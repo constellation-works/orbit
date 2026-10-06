@@ -34,6 +34,12 @@ spec:
         type: string
       published_head_sha:
         type: string
+      previous_published_head_sha:
+        type: [string, "null"]
+        description: >
+          The exact remote head replaced by this run's push. Only this old SHA
+          may receive a bounded metadata re-read, and only when the remote PR
+          head ref already names the pinned candidate.
       reviewed_head_sha:
         type: string
         description: >
@@ -86,6 +92,9 @@ spec:
           merged pull request, the branches and head it merged, and the commit
           that landed. Absent evidence never authorizes the done transition.
         properties:
+          stale_head_observations:
+            type: integer
+            description: Number of known previous-head metadata observations before delivery.
           delivery_evidence:
             type: object
             required: [pr_number, merge_commit]

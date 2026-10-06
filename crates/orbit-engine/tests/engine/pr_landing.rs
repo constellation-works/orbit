@@ -68,6 +68,217 @@ const PR_NUMBER: &str = "42";
 // Merge gating
 // ---------------------------------------------------------------------------
 
+/// Regression for ORB-14315: provider metadata may lag a verified lease-push,
+/// but both the merge mutation and review landing must keep the new exact SHA.
+#[test]
+fn previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins() {
+    isolated(
+        "previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins",
+        |sandbox| {
+            for reviewed in [true, false] {
+                for stale_reads in [1, 2] {
+                    let fx = Fixture::new(sandbox);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    host.set_status(TASK_ID, TaskStatus::Review);
+                    let mut input = fx.republished_completion_input(&host);
+                    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                    if !reviewed {
+                        input.as_object_mut().unwrap().remove("reviewed_head_sha");
+                    }
+                    let mut heads = vec![fx.candidate.as_str(); stale_reads];
+                    heads.push(&candidate);
+                    fx.script_heads(&heads, Some(&candidate));
+                    let before = fx.status_reads();
+
+                    let completed = action(&host, "pr_complete", &input)
+                        .expect("known previous-head metadata catches up within the bound");
+
+                    assert_eq!(completed["merge"]["stale_head_observations"], stale_reads);
+                    assert_eq!(completed["merge"]["waited_seconds"], stale_reads * 5);
+                    assert_eq!(fx.status_reads() - before, stale_reads + 2);
+                    assert_eq!(
+                        fx.merge_requests(),
+                        vec![format!("sha={candidate} merge_method=squash")]
+                    );
+                    assert_eq!(
+                        completed["merge"]["delivery_evidence"]["head_sha"],
+                        candidate
+                    );
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+                    if reviewed {
+                        assert_eq!(host.landings()[0].reviewed_head_sha, candidate);
+                    } else {
+                        assert!(host.landings().is_empty());
+                    }
+                }
+            }
+        },
+    );
+}
+
+/// Only the recorded previous head can wait, and only with the exact remote
+/// PR ref. Exhaustion and foreign identity never merge or complete a task.
+#[test]
+fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads() {
+    isolated(
+        "previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads",
+        |sandbox| {
+            for case in [
+                "persistent",
+                "review_only",
+                "time_cap",
+                "third_head",
+                "third_after_old",
+                "remote_old",
+                "remote_missing",
+                "remote_moved_after_old",
+                "review_mismatch",
+                "review_only_third",
+                "no_checkpoint",
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.republished_completion_input(&host);
+                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                let mut heads = vec![fx.candidate.as_str()];
+                let mut remote = Some(candidate.as_str());
+                let (expected_reads, error_code) = match case {
+                    "persistent" => {
+                        input["max_wait_seconds"] = json!(240);
+                        (4, "delivery_evidence_stale")
+                    }
+                    "review_only" => {
+                        input.as_object_mut().unwrap().remove("published_head_sha");
+                        input["max_wait_seconds"] = json!(240);
+                        (4, "review_gate_stale")
+                    }
+                    "time_cap" => {
+                        input["max_wait_seconds"] = json!(8);
+                        (2, "delivery_evidence_stale")
+                    }
+                    "third_head" => {
+                        heads = vec![fx.base_sha.as_str()];
+                        (1, "delivery_evidence_stale")
+                    }
+                    "third_after_old" => {
+                        heads.push(&fx.base_sha);
+                        (2, "delivery_evidence_stale")
+                    }
+                    "remote_old" => {
+                        remote = Some(&fx.candidate);
+                        (1, "delivery_evidence_stale")
+                    }
+                    "remote_missing" => {
+                        remote = None;
+                        (1, "delivery_evidence_stale")
+                    }
+                    "remote_moved_after_old" => {
+                        heads.push(&candidate);
+                        fs::write(
+                            fx.forge.join("remote-heads"),
+                            format!("{candidate}\n{}\n", fx.candidate),
+                        )
+                        .unwrap();
+                        (2, "delivery_evidence_stale")
+                    }
+                    "review_mismatch" => {
+                        heads = vec![candidate.as_str()];
+                        input["reviewed_head_sha"] = json!(fx.candidate);
+                        (1, "review_gate_stale")
+                    }
+                    "no_checkpoint" => {
+                        input
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("previous_published_head_sha");
+                        (1, "delivery_evidence_stale")
+                    }
+                    "review_only_third" => {
+                        input.as_object_mut().unwrap().remove("published_head_sha");
+                        heads = vec![fx.base_sha.as_str()];
+                        (1, "review_gate_stale")
+                    }
+                    _ => unreachable!(),
+                };
+                fx.script_heads(&heads, remote);
+                let before = fx.status_reads();
+
+                let error = action(&host, "pr_complete", &input)
+                    .expect_err("unverified metadata cannot authorize delivery");
+
+                assert!(error.to_string().contains(error_code), "{case}: {error}");
+                assert_eq!(
+                    fx.status_reads() - before,
+                    expected_reads,
+                    "{case}: bounded reads"
+                );
+                assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
+                assert!(host.landings().is_empty(), "{case}: no review landing");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+                assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
+            }
+        },
+    );
+}
+
+/// An in-run conflict repair retains the head it replaces even without an
+/// upstream previous-head checkpoint, so its verified push can settle too.
+#[test]
+fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
+    isolated(
+        "previous_published_head_metadata_lag_after_in_run_conflict_repair",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .unwrap();
+            host.set_status(TASK_ID, TaskStatus::Review);
+            fx.advance_base();
+            fx.script_checks(&["dirty", "success"]);
+            fx.script_heads(
+                &[&fx.candidate, &fx.candidate, "current"],
+                Some(&fx.candidate),
+            );
+            fs::write(fx.forge.join("remote-heads"), "current\n").unwrap();
+            let mut input = fx.complete_ungated_input();
+            input["max_wait_seconds"] = json!(60);
+
+            let completed = action(&host, "pr_complete", &input)
+                .expect("the repaired push's metadata catches up");
+
+            let repaired = fx.head();
+            assert_ne!(repaired, fx.candidate);
+            assert_eq!(completed["merge"]["stale_head_observations"], 1);
+            assert_eq!(
+                completed["merge"]["delivery_evidence"]["head_sha"],
+                repaired
+            );
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={repaired} merge_method=squash")]
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
 /// Pending checks are waited out, never merged early. Once they pass, the
 /// reviewed candidate is merged with a request conditional on its head SHA.
 /// The merge is read back from the forge, the landing is recorded for review
@@ -2122,6 +2333,74 @@ impl Fixture {
         .unwrap();
     }
 
+    /// Script PR metadata independently of the real remote PR head ref.
+    fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
+        fs::write(self.forge.join("heads"), format!("{}\n", heads.join("\n"))).unwrap();
+        fs::write(
+            self.forge.join("heads-start"),
+            self.forge_state("reads").unwrap_or_else(|| "0".into()),
+        )
+        .unwrap();
+        let remote = self.forge.join("remote.git");
+        match remote_head {
+            Some(head) => {
+                git(
+                    &self.repo,
+                    &[
+                        "--git-dir",
+                        path_str(&remote),
+                        "update-ref",
+                        "refs/pull/42/head",
+                        head,
+                    ],
+                );
+            }
+            None => {
+                git(
+                    &self.repo,
+                    &[
+                        "--git-dir",
+                        path_str(&remote),
+                        "update-ref",
+                        "-d",
+                        "refs/pull/42/head",
+                    ],
+                );
+            }
+        }
+    }
+
+    /// Replace the opened head through the production lease-push boundary and
+    /// hand its checkpoints to completion as the shipped pipeline does.
+    fn republished_completion_input(&self, host: &DeliveryHost) -> Value {
+        git(
+            &self.repo,
+            &["commit", "--amend", "-m", "republished candidate"],
+        );
+        let pushed = action(
+            host,
+            "git_push",
+            &json!({
+                "workspace_path": self.repo,
+                "job_run_id": RUN_ID,
+                "completed_task_ids": [TASK_ID],
+                "branch": BRANCH,
+                "rewrite_performed": true,
+                "rewrite_head_before": self.candidate,
+                "expected_remote_sha": self.candidate,
+            }),
+        )
+        .unwrap();
+        assert_eq!(pushed["decision"], "performed_force_with_lease");
+        assert_eq!(pushed["remote_sha_before"], self.candidate);
+        let mut input = self.complete_input();
+        input["published_head_sha"] = pushed["local_sha"].clone();
+        input["reviewed_head_sha"] = pushed["local_sha"].clone();
+        input["previous_published_head_sha"] = pushed["remote_sha_before"].clone();
+        input["max_wait_seconds"] = json!(60);
+        input
+    }
+
     /// Commit `file` on the checkout and push it, returning the new head.
     fn commit(&self, file: &str, contents: &str) -> String {
         let path = self.repo.join(file);
@@ -2686,6 +2965,19 @@ status() {
     observed=$(sed -n "${reads}p" "$forge/checks")
     [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
     state=OPEN
+    reported_head=$(head_sha)
+    if [ -f "$forge/heads" ]; then
+        head_read=$(( reads - $(cat "$forge/heads-start") ))
+        reported_head=$(sed -n "${head_read}p" "$forge/heads")
+        [ -n "$reported_head" ] || reported_head=$(tail -n 1 "$forge/heads")
+        [ "$reported_head" != current ] || reported_head=$(head_sha)
+        if [ -f "$forge/remote-heads" ]; then
+            remote_head=$(sed -n "${head_read}p" "$forge/remote-heads")
+            [ -n "$remote_head" ] || remote_head=$(tail -n 1 "$forge/remote-heads")
+            [ "$remote_head" != current ] || remote_head=$(head_sha)
+            git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+        fi
+    fi
     merged_at=null
     review=""
     case "$observed" in
@@ -2699,7 +2991,7 @@ status() {
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
     printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
-        "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$(head_sha)" "$pr_base" "$url"
+        "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
 }
 
 create() {

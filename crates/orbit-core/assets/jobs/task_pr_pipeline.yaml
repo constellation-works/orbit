@@ -363,6 +363,7 @@ spec:
         completion: "{{ input.completion }}"
         head: "{{ steps.sync_base.output.head }}"
         published_head_sha: "{{ steps.push.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.push.output.remote_sha_before }}"
         reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
         re_review_on_conflict: true
         base: "{{ steps.sync_base.output.base }}"
@@ -470,6 +471,7 @@ spec:
         completion: "{{ input.completion }}"
         head: "{{ steps.complete_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.re_push.output.remote_sha_before }}"
         reviewed_head_sha: "{{ steps.re_review_gate_settle.output.reviewed_head_sha }}"
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
