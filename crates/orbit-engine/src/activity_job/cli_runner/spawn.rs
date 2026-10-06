@@ -635,6 +635,7 @@ fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
 /// exists only in test builds: dispatch still snapshots the real deny rules,
 /// then execs the provider bare. Production probes and spawns Bubblewrap.
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 pub(crate) fn with_post_run_guard_without_user_namespace<T>(body: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
