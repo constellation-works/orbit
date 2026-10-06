@@ -432,7 +432,13 @@ fn main() {
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
         clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
-    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
+    // Invalid `orbit tool run` input cannot run. Reporting it before generation
+    // pin keeps a typo from resolving a workspace or applying pending migrations.
+    let unusable_tool_input = matches!(runtime_need, RuntimeNeed::UnusableToolInput { .. });
+    let _generation = if matches!(&cli.command, command::Commands::Update(_))
+        || inspection
+        || unusable_tool_input
+    {
         None
     } else {
         let root =
@@ -506,7 +512,9 @@ fn main() {
     // host's protected invocation record; request fields never select this
     // path. ToolRunArgs validates any explicit selector against that binding.
     let claimed_review_artifact = claimed_review_artifact_tool(&cli.command);
-    let claimed_review_worker = if claimed_review_artifact && workspace_selector.is_none() {
+    let claimed_review_worker = if unusable_tool_input {
+        false
+    } else if claimed_review_artifact && workspace_selector.is_none() {
         let global_root = match orbit_core::runtime::resolve_global_root() {
             Ok(root) => root,
             Err(error) => {
@@ -525,10 +533,15 @@ fn main() {
     } else {
         false
     };
-    let bootstrapped = if claimed_review_worker {
+    let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
+        Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+    } else if claimed_review_worker {
         RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
     } else {
         match &runtime_need {
+            RuntimeNeed::UnusableToolInput { message } => {
+                Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+            }
             RuntimeNeed::Forbidden => {
                 // A runtime-forbidden command has no store to authorize or audit
                 // against. None is governed; `Commands::operation` is exhaustive, so

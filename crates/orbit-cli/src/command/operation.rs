@@ -52,6 +52,13 @@ pub enum RuntimeNeed {
     TaskOwner {
         task_id: String,
     },
+    /// `orbit tool run` cannot use its input. `message` is the `InvalidInput`
+    /// detail (`invalid JSON input: …` or `cannot read input file '…': …`).
+    /// `main` reports it and exits before generation pin, workspace resolution,
+    /// runtime open, or migration.
+    UnusableToolInput {
+        message: String,
+    },
 }
 
 pub struct DispatchContext<'a> {
@@ -436,15 +443,18 @@ fn tool_operation(command: &super::tool::ToolCommand) -> CommandOperation {
         ToolSubcommand::Doctor => ("doctor", None, None, None, "admin".to_string(), None),
     };
     let runtime_need = match &command.command {
-        ToolSubcommand::Run(args) => {
-            if let Some(selector) = args.input_workspace_selector() {
+        ToolSubcommand::Run(args) => match args.bootstrap_route() {
+            Ok(super::tool::ToolRunBootstrap::SelectedWorkspace(selector)) => {
                 RuntimeNeed::SelectedWorkspace { selector }
-            } else if let Some(task_id) = args.id_resolved_task_id() {
-                RuntimeNeed::TaskOwner { task_id }
-            } else {
-                RuntimeNeed::Required
             }
-        }
+            Ok(super::tool::ToolRunBootstrap::TaskOwner(task_id)) => {
+                RuntimeNeed::TaskOwner { task_id }
+            }
+            Ok(super::tool::ToolRunBootstrap::CwdWorkspace) => RuntimeNeed::Required,
+            Err(error) => RuntimeNeed::UnusableToolInput {
+                message: unusable_tool_input_message(error),
+            },
+        },
         ToolSubcommand::List(_) => RuntimeNeed::ReadOnly,
         _ => RuntimeNeed::Required,
     };
@@ -493,32 +503,29 @@ fn tool_run_actor_role(args: &super::tool::ToolRunArgs) -> String {
         .unwrap_or_else(|| "agent".to_string())
 }
 
-fn tool_run_input_identity(args: &super::tool::ToolRunArgs) -> (Option<String>, Option<String>) {
-    let value = args
-        .input
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .or_else(|| {
-            args.input_file.as_deref().and_then(|path| {
-                std::fs::read_to_string(path)
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            })
-        });
-
-    match value {
-        Some(Value::Object(map)) => (
-            map.get("agent")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-            map.get("model")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-        ),
-        _ => (None, None),
+fn unusable_tool_input_message(error: OrbitError) -> String {
+    match error {
+        OrbitError::InvalidInput(message) => message,
+        other => other.to_string(),
     }
+}
+
+fn tool_run_input_identity(args: &super::tool::ToolRunArgs) -> (Option<String>, Option<String>) {
+    // Share `parsed_input`'s single read. A second `read_to_string` here would
+    // retry an unreadable `--input-file` while building the audit role.
+    let Ok(Value::Object(map)) = args.parsed_input() else {
+        return (None, None);
+    };
+    (
+        map.get("agent")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        map.get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    )
 }
