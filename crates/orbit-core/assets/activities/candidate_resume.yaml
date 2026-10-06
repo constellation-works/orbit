@@ -31,8 +31,9 @@ spec:
     a base conflict or stale base — and reads and writes no task state. It
     is squash-merged the same way and is always `resumed_repaired`: trigger
     `conflict` with `conflicting_paths`, or `landing` when it applied
-    cleanly. No `claim_repair`, or a candidate that cannot be applied, is
-    `fresh`.
+    cleanly or its changes are already on the new base. No `claim_repair` is
+    `fresh`; if the preserved candidate cannot be restored, the repair leaf
+    fails rather than implementing fresh without that work.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, base_sha, task_ids]

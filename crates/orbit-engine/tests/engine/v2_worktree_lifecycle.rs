@@ -1169,6 +1169,54 @@ fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
                 "the candidate is applied as uncommitted work"
             );
 
+            let present = PreservedCandidate::new("present.txt", "present\n");
+            commit_file(&present.fixture.repo, "present.txt", "present\n");
+            let setup = present.next_setup();
+            let resumed = present
+                .resume_claim_repair(&setup)
+                .expect("candidate already on the new base");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "landing");
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already present on the current base")
+            );
+            assert_eq!(
+                git(
+                    &Checkout::from_setup(&setup).path,
+                    &["status", "--porcelain"]
+                ),
+                "",
+                "already-present work leaves the base checkout clean"
+            );
+
+            let missing = action(
+                &present.host,
+                "candidate_resume",
+                &json!({
+                    "job_run_id": NEXT_RUN,
+                    "task_ids": [RESUME_TASK],
+                    "workspace_path": setup["workspace_path"],
+                    "base_sha": setup["base_sha"],
+                    "claimed": true,
+                    "claim_repair": {
+                        "repairs_claim_id": "claim-1",
+                        "handoff_id": "handoff-1",
+                        "branch": present.branch,
+                        "head_sha": "f".repeat(40),
+                        "stop_evidence": "pull request #42 conflicts with its base",
+                    },
+                }),
+            )
+            .expect_err("a repair may not silently discard an unavailable candidate");
+            assert!(
+                missing.to_string().contains("repair candidate")
+                    && missing.to_string().contains("could not be restored"),
+                "the repair failure retains its cause: {missing}"
+            );
+
             let fresh = action(
                 &clean.host,
                 "candidate_resume",

@@ -32,7 +32,9 @@
 //! `claim_repair`. It is squash-merged onto the leaf's base the same way, and
 //! the implementer always runs — on a `conflict` to resolve, or on a
 //! `landing` repair that applied cleanly onto the moved base — because its
-//! summary is what the new handoff carries. The owner task is not this host's,
+//! summary is what the new handoff carries. If the candidate cannot be
+//! restored, the claimed leaf fails closed instead of implementing fresh and
+//! silently dropping the preserved work. The owner task is not this host's,
 //! so nothing is read from or written to task state; the owner recorded the
 //! repair when it admitted the claim.
 
@@ -270,7 +272,12 @@ fn resume_claim_repair(
         failed_step_id: "landing".to_string(),
     };
     let outcome = match apply(&candidate, workspace_path, base_sha)? {
-        Applied::Refused(reason) => Outcome::Fresh(reason),
+        Applied::Refused(reason) => {
+            return Err(OrbitError::Execution(format!(
+                "candidate_resume: repair candidate {} could not be restored: {reason}",
+                candidate.head_sha
+            )));
+        }
         Applied::Conflict { paths, output } => Outcome::Repair(json!({
             "trigger": "conflict",
             "conflicting_paths": paths,
@@ -284,6 +291,14 @@ fn resume_claim_repair(
                 "The owner's landing of this candidate stopped: {stopped}\n\nIt applied cleanly \
                  onto the current base {base_sha}; confirm it still meets the acceptance \
                  criteria there."
+            )),
+        })),
+        Applied::AlreadyPresent => Outcome::Repair(json!({
+            "trigger": "landing",
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\nIts changes are \
+                 already present on the current base {base_sha}; confirm they still meet the \
+                 acceptance criteria there."
             )),
         })),
     };
@@ -303,6 +318,8 @@ fn resume_claim_repair(
 enum Applied {
     /// Nothing usable was applied, and why; the checkout is the clean base.
     Refused(String),
+    /// The candidate's changes are already present on the clean base.
+    AlreadyPresent,
     /// Uncommitted changes with conflict markers in `paths`.
     Conflict { paths: Vec<String>, output: String },
     /// Uncommitted changes that applied without conflict.
@@ -375,10 +392,7 @@ fn apply(
         });
     }
     if !applied {
-        return Ok(Applied::Refused(format!(
-            "candidate {}'s changes are already on base {base_sha}",
-            candidate.head_sha
-        )));
+        return Ok(Applied::AlreadyPresent);
     }
     Ok(Applied::Clean)
 }
@@ -392,6 +406,12 @@ fn resume<H: RuntimeHost + ?Sized>(
 ) -> Result<Outcome, OrbitError> {
     match apply(candidate, workspace_path, base_sha)? {
         Applied::Refused(reason) => return Ok(Outcome::Fresh(reason)),
+        Applied::AlreadyPresent => {
+            return Ok(Outcome::Fresh(format!(
+                "candidate {}'s changes are already on base {base_sha}",
+                candidate.head_sha
+            )));
+        }
         Applied::Conflict { paths, output } => {
             return Ok(Outcome::Repair(json!({
                 "trigger": "conflict",
