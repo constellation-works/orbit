@@ -379,13 +379,15 @@ fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
 
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
     let (username, host_path) = remote.split_once('@')?;
-    if username.contains('/')
-        || !host_path.contains(':')
-        || (!username.contains(':') && username != "***")
-    {
+    let (host, path) = host_path.split_once(':')?;
+    if username.contains('/') || (!username.contains(':') && username != "***") {
         return None;
     }
-    Some(format!("***@{host_path}"))
+    // Passwords may contain at-signs even when parsing rejects the remote.
+    // Mask through the last one before the host/path separator, preserving
+    // at-signs and colons in the repository path.
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    Some(format!("***@{host}:{path}"))
 }
 
 fn invalid_git_url(remote: &str) -> WorkspaceError {

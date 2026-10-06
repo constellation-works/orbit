@@ -46,14 +46,31 @@ fn malformed_scp_credentials_are_redacted_even_when_parsing_fails() {
             "deploy:hunter2@:example/tasks.git",
             "***@:example/tasks.git",
         ),
+        (
+            "deploy:p@ss@github.com:example/tasks.git",
+            "***@github.com:example/tasks.git",
+        ),
+        (
+            "deploy:p@ss@github.com:example/tasks@v1:archive.git",
+            "***@github.com:example/tasks@v1:archive.git",
+        ),
+        (
+            "deploy:p@ss@@github.com:example/tasks.git",
+            "***@github.com:example/tasks.git",
+        ),
     ] {
         assert_eq!(redact_git_remote(remote), redacted);
+        assert_eq!(redact_git_remote(redacted), redacted);
         for result in [
+            git_remote_identity(remote).map(|_| ()),
             validate_publication_remote(remote),
             validate_source_repository_fingerprint(remote),
         ] {
             let diagnostic = result.expect_err("malformed scp remote").to_string();
+            assert!(diagnostic.contains(redacted), "{diagnostic}");
+            assert!(!diagnostic.contains("deploy"), "{diagnostic}");
             assert!(!diagnostic.contains("hunter2"), "{diagnostic}");
+            assert!(!diagnostic.contains("ss"), "{diagnostic}");
         }
     }
 }
@@ -71,6 +88,10 @@ fn ordinary_scp_remotes_keep_usernames_and_repository_path_punctuation() {
             "github.com/example/tasks@v1",
         ),
         ("github.com:tasks@v1.git", "github.com/tasks@v1"),
+        (
+            "git@github.com:tasks@v1:archive.git",
+            "github.com/tasks@v1:archive",
+        ),
         (
             "git@github.com:example/tasks:archive.git",
             "github.com/example/tasks:archive",
