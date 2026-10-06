@@ -14,11 +14,12 @@ use orbit_engine::review_gate::{
     REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
 };
 use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
+use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, RetainedObligation, ReviewAttempt, ReviewCertificate,
     ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewValidation, ReviewVerdict,
-    ReviewerIdentity, ValidationRole,
+    ReviewerIdentity, ValidationOutcome, ValidationRole,
 };
 
 use super::super::automation_error;
@@ -304,6 +305,78 @@ impl Judgement {
         context.refresh_task_digests()?;
         self.task_meaning_digest = context.task_digests.1.clone();
         self.selectors_widened = widened;
+        Ok(())
+    }
+
+    /// Resolve a repeated evidence-only report from durable result/log pairs
+    /// on the final tree, never from the admission's advisory snapshot.
+    pub(super) fn reconcile_external_evidence(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &GateContext,
+        candidate: &SourceRevision,
+        repair: Option<&CommitIdentity>,
+        scope: &[String],
+    ) -> Result<(), OrbitError> {
+        if context.task_ids.len() != 1
+            || self.external_evidence.is_empty()
+            || open_findings(&self.findings).next().is_some()
+        {
+            return Ok(());
+        }
+        let Some(validation) = super::super::evidence::with_external_checks_passed(
+            &self.validation,
+            &self.external_evidence,
+        ) else {
+            return Ok(());
+        };
+        if validation_evidence(
+            &validation,
+            &ValidationContext {
+                scope,
+                obligations: &self.retained_obligations,
+                required_validation_commands: self.required_validation_commands.as_deref(),
+            },
+        )
+        .is_err()
+        {
+            return Ok(());
+        }
+        let satisfied = super::super::evidence::satisfied_external_evidence(
+            runtime,
+            &context.task_ids[0],
+            candidate,
+        )?;
+        self.external_evidence.retain(|required| {
+            let Some((artifact, evidence)) = satisfied
+                .iter()
+                .find(|(_, evidence)| evidence.matches_requirement(required, candidate))
+            else {
+                return true;
+            };
+            for record in &mut self.validation {
+                if record.command == required.command && record.role == ValidationRole::Required {
+                    record.outcome = ValidationOutcome::Passed;
+                    let note = format!(
+                        "External result {artifact}; log {}; tree {}",
+                        evidence.log_artifact, candidate.tree,
+                    );
+                    record.note = Some(match record.note.take() {
+                        Some(previous) => format!("{previous}; {note}"),
+                        None => note,
+                    });
+                }
+            }
+            false
+        });
+        if self.external_evidence.is_empty() {
+            self.verdict = if repair.is_some() {
+                ReviewVerdict::AcceptWithFixes
+            } else {
+                ReviewVerdict::Accept
+            };
+            self.escalation = None;
+        }
         Ok(())
     }
 

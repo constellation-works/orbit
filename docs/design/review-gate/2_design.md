@@ -437,12 +437,20 @@ its named artifact path, plus the separately referenced nonempty log artifact:
  "outcome":"passed","log_artifact":"evidence/windows-log.json"}
 ```
 
-Only results matching the held attempt, exact revision, kind, name and command
-count. Stale, unrelated, failed or logless evidence leaves the hold in place.
+Evidence identity is kind, exact command and candidate tree. Attempt, commit,
+display name and artifact path are provenance or locators, so a new commit on
+the same tree does not expire a passing result. Evidence for another tree,
+an unrelated check, a failed result or a missing/empty log does not count.
 After all results and logs arrive, an unchanged task still owned by that hold's
 run moves to backlog with `review_evidence_received`. This queues fresh review,
-not acceptance: the new reviewer verifies the evidence, and every publication
-and validation gate still applies. An operator block or later review decision
+not acceptance: admission supplies verified result/log pairs in the manifest's
+`satisfied_external_evidence`. The reviewer records these checks as passed for
+the unchanged tree. Settlement re-reads the artifacts against the final tree
+and resolves any repeated unavailable requirement, including a renamed result
+path, before judging the verdict. An otherwise complete evidence-only report
+settles as passing once all its requirements are satisfied. Reviewer repairs
+that change the tree require new evidence. Every publication and validation
+gate still applies. An operator block or later review decision
 is never undone by a late artifact attachment.
 Passing grants no lifecycle transition; `completion: review` still stops at
 the handoff.

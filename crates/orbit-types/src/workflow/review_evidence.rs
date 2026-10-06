@@ -41,6 +41,8 @@ pub struct ReviewEvidenceHold {
 
 /// Evidence attached at a requirement's artifact path, with a separately
 /// attached log. A matching passing result releases the hold for fresh review.
+/// Attempt, commit and display name record provenance; identity is kind,
+/// command and tree, so another review of the same tree can reuse the result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewExternalEvidence {
     pub schema_version: u32,
@@ -51,4 +53,19 @@ pub struct ReviewExternalEvidence {
     pub command: String,
     pub outcome: ValidationOutcome,
     pub log_artifact: String,
+}
+
+impl ReviewExternalEvidence {
+    /// Whether this result names the check on the candidate tree.
+    /// The host must also validate the schema, outcome and attached log.
+    pub fn matches_requirement(
+        &self,
+        requirement: &ReviewEvidenceRequirement,
+        candidate: &SourceRevision,
+    ) -> bool {
+        !candidate.tree.is_empty()
+            && self.candidate.tree == candidate.tree
+            && self.kind == requirement.kind
+            && self.command == requirement.command
+    }
 }

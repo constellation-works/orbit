@@ -50,12 +50,16 @@ unavailable external check and the report contains no open defect or failed
 required check. `review-evidence-hold.json` pins the attempt, candidate,
 task meaning, and each required artifact. Attach a passing `ReviewExternalEvidence`
 result at each named path and its nonempty log artifact. Each result must match
-the held attempt, candidate, kind, name, and command. Unrelated, stale, failed,
-or incomplete evidence leaves the hold in place.
+the kind, exact command and candidate tree. Attempt, commit, display name and
+artifact path changes do not expire a result on the same tree. Unrelated,
+different-tree, failed or incomplete evidence leaves the hold in place.
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review. It does not approve the candidate
-or resume the terminal held run. An operator status decision or changed task
+or resume the terminal held run. Fresh admission includes verified result/log
+pairs in `satisfied_external_evidence`; settlement re-reads them on the final
+tree and satisfies repeated unavailable checks without another hold. A repair
+that changes the tree needs new evidence. An operator status decision or changed task
 meaning prevents automatic receipt from overriding that decision. Held runs
 are settled outcomes for pipeline waits and are excluded from reliability's
 success/failure denominator.

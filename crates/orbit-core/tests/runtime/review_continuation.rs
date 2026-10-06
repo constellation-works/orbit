@@ -6,8 +6,9 @@ use orbit_engine::{
     ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost, TaskAutomationUpdate,
 };
 use orbit_types::workflow::{
-    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAttemptState,
-    ReviewEvidenceHold, ReviewVerdict, ReviewerInvocationEvent,
+    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewEvidenceHold,
+    ReviewManifest, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -36,6 +37,43 @@ fn interrupted_report(fixture: &Fixture) -> Value {
         "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
         "escalation": "External checks pending",
     })
+}
+
+fn fresh_review(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
+    let previous = fixture.runtime.show_job_run(&hold.run_id).unwrap();
+    let next = fixture
+        .runtime
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
+        .unwrap();
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(Some(next.run_id.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fixture.input["job_run_id"] = json!(next.run_id);
+    fixture.admit();
+    assert_ne!(fixture.input["admission"]["attempt_id"], hold.attempt_id);
+    next.run_id
+}
+
+fn manifest(fixture: &Fixture) -> ReviewManifest {
+    serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_MANIFEST_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap()
 }
 
 /// Run admission and settlement in the persisted worker, with every recovery
@@ -359,7 +397,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             });
             if index == 0 {
                 let candidate = evidence["candidate"].clone();
-                evidence["candidate"]["commit"] = json!("stale-head");
+                evidence["candidate"]["tree"] = json!("different-tree");
                 attach(&fixture, &requirement.artifact, &evidence);
                 attach(
                     &fixture,
@@ -372,8 +410,36 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                 );
                 evidence["candidate"] = candidate;
             }
+            if index + 1 == hold.requirements.len() {
+                attach(
+                    &fixture,
+                    &log,
+                    &json!({"captured_output": "passing external check"}),
+                );
+                // All other requirements and this log are satisfied, so each
+                // refusal exercises the changed field rather than a missing
+                // prerequisite masking an incorrect evidence match.
+                for (field, wrong) in [
+                    ("kind", json!("native_os")),
+                    ("command", json!("another check")),
+                    ("schema_version", json!(2)),
+                    ("outcome", json!("failed")),
+                    ("log_artifact", json!("evidence/missing-log.json")),
+                    ("log_artifact", json!(requirement.artifact)),
+                    ("log_artifact", json!(REVIEW_EVIDENCE_HOLD_ARTIFACT)),
+                ] {
+                    let mut invalid = evidence.clone();
+                    invalid[field] = wrong;
+                    attach(&fixture, &requirement.artifact, &invalid);
+                    assert_eq!(
+                        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+                        TaskStatus::InProgress,
+                        "mismatched {field} must not satisfy the last requirement"
+                    );
+                }
+            }
             attach(&fixture, &requirement.artifact, &evidence);
-            if index != 0 {
+            if index != 0 && index + 1 != hold.requirements.len() {
                 assert_eq!(
                     fixture.runtime.get_task(&fixture.task_id).unwrap().status,
                     TaskStatus::InProgress,
@@ -408,52 +474,168 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
         );
         // A new delivery run reviews the candidate afresh. Evidence receipt
         // itself neither approves it nor rewrites the incomplete certificate.
-        let previous_run = fixture.runtime.show_job_run(&hold.run_id).unwrap();
-        let next = fixture
-            .runtime
-            .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous_run.input, None)
+        // ORB-14328: a fresh reviewer saw a new commit on the evidenced tree,
+        // then requested the same unavailable check under its new attempt.
+        let mut command = std::process::Command::new("git");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let committed = command
+            .args(["commit", "--allow-empty", "-m", "same tree, fresh commit"])
+            .current_dir(&fixture.repo)
+            .output()
             .unwrap();
-        fixture
-            .runtime
-            .update_task_with_identity(
-                &fixture.task_id,
-                orbit_core::application::task::TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    job_run_id: Some(Some(next.run_id.clone())),
-                    ..Default::default()
-                },
-                Some("codex".into()),
-                None,
-            )
-            .unwrap();
-        fixture.input["job_run_id"] = json!(next.run_id);
-        fixture.admit();
-        assert_ne!(fixture.input["admission"]["attempt_id"], hold.attempt_id);
-        let mut accepted = interrupted_report(&fixture);
-        accepted["verdict"] = json!("accept");
-        accepted["escalation"] = Value::Null;
+        assert!(committed.status.success(), "{committed:?}");
+        let next_run = fresh_review(&mut fixture, &hold);
+        let input = manifest(&fixture);
+        assert_ne!(input.candidate.commit, hold.candidate.commit);
+        assert_eq!(input.candidate.tree, hold.candidate.tree);
+        assert_eq!(
+            input.satisfied_external_evidence.len(),
+            hold.requirements.len()
+        );
         for requirement in &hold.requirements {
-            accepted["validation"].as_array_mut().unwrap().push(json!({
-                "command": requirement.command, "outcome": "passed", "role": "required",
-                "log_artifact": requirement.artifact,
-            }));
+            let result = &input.satisfied_external_evidence[&requirement.artifact];
+            assert_eq!(result.attempt_id, hold.attempt_id);
+            assert_eq!(result.candidate, hold.candidate);
         }
-        fixture.put_report(&accepted);
+        report["attempt_id"] = fixture.input["admission"]["attempt_id"].clone();
+        // Names and result paths are locators, not evidence identity.
+        report["external_evidence"][0]["name"] = json!("Renamed Windows job");
+        report["external_evidence"][0]["artifact"] = json!("evidence/renamed-windows.json");
+        fixture.put_report(&report);
         run_review_pipeline(&fixture);
         assert_eq!(
-            fixture.runtime.show_job_run(&next.run_id).unwrap().state,
+            fixture.runtime.show_job_run(&next_run).unwrap().state,
             JobRunState::Success
         );
         assert_eq!(
             fixture
                 .runtime
-                .read_run_state(&next.run_id)
+                .read_run_state(&next_run)
                 .unwrap()
                 .unwrap()
                 .pipeline["review_gate_settle"]["gate"],
             "passed"
         );
+        let certificate: ReviewCertificate = serde_json::from_slice(
+            &fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)
+                .unwrap()
+                .unwrap()
+                .content,
+        )
+        .unwrap();
+        assert_eq!(certificate.verdict, ReviewVerdict::Accept);
+        assert_eq!(certificate.final_candidate, input.candidate);
+        assert!(
+            certificate.repair_commits.is_empty(),
+            "an unchanged review must not mint a commit"
+        );
+        assert!(
+            certificate
+                .validation
+                .iter()
+                .all(|record| record.outcome == ValidationOutcome::Passed)
+        );
     }
+}
+
+#[test]
+fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
+    fixture.admit();
+    let mut report = interrupted_report(&fixture);
+    report["external_evidence"] = json!([{
+        "kind": "native_os", "name": "macOS run", "command": "native macos",
+        "artifact": "evidence/macos.json",
+    }]);
+    report["validation"].as_array_mut().unwrap().push(json!({
+        "command": "native macos", "outcome": "not_run", "role": "required",
+    }));
+    fixture.put_report(&report);
+    run_review_pipeline(&fixture);
+    let hold: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    attach(
+        &fixture,
+        "evidence/macos.json",
+        &json!({
+            "schema_version": 1, "attempt_id": hold.attempt_id, "candidate": hold.candidate,
+            "kind": "native_os", "name": "macOS run", "command": "native macos",
+            "outcome": "passed", "log_artifact": "evidence/macos-log.json",
+        }),
+    );
+    attach(
+        &fixture,
+        "evidence/macos-log.json",
+        &json!({"output": "passed"}),
+    );
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let next_run = fresh_review(&mut fixture, &hold);
+    assert_eq!(manifest(&fixture).satisfied_external_evidence.len(), 1);
+    // The admission snapshot covers the old tree, but settlement must re-read
+    // against the repaired tree before resolving the repeated requirement.
+    std::fs::write(fixture.repo.join("candidate.txt"), "reviewer repaired\n").unwrap();
+    report["attempt_id"] = fixture.input["admission"]["attempt_id"].clone();
+    report["findings"] = json!([{
+        "id": "F1", "severity": "high", "summary": "Repair candidate",
+        "paths": ["candidate.txt"], "disposition": {"kind": "repaired"},
+        "change": "Repaired candidate behavior",
+    }]);
+    fixture.put_report(&report);
+    run_review_pipeline(&fixture);
+    assert_eq!(
+        fixture.runtime.show_job_run(&next_run).unwrap().state,
+        JobRunState::Held
+    );
+    let changed: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    assert_ne!(changed.candidate.tree, hold.candidate.tree);
+    attach(
+        &fixture,
+        "unrelated.json",
+        &json!({"output": "old evidence still attached"}),
+    );
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::InProgress
+    );
+    assert!(
+        fixture
+            .runtime
+            .run_deterministic(
+                "review_gate_admit",
+                &json!({}),
+                &fixture.input,
+                Default::default(),
+            )
+            .is_err(),
+        "a different tree must still wait for its own evidence"
+    );
 }
 
 #[test]
@@ -509,6 +691,21 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
             _ => unreachable!(),
         }
         fixture.put_report(&report);
+        attach(
+            &fixture,
+            "evidence/windows.json",
+            &json!({
+                "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
+                "candidate": manifest(&fixture).candidate, "kind": "hosted_ci",
+                "name": "Windows CI", "command": "hosted windows", "outcome": "passed",
+                "log_artifact": "evidence/windows-log.json",
+            }),
+        );
+        attach(
+            &fixture,
+            "evidence/windows-log.json",
+            &json!({"output": "passed"}),
+        );
         let refused = fixture.settle().unwrap_err();
         assert!(
             refused.to_string().contains("review_gate_blocked:"),

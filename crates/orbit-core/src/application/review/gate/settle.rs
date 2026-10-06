@@ -277,6 +277,20 @@ fn settle(
     };
 
     let validation_scope = validation_scope(context, &reviewed.commits, repair.as_ref())?;
+    let final_candidate = match &repair {
+        Some(commit) => SourceRevision {
+            commit: commit.commit.clone(),
+            tree: commit.tree.clone(),
+        },
+        None => reviewed.head.clone(),
+    };
+    judgement.reconcile_external_evidence(
+        runtime,
+        context,
+        &final_candidate,
+        repair.as_ref(),
+        &validation_scope,
+    )?;
     judgement.reconcile_verdict(repair.as_ref(), &validation_scope);
     let now = Utc::now();
 
@@ -311,13 +325,6 @@ fn settle(
         )?,
     };
 
-    let final_candidate = match &repair {
-        Some(commit) => SourceRevision {
-            commit: commit.commit.clone(),
-            tree: commit.tree.clone(),
-        },
-        None => reviewed.head.clone(),
-    };
     let certificate = ReviewCertificate {
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),

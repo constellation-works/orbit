@@ -303,6 +303,11 @@ fn admit(
         .get_task_artifact(&context.task_ids[0], REVIEW_REPORT_ARTIFACT)?
         .and_then(|artifact| orbit_types::workflow::ReviewReport::parse(&artifact.content).ok());
     let manifest = ReviewManifest {
+        satisfied_external_evidence: super::super::evidence::satisfied_external_evidence(
+            runtime,
+            &context.task_ids[0],
+            &candidate.head,
+        )?,
         previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),

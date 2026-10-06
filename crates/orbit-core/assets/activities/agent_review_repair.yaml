@@ -117,6 +117,13 @@ spec:
        to assess external evidence that arrived since the earlier review.
        These prior-evidence reads are optional: an absent or refused one is
        not a mismatch and not a reason to stop; review from the manifest.
+       The manifest's `satisfied_external_evidence` maps result artifact paths
+       to passing external checks whose separate logs the host verified for
+       `candidate.tree`. Reuse a matching kind and exact command while the
+       final tree is unchanged, even if the attempt, commit, display name or
+       result path changed. Record it as `required` and `passed`, naming its
+       result and log artifacts in `note`; do not request that check again.
+       A repair that changes the tree needs evidence for the repaired tree.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
        and the implementer's execution summary in the manifest. A green summary

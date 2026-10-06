@@ -740,6 +740,11 @@ fn normalize_label_field(
 /// The pinned, immutable input handed to the reviewer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewManifest {
+    /// Passing external results and their artifact paths, re-read with their
+    /// logs for this candidate tree. Attempt and commit changes do not expire
+    /// these checks; a reviewer repair that changes the tree does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub satisfied_external_evidence: BTreeMap<String, super::ReviewExternalEvidence>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]

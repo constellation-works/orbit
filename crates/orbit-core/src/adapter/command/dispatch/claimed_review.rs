@@ -532,11 +532,7 @@ impl ClaimedReviewScope<'_> {
                 continue;
             };
             if evidence.log_artifact == path
-                && evidence.attempt_id == hold.attempt_id
-                && evidence.candidate == hold.candidate
-                && evidence.kind == required.kind
-                && evidence.name == required.name
-                && evidence.command == required.command
+                && evidence.matches_requirement(required, &hold.candidate)
             {
                 return Ok(true);
             }
