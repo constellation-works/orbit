@@ -21,7 +21,7 @@ server UID. The broker executes authenticated requests for exec-backed plugin to
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
 It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
 `gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed before-PR
-reviewer's manifest read and report write to the claim's remote owner, so SSH runs outside the
+reviewer's review-artifact reads and report write to the claim's remote owner, so SSH runs outside the
 sandbox that masks `~/.ssh` (§3, "Claimed-review artifacts").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
@@ -155,21 +155,25 @@ agent and every command it runs could read it, and it would bypass the tools' re
 Nothing that changes GitHub is on the list.
 
 **Claimed-review artifacts.** The only other built-ins the broker carries are a claimed
-before-PR reviewer's `orbit.task.artifact.get` of `review-manifest.json` and
-`orbit.task.artifact.put` of `review-report.json`. A claimed leaf's task lives on its owner,
-another machine reached over SSH, and every agent sandbox masks `~/.ssh` (policy-sandbox
+before-PR reviewer's `orbit.task.artifact.get` and `orbit.task.artifact.put`. A read may name
+the review contract's `review-manifest.json`, `review-report.json`,
+`review-report-history.json` or `review-evidence-hold.json`, or an evidence artifact the
+owner's current evidence hold names: a requirement's result, or the log that result names for
+that requirement. A write may name only `review-report.json`. A claimed leaf's task lives on its
+owner, another machine reached over SSH, and every agent sandbox masks `~/.ssh` (policy-sandbox
 [2_design.md](../policy-sandbox/2_design.md) §7.1), so the reviewer's own SSH route can only fail
 host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested `orbit` of a worker whose
-claim names a remote owner sends exactly these two calls to the broker. The broker carries
+claim names a remote owner sends these calls to the broker. The broker carries
 them only for the reviewer activity (`agent_review_repair`) of the run bound to the claim, and
 only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer is
 running in this run before its deadline. It takes the task, claim, owner and attempt from
-those records, never from the request. A read must be the pinned manifest and the manifest the
+those records, never from the request, and it resolves which evidence paths are readable from
+the owner's hold and results, never from the request; with no hold, none is. The manifest the
 owner returns must be the running attempt's; a write must be a report that parses against the
 review contract and names that attempt. The nested `orbit` reads the report source inside the
 sandbox under `artifact.put`'s own confinement and no-follow open, and sends only its bytes;
-the broker never opens a path the agent names. The owner fences both calls on the claim. It
-answers the read and takes the write only while the claim could still take this worker's update:
+the broker never opens a path the agent names. The owner fences every call on the claim. It
+answers a read and takes the write only while the claim could still take this worker's update:
 the claim must be running or handed off, bound to this leaf, and still the task's current claim.
 A released, failed, revoked or superseded claim is refused as `stale_claim`, and so is a claim
 bound to another run. An elapsed reservation alone ends nothing: the claim stays active until
@@ -197,7 +201,7 @@ existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
 registration is a plugin backend, plus the five host-credentialed reads and the claimed
-reviewer's two artifact calls above. That covers `orbit tool run <ns>.<verb>`, its
+reviewer's artifact calls above. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an

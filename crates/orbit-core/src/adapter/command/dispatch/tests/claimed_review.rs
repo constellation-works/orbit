@@ -9,6 +9,7 @@
 //! retried without a second effect. The client is this test process,
 //! anchored by ancestry, as in the plugin broker's own tests.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,8 +27,9 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    ActivityToolDenyPolicy, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewBudget,
-    ReviewReservation, ReviewerInvocationEvent,
+    ActivityToolDenyPolicy, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget, ReviewReservation,
+    ReviewerInvocationEvent,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -46,12 +48,11 @@ const LINEAGE: &str = "lineage-1";
 const GET: &str = "orbit.task.artifact.get";
 const PUT: &str = "orbit.task.artifact.put";
 
-/// The owner's side of the claim route: answers the manifest read with
-/// `manifest`, records every call, and can drop one put's answer after
-/// accepting it.
+/// The owner's side of the claim route: answers a read from `artifacts`,
+/// records every call, and can drop one put's answer after accepting it.
 #[derive(Default)]
 struct Owner {
-    manifest: Mutex<Vec<u8>>,
+    artifacts: Mutex<BTreeMap<String, Vec<u8>>>,
     calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
     lose_next_put: AtomicBool,
 }
@@ -76,16 +77,39 @@ impl OwnerCoordinator for Owner {
             }
             return Ok(json!({"id": input["id"], "updated": true}));
         }
-        let manifest = self.manifest.lock().unwrap().clone();
+        let path = input["path"].as_str().unwrap_or_default();
+        let Some(bytes) = self.artifacts.lock().unwrap().get(path).cloned() else {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Artifact,
+                format!("{TASK}/{path}"),
+            ));
+        };
         Ok(json!({
             "id": input["id"], "path": input["path"], "media_type": "application/json",
-            "size": manifest.len(), "presentation": "text", "encoding": "utf-8",
-            "content": String::from_utf8(manifest).unwrap(),
+            "size": bytes.len(), "presentation": "text", "encoding": "utf-8",
+            "content": String::from_utf8(bytes).unwrap(),
         }))
     }
 }
 
 impl Owner {
+    fn hold(&self, path: &str, bytes: &[u8]) {
+        self.artifacts
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), bytes.to_vec());
+    }
+
+    fn reads(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, ..)| name == GET)
+            .map(|(_, input, _)| input["path"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
     fn puts(&self) -> Vec<Value> {
         self.calls
             .lock()
@@ -213,7 +237,7 @@ impl Fixture {
             "issued_at": Utc::now(),
         });
         let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
-        *self.owner.manifest.lock().unwrap() = bytes.clone();
+        self.owner.hold(REVIEW_MANIFEST_ARTIFACT, &bytes);
         bytes
     }
 
@@ -295,7 +319,7 @@ impl Fixture {
 fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_broker() {
     let fixture = Fixture::new();
     let broker = fixture.serve("agent_review_repair");
-    let pinned = fixture.owner.manifest.lock().unwrap().clone();
+    let pinned = fixture.owner.artifacts.lock().unwrap()[REVIEW_MANIFEST_ARTIFACT].clone();
 
     let read = fixture
         .forwarded(
@@ -373,9 +397,19 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
 
     let cases = [
         (
-            "another path",
+            "the gate's record",
             GET,
-            json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT}),
+            json!({"id": TASK, "path": "review-gate.json"}),
+        ),
+        (
+            "a path outside the artifacts",
+            GET,
+            json!({"id": TASK, "path": "../review-report.json"}),
+        ),
+        (
+            "a write of another path",
+            PUT,
+            json!({"id": TASK, "path": REVIEW_EVIDENCE_HOLD_ARTIFACT, "source_path": stale_source}),
         ),
         (
             "another task",
@@ -492,6 +526,80 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
             .all(|row| row.status != AuditEventStatus::Success),
         "every refusal is audited as one: {rows:?}"
     );
+}
+
+/// The prior evidence a continuing review reads: the contract's own report,
+/// history and hold, and exactly the evidence the owner's hold names. The
+/// names come from the owner's hold; a path no hold names is refused.
+#[test]
+fn the_reviewer_reads_the_prior_evidence_the_owners_hold_names() {
+    let fixture = Fixture::new();
+    let broker = fixture.serve("agent_review_repair");
+    let read = |path: &str| {
+        fixture
+            .forwarded(&broker, GET, json!({"id": TASK, "path": path}))
+            .map(|output| output["content"].as_str().unwrap_or_default().to_string())
+    };
+    let named = |path: &str| {
+        let refused = read(path).unwrap_err();
+        assert!(
+            refused.contains("claimed_review_bridge_refused"),
+            "{path}: {refused}"
+        );
+    };
+    let candidate = json!({"commit": "a".repeat(40), "tree": "b".repeat(40)});
+    let (_, report) = fixture.report("report.json", &fixture.attempt_id);
+    fixture.owner.hold(REVIEW_REPORT_ARTIFACT, &report);
+    fixture
+        .owner
+        .hold(REVIEW_REPORT_HISTORY_ARTIFACT, br#"{"schema_version":1}"#);
+    let result = json!({
+        "schema_version": 1, "attempt_id": "attempt-held", "candidate": candidate,
+        "kind": "hosted_ci", "name": "CI", "command": "make ci",
+        "outcome": "passed", "log_artifact": "evidence/ci.log",
+    })
+    .to_string();
+    fixture.owner.hold("evidence/ci.json", result.as_bytes());
+    fixture.owner.hold("evidence/ci.log", b"ci passed");
+    fixture.owner.hold("evidence/unnamed.json", b"{}");
+
+    // The contract's own artifacts are carried; with no hold, nothing names
+    // the evidence, and an absent artifact is the owner's not-found.
+    assert_eq!(
+        read(REVIEW_REPORT_ARTIFACT).unwrap().as_bytes(),
+        report.as_slice()
+    );
+    assert!(read(REVIEW_REPORT_HISTORY_ARTIFACT).is_ok());
+    let absent = read(REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap_err();
+    assert!(absent.contains("not found"), "{absent}");
+    named("evidence/ci.json");
+
+    let hold = json!({
+        "schema_version": 1, "attempt_id": "attempt-held", "lineage_key": LINEAGE,
+        "run_id": LEAF, "candidate": candidate, "task_meaning_digest": "digest",
+        "requirements": [{"kind": "hosted_ci", "name": "CI", "command": "make ci",
+                          "artifact": "evidence/ci.json"}],
+    })
+    .to_string();
+    fixture
+        .owner
+        .hold(REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.as_bytes());
+    assert_eq!(read(REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap(), hold);
+    assert_eq!(read("evidence/ci.json").unwrap(), result);
+    assert_eq!(read("evidence/ci.log").unwrap(), "ci passed");
+    named("evidence/unnamed.json");
+
+    // A result for another candidate does not name its log.
+    let foreign = result.replace(&"a".repeat(40), &"e".repeat(40));
+    fixture.owner.hold("evidence/ci.json", foreign.as_bytes());
+    named("evidence/ci.log");
+
+    let reads = fixture.owner.reads();
+    assert!(
+        !reads.iter().any(|path| path == "evidence/unnamed.json"),
+        "an unnamed path never reaches the owner: {reads:?}"
+    );
+    assert!(fixture.owner.puts().is_empty());
 }
 
 /// A reviewer whose recorded deadline has passed is no longer running, even

@@ -1,9 +1,10 @@
 //! The claimed before-PR reviewer's artifact route through its run's broker.
 //!
-//! A claimed leaf's reviewer reads its pinned manifest and attaches its report
-//! on the owner's task. The owner is another machine, reached over SSH, and
-//! the agent sandbox masks `~/.ssh`, so the nested `orbit` cannot open that
-//! route itself. With `ORBIT_PLUGIN_BROKER` set it hands exactly these two
+//! A claimed leaf's reviewer reads its pinned manifest and prior review
+//! evidence, and attaches its report, on the owner's task. The owner is another
+//! machine, reached over SSH, and the agent sandbox masks `~/.ssh`, so the
+//! nested `orbit` cannot open that route itself. With `ORBIT_PLUGIN_BROKER`
+//! set it hands its `orbit.task.artifact.get` and `orbit.task.artifact.put`
 //! calls to the broker in the unconfined step runner, which already holds the
 //! claim's owner route. Nothing else is forwarded: every other coordination
 //! tool keeps its existing route, and the broker answers no other built-in.
@@ -11,11 +12,14 @@
 //! The broker decides everything from its own records. The worker binding
 //! names the task, claim, owner and leaf run; the run's dispatch record names
 //! the activity; the review ledger names the one attempt whose reviewer is
-//! running in this run. The request contributes only the artifact bytes the
-//! reviewer wrote, which the broker validates before the owner's claim
-//! transaction persists them. The broker never opens a path the agent named:
-//! the nested `orbit` reads the source inside the sandbox, no-follow, under
-//! the workspace confinement `orbit.task.artifact.put` already applies.
+//! running in this run. A read is carried for the review contract's own
+//! artifacts and for the evidence artifacts the owner's current evidence hold
+//! names, resolved from the owner's hold, never from the request. A write is
+//! carried only for the report. The request contributes only the artifact
+//! bytes the reviewer wrote, which the broker validates before the owner's
+//! claim transaction persists them. The broker never opens a path the agent
+//! named: the nested `orbit` reads the source inside the sandbox, no-follow,
+//! under the workspace confinement `orbit.task.artifact.put` already applies.
 
 use std::path::Path;
 
@@ -26,8 +30,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{
-    REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAttemptState,
-    ReviewManifest, ReviewReport,
+    REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
+    ReviewAttemptState, ReviewEvidenceHold, ReviewExternalEvidence, ReviewManifest, ReviewReport,
 };
 use serde_json::{Map, Value, json};
 
@@ -38,6 +43,16 @@ pub(super) use crate::runtime::plugin::broker::is_claimed_review_artifact;
 
 const GET: &str = "orbit.task.artifact.get";
 const PUT: &str = "orbit.task.artifact.put";
+
+/// The review contract's artifacts the reviewer may always read: its pinned
+/// manifest and the prior evidence it continues from. Any other read must be
+/// named by the owner's current evidence hold.
+const CONTRACT_READS: [&str; 4] = [
+    REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT,
+    REVIEW_REPORT_HISTORY_ARTIFACT,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT,
+];
 
 /// Whether this process is a claimed worker whose owner is another machine:
 /// the only caller whose artifact calls need the bridge. A worker on its
@@ -363,31 +378,29 @@ pub(super) fn execute_brokered(
                 .into(),
         ));
     }
-    let expected = if tool == PUT {
-        REVIEW_REPORT_ARTIFACT
-    } else {
-        REVIEW_MANIFEST_ARTIFACT
-    };
-    if field("path") != expected {
+    let path = field("path");
+    if tool == PUT && path != REVIEW_REPORT_ARTIFACT {
         return Err(OrbitError::PolicyDenied(format!(
-            "claimed_review_bridge_refused: '{tool}' carries only `{expected}` for the claimed \
-             reviewer"
+            "claimed_review_bridge_refused: '{PUT}' carries only `{REVIEW_REPORT_ARTIFACT}` for \
+             the claimed reviewer"
         )));
+    }
+    if tool == GET && !CONTRACT_READS.contains(&path) && !evidence_path(path) {
+        return Err(read_refused());
     }
     runtime.authorize_tool_operation(
         tool,
         &session,
         crate::runtime::tool_exec::CapabilityEnforcement::McpSessionOnly,
     )?;
-    let mut owner_input = Map::new();
-    owner_input.insert("id".into(), json!(scope.task_id()));
-    if let Some(model) = object.get("model") {
-        owner_input.insert("model".into(), model.clone());
-    }
     if tool == GET {
-        owner_input.insert("path".into(), json!(expected));
-        let output = runtime.route_worker_tool(GET, Value::Object(owner_input), session)?;
-        scope.check_manifest(&output)?;
+        if !CONTRACT_READS.contains(&path) && !scope.hold_names(runtime, path, &session)? {
+            return Err(read_refused());
+        }
+        let output = scope.read(runtime, path, object.get("model"), session)?;
+        if path == REVIEW_MANIFEST_ARTIFACT {
+            scope.check_manifest(&output)?;
+        }
         return Ok(output);
     }
     let content = BASE64_STANDARD
@@ -396,34 +409,145 @@ pub(super) fn execute_brokered(
             OrbitError::InvalidInput(format!("`content_base64` is not base64: {error}"))
         })?;
     scope.check_report(&content)?;
+    let mut owner_input = Map::new();
+    owner_input.insert("id".into(), json!(scope.task_id()));
+    if let Some(model) = object.get("model") {
+        owner_input.insert("model".into(), model.clone());
+    }
     owner_input.insert(
         "artifacts".into(),
         json!([{
-            "path": expected,
-            "media_type": media_type_for_artifact_path(expected),
+            "path": REVIEW_REPORT_ARTIFACT,
+            "media_type": media_type_for_artifact_path(REVIEW_REPORT_ARTIFACT),
             "content": content,
         }]),
     );
     runtime.route_worker_tool(PUT, Value::Object(owner_input), session)
 }
 
+/// Whether `path` could be an evidence artifact a hold names: a valid
+/// relative artifact path that is not one of the review contract's own.
+fn evidence_path(path: &str) -> bool {
+    orbit_types::task::validate_relative_artifact_path(path).is_ok()
+        && !CONTRACT_READS.contains(&path)
+        && path != REVIEW_GATE_ARTIFACT
+}
+
+fn read_refused() -> OrbitError {
+    OrbitError::PolicyDenied(format!(
+        "claimed_review_bridge_refused: '{GET}' carries only `{REVIEW_MANIFEST_ARTIFACT}`, \
+         `{REVIEW_REPORT_ARTIFACT}`, `{REVIEW_REPORT_HISTORY_ARTIFACT}`, \
+         `{REVIEW_EVIDENCE_HOLD_ARTIFACT}` and the evidence artifacts the owner's current \
+         evidence hold names for the claimed reviewer"
+    ))
+}
+
+/// Whether an owner error says the artifact does not exist, in process or
+/// across the owner route.
+fn not_found(error: &OrbitError) -> bool {
+    match error {
+        OrbitError::NotFound { .. } => true,
+        OrbitError::RemoteTool { code, .. } => code == "not_found",
+        _ => false,
+    }
+}
+
+/// The artifact bytes in an owner's `orbit.task.artifact.get` answer.
+fn artifact_bytes(output: &Value, path: &str) -> Result<Vec<u8>, OrbitError> {
+    match (output.get("content"), output.get("content_base64")) {
+        (Some(Value::String(text)), _) => Ok(text.as_bytes().to_vec()),
+        (_, Some(Value::String(encoded))) => BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|error| OrbitError::Execution(format!("owner {path} payload: {error}"))),
+        _ => Err(OrbitError::Execution(format!(
+            "the owner answered the {path} read without its bytes"
+        ))),
+    }
+}
+
 impl ClaimedReviewScope<'_> {
+    /// Read the claimed task's artifact at `path` from the owner, whose claim
+    /// fence answers only while the claim is active.
+    fn read(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        model: Option<&Value>,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let mut input = Map::new();
+        input.insert("id".into(), json!(self.task_id()));
+        input.insert("path".into(), json!(path));
+        if let Some(model) = model {
+            input.insert("model".into(), model.clone());
+        }
+        runtime.route_worker_tool(GET, Value::Object(input), session)
+    }
+
+    /// The bytes of the owner's artifact at `path`, or `None` when it has none.
+    fn owner_bytes(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        session: &ToolSessionContext,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        match self.read(runtime, path, None, session.clone()) {
+            Ok(output) => artifact_bytes(&output, path).map(Some),
+            Err(error) if not_found(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Whether the owner's current evidence hold names `path`: as a
+    /// requirement's result artifact, or as the log that result names for
+    /// that requirement. The names come from the owner's records only; an
+    /// absent or unreadable hold names nothing.
+    fn hold_names(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        session: &ToolSessionContext,
+    ) -> Result<bool, OrbitError> {
+        let Some(bytes) = self.owner_bytes(runtime, REVIEW_EVIDENCE_HOLD_ARTIFACT, session)? else {
+            return Ok(false);
+        };
+        let Ok(hold) = serde_json::from_slice::<ReviewEvidenceHold>(&bytes) else {
+            return Ok(false);
+        };
+        if hold
+            .requirements
+            .iter()
+            .any(|required| required.artifact == path)
+        {
+            return Ok(true);
+        }
+        for required in &hold.requirements {
+            if !evidence_path(&required.artifact) {
+                continue;
+            }
+            let Some(bytes) = self.owner_bytes(runtime, &required.artifact, session)? else {
+                continue;
+            };
+            let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&bytes) else {
+                continue;
+            };
+            if evidence.log_artifact == path
+                && evidence.attempt_id == hold.attempt_id
+                && evidence.candidate == hold.candidate
+                && evidence.kind == required.kind
+                && evidence.name == required.name
+                && evidence.command == required.command
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The manifest the owner returned must be the admitted attempt's: the
     /// gate writes it once per attempt, so another attempt's manifest is stale.
     fn check_manifest(&self, output: &Value) -> Result<(), OrbitError> {
-        let bytes = match (output.get("content"), output.get("content_base64")) {
-            (Some(Value::String(text)), _) => text.as_bytes().to_vec(),
-            (_, Some(Value::String(encoded))) => {
-                BASE64_STANDARD.decode(encoded).map_err(|error| {
-                    OrbitError::Execution(format!("owner manifest payload: {error}"))
-                })?
-            }
-            _ => {
-                return Err(OrbitError::Execution(
-                    "the owner answered the manifest read without its bytes".into(),
-                ));
-            }
-        };
+        let bytes = artifact_bytes(output, REVIEW_MANIFEST_ARTIFACT)?;
         let manifest: ReviewManifest = serde_json::from_slice(&bytes).map_err(|error| {
             OrbitError::Execution(format!("{REVIEW_MANIFEST_ARTIFACT} is unreadable: {error}"))
         })?;

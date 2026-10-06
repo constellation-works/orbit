@@ -437,9 +437,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   binary mismatch, not a transport problem (check the follower's binary is
   current).
 - The before-PR reviewer of a claimed leaf is the one agent that reads and
-  writes owner artifacts: `review-manifest.json` and `review-report.json`.
-  Its nested `orbit` hands exactly those two calls, from the CLI or MCP, to
-  the run's coordinator (the step runner's broker, outside the sandbox),
+  writes owner artifacts: it reads `review-manifest.json` and its prior review
+  evidence (the report, its history, the evidence hold and the evidence that
+  hold names), and writes `review-report.json`. Its nested `orbit` hands
+  those calls, from the CLI or MCP, to the run's coordinator (the step runner's broker, outside the sandbox),
   which checks them against the claim and the running review attempt and
   carries them to the owner over this follower's SSH route. Anything else is
   refused without reaching the owner. Refusals and their recovery are in the

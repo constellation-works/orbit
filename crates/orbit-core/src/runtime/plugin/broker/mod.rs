@@ -52,10 +52,11 @@ pub(crate) fn is_host_credentialed_read(tool: &str) -> bool {
 }
 
 /// The other built-ins a broker runs (design §3): a claimed before-PR
-/// reviewer's manifest read and report write. The owner of a claimed task is
-/// another machine, reached over SSH, whose credentials every agent sandbox
-/// masks. The broker answers them only for that reviewer, scoped by its own
-/// records to the claimed task and the attempt whose reviewer is running.
+/// reviewer's review-artifact reads and report write. The owner of a claimed
+/// task is another machine, reached over SSH, whose credentials every agent
+/// sandbox masks. The broker answers them only for that reviewer, scoped by
+/// its own records to the claimed task and the attempt whose reviewer is
+/// running.
 const CLAIMED_REVIEW_ARTIFACT_TOOLS: [&str; 2] =
     ["orbit.task.artifact.get", "orbit.task.artifact.put"];
 

@@ -1,5 +1,5 @@
-//! A claimed before-PR reviewer's manifest read and report write from inside
-//! a real agent sandbox, carried to a remote owner by its run's broker
+//! A claimed before-PR reviewer's review-artifact reads and report write from
+//! inside a real agent sandbox, carried to a remote owner by its run's broker
 //! (`docs/design/plugins/2_agent_call_broker.md` §3, §4.4;
 //! `docs/runbooks/claimed-review-artifacts.md`).
 //!
@@ -9,7 +9,10 @@
 //! over that route; the follower's review ledger holds the admitted attempt
 //! with its reviewer running. Inside the sandbox the built `orbit` serves the
 //! reviewer through both the CLI and MCP, exactly as a provider calls it,
-//! and SSH runs only in the unconfined broker. Last, the claim's reservation
+//! and SSH runs only in the unconfined broker. Besides the manifest, the
+//! reviewer reads the prior evidence it continues from: the report, its
+//! history, the evidence hold and exactly the evidence that hold names; any
+//! other path is refused. Last, the claim's reservation
 //! elapses and the reviewer still reads and writes, until the owner recovers
 //! the claim and a later pull supersedes it: while the follower's ledger still
 //! records the reviewer running, the owner refuses the bridged calls.
@@ -40,8 +43,9 @@ use orbit_types::task::TaskStatus;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    ActivityToolDenyPolicy, REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewBudget, ReviewConsumption, ReviewManifest, ReviewReservation,
+    ActivityToolDenyPolicy, REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget,
+    ReviewConsumption, ReviewManifest, ReviewReportHistory, ReviewReservation,
     ReviewerInvocationEvent,
 };
 use serde_json::{Value, json};
@@ -429,19 +433,42 @@ fn sandbox_fixture() {
     // another attempt: the reviewer must refuse it as stale.
     let scratch = follower.work.join(".orbit/tmp");
     fs::create_dir_all(&scratch).expect("scratch");
-    let pin_manifest = |attempt: &str| -> Vec<u8> {
-        let bytes = serde_json::to_vec_pretty(&manifest(&task, attempt, &candidate)).unwrap();
-        let source = scratch.join(REVIEW_MANIFEST_ARTIFACT);
-        fs::write(&source, &bytes).expect("manifest source");
+    let attach = |path: &str, bytes: &[u8]| {
+        let source = scratch.join(path.replace('/', "-"));
+        fs::write(&source, bytes).expect("artifact source");
         runner
             .run_tool(
                 "orbit.task.artifact.put",
-                json!({"id": task, "path": REVIEW_MANIFEST_ARTIFACT, "source_path": source}),
+                json!({"id": task, "path": path, "source_path": source}),
             )
-            .expect("the gate pins the manifest on the owner");
+            .unwrap_or_else(|error| panic!("attach {path} on the owner: {error}"));
+    };
+    let pin_manifest = |attempt: &str| -> Vec<u8> {
+        let bytes = serde_json::to_vec_pretty(&manifest(&task, attempt, &candidate)).unwrap();
+        attach(REVIEW_MANIFEST_ARTIFACT, &bytes);
         bytes
     };
     pin_manifest("attempt-from-an-earlier-run");
+
+    // An earlier review's evidence hold on the owner, the hosted-CI result it
+    // names with that result's log, and an artifact no hold names.
+    let hold = json!({
+        "schema_version": 1, "attempt_id": "attempt-held", "lineage_key": LINEAGE,
+        "run_id": LEAF, "candidate": candidate, "task_meaning_digest": "digest",
+        "requirements": [{"kind": "hosted_ci", "name": "CI", "command": "make ci",
+                          "artifact": "evidence/ci.json"}],
+    })
+    .to_string();
+    let result = json!({
+        "schema_version": 1, "attempt_id": "attempt-held", "candidate": candidate,
+        "kind": "hosted_ci", "name": "CI", "command": "make ci",
+        "outcome": "passed", "log_artifact": "evidence/ci.log",
+    })
+    .to_string();
+    attach(REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.as_bytes());
+    attach("evidence/ci.json", result.as_bytes());
+    attach("evidence/ci.log", b"ci passed\n");
+    attach("evidence/unnamed.log", b"not named by the hold\n");
 
     // The reviewer's sources: its report, the one it first attaches over
     // MCP, one for another attempt, an oversize file and a link out of the
@@ -580,14 +607,54 @@ fn sandbox_fixture() {
         PathBuf::from(format!("{}.consumed", lose.display())).exists(),
         "the owner committed a put whose answer was then lost"
     );
+    // The prior evidence a continuing review reads, over the CLI and MCP,
+    // after the MCP put and before any CLI put.
+    for read in [
+        &running["evidence_reads"][REVIEW_REPORT_HISTORY_ARTIFACT]["output"],
+        &running["evidence_mcp_reads"][REVIEW_REPORT_HISTORY_ARTIFACT],
+    ] {
+        let history =
+            ReviewReportHistory::parse(read["content"].as_str().unwrap_or_default().as_bytes())
+                .unwrap_or_else(|error| panic!("the reviewer reads the report history: {error}"));
+        assert_eq!(
+            history
+                .revisions
+                .last()
+                .map(|revision| revision.attempt_id.as_str()),
+            Some(attempt_id.as_str()),
+            "the history records the attached report: {running}"
+        );
+    }
+    for (path, expected) in [
+        (REVIEW_REPORT_ARTIFACT, mcp_report.as_slice()),
+        (REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.as_bytes()),
+        ("evidence/ci.json", result.as_bytes()),
+        ("evidence/ci.log", b"ci passed\n".as_slice()),
+    ] {
+        for read in [
+            &running["evidence_reads"][path]["output"],
+            &running["evidence_mcp_reads"][path],
+        ] {
+            assert_eq!(
+                read["content"].as_str().map(str::as_bytes),
+                Some(expected),
+                "the reviewer reads {path} from the owner: {running}"
+            );
+        }
+    }
     refused(&running["wrong_path"], "claimed_review_bridge_refused");
     refused(&running["cross_task"], "claimed_review_bridge_refused");
+    refused(
+        &running["cross_task_evidence"],
+        "claimed_review_bridge_refused",
+    );
     refused(&running["stale_report"], "claimed_review_bridge_refused");
     refused(&running["symlink"], "");
     refused(&running["oversize"], "");
     // The same refusals over MCP, whose adapter prepares the input itself.
     let mcp = &running["mcp_refusals"];
     mcp_refused(&mcp["wrong_path"], "claimed_review_bridge_refused");
+    mcp_refused(&mcp["gate_record"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["cross_task"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["stale_report"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["symlink"], "");
@@ -1245,10 +1312,17 @@ if mode == 'running':
     open(mcp_done, 'w').close()
     wait(mcp_checked)
     source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
-    names = ['wrong_path', 'cross_task', 'stale_report', 'symlink', 'oversize', 'unrelated',
-             'other_owner']
+    evidence = [REPORT, 'review-report-history.json', 'review-evidence-hold.json',
+                'evidence/ci.json', 'evidence/ci.log']
+    report['evidence_reads'] = {path: tool('orbit.task.artifact.get', {'id': task, 'path': path})
+                                for path in evidence}
+    report['evidence_mcp_reads'] = dict(zip(evidence, mcp([
+        ('orbit_task_artifact_get', {'id': task, 'path': path}) for path in evidence])))
+    names = ['wrong_path', 'gate_record', 'cross_task', 'stale_report', 'symlink', 'oversize',
+             'unrelated', 'other_owner']
     report['mcp_refusals'] = dict(zip(names, mcp([
-        ('orbit_task_artifact_get', {'id': task, 'path': REPORT}),
+        ('orbit_task_artifact_get', {'id': task, 'path': 'evidence/unnamed.log'}),
+        ('orbit_task_artifact_get', {'id': task, 'path': 'review-gate.json'}),
         ('orbit_task_artifact_get', {'id': 'TSO-999', 'path': MANIFEST}),
         ('orbit_task_artifact_put', source('stale')),
         ('orbit_task_artifact_put', source('link')),
@@ -1267,8 +1341,10 @@ if mode == 'running':
     open(lose, 'w').close()
     report['lost_put'] = tool('orbit.task.artifact.put', put)
     report['retry_put'] = tool('orbit.task.artifact.put', put)
-    report['wrong_path'] = tool('orbit.task.artifact.get', {'id': task, 'path': REPORT})
+    report['wrong_path'] = tool('orbit.task.artifact.get', {'id': task, 'path': 'evidence/unnamed.log'})
     report['cross_task'] = tool('orbit.task.artifact.get', {'id': 'TSO-999', 'path': MANIFEST})
+    report['cross_task_evidence'] = tool('orbit.task.artifact.get',
+        {'id': 'TSO-999', 'path': 'evidence/ci.json'})
     for name in ('stale', 'link', 'oversize'):
         key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
         report[key] = tool('orbit.task.artifact.put', dict(put, source_path=os.path.join(scratch, name + '.json')))

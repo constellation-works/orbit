@@ -1,9 +1,9 @@
 //! A claimed reviewer's MCP artifact calls go where its CLI calls go.
 //!
 //! A managed worker's MCP server runs inside the agent sandbox, which masks
-//! the SSH credentials its owner route needs. Its manifest read and report
-//! write are handed to the run's broker exactly as `orbit tool run` hands
-//! them; every other call reaches the wrapped host unchanged.
+//! the SSH credentials its owner route needs. Its review-artifact reads and
+//! report write are handed to the run's broker exactly as `orbit tool run`
+//! hands them; every other call reaches the wrapped host unchanged.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
