@@ -389,9 +389,9 @@ impl DestinationSession {
         }
     }
 
-    /// Read until the response with this id arrives or the deadline passes.
-    /// Matching strictly by id keeps a server-initiated message or an
-    /// out-of-order answer from being read as this request's result.
+    /// Read until a response with this id arrives or the deadline passes.
+    /// Peer requests have their own ID namespace and must be answered before
+    /// correlating responses, including when their ID equals ours.
     fn await_response(
         &mut self,
         method: &str,
@@ -447,7 +447,35 @@ impl DestinationSession {
                     ));
                 }
             };
+            if let Some(peer_method) = message.get("method") {
+                // Notifications do not require a reply. Preserve numeric and
+                // string request IDs verbatim; neither belongs to our counter.
+                if let Some(peer_id) = message
+                    .get("id")
+                    .filter(|id| id.is_string() || id.is_i64() || id.is_u64())
+                {
+                    self.answer_peer(peer_id, peer_method).map_err(|error| {
+                        // The outgoing call is already dispatched. A failed
+                        // peer reply cannot reclassify it as a delivery miss.
+                        lost.classify(
+                            &self.destination,
+                            id,
+                            format!("could not answer peer while awaiting '{method}': {error}"),
+                        )
+                    })?;
+                }
+                continue;
+            }
             if message.get("id").and_then(Value::as_i64) == Some(id) {
+                if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+                    || message.get("result").is_some() == message.get("error").is_some()
+                {
+                    return Err(lost.classify(
+                        &self.destination,
+                        id,
+                        format!("emitted an invalid JSON-RPC response while awaiting '{method}'"),
+                    ));
+                }
                 if let Some(error) = message.get("error") {
                     return Err(unreachable(
                         &self.destination,
@@ -457,6 +485,24 @@ impl DestinationSession {
                 return Ok(message);
             }
         }
+    }
+
+    /// This client advertises no optional capabilities. Ping is required;
+    /// other peer methods are explicitly refused. Sending uses the current
+    /// absolute deadline, so servicing requests never renews the call budget.
+    fn answer_peer(&mut self, id: &Value, method: &Value) -> Result<(), OrbitError> {
+        let response = match method.as_str() {
+            Some("ping") => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+            Some(_) => json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"},
+            }),
+            None => json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
+        };
+        self.send("peer response", &response, unreachable)
     }
 }
 
