@@ -483,9 +483,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   base passes), `transient` (validation could not reach the network after its
   reruns, or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
-  breaker does not count a release. After `provider` or `transient`, the
-  drain stops offering that crew for the rest of its window. After
-  `environment` or `owner_route` — failures of the host itself — it requests
+  breaker does not count a release. After `operator_cancel`, `provider` or
+  `transient`, the drain stops offering that crew for the rest of its window.
+  After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
   `crews.host_suppressed`); fix the host and start a new drain. In either
   case the owner does not hand the released task back to that drain, so it is

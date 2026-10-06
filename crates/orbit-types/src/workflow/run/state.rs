@@ -201,13 +201,17 @@ impl ClaimFailureClass {
     }
 
     /// Whether the executing drain stops running the leaf's crew for the
-    /// rest of its window. An operator's cancel, a red base and a base
-    /// conflict say nothing about the host's crew, so none excludes it.
+    /// rest of its window. A cancel excludes that crew, but does not suppress
+    /// the whole host; a red base and a base conflict exclude neither.
     #[must_use]
     pub const fn excludes_crew(self) -> bool {
         matches!(
             self,
-            Self::Environment | Self::Transient | Self::OwnerRoute | Self::Provider
+            Self::Environment
+                | Self::Transient
+                | Self::OperatorCancel
+                | Self::OwnerRoute
+                | Self::Provider
         )
     }
 

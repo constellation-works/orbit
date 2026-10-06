@@ -374,7 +374,7 @@ fn a_candidate_failure_still_blocks_the_task() {
 
 /// Cancelling one launched claimed leaf, as `orbit run cancel <leaf>` and the
 /// dashboard's cancel do, gives its claim back with the operator's reason
-/// rather than failing the task, and leaves the crew running.
+/// rather than failing the task, and excludes its crew for the drain window.
 #[test]
 fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason() {
     if !isolated(
@@ -412,10 +412,11 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert_eq!(release["failure"]["class"], "operator_cancel", "{release}");
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "revoked");
-    assert_eq!(
-        sol_exclusion(&pair, &drain),
-        None,
-        "a cancel excludes no crew"
+    let exclusion = sol_exclusion(&pair, &drain).expect("a cancel excludes its crew");
+    assert_eq!(exclusion.source, CrewExclusionSource::LeafReleased);
+    assert!(
+        exclusion.reason.contains("operator_cancel"),
+        "{exclusion:?}"
     );
 }
 
@@ -496,6 +497,9 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
     assert_eq!(pair.owner_status(&task), "backlog");
 
     for (n, reason) in reasons.iter().enumerate() {
+        // A cancel excludes its crew only for the drain that admitted it;
+        // later drains can retry the task while the task-wide budget persists.
+        let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
         assert_eq!(
             pair.claimed_task(&leaf),

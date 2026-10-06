@@ -490,8 +490,9 @@ owns delivery:
   candidate that `sync_base` and its conflict recovery could not carry onto a base that moved).
   The class is read from the last failed step's typed marker, then any provider or red-base
   failure the run recorded, then the terminalizing diagnostic, then the leaf's progress.
-  `transient` and `provider` exclude the leaf's crew for the rest of the drain's window (source
-  `leaf_released`, or `provider_unavailable` for a provider). `environment` and `owner_route`
+  `operator_cancel`, `transient` and `provider` exclude the leaf's crew for
+  the rest of the drain's window (source `leaf_released`, or
+  `provider_unavailable` for a provider). `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. For any excluding class the owner's admission also holds the released
