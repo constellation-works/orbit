@@ -128,24 +128,24 @@ pub(crate) fn instructions(
 ) -> Result<InstructionSnapshot, AutomationError> {
     let source = Source::new(&runtime.paths().repo_root);
 
-    // The pinned tree includes every repository instruction, including nested
-    // selectors. Dirty local instructions cannot certify this pinned source.
+    // `git ls-tree` matches pathspecs literally and rejects glob magic, so
+    // `**/AGENTS.md` lists nothing. List the pinned tree and keep instruction
+    // basenames. `-z` keeps a path that contains spaces or quotes intact.
+    // Dirty worktree files are not in that tree, so they cannot certify it.
     let paths = source.git(&[
         "ls-tree",
         "-r",
+        "-z",
         "--name-only",
+        "--full-tree",
         revision,
-        "--",
-        "**/AGENTS.md",
-        "**/CLAUDE.md",
     ])?;
 
     let mut instructions = Vec::new();
 
-    for path in paths
-        .lines()
-        .filter(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
-    {
+    for path in paths.split('\0').filter(|path| {
+        !path.is_empty() && matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md"))
+    }) {
         if instructions.len() >= 50 {
             return Err(AutomationError::Deferred("instruction_scan_budget".into()));
         }
