@@ -99,10 +99,13 @@ fn run_single_pass_drain(
     let root = pair._root.path().to_path_buf();
     // This test binary cannot be re-executed as a worker. The drain's
     // substitute waits until the drain has run here; a leaf's exits at once.
+    // The drain is told apart by its own marker, not by when its shell first
+    // looks: a drain worker that starts after `leaves-exit` exists must still
+    // wait, or the supervisor interrupts the drain before it runs here.
     orbit_core::test_support::install_substitute_pipeline_worker([
         "sh".to_string(),
         "-c".to_string(),
-        "if [ -e \"$1/leaves-exit\" ]; then exit 3; fi; i=0; \
+        "if [ -e \"$1/leaves-exit\" ] && [ ! -e \"$1/drain-$2\" ]; then exit 3; fi; i=0; \
          while [ ! -e \"$1/started-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
             .to_string(),
         "worker".to_string(),
@@ -143,6 +146,7 @@ fn run_single_pass_drain(
             Ok(())
         })
         .unwrap();
+    std::fs::write(root.join(format!("drain-{run_id}")), "").unwrap();
     std::fs::write(root.join("leaves-exit"), "").unwrap();
     let executed = follower.execute_pipeline_run_worker(&run_id);
     std::fs::write(root.join(format!("started-{run_id}")), "").unwrap();
@@ -445,12 +449,16 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
     }
     let pair = Pair::new(1);
     install_pull_job_assets(&pair);
+    // No worker runs either drain; the test drives their state itself. Each
+    // substitute stays alive until released, so the supervisor never
+    // interrupts a pending run under the writes below.
+    let release = pair._root.path().join("release");
     orbit_core::test_support::install_substitute_pipeline_worker([
         "sh".to_string(),
         "-c".to_string(),
-        "exit 3".to_string(),
+        "i=0; while [ ! -e \"$1\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done".to_string(),
         "worker".to_string(),
-        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
+        release.to_string_lossy().into_owned(),
     ]);
     let (follower, selector) = bound_follower(&pair);
     let source = follower
@@ -579,4 +587,5 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
             .is_none(),
         "a replay cannot mint a new marker"
     );
+    std::fs::write(&release, "").unwrap();
 }
