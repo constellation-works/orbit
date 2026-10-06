@@ -53,6 +53,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
     "incomplete_review_timeout",
     "blocked_validation_environment",
     "held_baseline_red",
+    "held_provider_failure",
 ];
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.

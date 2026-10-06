@@ -69,6 +69,35 @@ pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<
         || message.is_some_and(|message| message.contains(PROVIDER_CAPACITY_MARKER))
 }
 
+/// Token a provider failure diagnostic carries when the provider's own
+/// content policy refused the turn — Codex's cybersecurity content filter, a
+/// Claude refusal — as opposed to the agent failing the work [ORB-14266].
+///
+/// It is not an unavailability: the provider works, it declined this task's
+/// content, so a pull drain does not exclude the crew for its window. Step
+/// and final recovery skip it (a repair agent on the same provider is refused
+/// the same way), and a local run's task goes back to the backlog with every
+/// crew of that provider withheld for a while.
+pub const PROVIDER_REFUSAL_ERROR_CODE: &str = "provider_refusal";
+
+/// The bracketed marker form of [`PROVIDER_REFUSAL_ERROR_CODE`].
+pub const PROVIDER_REFUSAL_MARKER: &str = "[provider_refusal]";
+
+/// Whether a step failure says its provider's content policy refused the turn.
+#[must_use]
+pub fn is_provider_refusal(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_REFUSAL_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(PROVIDER_REFUSAL_MARKER))
+}
+
+/// Whether a step failure is the provider's rather than the work's: it was
+/// [unavailable](is_provider_unavailable) (capacity included) or
+/// [refused](is_provider_refusal) the turn.
+#[must_use]
+pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
+    is_provider_unavailable(error_code, message) || is_provider_refusal(error_code, message)
+}
+
 /// Token a required-validation failure carries when a command could not find
 /// a tool in the validation environment — exit 127, `command not found`, or a
 /// guardrail's "is required" — as opposed to the candidate failing its checks

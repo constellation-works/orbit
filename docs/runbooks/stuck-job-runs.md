@@ -362,6 +362,26 @@ Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
 `validation/<run>/<n>.baseline.json`. See
 [CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).
 
+## A task held after a provider failure
+
+A local run that ends with `[provider_capacity]`, `[provider_unavailable]` or
+`[provider_refusal]` failed on its provider, not on the work. The task is not
+blocked. It is in `backlog` under a `provider_failure_hold` history event. The
+event's note names the excluded crews and the `not_before` time. The candidate
+is committed on the run's branch, and no `[BLOCKED]` PR was opened. Do not
+unblock or replay anything.
+
+Until `not_before`, the drain gives the task to a crew the hold does not
+exclude. A refusal excludes every crew of the refusing provider. When no crew
+is left, `orbit run readiness --json` reports the task with
+`reason: "provider_backoff"` and the release time.
+
+To run the task sooner, set its `crew` to one the hold does not exclude, or
+move it through another status: any later status change lifts the hold. If a
+provider keeps refusing the content, pin the task to a crew on another
+provider. See
+[CONFIG.md](../CONFIG.md#provider-failure-holds).
+
 ## Replay from the beginning
 
 When checkpoint outputs are invalid or the run must start from step zero:

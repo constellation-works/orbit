@@ -357,6 +357,16 @@ pub fn explain_workspace_auto_readiness(
                         );
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    BacklogTaskExclusionReason::ProviderBackoff => {
+                        // [ORB-14266] Lifts by itself at the hold's
+                        // `not_before`; the detail names the run, the
+                        // failure, the excluded crews and the time.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("provider_backoff".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));

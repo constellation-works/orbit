@@ -6,6 +6,7 @@ use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 mod block_on_run_failure;
 pub(crate) mod locks;
+pub(crate) mod provider_hold;
 mod reservation_cleanup;
 
 #[cfg(test)]

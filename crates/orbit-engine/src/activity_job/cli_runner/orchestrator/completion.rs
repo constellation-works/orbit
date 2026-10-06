@@ -7,11 +7,11 @@ use std::time::Duration;
 use orbit_agent::{
     ParsedStdout, antigravity_terminal_error_diagnostic, normalize_cli_stdout,
     project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_invocation_diagnostic,
+    provider_content_refusal, provider_invocation_diagnostic,
 };
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
-use orbit_types::workflow::{PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER};
+use orbit_types::workflow::{ProviderFailureClass, provider_failure_text};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -173,12 +173,16 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         && completion_envelope_error.is_none()
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"));
     let provider_auth_error = structured_provider_auth_error(&provider, stdout.protocol_bytes());
+    // [ORB-14266] A provider's terminal refusal frame ends the turn whatever
+    // the exit code, so it fails the invocation like an authentication error.
+    let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
     // (ADR-0224 / L-0087) — outside that opt-in, parsing stays advisory.
     let success = exit_success
         && provider_auth_error.is_none()
+        && provider_refusal.is_none()
         && !completion_protocol_violation
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
@@ -222,9 +226,19 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             timeout_seconds
         ))
     } else if let Some(diagnostic) = provider_auth_error {
-        Some(format!(
-            "{PROVIDER_UNAVAILABLE_MARKER} {}",
-            bounded_diagnostic(&diagnostic, redaction)
+        Some(provider_failure_text(
+            ProviderFailureClass::Unavailable,
+            &provider,
+            &bounded_diagnostic(&diagnostic, redaction),
+        ))
+    } else if let Some(refusal) = provider_refusal {
+        Some(provider_failure_text(
+            ProviderFailureClass::Refusal,
+            &provider,
+            &format!(
+                "{provider} provider refused the request: {}",
+                bounded_diagnostic(&refusal, redaction)
+            ),
         ))
     } else if !exit_success {
         let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
@@ -316,21 +330,47 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 .as_deref()
                 .is_some_and(provider_authentication_failure)
         {
-            Some(format!("{PROVIDER_UNAVAILABLE_MARKER} {diagnostic}"))
-        } else if let Some(capacity) = provider_capacity_error(
+            Some(provider_failure_text(
+                ProviderFailureClass::Unavailable,
+                &provider,
+                &diagnostic,
+            ))
+        } else if let Some(capacity) = provider_reported(
             &provider,
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
             terminal_error.as_deref(),
+            provider_capacity_exhausted,
         ) {
             // [ORB-14149] Nor can a repair agent, or an immediate rerun of the
             // same model, change a provider's capacity. Read only from a
             // failed exit: a provider that reports capacity mid-turn and then
             // finishes is not unavailable.
-            Some(format!(
-                "{PROVIDER_CAPACITY_MARKER} {diagnostic}: {provider} provider reported the \
-                 selected model at capacity: {}",
-                bounded_diagnostic(&capacity, redaction)
+            Some(provider_failure_text(
+                ProviderFailureClass::Capacity,
+                &provider,
+                &format!(
+                    "{diagnostic}: {provider} provider reported the selected model at capacity: {}",
+                    bounded_diagnostic(&capacity, redaction)
+                ),
+            ))
+        } else if let Some(refusal) = provider_reported(
+            &provider,
+            stdout.protocol_bytes(),
+            stderr_text.as_ref(),
+            terminal_error.as_deref(),
+            provider_content_refusal,
+        ) {
+            // [ORB-14266] Nor does either change the provider's content
+            // policy: Codex's content filter ends the turn with its own
+            // `error` and `turn.failed` frames and a failed exit.
+            Some(provider_failure_text(
+                ProviderFailureClass::Refusal,
+                &provider,
+                &format!(
+                    "{diagnostic}: {provider} provider refused the request: {}",
+                    bounded_diagnostic(&refusal, redaction)
+                ),
             ))
         } else {
             Some(diagnostic)
@@ -591,14 +631,43 @@ fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> Option<Strin
     })
 }
 
-/// The capacity text a failed provider wrote about itself: its stderr, its
-/// terminal error, or a provider-owned failure frame on stdout. Codex reports
-/// an exhausted model only as `error` and `turn.failed` frames [ORB-14149].
-fn provider_capacity_error(
+/// [ORB-14266] Claude's terminal `result` frame stopping for a refusal: the
+/// provider declined the turn, so no answer before it may stand. Only the
+/// provider's own control frame is read, never assistant or tool text.
+fn structured_provider_refusal(provider: &str, stdout: &[u8]) -> Option<String> {
+    if provider != "claude" {
+        return None;
+    }
+    let frame = stdout_frames(stdout)
+        .filter(|frame| frame.get("schemaVersion").is_none())
+        .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("result"))
+        .last()?;
+    let refused = frame.get("stop_reason").and_then(Value::as_str) == Some("refusal")
+        || (frame.get("is_error").and_then(Value::as_bool) == Some(true)
+            && frame
+                .get("result")
+                .and_then(Value::as_str)
+                .is_some_and(provider_content_refusal));
+    refused.then(|| {
+        frame
+            .get("result")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or("stop_reason=refusal")
+            .to_string()
+    })
+}
+
+/// The text a failed provider wrote about itself that `matches` — its
+/// stderr, its terminal error, or a provider-owned failure frame on stdout.
+/// Codex reports an exhausted model [ORB-14149] and a content-filter refusal
+/// [ORB-14266] only as `error` and `turn.failed` frames.
+fn provider_reported(
     provider: &str,
     stdout: &[u8],
     stderr_text: &str,
     terminal_error: Option<&str>,
+    matches: fn(&str) -> bool,
 ) -> Option<String> {
     let frame_text = || {
         stdout_frames(stdout).find_map(|frame| {
@@ -611,13 +680,13 @@ fn provider_capacity_error(
                         .iter()
                         .filter_map(|key| failure.get(*key).and_then(Value::as_str)),
                 )
-                .find(|text| provider_capacity_exhausted(text))
+                .find(|text| matches(text))
                 .map(str::to_string)
         })
     };
     let line = |text: &str| {
         text.lines()
-            .find(|line| provider_capacity_exhausted(line))
+            .find(|line| matches(line))
             .map(|line| line.trim().to_string())
     };
     line(stderr_text)

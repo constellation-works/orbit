@@ -81,6 +81,11 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_provider_unavailable(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-14266] Nor can it get past the provider's content policy: the
+    // repair agent and the rerun would send the same task to the same filter.
+    if orbit_types::workflow::is_provider_refusal(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     // [ORB-13987] Nor can it install a tool required validation could not
     // find; repairing the candidate would only spend the recovery budget.
     if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
@@ -653,7 +658,13 @@ pub(super) fn attempt_failure_activity(
         {
             orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE
         }
-        _ => "pipeline_step_failed",
+        // [ORB-14266] The handoff preserves the candidate for the next run.
+        error => {
+            match orbit_types::workflow::ProviderFailureClass::of(None, Some(&error.to_string())) {
+                Some(class) => class.as_str(),
+                None => "pipeline_step_failed",
+            }
+        }
     };
     let input = serde_json::json!({
         "failed_step_id": step.id,

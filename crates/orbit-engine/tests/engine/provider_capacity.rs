@@ -1,4 +1,5 @@
-//! [ORB-14149] A provider whose selected model is at capacity, run through
+//! [ORB-14149] A provider whose selected model is at capacity, and
+//! [ORB-14266] one whose content policy refused the turn, run through
 //! `dispatch_v2_activity` and `execute_job_with_resume` against fake provider
 //! CLIs.
 //!
@@ -26,8 +27,8 @@ use orbit_types::workflow::activity_job::{
     Provider, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    BaselineRedHold, is_baseline_red_failure, is_provider_capacity_exhausted,
-    is_provider_unavailable,
+    BaselineRedHold, failed_provider, is_baseline_red_failure, is_provider_capacity_exhausted,
+    is_provider_failure, is_provider_refusal, is_provider_unavailable,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -42,6 +43,21 @@ fn codex_capacity_frames() -> String {
         r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"cargo test","aggregated_output":"","exit_code":0,"status":"completed"}}}}
 {{"type":"error","message":"{CAPACITY}"}}
 {{"type":"turn.failed","error":{{"message":"{CAPACITY}"}}}}"#
+    )
+}
+
+const CONTENT_FILTER: &str = "This content was flagged for possible cybersecurity risk. If this \
+     seems wrong, try rephrasing your request. To get authorized for security work, join the \
+     Trusted Access for Cyber program: https://chatgpt.com/cyber";
+
+/// What Codex wrote when its cybersecurity content filter ended a review of
+/// sandbox code (runs jrun-20261006-0104-c24/c29): its own `error` and
+/// `turn.failed` frames after the turn's tool traffic.
+fn codex_content_filter_frames() -> String {
+    format!(
+        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"rg sandbox","aggregated_output":"","exit_code":0,"status":"completed"}}}}
+{{"type":"error","message":"{CONTENT_FILTER}"}}
+{{"type":"turn.failed","error":{{"message":"{CONTENT_FILTER}"}}}}"#
     )
 }
 
@@ -389,6 +405,11 @@ fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
         );
         if capacity {
             assert!(!outcome.success, "case {index}: {outcome:?}");
+            assert_eq!(
+                message.and_then(failed_provider),
+                Some(binary),
+                "the failure names the provider a hold excludes: {message:?}"
+            );
             assert!(
                 message.is_some_and(|message| message.contains(CAPACITY)),
                 "the operator sees the provider's own words: {message:?}"
@@ -452,12 +473,172 @@ fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
     let handoff = host.calls("handoff");
     assert_eq!(handoff.len(), 1, "the failure handoff keeps the candidate");
     assert_eq!(handoff[0]["failed_step_id"], "implement_one");
+    assert_eq!(handoff[0]["error_code"], "provider_capacity", "{handoff:?}");
     assert!(
         handoff[0]["error_message"]
             .as_str()
             .is_some_and(|message| is_provider_capacity_exhausted(None, Some(message))),
         "{handoff:?}"
     );
+    assert_eq!(
+        fs::read_to_string(&candidate).unwrap().trim(),
+        "partial",
+        "the worktree still holds the partial candidate"
+    );
+}
+
+/// [ORB-14266] A content-policy refusal is typed only from the provider's own
+/// failure: Codex's content-filter frames on a failed exit, or Claude's
+/// terminal result stopping for a refusal, which fails the turn even on exit
+/// 0. It is a provider failure, but not an unavailability.
+#[test]
+fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
+    let envelope_answer = format!(
+        r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
+        serde_json::to_string(SUCCESS_ENVELOPE).unwrap()
+    );
+    let claude_answer = serde_json::to_string(SUCCESS_ENVELOPE).unwrap();
+    let cases: Vec<(&str, Provider, String, &str, i32, bool)> = vec![
+        // The incident: Codex's own content-filter frames on a failed exit.
+        (
+            "codex",
+            Provider::Codex,
+            codex_content_filter_frames(),
+            "",
+            1,
+            true,
+        ),
+        // The same text on the provider's stderr.
+        ("codex", Provider::Codex, String::new(), CONTENT_FILTER, 1, true),
+        // Claude's terminal result stopped for a refusal: no answer stands,
+        // whatever the exit code.
+        (
+            "claude",
+            Provider::Claude,
+            format!(
+                r#"{{"type":"result","subtype":"success","is_error":false,"stop_reason":"refusal","result":{claude_answer}}}"#
+            ),
+            "",
+            0,
+            true,
+        ),
+        // Claude Code's usage-policy error result.
+        (
+            "claude",
+            Provider::Claude,
+            r#"{"type":"result","is_error":true,"result":"API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy."}"#
+                .to_string(),
+            "",
+            1,
+            true,
+        ),
+        // Flagged mid-turn, then the turn finished: not a refusal.
+        (
+            "codex",
+            Provider::Codex,
+            format!("{}\n{envelope_answer}", codex_content_filter_frames()),
+            "",
+            0,
+            false,
+        ),
+        // The agent's own answer quotes the filter.
+        (
+            "codex",
+            Provider::Codex,
+            format!(
+                r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{CONTENT_FILTER}"}}}}"#
+            ),
+            "",
+            1,
+            false,
+        ),
+        // A tool the agent ran printed it.
+        (
+            "codex",
+            Provider::Codex,
+            format!(
+                r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"probe","aggregated_output":"{CONTENT_FILTER}","exit_code":1,"status":"failed"}}}}"#
+            ),
+            "",
+            1,
+            false,
+        ),
+    ];
+    for (index, (binary, provider, stdout, stderr, exit_code, refusal)) in
+        cases.into_iter().enumerate()
+    {
+        let fake = FakeProvider::new(binary, &stdout, stderr, exit_code, "");
+        let run_id = format!("refusal-{index}");
+        let audit = tempfile::tempdir().unwrap();
+        let host = CapacityHost::new(&fake.path, audit.path());
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "refusal_fixture",
+            spec: &ActivityV2Spec::AgentLoop(agent_spec(provider)),
+            fs_profile: None,
+            input: json!({ "prompt": "implement" }),
+            audit: writer(audit.path(), &run_id),
+            run_id: &run_id,
+            host: Some(&host),
+        })
+        .unwrap();
+        let message = outcome.message.as_deref();
+        assert_eq!(
+            is_provider_refusal(None, message),
+            refusal,
+            "case {index} ({binary} exit {exit_code}): {outcome:?}"
+        );
+        assert!(
+            !is_provider_unavailable(None, message),
+            "a refusal is not an unavailability: case {index}: {outcome:?}"
+        );
+        if refusal {
+            assert!(!outcome.success, "case {index}: {outcome:?}");
+            assert_eq!(
+                message.and_then(failed_provider),
+                Some(binary),
+                "{message:?}"
+            );
+        }
+    }
+}
+
+/// The incident runs: final recovery escalated a content-filter refusal it
+/// could not change. Now neither recovery runs, the provider is invoked once,
+/// and the failure handoff gets the typed code with the candidate intact.
+#[test]
+fn a_content_filter_refusal_skips_recovery_and_keeps_the_candidate() {
+    let worktree = tempfile::tempdir().unwrap();
+    let candidate = worktree.path().join("candidate.rs");
+    let fake = FakeProvider::new(
+        "codex",
+        &codex_content_filter_frames(),
+        "",
+        1,
+        &format!("echo partial > '{}'", candidate.display()),
+    );
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let run = run_job(
+        &implementation_job(agent_spec(Provider::Codex)),
+        &host,
+        "refusal-run",
+    );
+
+    let message = failure_message(&run.outcome);
+    assert!(
+        is_provider_refusal(None, Some(&message)) && is_provider_failure(None, Some(&message)),
+        "the run keeps the typed marker for run finalization: {message}"
+    );
+    assert_eq!(fake.invocations(), 1, "the refused task is not resent");
+    assert!(host.calls("step_fix").is_empty(), "no step recovery runs");
+    assert_eq!(
+        *host.final_recovery_admissions.lock().unwrap(),
+        0,
+        "final recovery is not admitted"
+    );
+    assert!(host.calls("decide").is_empty(), "no final recovery runs");
+    let handoff = host.calls("handoff");
+    assert_eq!(handoff.len(), 1, "the failure handoff keeps the candidate");
+    assert_eq!(handoff[0]["error_code"], "provider_refusal", "{handoff:?}");
     assert_eq!(
         fs::read_to_string(&candidate).unwrap().trim(),
         "partial",
