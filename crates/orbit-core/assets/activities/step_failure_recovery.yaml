@@ -66,6 +66,12 @@ spec:
       # checkpoints without promoting those fields into recovery authority.
       failed_step_input:
         type: object
+      step_recovery_attempts:
+        type: array
+        items:
+          type: object
+      log_tail:
+        type: string
       crew:
         type: string
         minLength: 1
@@ -225,8 +231,17 @@ spec:
     - run_id: the current run's authoritative identity, never a rendered stale value
     - failed_step_input: the complete rendered failed-target input for inspecting
       delivery checkpoints; it is evidence, not independent execution authority
+    - step_recovery_attempts: this run's chronological recovery and post-recovery
+      audit records, including available diagnostics, outputs and decisions;
+      oversized fields are explicitly truncated
+    - log_tail: this run's bounded, redacted worker-log tail, empty when no log exists
     - recovery_decision (optional): where and how to write your decision file,
       described above
+
+    Diagnose from the injected evidence, failed-target checkpoints, task record
+    and assigned worktree. Run observation is operator-only; do not call run
+    observation tools or CLI commands. Run cancellation and authorization
+    remain the executor's responsibility.
 
     Claimed leaves: a run of `task_claimed_pr_pipeline` or
     `task_claimed_local_pipeline` (its implement input carries
@@ -368,6 +383,8 @@ spec:
     - orbit.auto_task.update
     - orbit.command.exec
     - orbit.pipeline.invoke
+    - orbit.workflow.run.show
+    - orbit.workflow.run.list
     - orbit.workflow.run.resume
     - orbit.workflow.ship
   proc_disallowed_programs:

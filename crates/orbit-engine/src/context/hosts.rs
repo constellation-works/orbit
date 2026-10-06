@@ -1121,8 +1121,8 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
-    /// Read only this run's bounded, redacted worker log tail for final
-    /// recovery. `None` means the run has no worker log; read failures must
+    /// Read only this run's bounded, redacted worker log tail for built-in
+    /// step and final recovery. `None` means the run has no worker log; read failures must
     /// remain distinguishable from an empty log. This host capability is
     /// internal and grants no agent-facing run observation tool.
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {

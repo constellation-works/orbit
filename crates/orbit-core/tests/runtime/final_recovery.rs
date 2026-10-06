@@ -539,68 +539,80 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
     use orbit_types::workflow::ActivityV2Spec;
 
     let fixture = fixture("[]");
-    let yaml = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/activities/final_recovery.yaml"),
-    )
-    .unwrap();
-    let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
-    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
-        panic!("agent activity")
-    };
-    let denied = spec.tool_disallow_list.unwrap();
-    let resolved = fixture
-        .runtime
-        .resolve_activity_tool_denials(&[], "final_recovery", &denied)
+    for activity in [
+        "final_recovery",
+        "step_failure_recovery",
+        "pr_conflict_recovery",
+    ] {
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+        )
         .unwrap();
-    assert!(
-        resolved
-            .effective_tools
-            .iter()
-            .any(|tool| tool == "orbit.task.show")
-    );
-    for tool in &denied {
-        assert!(
-            !resolved.effective_tools.contains(tool),
-            "denied tool {tool} must never be delegated to the harness"
-        );
-    }
-
-    // An agent envelope alone cannot observe runs, even before the activity
-    // deny list is applied. Advertising or requiring a tool grants no capability.
-    {
-        let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
-        for tool in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
-            let error = fixture
-                .runtime
-                .execute_tool_command(tool, json!({"id": "jrun-missing"}), None, None)
-                .unwrap_err();
+        let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+        let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+            panic!("agent activity")
+        };
+        let denied = spec.tool_disallow_list.unwrap();
+        for observer in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
             assert!(
-                matches!(error, OrbitError::CapabilityDenied(_)),
-                "{tool} must retain capability_denied for an agent envelope: {error}"
+                denied.iter().any(|tool| tool == observer),
+                "ORB-14267: {activity} must withhold {observer}; recovery receives run evidence without operator authority"
             );
         }
-    }
-
-    let deny_env = denied.join(",");
-    let _env = orbit_common::test_env::scoped([
-        ("ORBIT_AGENT_NAME", Some("codex")),
-        ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
-        (ACTIVITY_NAME_ENV, Some("final_recovery")),
-        (ACTIVITY_TOOL_POLICY_ENV, Some("deny")),
-        (ACTIVITY_TOOLS_DENY_ENV, Some(deny_env.as_str())),
-    ]);
-    for tool in &denied {
-        let error = fixture
+        let resolved = fixture
             .runtime
-            .execute_tool_command(tool, json!({}), None, None)
-            .unwrap_err();
+            .resolve_activity_tool_denials(&[], activity, &denied)
+            .unwrap();
         assert!(
-            matches!(
-                error,
-                OrbitError::CapabilityDenied(_) | OrbitError::PolicyDenied(_)
-            ),
-            "{tool} must be rejected before domain execution: {error}"
+            resolved
+                .effective_tools
+                .iter()
+                .any(|tool| tool == "orbit.task.show")
         );
+        for tool in &denied {
+            assert!(
+                !resolved.effective_tools.contains(tool),
+                "denied tool {tool} must never be delegated to the harness"
+            );
+        }
+
+        // An agent envelope alone cannot observe runs, even before the activity
+        // deny list is applied. Advertising or requiring a tool grants no capability.
+        {
+            let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
+            for tool in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
+                let error = fixture
+                    .runtime
+                    .execute_tool_command(tool, json!({"id": "jrun-missing"}), None, None)
+                    .unwrap_err();
+                assert!(
+                    matches!(error, OrbitError::CapabilityDenied(_)),
+                    "{tool} must retain capability_denied for an agent envelope: {error}"
+                );
+            }
+        }
+
+        let deny_env = denied.join(",");
+        let _env = orbit_common::test_env::scoped([
+            ("ORBIT_AGENT_NAME", Some("codex")),
+            ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
+            (ACTIVITY_NAME_ENV, Some(activity)),
+            (ACTIVITY_TOOL_POLICY_ENV, Some("deny")),
+            (ACTIVITY_TOOLS_DENY_ENV, Some(deny_env.as_str())),
+        ]);
+        for tool in &denied {
+            let error = fixture
+                .runtime
+                .execute_tool_command(tool, json!({}), None, None)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    OrbitError::CapabilityDenied(_) | OrbitError::PolicyDenied(_)
+                ),
+                "{tool} must be rejected before domain execution: {error}"
+            );
+        }
     }
 }

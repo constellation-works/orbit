@@ -21,6 +21,7 @@ mod history_note;
 mod pr_landing;
 #[cfg(unix)]
 mod provider_capacity;
+mod recovery_evidence;
 mod review_fixes;
 #[cfg(unix)]
 mod source_inspection;
