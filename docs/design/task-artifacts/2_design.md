@@ -249,6 +249,11 @@ That comparison also supplies the metadata candidate selection filters and order
 
 ## 8. Crash Consistency
 
+Ordinary task updates persist artifacts before document and history changes. An
+artifact store rejection therefore leaves the task's status, document and history
+unchanged. Accepted artifacts are not rolled back if a later document or history
+write fails; this ordering does not make the combined update transactional.
+
 The v2 bundle is local and file-backed, so multi-file mutations are not fully transactional. The implementation keeps the envelope canonical and makes generated data rebuildable, but the following interrupted states are expected repair cases:
 
 - Document updates may write Markdown sidecars before `task.yaml`; readers return the sidecar content and the previous envelope metadata until the next successful mutation.
