@@ -5,7 +5,7 @@ tags: [operations, logs, tracing, rotation, routines]
 paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
-last_validated: 2026-09-12
+last_validated: 2026-10-05
 ---
 
 # Inspect and Retain Logs
@@ -56,10 +56,11 @@ request.
 
 ## Rotation and retention
 
-Rotation is size-based and checked once at process start. When the active file exceeds the
-per-file cap, it is renamed to `orbit.jsonl.<UTC-timestamp>`. Archives older than the
-retention window are deleted, then the oldest archives are deleted until the total-size cap
-holds.
+Rotation is size-based. Long-lived commands (`mcp serve`, `web serve`, `sweep`, and
+`clock tick`) rotate at startup; short-lived commands check the active file on their first
+JSONL write and rotate it only if it exceeds the per-file cap. The active file is renamed to
+`orbit.jsonl.<UTC-timestamp>`. Archives older than the retention window are deleted, then
+the oldest archives are deleted until the total-size cap holds.
 
 Defaults are **100 MB per file, 500 MB total, and 7 days retention**. Override them in
 `~/.orbit/config.toml`:
