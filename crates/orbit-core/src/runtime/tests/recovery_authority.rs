@@ -841,7 +841,7 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn worker_binding() -> orbit_types::tool::WorkerInvocation {
     orbit_types::tool::WorkerInvocation {
         owner_machine_id: "owner-machine".into(),
