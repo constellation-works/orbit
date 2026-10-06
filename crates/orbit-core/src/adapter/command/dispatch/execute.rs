@@ -126,21 +126,33 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
     #[cfg(unix)]
-    if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER") {
+    let broker_refusal = if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER") {
         let cwd = std::env::current_dir()?;
-        let result = crate::runtime::plugin::broker::forward_call(
+        let result = crate::runtime::plugin::broker::forward_call_with_status(
             Path::new(&socket),
             name,
-            input,
+            input.clone(),
             &cwd,
             None,
             broker_entry_point(entry_point),
         );
-        mark_tool_audit_recorded();
-        return result;
-    }
-    #[cfg(unix)]
-    crate::runtime::plugin::broker::refuse_unbrokered_call(global_root, name)?;
+        match result {
+            Ok(value) => {
+                mark_tool_audit_recorded();
+                return Ok(value);
+            }
+            Err(crate::runtime::plugin::broker::ForwardCallError::BrokerAudit(error)) => {
+                mark_tool_audit_recorded();
+                return Err(error);
+            }
+            Err(crate::runtime::plugin::broker::ForwardCallError::CallerAudit(error)) => {
+                Some(error)
+            }
+        }
+    } else {
+        crate::runtime::plugin::broker::refuse_unbrokered_call(global_root, name)?;
+        None
+    };
     let execution_kind = registry
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
@@ -172,6 +184,10 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
         },
         |input| {
+            #[cfg(unix)]
+            if let Some(error) = broker_refusal {
+                return Err(error);
+            }
             // The workspace path authorizes inside `execute_registered_tool`;
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
@@ -329,10 +345,9 @@ impl OrbitRuntime {
         entry_point: ToolEntryPoint,
         session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
-        // The broker is the only dispatcher and audit writer for a forwarded
-        // plugin call or host-credentialed read. Intercept before the local
-        // audit boundary; other built-ins and calls outside a managed broker
-        // environment keep their path.
+        // The broker audits dispatched plugin calls and host-credentialed
+        // reads. Listener refusals and unusable responses belong to this
+        // caller's audit boundary; never execute them locally as a fallback.
         #[cfg(unix)]
         let host_read = crate::runtime::plugin::broker::is_host_credentialed_read(name);
         #[cfg(unix)]
@@ -349,16 +364,38 @@ impl OrbitRuntime {
                 .and_then(Value::as_str)
                 .map(|_| self.workspace_id())
                 .transpose()?;
-            let result = crate::runtime::plugin::broker::forward_call(
+            let result = crate::runtime::plugin::broker::forward_call_with_status(
                 Path::new(&socket),
                 name,
-                input,
+                input.clone(),
                 &cwd,
                 workspace.as_deref(),
                 broker_entry_point(entry_point),
             );
-            mark_tool_audit_recorded();
-            let value = result?;
+            let value = match result {
+                Ok(value) => {
+                    mark_tool_audit_recorded();
+                    value
+                }
+                Err(crate::runtime::plugin::broker::ForwardCallError::BrokerAudit(error)) => {
+                    mark_tool_audit_recorded();
+                    return Err(error);
+                }
+                Err(crate::runtime::plugin::broker::ForwardCallError::CallerAudit(error)) => {
+                    return self.execute_tool_dispatch_with(
+                        name,
+                        input,
+                        ToolDispatchAuditContext {
+                            agent_override,
+                            model_override,
+                            entry_point,
+                            session_context: Some(session_context),
+                            brokered: None,
+                        },
+                        |_| Err(error),
+                    );
+                }
+            };
             return Ok(ToolDispatchOutcome {
                 value,
                 audit_recorded: false,

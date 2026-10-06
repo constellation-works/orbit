@@ -310,7 +310,11 @@ hint for the audit row; it grants nothing.
 
 The broker runs the call through the same audited dispatch the in-process path uses. The audit
 row carries the usual plugin fields plus `brokered: true` and the peer PID. The nested `orbit`
-writes no dispatch row of its own for a forwarded call, so each call is counted once. `mcp`
+writes no dispatch row of its own for a call dispatched by the broker, including a dispatched
+failure. Listener refusals (`busy`, invalid or oversized requests) and missing or unusable
+responses are audited by the nested caller instead, as one failure row for CLI and MCP calls,
+including host-global plugin tools and host-credentialed reads. The CLI guard suppresses its
+row only after the runtime persists the caller's row or the broker owns the row. `mcp`
 backends are kept per caller context inside the broker, as §4.2 of the scope describes for any
 runtime, and are reclaimed when the run ends.
 

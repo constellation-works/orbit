@@ -8,6 +8,10 @@ use std::os::unix::net::UnixListener;
 /// Write a plugin outside the workspace checkout — installs are global, and a
 /// source inside the repository is refused on purpose.
 fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
+    write_plugin_with_scope(home, namespace, "workspace")
+}
+
+fn write_plugin_with_scope(home: &Path, namespace: &str, scope: &str) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
@@ -25,7 +29,7 @@ fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Roundtrip fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: echo\n      description: Echo the request envelope back.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: What to echo. }}\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Roundtrip fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: echo\n      description: Echo the request envelope back.\n      execution_kind: read_only\n      mcp_scope: {scope}\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: What to echo. }}\n"
         ),
     )
     .expect("write plugin manifest");
@@ -83,9 +87,16 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 
 #[cfg(unix)]
 #[test]
-fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
+fn brokered_plugin_calls_audit_only_caller_owned_failures() {
+    for scope in ["workspace", "global"] {
+        check_brokered_plugin_audit(scope);
+    }
+}
+
+#[cfg(unix)]
+fn check_brokered_plugin_audit(scope: &str) {
     let workspace = McpWorkspace::init();
-    let source = write_plugin(&workspace.home, "brokerfixture");
+    let source = write_plugin_with_scope(&workspace.home, "brokerfixture", scope);
     std::fs::write(
         source.join("bin/backend.sh"),
         "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"ok\":true,\"output\":{\"value\":7}}'\n",
@@ -171,9 +182,16 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
             "detail":{"at":"posts[0]"}
         })
     );
+    assert_eq!(
+        audit_count_for_tool(&workspace, "brokerfixture.echo"),
+        audit_before,
+        "{scope}: successful calls and broker-dispatched failures add no caller row"
+    );
     let busy = client.call_tool_err("brokerfixture_echo", json!({}));
     assert_eq!(busy["code"], "plugin_broker_busy");
     assert_eq!(busy["retryable"], true);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 1);
+
     let cli_failed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
             "tool",
@@ -192,6 +210,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let cli_failed_error: Value =
         serde_json::from_slice(&cli_failed.stderr).expect("CLI writes structured error to stderr");
     assert_eq!(cli_failed_error, error);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 1);
     let explicit_input = json!({"workspace": workspace.work}).to_string();
     let explicit = run_orbit_with_env(
         &workspace,
@@ -240,6 +259,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let unreachable = client.call_tool_err("brokerfixture_echo", json!({}));
     assert_eq!(unreachable["code"], "plugin_broker_unavailable");
     assert_eq!(unreachable["retryable"], false);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 2);
     let cli_unreachable = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
             "tool",
@@ -259,6 +279,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
         .expect("CLI writes structured broker error to stderr");
     assert_eq!(cli_error["code"], "plugin_broker_unavailable");
     assert_eq!(cli_error["retryable"], false);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 3);
     let built_in = run_orbit_with_env(
         &workspace,
         &[
@@ -273,8 +294,8 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let _: Value = serde_json::from_slice(&built_in.stdout).expect("built-in tool output");
     assert_eq!(
         audit_count_for_tool(&workspace, "brokerfixture.echo"),
-        audit_before,
-        "forwarded calls must leave no local audit rows"
+        audit_before + 3,
+        "{scope}: only BUSY and the two unreachable calls add caller audit rows"
     );
 }
 
@@ -289,6 +310,59 @@ fn audit_count_for_tool(workspace: &McpWorkspace, tool: &str) -> i64 {
             |row| row.get(0),
         )
         .expect("count tool audit rows")
+}
+
+#[cfg(unix)]
+fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64, failures: i64) {
+    assert_eq!(
+        audit_count_for_tool(workspace, tool),
+        before + failures,
+        "each caller-owned failure must add exactly one durable row for {tool}"
+    );
+    let db = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit db");
+    let recorded: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE tool_name = ?1
+             AND status = 'failure' AND exit_code = 1 AND brokered IS NULL
+             AND error_message IS NOT NULL",
+            [tool],
+            |row| row.get(0),
+        )
+        .expect("count caller failures");
+    assert_eq!(
+        recorded, failures,
+        "{tool}: failures retain status and cause"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreachable_host_read_is_audited_once_by_cli() {
+    let workspace = McpWorkspace::init();
+    // The audit schema is opened lazily. Exercise an audited built-in before
+    // reading the baseline, without running a host-credentialed command.
+    run_orbit(
+        &workspace,
+        &[
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            "{\"query\":\"audit\"}",
+        ],
+    );
+    let tool = "github.auth.status";
+    let before = audit_count_for_tool(&workspace, tool);
+    let socket = "absent-broker.sock";
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["tool", "run", tool, "--input", "{}", "--format", "json"])
+        .env("ORBIT_PLUGIN_BROKER", socket)
+        .output()
+        .expect("CLI host read against unreachable broker");
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stderr).expect("structured CLI error");
+    assert_eq!(error["code"], "plugin_broker_unavailable");
+    assert_caller_failure_rows(&workspace, tool, before, 1);
 }
 
 #[cfg(unix)]
