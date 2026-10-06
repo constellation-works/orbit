@@ -188,7 +188,7 @@ Rules:
 orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/)
 orbit plugin add <git+url#commit> --allow-build
                                               →  installed   (spec.build ran in the build sandbox; build recorded)
-orbit plugin upgrade <ns> [source] [--grant …] [--allow-build]
+orbit plugin upgrade <ns> <source> [--grant …] [--allow-build]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
@@ -503,8 +503,12 @@ set that fails its witness (§3) grants nothing on every surface.
 roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Unchanged or narrower
 keeps the enable/grant state. Any widening disables the plugin, clears its grants and witness,
 prints the widened requests, and names the full `orbit plugin enable <ns> --grant …` command.
-`plugin upgrade <ns> [source]` defaults to the recorded source and always prints the diff; its
-own `--grant …` is explicit re-consent.
+`plugin upgrade <ns> <source>` requires an explicit, non-empty source and always prints the
+diff; its own `--grant …` is explicit re-consent. Omitting the source refuses before any
+fetch or install. The recorded `plugins.source` field is informational: a backend with
+`orbit_tools` can rewrite the database, and the host-owned grant witness does not bind that
+field. Review and supply the intended source on every upgrade rather than copying it from
+the database without checking it.
 
 **Manifest digest binding.** Every load hashes the on-disk `plugin.yaml` and compares it to
 the row's install-time `manifest_digest`. A mismatch registers the plugin inactive with a

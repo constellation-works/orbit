@@ -208,6 +208,115 @@ fn write_status_plugin(source: &Path, namespace: &str, extra_spec: &str) {
     .expect("write manifest");
 }
 
+#[test]
+fn upgrade_refuses_a_tampered_recorded_source_and_accepts_an_explicit_source() {
+    let fixture = Fixture::new();
+    let source = fixture.source("victim");
+    let source_arg = source.to_str().expect("utf8 source");
+    let permissions = "  permissions:\n    network: any\n";
+    write_status_plugin(&source, "victim", permissions);
+    let payload = "upgrade-payload.txt";
+    std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v1")
+        .expect("write trusted payload");
+    fixture
+        .orbit()
+        .args([
+            "plugin", "add", source_arg, "--enable", "--grant", "network",
+        ])
+        .assert()
+        .success();
+
+    // A backend with orbit_tools can write its own state tree and orbit.db,
+    // but cannot write the victim's installed tree or grant witness.
+    let attacker = fixture
+        .home
+        .join(".orbit/state/plugins/attacker/replacement");
+    write_status_plugin(&attacker, "victim", permissions);
+    std::fs::write(attacker.join(".orbit-plugin").join(payload), b"attacker")
+        .expect("write attacker payload");
+    let connection =
+        Connection::open(fixture.home.join(".orbit/orbit.db")).expect("open the plugin store");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE plugins SET source = ?1 WHERE name = 'victim'",
+                [attacker.to_str().expect("utf8 attacker source")],
+            )
+            .expect("tamper with the recorded source"),
+        1
+    );
+    let record = || {
+        connection
+            .query_row(
+                "SELECT source, enabled, grants_json, manifest_digest, install_path \
+                 FROM plugins WHERE name = 'victim'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("read victim record")
+    };
+    let tampered_record = record();
+    let installed = fixture.home.join(".orbit/plugins/victim/0.1.0");
+    let witness = fixture.home.join(".orbit/plugins/.grants/victim.json");
+    let authorized = std::fs::read(&witness).expect("read grant witness");
+
+    // Missing and blank explicit sources must fail in the upgrade use case,
+    // before the forged same-namespace source can inherit the victim's grants.
+    for explicit in [None, Some(""), Some(" \t ")] {
+        let mut command = fixture.orbit();
+        command.args(["plugin", "upgrade", "victim"]);
+        if let Some(explicit) = explicit {
+            command.arg(explicit);
+        }
+        command.assert().failure().stderr(predicate::str::contains(
+            "orbit plugin upgrade victim <source>",
+        ));
+        assert_eq!(
+            std::fs::read(installed.join(payload)).expect("read installed payload"),
+            b"trusted-v1",
+            "an untrusted recorded source must not replace the installed code"
+        );
+        assert_eq!(record(), tampered_record, "refusal preserves the host row");
+        assert_eq!(
+            std::fs::read(&witness).expect("read grant witness after refusal"),
+            authorized,
+            "refusal preserves the victim's authorization"
+        );
+    }
+
+    std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v2")
+        .expect("update trusted payload");
+    fixture
+        .orbit()
+        .args(["plugin", "upgrade", "victim", source_arg])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(installed.join(payload)).expect("read upgraded payload"),
+        b"trusted-v2",
+        "the caller's explicit source takes precedence over the forged database value"
+    );
+    let upgraded = record();
+    assert_eq!(upgraded.0, source_arg);
+    assert!(
+        upgraded.1,
+        "a safe explicit upgrade preserves enabled state"
+    );
+    assert_eq!(upgraded.2, tampered_record.2, "safe grants carry over");
+    assert_eq!(
+        std::fs::read(&witness).expect("read carried grant witness"),
+        authorized
+    );
+}
+
 fn stdout_json(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -1690,7 +1799,7 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
 
     fixture
         .orbit()
-        .args(["plugin", "upgrade", "uvdemo"])
+        .args(["plugin", "upgrade", "uvdemo", &source_arg])
         .assert()
         .success();
     let upgraded = call();

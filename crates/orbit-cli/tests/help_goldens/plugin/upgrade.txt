@@ -7,11 +7,11 @@ Arguments:
           Installed plugin namespace
 
   [SOURCE]
-          Replacement source; defaults to the source recorded at install time
+          Explicit replacement source (required); recorded sources are not trusted
 
 Options:
       --digest <DIGEST>
-          `sha256:<hex>` the archive at an `https://` source must hash to. Required for such a source, including one recorded at install time: the replacement archive is a new download and needs its own pin
+          `sha256:<hex>` the archive at an `https://` source must hash to. Required for such a source: the replacement archive is a new download and needs its own pin
 
       --root <ROOT>
           Override the Orbit root directory (highest precedence)

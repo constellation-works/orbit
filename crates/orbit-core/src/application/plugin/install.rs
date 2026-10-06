@@ -67,7 +67,7 @@ pub struct PluginPermissionChange {
 #[derive(Debug, Clone, Default)]
 pub struct PluginUpgradeOptions {
     /// `sha256:<hex>` for an `https://` archive source, as in
-    /// [`PluginAddOptions::digest`]. A recorded archive source is re-fetched
+    /// [`PluginAddOptions::digest`]. An archive source is re-fetched
     /// on upgrade, so the new archive needs its own pin.
     pub digest: Option<String>,
     /// Complete grant set authorizing and enabling the upgraded manifest.
@@ -159,17 +159,18 @@ pub(super) fn install_pinned_plugin(
     .map(|outcome| outcome.summary)
 }
 
-/// Replace an installed namespace, using its recorded source when the caller
-/// does not provide one. An explicit grant list is re-consent for the new
-/// manifest and enables it; otherwise the same widening rules as plain `add`
-/// apply.
+/// Replace an installed namespace from an explicit, non-empty source. The
+/// recorded source is informational: a plugin with `orbit_tools` can rewrite
+/// the database, and the host-owned grant witness does not bind that field.
+/// An explicit grant list is re-consent for the new manifest and enables it;
+/// otherwise the same widening rules as plain `add` apply.
 pub fn upgrade_plugin(
     runtime: &OrbitRuntime,
     name: &str,
     source: Option<&str>,
     options: &PluginUpgradeOptions,
 ) -> Result<PluginUpgradeResult, OrbitError> {
-    let existing = runtime
+    runtime
         .stores()
         .plugins()
         .get_plugin(name)?
@@ -178,12 +179,14 @@ pub fn upgrade_plugin(
                 "plugin '{name}' is not installed on this host; run `orbit plugin add <source>` first"
             ))
         })?;
-    let source = source.unwrap_or(&existing.source);
-    if source.trim().is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "plugin '{name}' has no recorded source; pass one as `orbit plugin upgrade {name} <source>`"
-        )));
-    }
+    let source = source
+        .filter(|source| !source.trim().is_empty())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin '{name}' requires an explicit upgrade source; the recorded source is not \
+                 trusted; run `orbit plugin upgrade {name} <source>`"
+            ))
+        })?;
     let add_options = PluginAddOptions {
         force: true,
         digest: options.digest.clone(),
