@@ -56,6 +56,19 @@ impl<'a> Source<'a> {
         input: Option<&[u8]>,
         budget: Duration,
     ) -> Result<String, AutomationError> {
+        // Test seam for ORB-14356: the next `diff-tree` fails as a deadline
+        // once, so a swallowed canonical signature is distinguishable from a
+        // propagated one. Production builds do not include the seam.
+        #[cfg(test)]
+        if canonical_signature_deadline_armed(args) {
+            return Err(AutomationError::Deferred("source_deadline".into()));
+        }
+
+        #[cfg(test)]
+        if source_deadline_forced(self) {
+            return Err(AutomationError::Deferred("source_deadline".into()));
+        }
+
         if self.started.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
@@ -168,6 +181,17 @@ impl<'a> Source<'a> {
         self.command_with("git", args, &[], Some(input), COMMAND_BUDGET)
     }
 
+    /// One git command for the replay proof. A batched range can outlive the
+    /// two-second local-command budget, so this uses the time left on this
+    /// source's deadline — the same rule as a fetch.
+    fn git_replay(&self, args: &[&str], input: Option<&[u8]>) -> Result<String, AutomationError> {
+        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
+            Some(budget) if !budget.is_zero() => budget,
+            _ => return Err(AutomationError::Deferred("source_deadline".into())),
+        };
+        self.command_with("git", args, &[], input, budget)
+    }
+
     pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
         let commit = self.git(&[
             "rev-parse",
@@ -226,6 +250,8 @@ impl<'a> Source<'a> {
             self.revision(&format!("refs/heads/{branch}"))?
         };
         let repository = self.repository()?;
+        #[cfg(test)]
+        expire_source_after_head(self);
         Ok((repository, head))
     }
 
@@ -595,7 +621,7 @@ impl<'a> Source<'a> {
         &self,
         branch: &str,
         state: &AutomationState,
-        lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
+        lookup: &dyn Fn(&Source<'_>, &str, &str) -> Result<String, AutomationError>,
         accepted_receipts: usize,
     ) -> Result<(SourcePage, HistoryReplayRecord), AutomationError> {
         let (repository, head) = self.head(branch)?;
@@ -603,7 +629,12 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Refused(refusal::REPOSITORY_CHANGED.into()));
         }
 
-        let old_observed = self
+        // `head` may already have spent the shared deadline on a fetch. The
+        // proof is a separate pass: a range the traversal check admits gets a
+        // full deadline, and its git reads are batched under that budget.
+        let source = Self::new(self.root);
+
+        let old_observed = source
             .revision(&state.observed.commit)
             .map_err(|_| AutomationError::Refused(refusal::HISTORY_OBJECT_MISSING.into()))?;
         if old_observed != state.observed {
@@ -611,7 +642,7 @@ impl<'a> Source<'a> {
                 refusal::HISTORY_CONTRACT_DRIFT.into(),
             ));
         }
-        if self
+        if source
             .git(&[
                 "merge-base",
                 "--is-ancestor",
@@ -635,8 +666,8 @@ impl<'a> Source<'a> {
                     ]
                 }))
         {
-            if !matches!(self.revision(&boundary.commit), Ok(actual) if actual == *boundary)
-                || self
+            if !matches!(source.revision(&boundary.commit), Ok(actual) if actual == *boundary)
+                || source
                     .git(&[
                         "merge-base",
                         "--is-ancestor",
@@ -651,8 +682,8 @@ impl<'a> Source<'a> {
             }
         }
 
-        let base_commit = self.git(&["merge-base", &old_observed.commit, &head.commit])?;
-        if self
+        let base_commit = source.git(&["merge-base", &old_observed.commit, &head.commit])?;
+        if source
             .git(&[
                 "merge-base",
                 "--is-ancestor",
@@ -665,34 +696,61 @@ impl<'a> Source<'a> {
                 refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
             ));
         }
-        let common_base = self.revision(&base_commit)?;
-        let old_commits = self.first_parent_range(&base_commit, &old_observed.commit)?;
-        let canonical_commits = self.first_parent_range(&base_commit, &head.commit)?;
+        let common_base = source.revision(&base_commit)?;
+        let old_commits = source.first_parent_range(&base_commit, &old_observed.commit)?;
+        let canonical_commits = source.first_parent_range(&base_commit, &head.commit)?;
         validate_replay_range_lengths(old_commits.len(), canonical_commits.len())?;
 
+        let canonical_proofs = source.replay_signatures(&canonical_commits)?;
         let mut candidates_by_proof = BTreeMap::<String, Vec<(usize, String)>>::new();
-        for (position, canonical) in canonical_commits.iter().enumerate() {
-            if let Ok(proof) = self.replay_signature(canonical) {
-                candidates_by_proof
-                    .entry(proof)
-                    .or_default()
-                    .push((position, canonical.clone()));
+        for (position, (canonical, proof)) in
+            canonical_commits.iter().zip(canonical_proofs).enumerate()
+        {
+            match proof {
+                Ok(proof) => {
+                    candidates_by_proof
+                        .entry(proof)
+                        .or_default()
+                        .push((position, canonical.clone()));
+                }
+                // A commit with no `.orbit` tree is not a mapping candidate.
+                // A deadline or command budget is the pass failing, not a miss.
+                Err(error) if !is_source_deadline_or_budget(&error) => continue,
+                Err(error) => return Err(error),
             }
         }
 
-        let mut mappings = Vec::with_capacity(old_commits.len());
+        let orphan_proofs = source.replay_signatures(&old_commits)?;
+        let mut pending = Vec::with_capacity(old_commits.len());
         let mut last_position = None;
-        for orphan in &old_commits {
-            let proof_digest = self.replay_signature(orphan)?;
+        for (orphan, proof) in old_commits.iter().zip(orphan_proofs) {
+            let proof_digest = proof?;
             let candidates = candidates_by_proof
                 .get(&proof_digest)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
             let (position, canonical) = unique_mapping_candidate(candidates, last_position)?;
             last_position = Some(position);
+            pending.push((orphan.clone(), canonical.to_owned(), proof_digest));
+        }
+
+        let mut revision_ids = Vec::with_capacity(pending.len() * 2);
+        for (orphan, canonical, _) in &pending {
+            revision_ids.push(orphan.clone());
+            revision_ids.push(canonical.clone());
+        }
+        let mut revisions = source.replay_revisions(&revision_ids)?.into_iter();
+        let mut mappings = Vec::with_capacity(pending.len());
+        for (_orphan, _canonical, proof_digest) in pending {
+            let (Some(orphan), Some(canonical)) = (revisions.next(), revisions.next()) else {
+                return Err(AutomationError::Deferred(
+                    "evidence_unavailable: git cat-file --batch-check: replay revision count"
+                        .into(),
+                ));
+            };
             mappings.push(HistoryMapping {
-                orphan: self.revision(orphan)?,
-                canonical: self.revision(canonical)?,
+                orphan,
+                canonical,
                 proof_digest,
             });
         }
@@ -767,11 +825,14 @@ impl<'a> Source<'a> {
             .last()
             .map(|mapping| mapping.canonical.clone())
             .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_MAPPING_AMBIGUOUS.into()))?;
-        let mut page = self
+        // Provider observation can fetch `origin` again. Give that pass its
+        // own deadline so it cannot consume the signature proof's budget.
+        let page_source = Self::new(self.root);
+        let mut page = page_source
             .observe_with_lookup_limit(
                 branch,
                 &probe,
-                lookup,
+                &|repository, sha| lookup(&page_source, repository, sha),
                 200,
                 Some(replay_through.clone()),
                 true,
@@ -816,10 +877,10 @@ impl<'a> Source<'a> {
         self.replay_history_with_lookup(
             branch,
             state,
-            &|repository, sha| {
+            &|source, repository, sha| {
                 let request =
                     orbit_tools::github_cli::commit_pull_requests_request(repository, sha)?;
-                self.command(
+                source.command(
                     "gh",
                     &request.args.iter().map(String::as_str).collect::<Vec<_>>(),
                 )
@@ -847,24 +908,180 @@ impl<'a> Source<'a> {
             .collect())
     }
 
-    fn replay_signature(&self, commit: &str) -> Result<String, AutomationError> {
-        let orbit_tree = self.git(&[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{commit}:.orbit"),
-        ])?;
-        let patch = self.git(&[
-            "diff-tree",
-            "--binary",
-            "--full-index",
-            "--no-renames",
-            "--no-commit-id",
-            "-r",
-            &format!("{commit}^1"),
-            commit,
-        ])?;
-        Ok(digest(format!("{orbit_tree}\0{patch}").as_bytes()))
+    /// Parent-relative signature of each commit: `.orbit` tree id, NUL, patch.
+    ///
+    /// Each entry is the digest, or a per-commit `evidence_unavailable` when
+    /// that commit has no signature. A deadline or command budget fails the
+    /// whole call — callers must not skip those.
+    fn replay_signatures(
+        &self,
+        commits: &[String],
+    ) -> Result<Vec<Result<String, AutomationError>>, AutomationError> {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let trees = self.orbit_trees(commits)?;
+        let mut present = Vec::new();
+        for (index, tree) in trees.iter().enumerate() {
+            if tree.is_some() {
+                present.push(commits[index].clone());
+            }
+        }
+        let patches = self.parent_patches(&present)?;
+        let mut patches = patches.into_iter();
+        let mut signatures = Vec::with_capacity(commits.len());
+        for (commit, tree) in commits.iter().zip(trees) {
+            let Some(tree) = tree else {
+                signatures.push(Err(missing_orbit_tree(commit)));
+                continue;
+            };
+            match patches.next() {
+                Some(Ok(patch)) => {
+                    signatures.push(Ok(digest(format!("{tree}\0{patch}").as_bytes())));
+                }
+                Some(Err(error)) => signatures.push(Err(error)),
+                None => {
+                    return Err(AutomationError::Deferred(
+                        "evidence_unavailable: git diff-tree --stdin: replay patch count".into(),
+                    ));
+                }
+            }
+        }
+        Ok(signatures)
+    }
+
+    /// Object id of `commit:.orbit` for each commit. `None` means the path is
+    /// absent. A failed batch is a deadline, a budget, or a git failure.
+    fn orbit_trees(&self, commits: &[String]) -> Result<Vec<Option<String>>, AutomationError> {
+        let mut input = String::new();
+        for commit in commits {
+            input.push_str(commit);
+            input.push_str(":.orbit\n");
+        }
+        let output = self.git_replay(
+            &["cat-file", "--batch-check=%(objectname)"],
+            Some(input.as_bytes()),
+        )?;
+        let lines: Vec<&str> = output.lines().collect();
+        if lines.len() != commits.len() {
+            return Err(AutomationError::Deferred(
+                "evidence_unavailable: git cat-file --batch-check: replay orbit tree count".into(),
+            ));
+        }
+
+        let mut trees = Vec::with_capacity(commits.len());
+        for (commit, line) in commits.iter().zip(lines) {
+            if is_object_name(line) {
+                trees.push(Some(line.to_owned()));
+                continue;
+            }
+            if line == format!("{commit}:.orbit missing") {
+                trees.push(None);
+                continue;
+            }
+            return Err(AutomationError::Deferred(format!(
+                "evidence_unavailable: git cat-file --batch-check: {line}"
+            )));
+        }
+        Ok(trees)
+    }
+
+    /// Parent-relative patch of each commit, in order. An empty diff is an
+    /// empty string, matching `diff-tree --no-commit-id` on that commit.
+    ///
+    /// A batch that exceeds the command output cap is split. A deadline fails
+    /// the call. One commit's own failure stays in its entry so the caller
+    /// can skip a canonical miss or surface an orphan miss.
+    fn parent_patches(
+        &self,
+        commits: &[String],
+    ) -> Result<Vec<Result<String, AutomationError>>, AutomationError> {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut input = String::new();
+        for commit in commits {
+            input.push_str(commit);
+            input.push('\n');
+        }
+        match self.git_replay(
+            &[
+                "diff-tree",
+                "--stdin",
+                "--binary",
+                "--full-index",
+                "--no-renames",
+                "-r",
+            ],
+            Some(input.as_bytes()),
+        ) {
+            Ok(output) => Ok(split_diff_tree_patches(commits, &output)
+                .into_iter()
+                .map(Ok)
+                .collect()),
+            Err(error) if is_source_deadline(&error) => Err(error),
+            Err(error) if is_source_budget(&error) && commits.len() == 1 => Err(error),
+            Err(_error) if commits.len() > 1 => {
+                let mid = commits.len() / 2;
+                let mut patches = self.parent_patches(&commits[..mid])?;
+                patches.extend(self.parent_patches(&commits[mid..])?);
+                Ok(patches)
+            }
+            Err(error) => Ok(vec![Err(error)]),
+        }
+    }
+
+    /// Commit and tree ids for each already-resolved commit, in order.
+    fn replay_revisions(&self, commits: &[String]) -> Result<Vec<SourceRevision>, AutomationError> {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut input = String::new();
+        for commit in commits {
+            input.push_str(commit);
+            input.push_str("^{commit}\n");
+            input.push_str(commit);
+            input.push_str("^{tree}\n");
+        }
+        let output = self.git_replay(
+            &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            Some(input.as_bytes()),
+        )?;
+        let lines: Vec<&str> = output.lines().collect();
+        if lines.len() != commits.len() * 2 {
+            return Err(AutomationError::Deferred(
+                "evidence_unavailable: git cat-file --batch-check: replay revision count".into(),
+            ));
+        }
+
+        let mut revisions = Vec::with_capacity(commits.len());
+        for (index, commit) in commits.iter().enumerate() {
+            let commit_line = lines[index * 2];
+            let tree_line = lines[index * 2 + 1];
+            let (commit_id, commit_kind) = object_and_type(commit_line).ok_or_else(|| {
+                AutomationError::Deferred(format!(
+                    "evidence_unavailable: git cat-file --batch-check: {commit} is not a commit"
+                ))
+            })?;
+            let (tree_id, tree_kind) = object_and_type(tree_line).ok_or_else(|| {
+                AutomationError::Deferred(format!(
+                    "evidence_unavailable: git cat-file --batch-check: {commit} has no tree"
+                ))
+            })?;
+            if commit_kind != "commit" || tree_kind != "tree" {
+                return Err(AutomationError::Deferred(format!(
+                    "evidence_unavailable: git cat-file --batch-check: {commit} resolved to {commit_kind}/{tree_kind}"
+                )));
+            }
+            revisions.push(SourceRevision {
+                commit: commit_id.to_owned(),
+                tree: tree_id.to_owned(),
+            });
+        }
+        Ok(revisions)
     }
 
     /// Pin the batch boundaries so the frozen input stays reachable during review.
@@ -978,6 +1195,135 @@ impl From<std::io::Error> for FetchLockError {
 
 fn is_evidence_unavailable(reason: &str) -> bool {
     reason.starts_with("evidence_unavailable:")
+}
+
+fn deferred_reason(error: &AutomationError) -> Option<&str> {
+    match error {
+        AutomationError::Deferred(reason) => Some(reason.as_str()),
+        _ => None,
+    }
+}
+
+fn is_source_deadline(error: &AutomationError) -> bool {
+    deferred_reason(error) == Some("source_deadline")
+}
+
+fn is_source_budget(error: &AutomationError) -> bool {
+    deferred_reason(error) == Some("source_budget")
+}
+
+/// Deadline exhaustion, including the in-command check that reports
+/// `source_budget` once the shared clock is already past the deadline.
+fn is_source_deadline_or_budget(error: &AutomationError) -> bool {
+    is_source_deadline(error) || is_source_budget(error)
+}
+
+fn missing_orbit_tree(commit: &str) -> AutomationError {
+    AutomationError::Deferred(format!(
+        "evidence_unavailable: git rev-parse --verify --end-of-options {commit}:.orbit: path '.orbit' does not exist"
+    ))
+}
+
+fn is_object_name(line: &str) -> bool {
+    let len = line.len();
+    (len == 40 || len == 64) && line.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn object_and_type(line: &str) -> Option<(&str, &str)> {
+    let (name, kind) = line.split_once(' ')?;
+    if is_object_name(name) && !kind.is_empty() && !kind.contains(' ') {
+        Some((name, kind))
+    } else {
+        None
+    }
+}
+
+/// Patches from `git diff-tree --stdin`, one per commit, in request order.
+///
+/// `diff-tree` omits a commit whose patch is empty, so a missing header is an
+/// empty patch — the same bytes as `--no-commit-id` on that commit. Headers
+/// are recognized only as a full line equal to a still-pending commit id.
+fn split_diff_tree_patches(commits: &[String], output: &str) -> Vec<String> {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut index = 0;
+    let mut patches = Vec::with_capacity(commits.len());
+    for (nth, commit) in commits.iter().enumerate() {
+        if index < lines.len() && lines[index] == commit.as_str() {
+            index += 1;
+            let start = index;
+            while index < lines.len()
+                && !commits[nth + 1..]
+                    .iter()
+                    .any(|later| lines[index] == later.as_str())
+            {
+                index += 1;
+            }
+            patches.push(lines[start..index].join("\n").trim().to_string());
+        } else {
+            patches.push(String::new());
+        }
+    }
+    patches
+}
+
+#[cfg(test)]
+thread_local! {
+    static CANONICAL_SIGNATURE_DEADLINE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Fail the next `diff-tree` once with `source_deadline`.
+///
+/// The canonical pass runs that command first. Swallowing the failure lets
+/// the orphan pass succeed and report an ambiguous mapping instead.
+#[cfg(test)]
+pub(super) fn arm_canonical_signature_deadline() {
+    CANONICAL_SIGNATURE_DEADLINE.with(|armed| armed.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn clear_canonical_signature_deadline() {
+    CANONICAL_SIGNATURE_DEADLINE.with(|armed| armed.set(false));
+}
+
+#[cfg(test)]
+fn canonical_signature_deadline_armed(args: &[&str]) -> bool {
+    if !args.contains(&"diff-tree") {
+        return false;
+    }
+    CANONICAL_SIGNATURE_DEADLINE.with(|armed| armed.replace(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPIRE_AFTER_NEXT_HEAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static EXPIRED_SOURCE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_expire_source_after_next_head() {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| armed.set(true));
+    EXPIRED_SOURCE.with(|source| source.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn clear_expired_source() {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| armed.set(false));
+    EXPIRED_SOURCE.with(|source| source.set(0));
+}
+
+#[cfg(test)]
+fn expire_source_after_head(source: &Source<'_>) {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| {
+        if armed.replace(false) {
+            EXPIRED_SOURCE.with(|expired| expired.set(source as *const Source<'_> as usize));
+        }
+    });
+}
+
+#[cfg(test)]
+fn source_deadline_forced(source: &Source<'_>) -> bool {
+    EXPIRED_SOURCE.with(|expired| expired.get() == source as *const Source<'_> as usize)
 }
 
 fn fetch_failure(detail: &str) -> AutomationError {
