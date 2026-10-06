@@ -1,16 +1,19 @@
 //! Hold external checks without accepting a candidate or blocking for repairs.
 
+use std::collections::BTreeMap;
+
 use orbit_automation::review::{
     ValidationContext, combined_task_meaning_digest, task_meaning_digest, validation_evidence,
 };
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::TaskStatus;
+use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
     ReviewCertificate, ReviewEvidenceHold, ReviewEvidenceRequirement, ReviewExternalEvidence,
-    ValidationOutcome, ValidationRole,
+    ReviewValidation, ValidationOutcome, ValidationRole,
 };
 
 use crate::OrbitRuntime;
@@ -32,41 +35,10 @@ pub(super) fn evidence_only(
     {
         return false;
     }
-    let mut validation = certificate.validation.clone();
-    let mut seen = std::collections::BTreeSet::new();
-    for required in requirements {
-        if required.name.trim().is_empty()
-            || required.command.trim().is_empty()
-            || matches!(
-                required.artifact.as_str(),
-                REVIEW_EVIDENCE_HOLD_ARTIFACT
-                    | REVIEW_GATE_ARTIFACT
-                    | REVIEW_MANIFEST_ARTIFACT
-                    | REVIEW_REPORT_ARTIFACT
-                    | REVIEW_REPORT_HISTORY_ARTIFACT
-            )
-            || orbit_types::task::validate_relative_artifact_path(&required.artifact).is_err()
-            || !seen.insert(&required.artifact)
-        {
-            return false;
-        }
-        let mut matched = false;
-        for record in &mut validation {
-            if record.command == required.command && record.role == ValidationRole::Required {
-                if !matches!(
-                    record.outcome,
-                    ValidationOutcome::NotRun | ValidationOutcome::Denied
-                ) {
-                    return false;
-                }
-                record.outcome = ValidationOutcome::Passed;
-                matched = true;
-            }
-        }
-        if !matched {
-            return false;
-        }
-    }
+    let Some(validation) = with_external_checks_passed(&certificate.validation, requirements)
+    else {
+        return false;
+    };
     validation_evidence(
         &validation,
         &ValidationContext {
@@ -76,6 +48,43 @@ pub(super) fn evidence_only(
         },
     )
     .is_ok()
+}
+
+/// Check the requirement shape and simulate receipt, without hiding failures
+/// or treating an unnamed missing check as an external requirement.
+pub(super) fn with_external_checks_passed(
+    records: &[ReviewValidation],
+    requirements: &[ReviewEvidenceRequirement],
+) -> Option<Vec<ReviewValidation>> {
+    let mut validation = records.to_vec();
+    let mut seen = std::collections::BTreeSet::new();
+    for required in requirements {
+        if required.name.trim().is_empty()
+            || required.command.trim().is_empty()
+            || reserved_artifact(&required.artifact)
+            || orbit_types::task::validate_relative_artifact_path(&required.artifact).is_err()
+            || !seen.insert(&required.artifact)
+        {
+            return None;
+        }
+        let mut matched = false;
+        for record in &mut validation {
+            if record.command == required.command && record.role == ValidationRole::Required {
+                if !matches!(
+                    record.outcome,
+                    ValidationOutcome::NotRun | ValidationOutcome::Denied
+                ) {
+                    return None;
+                }
+                record.outcome = ValidationOutcome::Passed;
+                matched = true;
+            }
+        }
+        if !matched {
+            return None;
+        }
+    }
+    Some(validation)
 }
 
 pub(crate) fn evidence_hold(
@@ -101,35 +110,64 @@ pub(crate) fn evidence_ready(
     if hold.schema_version != 1 || hold.requirements.is_empty() {
         return Ok(false);
     }
-    for required in &hold.requirements {
-        let Some(artifact) = runtime.get_task_artifact(task_id, &required.artifact)? else {
-            return Ok(false);
+    let evidence = satisfied_external_evidence(runtime, task_id, &hold.candidate)?;
+    Ok(hold.requirements.iter().all(|required| {
+        evidence
+            .values()
+            .any(|result| result.matches_requirement(required, &hold.candidate))
+    }))
+}
+
+/// Collect passing result/log pairs on this tree. Artifact paths and display
+/// names may change between reviews; they are locators, not check identity.
+pub(super) fn satisfied_external_evidence(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    candidate: &SourceRevision,
+) -> Result<BTreeMap<String, ReviewExternalEvidence>, OrbitError> {
+    let mut satisfied = BTreeMap::new();
+    for file in runtime.get_task_artifact_manifest(task_id)? {
+        if reserved_artifact(&file.path) {
+            continue;
+        }
+        let Some(artifact) = runtime.get_task_artifact(task_id, &file.path)? else {
+            continue;
         };
         let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&artifact.content)
         else {
-            return Ok(false);
+            continue;
         };
         if evidence.schema_version != 1
-            || evidence.attempt_id != hold.attempt_id
-            || evidence.candidate != hold.candidate
-            || evidence.kind != required.kind
-            || evidence.name != required.name
-            || evidence.command != required.command
+            || candidate.tree.is_empty()
+            || evidence.candidate.tree != candidate.tree
+            || evidence.command.trim().is_empty()
             || evidence.outcome != ValidationOutcome::Passed
-            || evidence.log_artifact == required.artifact
-            || evidence.log_artifact == REVIEW_EVIDENCE_HOLD_ARTIFACT
+            || evidence.log_artifact == file.path
+            || reserved_artifact(&evidence.log_artifact)
             || orbit_types::task::validate_relative_artifact_path(&evidence.log_artifact).is_err()
         {
-            return Ok(false);
+            continue;
         }
         if runtime
             .get_task_artifact(task_id, &evidence.log_artifact)?
             .is_none_or(|log| log.content.is_empty())
         {
-            return Ok(false);
+            continue;
         }
+        satisfied.insert(file.path, evidence);
     }
-    Ok(true)
+    Ok(satisfied)
+}
+
+fn reserved_artifact(path: &str) -> bool {
+    matches!(
+        path,
+        REVIEW_EVIDENCE_HOLD_ARTIFACT
+            | REVIEW_GATE_ARTIFACT
+            | REVIEW_MANIFEST_ARTIFACT
+            | REVIEW_REPORT_ARTIFACT
+            | REVIEW_REPORT_HISTORY_ARTIFACT
+    )
 }
 
 /// Called under the task write lock after an artifact update. All requirements
