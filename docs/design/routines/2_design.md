@@ -230,8 +230,12 @@ Reconciliation is confined to the catalog. The `routines/` directory, its
 manifest, each definition, and the `.retired-managed/routines/` route must be a
 real directory or regular file, or absent, judged without following links. Every
 creation, refresh (including a lifecycle-variant refresh), retirement, and
-preserved-copy move checks this first, and on Unix the definition write also
-refuses a final-component link. A symbolic link at any of those paths, dangling
+preserved-copy move checks this first. Definition writes stage the complete content
+in an exclusively created sibling file (`O_NOFOLLOW` on Unix), sync that file,
+rename it over the definition, and sync the catalog directory. Readers see a complete
+old or new definition; a failed or interrupted staging write leaves the previous
+definition intact. A final-component link installed after inspection is replaced by
+the rename rather than written through. A symbolic link found during inspection, dangling
 or not, is reported as preserved with its path and left untouched. Its manifest
 provenance is kept, so a later sync finishes the work once the operator replaces
 the link. A linked catalog or manifest refuses the whole routine catalog,

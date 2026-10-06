@@ -1,4 +1,4 @@
-//! Managed-routine writes and retirement stay confined to the catalog.
+//! Managed-routine writes are atomic and stay confined to the catalog.
 
 use orbit_common::security::release::sha256_hex;
 
@@ -76,6 +76,105 @@ fn outcome_of(reconciled: &ManagedAssetReconciliation, stem: &str) -> Vec<Manage
         .filter(|action| action.name == stem)
         .map(|action| action.outcome)
         .collect()
+}
+
+/// An open reader must keep the previous complete definition across a write,
+/// while a new reader sees the complete replacement (ORB-14347).
+#[test]
+fn confined_writer_replaces_the_file_without_changing_an_open_readers_content() {
+    use std::io::Read;
+
+    use super::super::materialize::write_confined_routine;
+
+    let root = tempfile::tempdir().expect("create tempdir");
+    let path = root.path().join("routines/task_pilot.yaml");
+    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
+    write_confined_routine(&path, &previous).expect("create the definition");
+    let mut reader = std::fs::File::open(&path).expect("open a reader before replacement");
+    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
+
+    write_confined_routine(&path, &replacement).expect("replace the definition");
+
+    let mut observed = String::new();
+    reader
+        .read_to_string(&mut observed)
+        .expect("finish the old reader");
+    assert_eq!(
+        observed, previous,
+        "an open reader retains the complete old file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("open the replacement"),
+        replacement,
+        "a new reader sees the complete replacement"
+    );
+}
+
+/// A real kernel write failure after partial staging must leave the old routine
+/// intact (ORB-14347). Isolate the process-wide file-size limit and signal handler.
+#[cfg(target_os = "linux")]
+#[test]
+fn confined_writer_preserves_the_previous_file_when_staging_write_fails() {
+    const CHILD: &str = "application::routines::tests::materialize::staging_write_failure_child";
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command.args([
+        "--exact",
+        CHILD,
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    let output =
+        orbit_common::process::run_bounded(&mut command, std::time::Duration::from_secs(10))
+            .expect("fault-injection child finishes before its deadline");
+    orbit_common::test_env::assert_child_test_passed(
+        CHILD,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs only in the isolated file-size fault-injection child"]
+fn staging_write_failure_child() {
+    use super::super::materialize::write_confined_routine;
+
+    let root = tempfile::tempdir().expect("create tempdir");
+    let path = root.path().join("task_pilot.yaml");
+    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
+    write_confined_routine(&path, &previous).expect("create the definition before limiting writes");
+    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
+    let limit = libc::rlimit {
+        rlim_cur: 1024,
+        rlim_max: 1024,
+    };
+    // SAFETY: this isolated child owns its signal disposition and resource
+    // limits. `limit` is a valid rlimit and lives through the synchronous call.
+    unsafe {
+        assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
+        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
+    }
+
+    let error = write_confined_routine(&path, &replacement)
+        .expect_err("the kernel must refuse a write larger than the file-size limit");
+    assert!(matches!(error, orbit_common::OrbitError::Io(_)));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read the previous definition"),
+        previous,
+        "a failed partial staging write must not truncate the managed routine"
+    );
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .expect("list staging residue")
+            .count(),
+        1,
+        "the failed staging file is cleaned up"
+    );
 }
 
 /// Routine catalog confinement: a link anywhere on a routine's route —
