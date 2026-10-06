@@ -262,7 +262,11 @@ still prevents the write.
 discovery roots that are siblings of the active global root (`~/.orbit` →
 `~/.agents/skills`, `~/.claude/skills`; `--root /path/to/root` → `/path/to/.agents/skills`,
 `/path/to/.claude/skills`). Disable removes only links whose targets are inside the global
-root's `plugins/<ns>/`.
+root's `plugins/<ns>/`. An enabled install or upgrade removes links into older
+version directories before linking the current manifest's skills, including when
+the manifest drops or renames a skill. Links into the current install and links
+outside the namespace are preserved. `plugin doctor` reports dangling skill links
+into any version directory in the namespace, including versions already pruned.
 
 **One version directory per namespace, swapped whole.** The `plugins` row's `install_path` is
 the only authority for where a plugin lives: the loader reads it, every lifecycle verb verifies
