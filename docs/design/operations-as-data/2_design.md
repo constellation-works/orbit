@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: How the operation spec kernel, the split spec/handler table, and the MCP and CLI adapters work today on the friction noun.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation_args.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: []
 ---
@@ -127,7 +127,7 @@ present-and-empty; **required** parameters pass through verbatim so that
 "you passed only whitespace" is reported by the handler, where the domain rules
 live. That reproduces the pre-migration behavior exactly.
 
-Audit metadata is derived too. `command/operation_registry.rs`'s friction arm reads
+Audit metadata is derived too. `command/operation/registry.rs`'s friction arm reads
 `invocation.spec.name` and `invocation.target_id()` — the latter resolved by
 looking up the spec's positional parameter — instead of matching verb by verb.
 
