@@ -8,6 +8,9 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/git_repo.rs"]
+mod git_repo;
+
 mod error_output;
 mod help_goldens;
 mod help_skips_log_io;

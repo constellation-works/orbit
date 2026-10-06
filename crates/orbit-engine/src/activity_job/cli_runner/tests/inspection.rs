@@ -147,6 +147,10 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     let temp = tempdir().expect("tempdir");
     let bare = temp.path().join("bare");
     fs::create_dir(&bare).expect("bare dir");
+    // A `.git` file naming a missing gitdir stops Git's upward discovery
+    // here. Without it, a TMPDIR nested in another checkout resolves that
+    // repository and the missing revision reads as a permanent missing SHA.
+    fs::write(bare.join(".git"), "gitdir: missing-gitdir\n").expect("bare gitfile");
     let missing = "0123456789abcdef0123456789abcdef01234567";
     assert_retryable(
         SourceInspection::from_input(
