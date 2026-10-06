@@ -11,6 +11,11 @@
 //! distinct structured error variant. Uses an inline mock transport so this
 //! runs in `cargo build --examples` and `cargo run --example guardrails_smoke`
 //! without credentials.
+//!
+//! The iteration case calls `noop.tool`. The loop advertises only active
+//! registry schemas named by the allowlist, so this fixture registers that
+//! tool. An allowlist entry alone does not make an unregistered tool callable,
+//! and production denial of a missing or disallowed tool is unchanged.
 
 use std::process::ExitCode;
 use std::sync::Mutex;
@@ -21,7 +26,35 @@ use orbit_agent::loop_engine::{
     AgentLoop, AgentLoopConfig, AgentLoopError, ContentBlock, InMemorySink, LoopTransport, Session,
     StopReason, TransportError, TurnRequest, TurnResponse, TurnUsage,
 };
-use orbit_tools::{ToolContext, ToolRegistry};
+use orbit_tools::{Tool, ToolContext, ToolExecutionKind, ToolRegistry};
+use orbit_types::tool::ToolSchema;
+
+/// In-process tool the iteration case is allowed to call. It returns a fixed
+/// JSON object and does not touch Orbit state, the network, or credentials.
+struct NoopTool;
+
+impl Tool for NoopTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "noop.tool".to_string(),
+            description: "Credential-free no-op for the offline guardrail smoke.".to_string(),
+            parameters: Vec::new(),
+            builtin: false,
+        }
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
+    fn execute(
+        &self,
+        _ctx: &ToolContext,
+        _input: serde_json::Value,
+    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+        Ok(serde_json::json!({ "ok": true }))
+    }
+}
 
 struct ScriptedTransport {
     model: String,
@@ -114,7 +147,10 @@ fn main() -> ExitCode {
             .join("orbit-agent-examples")
             .join("guardrails-blobs"),
     );
-    let registry = ToolRegistry::new();
+    // Registration is what advertises the tool. The case below still allowlists
+    // the same name; production policy refuses a call that lacks either.
+    let mut registry = ToolRegistry::new();
+    registry.register(NoopTool);
     let ctx = ToolContext::default();
 
     // 1. max_iterations
