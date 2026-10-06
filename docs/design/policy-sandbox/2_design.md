@@ -19,9 +19,9 @@ This document describes Orbit's shipped policy and sandboxing implementation: v2
 
 ## 1. Policy Schema
 
-`PolicyDef` in `crates/orbit-common/src/types/policy_def.rs` is v2-only. `crates/orbit-common/src/types/resource.rs` rejects schema v1 with a migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
+`PolicyDef` in `crates/orbit-types/src/policy/policy_def.rs` is v2-only. `crates/orbit-common/src/protocol/yaml.rs` rejects schema v1 with a migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
 
-A valid policy declares `name`, optional `description`, global `denyRead` / `denyModify`, and `fsProfiles` mapping names to `FsProfile { read, modify }`. The policy name must also pass the centralized resource-name validator in `crates/orbit-common/src/types/resource.rs`: it is a non-empty single file stem, not a hidden dot name, and contains no separators, traversal markers, drive-prefix characters, extension dots, or control characters ([T20260509-28]). File-backed stores validate before constructing `<name>.yaml` paths.
+A valid policy declares `name`, optional `description`, global `denyRead` / `denyModify`, and `fsProfiles` mapping names to `FsProfile { read, modify }`. The policy name must also pass the centralized resource-name validator in `crates/orbit-types/src/resource/data.rs`: it is a non-empty single file stem, not a hidden dot name, and contains no separators, traversal markers, drive-prefix characters, extension dots, or control characters ([T20260509-28]). File-backed stores validate before constructing `<name>.yaml` paths.
 
 `PolicyDef::validate` enforces:
 
@@ -31,7 +31,7 @@ A valid policy declares `name`, optional `description`, global `denyRead` / `den
 4. Profile rules do not exactly duplicate global deny entries.
 5. `denyRead` never contains exceptions. A `denyModify` exception uses `!<path>`, names an exact path or `<path>/**` subtree, and is strictly contained by an earlier deny in the same policy.
 
-`PolicyDef::merged(global, workspace)` lets workspace `fsProfiles` overwrite globals by name while global denies accumulate. A workspace may repeat or narrow a host `denyModify` exception, but cannot introduce an exception outside the host exception surface. Workspace denies are appended after host exceptions and therefore can narrow them. The merged policy is revalidated.
+`PolicyDef::merged(global, workspace)` lets workspace `fsProfiles` overwrite globals by name while global denies accumulate. A workspace may repeat or narrow a host `denyModify` exception, but cannot introduce an exception outside the host exception surface. Workspace denies are appended after host exceptions and therefore can narrow them, including when the workspace repeats a deny that preceded the host exception. Modify rules are deduplicated only within the trailing run of denies or exceptions of the same kind; an intervening exception or deny makes a repeated rule meaningful again. The merged policy is revalidated.
 
 The shipped default expresses the versioned Orbit boundary as an ordered `.orbit/**` deny followed by exceptions for `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.toml`, `.orbit/resources/**`, and `.orbit/tmp/**` (the sanctioned worker scratch directory for `orbit.task.artifact.put`). Checkout-local `.orbit/config.yaml` is ignored runtime identity rather than repository configuration; it stays under the deny and therefore cannot become a managed-worktree sandbox anchor ([ORB-11376]). The broad deny continues to cover `.orbit/state/**`, task/learning/ADR/friction stores, databases, locks, and any future or misspelled `.orbit` path. Task `context_files` remain planning and conflict selectors; policy resolution does not convert them into filesystem grants ([ORB-10560]), and anchor materialization does not consult them at all ([ORB-10602]).
 
@@ -75,7 +75,7 @@ PolicyEngine::check(profile, operation, path) -> FsPolicyEvaluation
 
 `FsPolicyEvaluation` carries `{ profile, operation, path, allowed, matched_rule }`. `evaluator.rs` currently passes through to `PolicyDef::check_path`; the indirection leaves room for caching or layered evaluators later.
 
-`PolicyDecision` (`crates/orbit-common/src/types/policy_decision.rs`) is a separate `Allow | Deny { reason }` enum for broader policy/RBAC callers. `PolicyEngine::check` does not produce it; fs callers use `FsPolicyEvaluation`.
+`PolicyDecision` (`crates/orbit-types/src/policy/policy_decision.rs`) is a separate `Allow | Deny { reason }` enum for broader policy/RBAC callers. `PolicyEngine::check` does not produce it; fs callers use `FsPolicyEvaluation`.
 
 ---
 
