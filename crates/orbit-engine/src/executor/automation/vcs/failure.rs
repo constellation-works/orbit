@@ -465,11 +465,23 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         && failed_step_id == "review_gate_settle"
         && error_message.contains("review_awaiting_evidence:")
         && host.get_task_artifacts(&task.id)?.iter().any(|artifact| {
+            let admitted = input
+                .get("pipeline")
+                .and_then(|pipeline| pipeline.get("review_gate_admit"));
+            let attempt_id = admitted.and_then(|admit| input_string_field(admit, "attempt_id"));
+            let lineage_key = admitted.and_then(|admit| input_string_field(admit, "lineage_key"));
             artifact.path == orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT
+                && artifact.created_by.as_deref() == Some("system")
                 && serde_json::from_slice::<orbit_types::workflow::ReviewEvidenceHold>(
                     &artifact.content,
                 )
-                .is_ok_and(|hold| hold.run_id == run_id && hold.candidate.commit == head_sha)
+                .is_ok_and(|hold| {
+                    !hold.requirements.is_empty()
+                        && attempt_id.as_deref() == Some(hold.attempt_id.as_str())
+                        && lineage_key.as_deref() == Some(hold.lineage_key.as_str())
+                        && hold.run_id == run_id
+                        && hold.candidate.commit == head_sha
+                })
         });
     let timed_out = task.status == TaskStatus::InProgress
         && failed_step_id == "review"

@@ -1526,21 +1526,63 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
                 (TASK_ID.into(), "review-evidence-hold.json".into()),
                 serde_json::to_vec(&hold).unwrap(),
             );
+            host.artifact_creators.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                "system".into(),
+            );
             let mut input = json!({
                 "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
-                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE}},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                    "review_gate_admit": {"attempt_id": "rvw-held", "lineage_key": "lineage"}},
             });
             let held = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(held["decision"], "awaiting_review_evidence");
             assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
             assert_eq!(fx.forge_state("pr-head"), None);
+            let mut stale_hold = hold.clone();
+            stale_hold["attempt_id"] = json!("rvw-stale");
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&stale_hold).unwrap(),
+            );
+            let stale = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(
+                stale["decision"], "blocked_review_gate",
+                "a system hold must match the admitted attempt"
+            );
             input["error_message"] = json!("review_gate_blocked: changes_required; wrong approach");
             let rejected = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(rejected["decision"], "blocked_review_gate");
             assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+
+            let forged_fx = Fixture::new(sandbox);
+            let forged_host = DeliveryHost::new(&forged_fx.repo, TaskStatus::InProgress);
+            let forged_hold = json!({
+                "schema_version": 1, "attempt_id": "rvw-forged", "lineage_key": "lineage", "run_id": RUN_ID,
+                "candidate": {"commit": forged_fx.candidate, "tree": git(&forged_fx.repo, &["rev-parse", "HEAD^{tree}"])},
+                "task_meaning_digest": "meaning",
+                "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
+            });
+            forged_host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&forged_hold).unwrap(),
+            );
+            let forged = action(&forged_host, "pr_failure_handoff", &json!({
+                "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+                "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
+                "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+                "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": forged_fx.repo},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                    "review_gate_admit": {"attempt_id": "rvw-forged", "lineage_key": "lineage"}},
+            })).unwrap();
+            assert_eq!(
+                forged["decision"], "blocked_review_gate",
+                "attached holds are not settlement evidence"
+            );
+            assert_eq!(forged_host.status(TASK_ID), TaskStatus::Blocked);
         },
     );
 }
@@ -1813,6 +1855,8 @@ struct DeliveryHost {
     required_commands: Mutex<Vec<String>>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+    /// Trusted system artifacts, by task id and path.
+    artifact_creators: Mutex<BTreeMap<(String, String), String>>,
     releases: Mutex<Vec<ReviewReleaseRequest>>,
     /// The resolved validation environment, standing in for the owner's
     /// resolver; `None` keeps the trait default.
@@ -1837,6 +1881,7 @@ impl DeliveryHost {
             landings: Mutex::default(),
             required_commands: Mutex::default(),
             artifacts: Mutex::default(),
+            artifact_creators: Mutex::default(),
             releases: Mutex::default(),
             validation_env: Mutex::default(),
             widenings: Mutex::default(),
@@ -1956,7 +2001,12 @@ impl RuntimeHost for DeliveryHost {
                 path: path.clone(),
                 content: content.clone(),
                 media_type: "application/json".into(),
-                created_by: None,
+                created_by: self
+                    .artifact_creators
+                    .lock()
+                    .unwrap()
+                    .get(&(task_id.to_string(), path.clone()))
+                    .cloned(),
             })
             .collect())
     }
