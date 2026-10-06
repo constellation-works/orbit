@@ -118,7 +118,29 @@ pub(super) fn bridge_through(
     if !crate::runtime::is_coordination_tool(name) {
         return None;
     }
-    let binding = remote_owner(binding, process_machine_id)?;
+    let binding = binding?;
+    let local = process_machine_id?;
+    // A local owner does not need the broker, but the newly granted read
+    // still has to stay within this claim. Reject the internal projections
+    // here too: they are reserved for host-owned reads and can enumerate
+    // records beyond the claimed task.
+    if binding.execution.machine_id == local
+        && binding.owner_machine_id == local
+        && name == TASK_SHOW
+    {
+        if input.get("_worker_read").is_some() {
+            return Some(ClaimedOwnerRoute::Refused(denied(
+                "internal task projections are not available to a claimed worker",
+            )));
+        }
+        if input.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
+            return Some(ClaimedOwnerRoute::Refused(denied(
+                "the request names a task other than the claimed task",
+            )));
+        }
+        return None;
+    }
+    let binding = remote_owner(Some(binding), Some(local))?;
     let masked = || crate::runtime::plugin::sandbox_mask::plugin_trees_masked(global_root);
     if !is_claimed_owner_tool(name) {
         return masked().then(|| ClaimedOwnerRoute::Refused(outside_allowlist(name)));

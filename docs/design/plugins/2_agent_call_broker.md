@@ -167,9 +167,9 @@ and takes the task, claim and owner from those records, never from the request. 
 scoped to the claim: a read or an artifact names the claimed task; a new task must relate to
 the claimed task, and only as `spawned_from`; a friction may name only
 the claimed task as the one it was found during. A request field the call does not need, or an
-internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies, so a
-claimed implementer, which is never granted `orbit.task.show` (distributed-drain
-[2_design.md](../distributed-drain/2_design.md) §3), cannot read through the broker either.
+internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies.
+Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
+read scoped to the claimed task.
 
 A `review-*` artifact is the review gate's and keeps its stricter scope. The broker carries it
 only for the reviewer activity (`agent_review_repair`), and only while the review ledger shows

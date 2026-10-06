@@ -21,8 +21,9 @@ spec:
       repo_root:
         type: string
       # Set by the claimed pipelines only. The runner denies
-      # `orbit.task.show` and `orbit.task.update` for a claimed invocation,
-      # whether or not this is set: a claimed leaf's worker binding is enough.
+      # `orbit.task.update` for a claimed invocation, whether or not this is
+      # set: a claimed leaf's worker binding is enough. `orbit.task.show` is
+      # read-only and scoped by the run broker to the claimed task.
       claimed:
         type: boolean
       # Set by `candidate_resume` when the checkout already holds this
@@ -96,8 +97,9 @@ spec:
     Claimed mode
 
     - When `input.claimed` is true, the pipeline delivers your output to the
-      owning machine. The injected task is authoritative; `orbit.task.show`
-      and `orbit.task.update` are unavailable. Return writes as output fields:
+      owning machine. The injected task is authoritative; `orbit.task.update`
+      is unavailable. `orbit.task.show` can read only the claimed task through
+      the run's coordinator. Return writes as output fields:
       - `execution_summary` (REQUIRED): the item 12 summary.
       - `context_files_added`: selectors from item 4 (reported, not applied;
         the owner widens the claim's footprint over every path the candidate

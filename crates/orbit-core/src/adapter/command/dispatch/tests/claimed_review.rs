@@ -258,7 +258,7 @@ impl Fixture {
             allowed_tools: Vec::new(),
             tool_deny_policy: Some(ActivityToolDenyPolicy {
                 activity: activity.into(),
-                disallow_list: vec!["orbit.agent.invoke".into()],
+                disallow_list: vec!["orbit.agent.invoke".into(), "orbit.task.update".into()],
             }),
             caller: BrokeredCaller {
                 worktree: self.worktree.clone(),

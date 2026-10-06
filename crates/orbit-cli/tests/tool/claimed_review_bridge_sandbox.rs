@@ -284,7 +284,10 @@ fn broker_run(
         allowed_tools: Vec::new(),
         tool_deny_policy: Some(ActivityToolDenyPolicy {
             activity: activity.to_string(),
-            disallow_list: vec!["orbit.agent.invoke".to_string()],
+            disallow_list: vec![
+                "orbit.agent.invoke".to_string(),
+                "orbit.task.update".to_string(),
+            ],
         }),
         caller: caller.clone(),
     }

@@ -278,6 +278,51 @@ fn the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox() {
 }
 
 #[test]
+fn a_local_claimed_task_read_stays_on_the_claimed_task() {
+    let fixture = Fixture::new();
+    let local_owner = WorkerInvocation {
+        owner_machine_id: FOLLOWER.into(),
+        ..fixture.binding.clone()
+    };
+    for input in [
+        json!({"id": "TSO-2"}),
+        json!({"id": TASK, "_worker_read": "tasks"}),
+    ] {
+        let error = refused(bridge_through(
+            None,
+            &fixture.global_root,
+            Some(&local_owner),
+            Some(FOLLOWER),
+            SHOW,
+            &input,
+            &fixture.worktree,
+            &fixture.worktree,
+            ToolEntryPoint::Cli,
+        ));
+        assert!(
+            matches!(&error, OrbitError::PolicyDenied(reason)
+                if reason.starts_with("claimed_owner_bridge_refused")),
+            "{error}"
+        );
+    }
+    assert!(
+        bridge_through(
+            None,
+            &fixture.global_root,
+            Some(&local_owner),
+            Some(FOLLOWER),
+            SHOW,
+            &json!({"id": TASK}),
+            &fixture.worktree,
+            &fixture.worktree,
+            ToolEntryPoint::Cli,
+        )
+        .is_none(),
+        "the claimed task remains readable through the local owner route"
+    );
+}
+
+#[test]
 fn inside_a_masked_sandbox_no_owner_call_falls_back_to_ssh() {
     let fixture = Fixture::new();
     mask(&fixture);
