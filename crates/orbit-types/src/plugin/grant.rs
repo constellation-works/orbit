@@ -113,9 +113,31 @@ impl PluginGrantEntry {
     /// hashes, so changing a root changes the recorded set and therefore the
     /// witness — re-scoping a plugin needs fresh consent exactly the way
     /// adding a grant does.
+    ///
+    /// A bare relative root is grantable, but comma is also the grant
+    /// separator. Written verbatim, `fs=data,cache` loads `cache` as an
+    /// unknown grant, and `fs=./a,network` loads the `network` grant the
+    /// operator never gave. Each bare root after the first is therefore
+    /// written `./<root>`, which [`looks_like_root`] accepts as a path.
+    /// [`PluginGrantSet::from_entries`] reads that prefix back off, so the
+    /// set keeps the bare spelling.
     pub fn to_recorded(&self) -> String {
         match &self.roots {
-            Some(roots) => format!("{}={}", self.grant.as_str(), roots.join(",")),
+            Some(roots) => {
+                let mut recorded = String::new();
+                recorded.push_str(self.grant.as_str());
+                recorded.push('=');
+                for (index, root) in roots.iter().enumerate() {
+                    if index > 0 {
+                        recorded.push(',');
+                        if !looks_like_root(root) {
+                            recorded.push_str("./");
+                        }
+                    }
+                    recorded.push_str(root);
+                }
+                recorded
+            }
             None => self.grant.as_str().to_string(),
         }
     }
@@ -145,7 +167,31 @@ impl PluginGrantSet {
     /// without roots — `--grant fs --grant fs=/tmp/x` asks for the whole
     /// request and a slice of it at once, and silently taking either one is
     /// how an operator ends up with a wider profile than they typed.
+    ///
+    /// A set this accepts records to a list [`parse_stored_grants`] reads
+    /// back as the same set. A merged bare continuation is stored as
+    /// `./<root>` and loaded as the bare root, so `--grant fs=data --grant
+    /// fs=cache` keeps roots `data` and `cache` and never gains another grant.
     pub fn from_entries(entries: Vec<PluginGrantEntry>) -> Result<Self, String> {
+        let set = Self::canonicalize(entries)?;
+        let recorded = set.to_recorded();
+        let listed = recorded.join(", ");
+        let parsed = parse_grant_entries(&recorded)
+            .map_err(|error| format!("grant set `{listed}` does not parse back: {error}"))?;
+        let again = Self::canonicalize(parsed)?;
+        if again != set {
+            return Err(format!(
+                "grant set `{listed}` loads back as `{}`",
+                again.to_recorded().join(", ")
+            ));
+        }
+        Ok(set)
+    }
+
+    /// Order, merge, and spell roots the way [`Self::to_recorded`] will write
+    /// them. Does not check the round-trip; [`Self::from_entries`] does, and
+    /// calling this from that check must not recurse into it.
+    fn canonicalize(entries: Vec<PluginGrantEntry>) -> Result<Self, String> {
         let mut canonical = Vec::new();
         for grant in PluginGrant::ALL {
             let mut matching = entries
@@ -163,8 +209,16 @@ impl PluginGrantSet {
                     Some(scoped) => {
                         saw_scoped = true;
                         for root in scoped {
-                            if !roots.iter().any(|seen| seen == root) {
-                                roots.push(root.clone());
+                            // The first root is written as given. Each later
+                            // root is a continuation: `./<bare>` is the
+                            // recorded spelling of that bare root.
+                            let canonical_root = if roots.is_empty() {
+                                root.clone()
+                            } else {
+                                canonical_continuation_root(root).to_string()
+                            };
+                            if !roots.iter().any(|seen| seen == &canonical_root) {
+                                roots.push(canonical_root);
                             }
                         }
                     }
@@ -252,14 +306,29 @@ impl<'a> IntoIterator for &'a PluginGrantSet {
 /// a typo as a filesystem root and say nothing. So a continuation root must
 /// look like a path — absolute, explicitly relative, home-relative, or a
 /// template — and anything else is reported as the unknown grant it probably
-/// is. A bare relative root is still grantable; after the first it is written
-/// `./<root>`, the same way the shell distinguishes one from a command name.
+/// is. A bare relative root is still grantable. [`PluginGrantEntry::to_recorded`]
+/// writes each later one as `./<root>`, and [`canonical_continuation_root`]
+/// reads that prefix back off so the set keeps the bare spelling.
 fn looks_like_root(segment: &str) -> bool {
     segment.starts_with('/')
         || segment.starts_with("./")
         || segment.starts_with("../")
         || segment.starts_with('~')
         || segment.starts_with("{{")
+}
+
+/// The root a continuation segment names.
+///
+/// `./<bare>` is how a bare relative continuation is recorded, not a
+/// different directory: `./cache` and `cache` both join onto the plugin root
+/// as that directory. A continuation that already names a path on its own
+/// (`/tmp`, `../cache`, `~/cache`, `{{workspace}}`, or `././cache`) is kept
+/// character for character.
+fn canonical_continuation_root(root: &str) -> &str {
+    match root.strip_prefix("./") {
+        Some(bare) if !bare.is_empty() && !looks_like_root(bare) => bare,
+        _ => root,
+    }
 }
 
 /// Parse a `--grant` or stored grant list into entries, in the order written.
