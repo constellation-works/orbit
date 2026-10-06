@@ -6,7 +6,9 @@
 //! calls [`OrbitRuntime::close_task_prs_after_transition`] after its write.
 //! Only a transition *into* done, rejected or archived closes anything: a new
 //! run, a block or a requeue never does, because a re-run resumes from the
-//! `[BLOCKED]` candidate.
+//! `[BLOCKED]` candidate. Leaving done never closes anything either: the done
+//! transition already settled which PRs close, and archiving a done task must
+//! not close the landing it deliberately kept open.
 //!
 //! A PR qualifies only when all of these hold:
 //! - its head branch is `orbit/<TASK-ID>-…`;
@@ -41,7 +43,13 @@ impl OrbitRuntime {
         task: &Task,
         note: Option<&str>,
     ) {
-        if previous == task.status || !is_terminal_decision(task.status) {
+        // A done task's landing PR was kept open on purpose, and the done
+        // transition already closed the rest, so leaving done (an archive)
+        // has nothing left to close.
+        if previous == task.status
+            || previous == TaskStatus::Done
+            || !is_terminal_decision(task.status)
+        {
             return;
         }
         let settings = self.context.settings().pr_settings();
