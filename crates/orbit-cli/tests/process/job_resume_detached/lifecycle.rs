@@ -352,6 +352,182 @@ fn completion_resume_restores_review_and_completes_merged_pr() {
     );
 }
 
+/// Resumed workers use the original checkpoint batch for delivery. Their
+/// failure or orphan reconciliation must still block every readmitted task.
+#[test]
+fn resumed_terminal_runs_block_readmitted_tasks() {
+    if !isolated("resumed_terminal_runs_block_readmitted_tasks") {
+        return;
+    }
+    for case in ["failed", "interrupted", "superseded"] {
+        let fx = Delivery::new();
+        fx.skip_promotion();
+        fx.runtime
+            .apply_task_automation_update(
+                &fx.task,
+                orbit_engine::blocked_workflow_failure_update(JOB, &fx.run, None, None),
+            )
+            .unwrap();
+        let companion = fx.cli.json(&[
+            "task",
+            "add",
+            "--title",
+            "Companion delivery",
+            "--description",
+            "Exercise resumed bundle cleanup.",
+            "--acceptance-criteria",
+            "Resume cleans up the whole bundle.",
+            "--plan",
+            "Resume the bundle.",
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--json",
+        ])["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let descendant = "jrun-previous-resume";
+        insert_run(
+            &fx.db,
+            &fx.runtime.workspace_id().unwrap(),
+            descendant,
+            Some(&fx.run),
+            &json!({"task_ids": [companion]}),
+        );
+        // An earlier attempt changed this binding. Resume must restore the
+        // checkpoint batch and couple this already-in-progress task as well.
+        fx.runtime
+            .apply_task_automation_update(
+                &companion,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    job_run_id: Some(descendant.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let input = if case == "interrupted" {
+            // Jobs without an explicit task list still reconcile lineage tasks.
+            json!({"completion": "done", "crew": "sol"})
+        } else {
+            json!({"task_ids": [fx.task, companion], "completion": "done", "crew": "sol"})
+        };
+        fx.db
+            .execute(
+                "UPDATE job_runs SET input_json=?2 WHERE run_id=?1",
+                params![fx.run, input.to_string()],
+            )
+            .unwrap();
+        let path = fx
+            .cli
+            .home
+            .join(".orbit/resources/jobs")
+            .join(format!("{JOB}.yaml"));
+        let mut job: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        job["spec"]["steps"][4] = if case == "failed" {
+            json!({"id": "fail_resume", "default_input": {"result": {"status": "failed", "run_id": "fixture_failure"}},
+                "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}})
+        } else {
+            json!({"id": "wait_resume", "default_input": {"seconds": 60},
+                "spec": {"type": "deterministic", "action": "sleep", "config": {}}})
+        };
+        fs::write(path, job.to_string()).unwrap();
+        let retry = if case == "failed" {
+            fx.resume(&fx.run, "failed")
+        } else {
+            let submitted = fx.cli.json(&["job", "resume", &fx.run, "--json"]);
+            let retry = submitted["run_id"].as_str().unwrap().to_string();
+            let running = fx.cli.poll_run(&retry, "running", Duration::from_secs(20));
+            assert_eq!(fx.status(), TaskStatus::InProgress);
+            assert_eq!(
+                fx.runtime.get_task(&companion).unwrap().status,
+                TaskStatus::InProgress
+            );
+            if case == "superseded" {
+                insert_run(
+                    &fx.db,
+                    &fx.runtime.workspace_id().unwrap(),
+                    "jrun-unrelated",
+                    None,
+                    &json!({"task_ids": [fx.task]}),
+                );
+                fx.runtime
+                    .apply_task_automation_update(
+                        &fx.task,
+                        TaskAutomationUpdate {
+                            job_run_id: Some("jrun-unrelated".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            let pid = running["run"]["pid"].as_u64().unwrap() as i32;
+            assert_ne!(pid as u32, std::process::id());
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+            fx.cli
+                .poll_run(&retry, "interrupted", Duration::from_secs(20));
+            retry
+        };
+        for id in [&fx.task, &companion] {
+            let task = fx.runtime.get_task(id).unwrap();
+            if case == "superseded" && id == &fx.task {
+                assert_eq!(
+                    task.status,
+                    TaskStatus::InProgress,
+                    "a newer binding is protected"
+                );
+                assert_eq!(task.job_run_id.as_deref(), Some("jrun-unrelated"));
+                continue;
+            }
+            assert_eq!(
+                task.status,
+                TaskStatus::Blocked,
+                "ORB-14346: {case} must not strand readmitted work"
+            );
+            assert_eq!(
+                task.job_run_id.as_deref(),
+                Some(fx.run.as_str()),
+                "delivery keeps its checkpoint batch"
+            );
+            let history = fx.runtime.get_task_history(id).unwrap();
+            let last = history.last().unwrap();
+            assert_eq!(
+                last.event,
+                if case == "failed" {
+                    "workflow_run_failed"
+                } else {
+                    "workflow_run_interrupted"
+                }
+            );
+            assert_eq!(last.from_status, Some(TaskStatus::InProgress));
+            assert!(last.note.as_ref().unwrap().contains(&retry));
+        }
+        if case == "failed" {
+            let repeated = fx.resume(&retry, "failed");
+            for id in [&fx.task, &companion] {
+                let task = fx.runtime.get_task(id).unwrap();
+                assert_eq!(
+                    task.status,
+                    TaskStatus::Blocked,
+                    "repeated failures also clean up readmission"
+                );
+                let history = fx.runtime.get_task_history(id).unwrap();
+                assert!(
+                    history
+                        .last()
+                        .unwrap()
+                        .note
+                        .as_ref()
+                        .unwrap()
+                        .contains(&repeated)
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
     if !isolated("completion_resume_cannot_invent_review_or_reverse_withdrawal") {
@@ -487,7 +663,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
         fx.resume(&fx.run, "failed");
         let after = fx.runtime.get_task(&fx.task).unwrap();
         if case == "early" {
-            assert_eq!(after.status, TaskStatus::InProgress);
+            assert_eq!(after.status, TaskStatus::Blocked);
         }
         assert!(
             !matches!(after.status, TaskStatus::Review | TaskStatus::Done),
@@ -539,13 +715,18 @@ fn failure_handoff_note(event: &str, run: &str) -> String {
     }
 }
 
-fn latest_status_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
+fn latest_resume_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
     fx.runtime
         .get_task_history(&fx.task)
         .unwrap()
         .into_iter()
         .rev()
-        .find(|entry| entry.to_status.is_some())
+        .find(|entry| {
+            matches!(
+                entry.event.as_str(),
+                "resume_readmitted" | "resume_review_restored"
+            )
+        })
         .unwrap()
 }
 
@@ -657,10 +838,14 @@ fn resume_preserves_promotion_across_non_completion_tails() {
             };
             assert_eq!(
                 fx.status(),
-                expected,
-                "ORB-14047: {case} must retain its reused delivery stage"
+                if case == "early" {
+                    TaskStatus::Blocked
+                } else {
+                    expected
+                },
+                "{case}: review stays restored; failed implementation is blocked"
             );
-            let restored = latest_status_event(&fx);
+            let restored = latest_resume_event(&fx);
             assert_eq!(
                 restored.event,
                 if case == "early" {
@@ -699,8 +884,8 @@ fn resume_readmits_lineage_failure_handoff_blocks() {
         fx.block_handoff(event, &failure_handoff_note(event, &fx.run));
         fx.fail(&fx.run);
         fx.resume(&fx.run, "failed");
-        assert_eq!(fx.status(), TaskStatus::InProgress, "{event}");
-        let restored = latest_status_event(&fx);
+        assert_eq!(fx.status(), TaskStatus::Blocked, "{event}");
+        let restored = latest_resume_event(&fx);
         assert_eq!(restored.event, "resume_readmitted", "{event}");
         assert_eq!(restored.from_status, Some(TaskStatus::Blocked), "{event}");
         assert_eq!(restored.to_status, Some(TaskStatus::InProgress), "{event}");
@@ -745,7 +930,7 @@ fn resume_readmits_lineage_failure_handoff_blocks() {
     fx.fail(&fx.run);
     fx.resume(&fx.run, "failed");
     assert_eq!(fx.status(), TaskStatus::Review);
-    let restored = latest_status_event(&fx);
+    let restored = latest_resume_event(&fx);
     assert_eq!(restored.event, "resume_review_restored");
     assert_eq!(restored.from_status, Some(TaskStatus::Blocked));
     assert_eq!(restored.to_status, Some(TaskStatus::Review));

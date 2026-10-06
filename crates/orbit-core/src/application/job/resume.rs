@@ -54,6 +54,7 @@ use crate::application::job::pipeline::{
 };
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
+use crate::runtime::task::resumed_task_run_id;
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
 /// A lineage this deep is pathological; the bound keeps a corrupted cycle from
@@ -440,12 +441,17 @@ impl OrbitRuntime {
             );
             let restamp = plan.checkpoint_batch_id.as_ref()
                 .filter(|batch| task.job_run_id.as_ref() != Some(batch));
-            if restored.is_none() && restamp.is_none() {
+            let owner = plan.checkpoint_batch_id.as_deref().unwrap_or(expected_owner);
+            // The batch binding is needed by handoff checks; the history entry
+            // couples cleanup to this attempt without changing that binding.
+            let recouple = task.status == TaskStatus::InProgress
+                && resumed_task_run_id(&history, owner) != Some(resumed_run_id);
+            if restored.is_none() && restamp.is_none() && !recouple {
                 return Ok(());
             }
             let stage = restored.unwrap_or(task.status);
             let note = format!(
-                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}",
+                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}; owner_run_id={owner}",
                 plan.source.run_id, blocking_run.unwrap_or("-"), checkpoint.is_some(),
             );
             self.with_mutation(|| {
