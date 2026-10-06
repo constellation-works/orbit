@@ -62,7 +62,3 @@ fn a_late_re_record_cannot_reopen_a_cancelled_child() {
         "phase, status, error, cancellation, and submitted_at must all survive"
     );
 }
-
-// [ORB-11253] The live worker ceiling of a bounded drain.
-
-// [ORB-11283] Stop new admissions without cancelling the coordinator.
