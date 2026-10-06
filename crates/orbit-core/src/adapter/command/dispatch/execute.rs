@@ -401,14 +401,14 @@ impl OrbitRuntime {
                 audit_recorded: false,
             });
         }
-        // A claimed reviewer's artifact call goes to the broker too: the
-        // claim's owner is reached over SSH, which the sandbox masks. The
-        // broker writes the audit row for what it answers, naming this caller
-        // as the peer; a refusal made here is audited below like any other.
+        // A claimed worker's owner calls go to the broker too: the claim's
+        // owner is reached over SSH, which the sandbox masks. The broker
+        // writes the audit row for what it answers, naming this caller as the
+        // peer; a refusal made here is audited below like any other.
         #[cfg(unix)]
-        let mut claimed_review_refusal = None;
+        let mut claimed_owner_refusal = None;
         #[cfg(unix)]
-        match super::claimed_review::bridge_claimed_review_artifact(
+        match super::claimed_owner::bridge_claimed_owner_call(
             &self.global_root(),
             self.worker_invocation(),
             self.automation_machine_identity(),
@@ -418,15 +418,15 @@ impl OrbitRuntime {
             &self.paths().repo_root,
             entry_point,
         ) {
-            Some(super::claimed_review::ClaimedReviewRoute::Forwarded(result)) => {
+            Some(super::claimed_owner::ClaimedOwnerRoute::Forwarded(result)) => {
                 mark_tool_audit_recorded();
                 return Ok(ToolDispatchOutcome {
                     value: result?,
                     audit_recorded: false,
                 });
             }
-            Some(super::claimed_review::ClaimedReviewRoute::Refused(error)) => {
-                claimed_review_refusal = Some(error);
+            Some(super::claimed_owner::ClaimedOwnerRoute::Refused(error)) => {
+                claimed_owner_refusal = Some(error);
             }
             None => {}
         }
@@ -448,7 +448,7 @@ impl OrbitRuntime {
             |input| {
                 self.ensure_tool_agent_facing(name)?;
                 #[cfg(unix)]
-                if let Some(error) = claimed_review_refusal {
+                if let Some(error) = claimed_owner_refusal {
                     return Err(error);
                 }
                 #[cfg(unix)]

@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247, ORB-14260]
 ---
 
 # Distributed Drain — Design
@@ -206,14 +206,15 @@ default crew. System-crew activities such as the recovery hooks keep `workflow.s
 claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 
 - The injected task envelope is the task. The claim is the authority to work on it, and the owner
-  fences stale work when the claim settles (`stale_claim`), so the agent re-reads nothing.
-- The CLI runner denies `orbit.task.show` and `orbit.task.update` on top of the activity's own
+  fences stale work when the claim settles (`stale_claim`). A read through `orbit.task.show` is
+  scoped by the run broker to that claimed task.
+- The CLI runner denies `orbit.task.update` on top of the activity's own
   list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator/policy.rs`; an allowlisted activity has
-  them removed instead). The prompt is not the only guard. The runner treats an invocation as
+  it removed instead). The prompt is not the only guard. The runner treats an invocation as
   claimed when the host carries the claim's trusted worker binding, or the step input says
   `claimed: true`. The binding covers every agent the leaf launches, so `step_failure_recovery`
   and `pr_conflict_recovery`, which the claimed leaves use as step recovery hooks and whose input
-  never carries `claimed`, lose the same two tools. A run outside a claim keeps them.
+  never carries `claimed`, lose task updates too. A run outside a claim keeps its activity grant.
 - The agent returns `execution_summary`, plus any `context_files_added` and `comment`, in the step
   output. The handoff step reads that output (`implementation: "{{ steps.implement_one.output }}"`,
   one iteration, since a claim binds exactly one task). `claim_handoff` composes the handoff's
@@ -262,9 +263,13 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 
 This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
 leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
-given no owner transport. Before this, every such agent finished its change, failed to save its
-summary through `orbit.task.update`, and reported the step failed (`task_store_unreachable`),
-which blocked the task with finished work uncommitted.
+given no owner transport of its own: the few claim-scoped owner calls it may make (the claimed
+task's record and artifacts, a follow-up task `spawned_from` it, a friction) cross the run's
+plugin broker outside the sandbox ([ORB-14260]; plugins
+[2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3, "Claimed-owner calls").
+Before this, every such agent finished its change, failed to save its summary through
+`orbit.task.update`, and reported the step failed (`task_store_unreachable`), which blocked the
+task with finished work uncommitted.
 
 **Execution authority** is the trusted worker binding plus the durable admission, never a
 payload: `execute_pipeline_run_worker` admits a claimed leaf only when the binding's task, claim,
@@ -479,6 +484,12 @@ owns delivery:
   recovery and final recovery; the final-recovery skip is audited as
   `job.final_recovery_attempted` with outcome `skipped`, because another agent cannot sign the
   provider in [ORB-14262].
+  A claimed worker whose owner call could not cross the run's broker (missing or gone) gets the
+  typed `owner_route_unavailable` and ends its step on that `error.code` [ORB-14260]. The runner
+  stamps `[owner_route_unavailable]`, step and final recovery are skipped (nothing inside the
+  sandbox can open the route), and the leaf settles as the `owner_route` class below. The code
+  grants nothing an agent could abuse: declaring it only withholds repair and returns the task
+  to the owner's backlog.
 - *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a
   `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
   `candidate` (the default: the candidate's implementation, checks or review failed) and
@@ -947,7 +958,8 @@ Acceptance criteria, not reported as passing.
 | Pull drain cancelled while its leaves are live | Graceful: unlaunched claims return to `backlog` with a comment; launched leaves finish and deliver, then the drain ends `cancelled`. `--force`: the drain's own launched leaves are released and stopped, their tasks return to `backlog`; another live drain's leaves are untouched; a leaf whose stop is unconfirmed keeps its claim and fails the cancel. No claim is left `running` without a responsible follower process ([ORB-13663], [ORB-13892]) |
 | Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
-| Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
+| Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
+| Claimed agent's owner call from inside the sandbox | Only the claim-scoped owner calls cross the run's broker; another call, task or relation is refused before the owner; a missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |

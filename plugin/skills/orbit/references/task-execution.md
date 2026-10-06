@@ -231,11 +231,12 @@ it — see [friction.md](friction.md). Then:
   succeed.
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
-  granted `orbit.task.show` or `orbit.task.update`. Return the summary as the
-  output's `execution_summary` (with `context_files_added` and `comment` for
-  anything you would have written to the task); the pipeline's handoff
-  carries it to the owner. An owner-routed tool that answers unreachable is
-  not a task failure.
+  granted `orbit.task.update`. `orbit.task.show` reads only the claimed task
+  through the run's coordinator. Return the summary as the output's
+  `execution_summary` (with `context_files_added` and `comment` for anything
+  you would have written to the task); the pipeline's handoff carries it to
+  the owner. An owner-routed tool that answers unreachable is not a task
+  failure.
 - **Direct execution** (no envelope): persist the summary *and* move to `review`
   via `orbit.task.update`.
 

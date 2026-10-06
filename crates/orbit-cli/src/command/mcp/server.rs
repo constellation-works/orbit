@@ -140,7 +140,7 @@ pub(super) fn serve_mcp_federated_stdio(
         destinations,
         Arc::new(probe),
     ));
-    let host = with_claimed_review_bridge(
+    let host = with_claimed_owner_bridge(
         host,
         &identity.session_context,
         &global_root_for_bridge,
@@ -252,7 +252,7 @@ fn compose_server(
         identity.process_machine_id.clone(),
         identity.process_machine_name,
     ));
-    let host = with_claimed_review_bridge(
+    let host = with_claimed_owner_bridge(
         host,
         &identity.session_context,
         &global_root,
@@ -261,9 +261,9 @@ fn compose_server(
     Ok((host, identity.session_context))
 }
 
-/// A managed worker's host, with a claimed reviewer's manifest read and
-/// report write routed through its run's broker as its CLI routes them.
-fn with_claimed_review_bridge(
+/// A managed worker's host, with a claimed worker's owner calls routed
+/// through its run's broker as its CLI routes them.
+fn with_claimed_owner_bridge(
     host: Arc<dyn McpHost>,
     session_context: &ToolSessionContext,
     global_root: &Path,
@@ -271,7 +271,7 @@ fn with_claimed_review_bridge(
 ) -> Arc<dyn McpHost> {
     #[cfg(unix)]
     if session_context.worker_invocation.is_some() {
-        return Arc::new(super::claimed_review::ClaimedReviewBridge {
+        return Arc::new(super::claimed_owner::ClaimedOwnerBridge {
             inner: host,
             global_root: global_root.to_path_buf(),
             process_machine_id: process_machine_id.to_string(),

@@ -137,6 +137,14 @@ pub(super) fn attempt_final_recovery(
             "the provider's content policy refused the turn; the candidate was not judged",
         );
     }
+    // [ORB-14260] Nor can a recovery agent in the same sandbox reach the
+    // claimed task's owner its step could not; the claim is released.
+    if orbit_types::workflow::is_owner_route_unavailable(None, Some(error_message)) {
+        return skip(
+            "the claimed worker could not reach its owner through the run's coordinator; the \
+             candidate was not judged",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",

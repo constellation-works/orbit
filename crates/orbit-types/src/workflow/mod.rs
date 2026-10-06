@@ -111,8 +111,8 @@ pub use run::{
     TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE,
     TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE,
     VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, failed_provider,
-    is_baseline_red_failure, is_provider_capacity_exhausted, is_provider_failure,
-    is_provider_refusal, is_provider_unavailable, is_task_blocked_by_agent,
+    is_baseline_red_failure, is_owner_route_unavailable, is_provider_capacity_exhausted,
+    is_provider_failure, is_provider_refusal, is_provider_unavailable, is_task_blocked_by_agent,
     is_validation_environment_failure, provider_failure_text, run_id_candidate, run_id_minute_stem,
     run_id_role, task_blocked_by_agent_kind, task_blocked_by_agent_message,
 };

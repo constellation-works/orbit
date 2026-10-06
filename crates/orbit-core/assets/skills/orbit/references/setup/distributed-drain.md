@@ -198,10 +198,11 @@ returns.
   and the next due attempt settles it, or `orbit run auto --stop` retries it
   at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
-  has no route to the owner and needs none. It is denied `orbit.task.show` /
-  `orbit.task.update` and returns its execution summary as step output;
-  `claim_handoff` carries it to the owner's `execution_summary`. Never loosen
-  the sandbox to give an agent the owner.
+  has no direct route to the owner. The run broker carries only the scoped
+  claimed-task read and other owner calls documented in the runbook; the
+  agent is denied `orbit.task.update` and returns its execution summary as
+  step output. `claim_handoff` carries it to the owner's `execution_summary`.
+  Never loosen the sandbox to give an agent direct owner access.
 - A leaf that fails before handing off settles its claim as a failure: the
   owner's task moves to `blocked` with the leaf run, failed step and error in
   its summary. Inspect the run itself on the follower (`orbit run show <run>`).

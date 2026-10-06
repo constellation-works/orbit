@@ -48,6 +48,11 @@ pub(super) fn completion_diagnostic(error: &str, redactor: &PatternRedactor) -> 
     )
 }
 
+/// The step message for an envelope that declared failure. [ORB-14260] An
+/// agent whose claimed-owner call could not reach its coordinator declares
+/// `owner_route_unavailable`; the typed marker lets recovery skip the step and
+/// a pull drain release the claim. The code grants no authority: the marker
+/// only withholds a repair and returns the task to its owner's backlog.
 pub(super) fn declared_failure_diagnostic(
     status: &str,
     failure: Option<&orbit_agent::DeclaredResponseFailure>,
@@ -58,9 +63,14 @@ pub(super) fn declared_failure_diagnostic(
     let Some(error) = failure.and_then(|failure| failure.error.as_ref()) else {
         return format!("{prefix}: declared envelope error details unavailable");
     };
+    let marker = if orbit_types::workflow::is_owner_route_unavailable(Some(&error.code), None) {
+        format!("{} ", orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_MARKER)
+    } else {
+        String::new()
+    };
 
     format!(
-        "{prefix}: error.code={}; error.message={}",
+        "{marker}{prefix}: error.code={}; error.message={}",
         bounded_diagnostic(&error.code, redactor),
         bounded_diagnostic(&error.message, redactor),
     )
