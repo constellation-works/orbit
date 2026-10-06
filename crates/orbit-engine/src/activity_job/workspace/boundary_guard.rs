@@ -15,6 +15,7 @@ use super::fingerprint::{
     GitPathState, GitWorktreeFingerprint, cached_primary_before_fingerprint, changed_paths,
     git_fingerprint, git_output_raw,
 };
+use super::rebase_recovery::RebaseContinuation;
 use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundaryGuard};
 
 impl WorktreeBoundaryGuard {
@@ -239,8 +240,9 @@ impl WorktreeBoundaryGuard {
     /// edits, overlapping record-store dirt, primary rewrites, primary branch
     /// switches, and unapproved history changes in the assigned worktree remain
     /// typed, fail-closed violations. The guard does not clean or copy either
-    /// checkout. Only completion of an explicitly admitted stopped rebase
-    /// permits assigned history changes.
+    /// checkout. Only the host's continuation of an explicitly admitted
+    /// stopped rebase permits assigned history changes: one that finishes it,
+    /// or one that stops again on a later pick of that same rebase.
     pub(crate) fn verify_after_provider(
         self,
         host: &dyn RuntimeHost,
@@ -261,11 +263,17 @@ impl WorktreeBoundaryGuard {
         } else {
             None
         };
-        self.verify()?;
-        if let Some((step_id, output)) = completion {
-            host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
-        } else {
-            self.widen_for_agent_changes(host, task_ids)?;
+        match completion {
+            Some((step_id, RebaseContinuation::Completed(output))) => {
+                self.verify()?;
+                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
+            }
+            // Nothing is certified until a later round finishes the rebase.
+            Some((_, RebaseContinuation::StoppedAgain)) => self.verify_checkouts(true)?,
+            None => {
+                self.verify()?;
+                self.widen_for_agent_changes(host, task_ids)?;
+            }
         }
         Ok(())
     }
@@ -342,6 +350,13 @@ impl WorktreeBoundaryGuard {
     }
 
     pub(crate) fn verify(&self) -> Result<(), DispatchError> {
+        self.verify_checkouts(false)
+    }
+
+    /// [`Self::verify`], where `continuation_stopped_again` also admits the
+    /// HEAD the host's own continuation of the admitted rebase left on a
+    /// later, conflicting pick of that same rebase.
+    fn verify_checkouts(&self, continuation_stopped_again: bool) -> Result<(), DispatchError> {
         let assigned_after = git_fingerprint(&self.assigned_root)?;
         let primary_after = git_fingerprint(&self.primary_root)?;
         let assigned_history_changed = assigned_after.head != self.assigned_before.head
@@ -362,7 +377,10 @@ impl WorktreeBoundaryGuard {
             .cloned()
             .collect::<Vec<_>>();
 
-        if assigned_history_changed && !self.completed_authorized_rebase(&assigned_after)? {
+        if assigned_history_changed
+            && !self.completed_authorized_rebase(&assigned_after)?
+            && !(continuation_stopped_again && self.stopped_authorized_rebase()?)
+        {
             // Only the checkpointed conflict-recovery leaf may finish a rebase.
             return Err(self.integrity_error(
                 "worktree_content_conflict",

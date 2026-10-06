@@ -376,12 +376,38 @@ fn refuse_or_recover_existing_rebase(
 ) -> Result<Value, OrbitError> {
     let conflicting_paths = unmerged_paths(workspace_path)?;
     if !conflicting_paths.is_empty() {
+        // A conflict recovery round can leave this candidate's rebase stopped
+        // on a later pick. It stays pinned to its own `onto`, which a
+        // completion retry's fresh base fetch may already have passed; the
+        // next round must describe that pin to be admitted.
+        let onto = read_rebase_state(workspace_path, "onto")?;
+        let target_base_sha = match onto.as_deref() {
+            Some(onto)
+                if rebase_belongs_to_attempt(workspace_path, head, head_sha_before, onto)? =>
+            {
+                onto
+            }
+            _ => base_sha,
+        };
+        // Naming the stopped pick tells a later stop of the same rebase
+        // apart from the one a recovery round just resolved.
+        let diagnostic = match (
+            read_rebase_state(workspace_path, "msgnum")?,
+            read_rebase_state(workspace_path, "end")?,
+        ) {
+            (Some(pick), Some(end)) => {
+                format!(
+                    "rebase remains stopped with unresolved conflicts at commit {pick} of {end}"
+                )
+            }
+            _ => "rebase remains stopped with unresolved conflicts".to_string(),
+        };
         return Err(rebase_conflict_error(
             workspace_path,
             head_sha_before,
-            base_sha,
+            target_base_sha,
             conflicting_paths,
-            "rebase remains stopped with unresolved conflicts",
+            &diagnostic,
         )?);
     }
     if rebase_belongs_to_attempt(workspace_path, head, head_sha_before, base_sha)? {
@@ -756,8 +782,10 @@ fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
     };
     let mut saw_uncertified_match = false;
     for (step_id, checkpoint) in &state.rebase_recovery_checkpoints {
-        if !matches!(step_id.as_str(), "sync_base" | "complete_pr")
-            || checkpoint.get("head_sha").and_then(Value::as_str) != Some(head_sha)
+        if !matches!(
+            step_id.as_str(),
+            "sync_base" | "complete_pr" | "complete_reviewed_pr"
+        ) || checkpoint.get("head_sha").and_then(Value::as_str) != Some(head_sha)
             || !recorded_workspace_matches(
                 checkpoint.get("workspace_path").and_then(Value::as_str),
                 workspace,

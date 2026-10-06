@@ -27,6 +27,9 @@
 #   event with the blocker kind. Resume does not move that task back. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
+# - A reviewed PR that conflicts at completion is rebased (conflict recovery
+#   repairing each stop), re-reviewed and republished, for at most two rounds;
+#   a conflict after the second keeps the PR and the task in review.
 #
 schemaVersion: 2
 kind: Job
@@ -371,11 +374,10 @@ spec:
 
     # ORB-13890: review the rebased head with a fresh reviewer start from the
     # same lineage, republish it under the rebase lease, then complete it.
-    # A second conflict is review_gate_stale; any failure here keeps the
-    # published PR and the task in review. `complete_pr` may be skipped, so no
-    # `when:` reads its output: `re_review_gate_admit` always runs, reads the
-    # run's recorded `complete_pr` checkpoint itself, and its `applies` gates
-    # the rest.
+    # Any failure here keeps the published PR and the task in review.
+    # `complete_pr` may be skipped, so no `when:` reads its output:
+    # `re_review_gate_admit` always runs, reads the run's recorded
+    # `complete_pr` checkpoint itself, and its `applies` gates the rest.
     - id: re_review_gate_admit
       retry:
         max_attempts: 3
@@ -460,8 +462,13 @@ spec:
         rewrite_head_before: "{{ steps.complete_pr.output.rebased.head_sha_before }}"
         expected_remote_sha: "{{ steps.complete_pr.output.rebased.remote_sha_before }}"
 
+    # ORB-14332: the base can move again while the rebased head is under
+    # re-review. A conflict here rebases and recovers exactly like
+    # `complete_pr` and asks for one more re-review round below, instead of
+    # stopping an accepted candidate as review_gate_stale.
     - id: complete_reviewed_pr
       when: "{{ steps.re_review_gate_admit.output.applies }} == true"
+      recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
@@ -473,6 +480,108 @@ spec:
         published_head_sha: "{{ steps.re_push.output.local_sha }}"
         previous_published_head_sha: "{{ steps.re_push.output.remote_sha_before }}"
         reviewed_head_sha: "{{ steps.re_review_gate_settle.output.reviewed_head_sha }}"
+        re_review_on_conflict: true
+        base: "{{ steps.sync_base.output.base }}"
+        base_sync: "{{ input.base_sync }}"
+
+    # ORB-14332: the bounded second re-review round, the same steps over the
+    # head `complete_reviewed_pr` rebased. `complete_reviewed_pr` is skipped
+    # unless the first round applied, so `re_review_gate_admit_2` always runs
+    # and reads its recorded checkpoint. A third conflict is
+    # review_gate_stale: the published PR and the task stay in review.
+    - id: re_review_gate_admit_2
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        completion: "{{ input.completion }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        re_review_after: complete_reviewed_pr
+
+    - id: re_review_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.re_review_gate_admit_2.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.re_review_gate_admit_2.output.attempt_id }}"
+        lineage_key: "{{ steps.re_review_gate_admit_2.output.lineage_key }}"
+        manifest_artifact: "{{ steps.re_review_gate_admit_2.output.manifest_artifact }}"
+        report_artifact: "{{ steps.re_review_gate_admit_2.output.report_artifact }}"
+        crew: "{{ steps.re_review_gate_admit_2.output.reviewer.crew }}"
+
+    - id: re_review_gate_settle_2
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.re_review_gate_admit_2.output }}"
+
+    - id: re_review_validate_2
+      when: "{{ steps.re_review_gate_settle_2.output.reviewer_fixed }} == true"
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.complete_reviewed_pr.output.rebased.base_sha }}"
+        base_ref: "{{ steps.complete_reviewed_pr.output.rebased.base_ref }}"
+        ownership_base_sha: "{{ steps.re_review_gate_settle_2.output.implementation_head_sha }}"
+
+    - id: re_push_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
+        base: "{{ steps.complete_reviewed_pr.output.rebased.base }}"
+        base_ref: "{{ steps.complete_reviewed_pr.output.rebased.base_ref }}"
+        rewrite_performed: "{{ steps.complete_reviewed_pr.output.rebased.rewritten }}"
+        rewrite_head_before: "{{ steps.complete_reviewed_pr.output.rebased.head_sha_before }}"
+        expected_remote_sha: "{{ steps.complete_reviewed_pr.output.rebased.remote_sha_before }}"
+
+    - id: complete_reviewed_pr_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:pr_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
+        completion: "{{ input.completion }}"
+        head: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
+        published_head_sha: "{{ steps.re_push_2.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.re_push_2.output.remote_sha_before }}"
+        reviewed_head_sha: "{{ steps.re_review_gate_settle_2.output.reviewed_head_sha }}"
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
 

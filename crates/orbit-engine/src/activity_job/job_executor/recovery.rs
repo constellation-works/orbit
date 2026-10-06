@@ -11,6 +11,15 @@ use crate::context::{
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
 
+/// Most `pr_conflict_recovery` rounds one failing step gets [ORB-14332].
+///
+/// A rebase stops once per conflicting commit it replays, and a delivery
+/// candidate carries its implementation commit plus at most one reviewer
+/// commit per review round (before-PR review and two completion re-reviews).
+/// Each round resolves one stop; a retry that stops yet again past this
+/// bound fails the step like any other failed post-recovery attempt.
+const MAX_CONFLICT_RECOVERY_ROUNDS: u32 = 4;
+
 /// Largest `error_message` the recovery input may carry, in bytes.
 ///
 /// The CLI envelope serialises the recovery input twice — once as `input` and
@@ -106,19 +115,47 @@ pub(super) fn recover_or_return_original(
         return failure.into_result();
     };
 
-    if attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
-        return post_recovery_attempt(step, ctx, &recovery, failure);
+    // Each conflict recovery round resolves one stop of the rebase. A retry
+    // that stops on a later commit of that rebase, or on a base that moved
+    // again, is a new typed conflict for the next round, up to the bound. A
+    // retry reporting the very conflict just recovered made no progress, so
+    // another round would only repeat it.
+    let original = failure.diagnostic();
+    let mut failure = failure;
+    let mut round = 1;
+    loop {
+        if !attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
+            return failure.into_result();
+        }
+        let recovered_conflict = (recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
+            && round < MAX_CONFLICT_RECOVERY_ROUNDS)
+            .then(|| failure.diagnostic());
+        match post_recovery_attempt(step, ctx, &recovery, &original, recovered_conflict) {
+            PostRecovery::ConflictAgain(conflict) => {
+                failure = StepFailure::Error(conflict);
+                round += 1;
+            }
+            PostRecovery::Settled(result) => return result,
+        }
     }
+}
 
-    failure.into_result()
+/// How the post-recovery attempt of a failed step ended.
+enum PostRecovery {
+    /// Recovered, or failed for good with the original diagnostic attached.
+    Settled(Result<StepOutcome, DispatchError>),
+    /// The retry stopped on a different typed rebase conflict and a further
+    /// conflict recovery round is admitted.
+    ConflictAgain(DispatchError),
 }
 
 fn post_recovery_attempt(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    failure: StepFailure,
-) -> Result<StepOutcome, DispatchError> {
+    original: &str,
+    recovered_conflict: Option<String>,
+) -> PostRecovery {
     let reattempt = run_step_body(step, ctx);
     let (outcome, error_message) = match &reattempt {
         Ok(outcome) if outcome.success => ("success", None),
@@ -152,12 +189,18 @@ fn post_recovery_attempt(
     );
 
     match reattempt {
-        Ok(outcome) if outcome.success => Ok(outcome),
-        Ok(_) | Err(_) => Err(DispatchError::JobExecution(format!(
-            "post-recovery attempt {outcome}: {}; original error before recovery: {}",
+        Ok(outcome) if outcome.success => PostRecovery::Settled(Ok(outcome)),
+        Err(conflict @ DispatchError::RecoverableVcsConflict { .. })
+            if recovered_conflict
+                .as_deref()
+                .is_some_and(|recovered| recovered != conflict.to_string()) =>
+        {
+            PostRecovery::ConflictAgain(conflict)
+        }
+        Ok(_) | Err(_) => PostRecovery::Settled(Err(DispatchError::JobExecution(format!(
+            "post-recovery attempt {outcome}: {}; original error before recovery: {original}",
             error_message.unwrap_or_else(|| "no diagnostic".to_string()),
-            failure.diagnostic(),
-        ))),
+        )))),
     }
 }
 
