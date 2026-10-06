@@ -113,7 +113,7 @@ pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
 /// [`Self::TaskInput`]: the work or the task itself needs a human. Every
 /// other class is the executing host's, the base's or the moment's, so the
 /// claim is released to the backlog instead, within a per-task release budget
-/// that an operator's own cancel does not spend.
+/// that counts every typed release.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimFailureClass {
@@ -164,11 +164,11 @@ impl ClaimFailureClass {
     }
 
     /// Whether a release of this class counts against the task's release
-    /// budget. An operator's cancel is a human's deliberate act, not a
-    /// failure that could recur unattended.
+    /// budget. Every typed release counts; the third within the window blocks
+    /// the task until a human decides what should change.
     #[must_use]
     pub const fn budgeted(self) -> bool {
-        !self.blocks() && !matches!(self, Self::OperatorCancel)
+        !self.blocks()
     }
 
     /// Whether the executing drain stops running the leaf's crew for the

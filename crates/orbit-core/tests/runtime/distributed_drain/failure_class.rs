@@ -415,8 +415,8 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
 /// A task released twice within the budget window for failures that were
 /// not the candidate's — here its committed candidate conflicting with a
 /// moving base, which excludes nothing, so the same drain pulls it again —
-/// is blocked by the third, with one comment listing every reason. An
-/// operator's cancel does not spend the budget.
+/// is blocked by the third, with one comment listing every reason,
+/// including an operator's cancel.
 #[test]
 fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
     if !isolated(
@@ -431,10 +431,9 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
     let reasons = [
         "rebase onto main conflicted in src/f0.rs: first",
         "rebase onto main conflicted in src/f0.rs: second",
-        "rebase onto main conflicted in src/f0.rs: third",
     ];
 
-    // An operator's cancel first: released, and not counted.
+    // An operator's cancel first: released to the backlog, and counted.
     let (cancelled, worker) = pair.running_leaf_with_worker(&drain, 1);
     pair.follower
         .cancel_job_run_with_reason(&cancelled, "operator", "cli", Some("rebalancing hosts"))
@@ -452,7 +451,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
         leaf_completed(&pair, &leaf, prepared());
         pair.leaf_fails_with(&leaf, reason);
         let pass = settle_only(&pair, &drain);
-        let expected = if n < 2 { "backlog" } else { "blocked" };
+        let expected = if n == 0 { "backlog" } else { "blocked" };
         assert_eq!(pair.owner_status(&task), expected, "release {n}: {pass}");
     }
 
@@ -476,8 +475,8 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
         );
     }
     assert!(
-        !comment.contains("rebalancing hosts"),
-        "an operator's cancel is not counted: {comment}"
+        comment.contains("rebalancing hosts"),
+        "the operator cancel is counted: {comment}"
     );
     let phases = pair
         .owner_claims()
@@ -486,7 +485,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
         .collect::<Vec<_>>();
     assert_eq!(
         phases.iter().filter(|phase| *phase == "revoked").count(),
-        3,
+        2,
         "{phases:?}"
     );
     assert_eq!(

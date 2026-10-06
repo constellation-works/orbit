@@ -498,7 +498,7 @@ owns delivery:
   the follower built its next request is not pulled straight back. `baseline_red` releases with
   its hold, and the owner's admission withholds the task until the base moves to a commit where
   the command passes. The owner bounds the releases: a task released twice within 24 hours for a
-  budgeted class (anything but `operator_cancel`) is blocked by its third, with one comment
+  budgeted class is blocked by its third, with one comment
   listing every counted reason; releases before such a block no longer count. A `Release` naming
   a class that blocks is applied as a block. `orbit run show <leaf>` prints the class on its
   `Claim:` line (`pull_claim.failure_class`).

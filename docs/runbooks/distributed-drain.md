@@ -483,7 +483,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   claim continues it rather than starting over, unless the task's spec
   changed or `orbit task update --discard-candidate` discarded it since. A
   candidate that was never pushed is only on the follower that made it. A task released twice within 24
-  hours for anything but an operator's cancel is blocked by the next such
+  hours for a typed failure class is blocked by the next such
   failure, with one comment listing every reason; unblock it once the cause
   is fixed. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
