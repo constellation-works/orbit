@@ -34,6 +34,26 @@ pub(crate) fn files_root(runtime: &OrbitRuntime) -> PathBuf {
 }
 
 impl OrbitRuntime {
+    /// Permit resolution of a replica's existing host-local friction corpus.
+    ///
+    /// Friction reads use this host's workspace partition, which can retain
+    /// records authored before the checkout became a replica. Closing those
+    /// records changes no owner state. The caller must only resolve an
+    /// existing record, never add, reopen, or move one through this exception.
+    /// Claimed workers still have to use their owner route.
+    pub(crate) fn ensure_local_friction_resolution_permitted(
+        &self,
+        id: &str,
+    ) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() || self.coordination_write_owner().is_none() {
+            return self.ensure_coordination_task_write_permitted();
+        }
+        store_for(self)?
+            .show(id)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
+        Ok(())
+    }
+
     /// Workspace tag names and descriptions used to advertise friction inputs.
     pub fn friction_tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
         store_for(self)?.tag_taxonomy()

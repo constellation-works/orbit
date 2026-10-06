@@ -19,7 +19,8 @@ pub enum McpToolClass {
     /// Task issuance and the coordination store, whose authority is the
     /// declared control-plane owner rather than the destination host.
     ControlPlane,
-    /// Runs, logs, and scheduler state, which the destination host owns.
+    /// Runs, logs, scheduler state, and local friction dispositions, which
+    /// the destination host owns.
     Execute,
 }
 
@@ -52,7 +53,6 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_artifact_get"
         | "orbit_task_artifact_put"
         | "orbit_friction_add"
-        | "orbit_friction_update"
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
         | "orbit_auto_task_add"
@@ -71,6 +71,9 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_drain_claim_bind"
         | "orbit_drain_claim_settle"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
+        // A replica may resolve an existing host-local legacy friction. Core
+        // checks the update's fields and still refuses every other mutation.
+        "orbit_friction_update" => McpToolClass::Execute,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].

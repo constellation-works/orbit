@@ -19,7 +19,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.pipeline.invoke", McpToolClass::Execute),
     ("orbit.agent.invoke", McpToolClass::Execute),
     ("orbit.friction.add", McpToolClass::ControlPlane),
-    ("orbit.friction.update", McpToolClass::ControlPlane),
+    ("orbit.friction.update", McpToolClass::Execute),
     ("orbit.search", McpToolClass::ControlPlane),
     ("orbit.task.add", McpToolClass::ControlPlane),
     ("orbit.task.artifact.get", McpToolClass::ControlPlane),
