@@ -173,7 +173,7 @@ returns.
 - The drain keeps settling claims after `--for` expires, until none is left.
   `orbit run auto --stop` closes the window early; live leaves keep running.
   Each leaf also delivers its own handoff or failure when it ends, so
-  cancelling the drain (`orbit run cancel`) strands nothing. Cancel is
+  cancelling the drain (`orbit run cancel <run-id> --confirm`) strands nothing. Cancel is
   graceful: the drain stops requesting, returns unlaunched claims to the
   owner's backlog, and ends `cancelled` once its running leaves have settled;
   `--force` stops that drain's leaves too and returns their tasks to the

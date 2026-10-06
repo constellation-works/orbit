@@ -199,7 +199,7 @@ Restarts: a contained worker lives outside the `orbit-web.service` and
 uncontained worker keeps the existing guarantee: it runs in its own `setsid`
 session and the sweep unit uses `KillMode=process`. Stopping a worker scope
 (`systemctl --user stop orbit-worker-….scope`) kills that run; use
-`orbit run cancel` instead.
+`orbit run cancel <run-id> --confirm` instead.
 
 ## Archive-Pruning Warning
 
