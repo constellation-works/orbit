@@ -133,6 +133,13 @@ Two of its answers separate contention from capacity:
   task a live child is already carrying (`live_claim`), or was chosen earlier
   in the same admission wave (`same_wave`). `capacity_saturated`, by contrast,
   means there was no free slot at all.
+- `surface_reserved` means a critical or high-priority task ranked ahead of
+  this one waits only on context locks, and this task overlaps its surface.
+  It is withheld so it cannot take each lock as it frees, and admits once the
+  reserving task (`blocking_task_ids`) is admitted or leaves backlog. The
+  reserving task reports `context_lock_conflict` with a `detail` saying it
+  reserves. At most two tasks reserve per pass; work that does not overlap a
+  reserved surface admits normally.
 - `capacity.occupancy` breaks the occupied slots down by what each is doing —
   `lock_waiting`, `implementing`, `post_implementation`, or `unknown` — with
   the wrapper, task, and descendant run IDs behind each. A drain whose slots

@@ -98,6 +98,11 @@ Common reasons a backlog task waits:
 - **An active file lock.** Two tasks whose selectors overlap cannot run at
   once. `orbit task locks contention` shows which files the backlog collides
   on, which is what really limits your parallelism.
+- **`surface_reserved`**: a critical or high-priority task ahead of it in the
+  queue is waiting on file locks, and this task overlaps the files it needs.
+  It waits so the higher-priority task gets each lock as it frees, instead of
+  losing it to smaller tasks one lock at a time. It starts once that task
+  starts. Unrelated work is not held.
 - **`crew_not_allowed`**, when you preview a
   [crew restriction](#restrict-a-window-to-some-crews).
 - **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied

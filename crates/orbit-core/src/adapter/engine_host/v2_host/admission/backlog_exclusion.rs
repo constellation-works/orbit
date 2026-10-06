@@ -11,6 +11,9 @@ use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::surface_reservation::{
+    MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
+};
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::task::{PilotAdmissionHold, list_task_metadata_in};
@@ -36,7 +39,10 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogTaskExclusion {
     /// an exclusion the drain cannot resolve by itself. A lock conflict clears
     /// when the holder finishes and needs no instruction; an
     /// [`BacklogTaskExclusionReason::InheritedOnlyEpicRoot`] never clears until
-    /// the task is edited, so it carries one.
+    /// the task is edited, so it carries one. A lock conflict whose task
+    /// reserves its surface says so here, and the
+    /// [`BacklogTaskExclusionReason::SurfaceReserved`] exclusions it causes
+    /// name it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::adapter::engine_host::v2_host) detail: Option<String>,
 }
@@ -94,6 +100,13 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// the command passes on a new base tip, and `detail` names the base and
     /// command.
     BaselineRedHold,
+    /// A critical or high-priority task ranked ahead of this one waits only on
+    /// context locks, and this task's surface overlaps the surface it reserves.
+    /// Admitting this task would take a lock the reserving task needs as soon
+    /// as it frees, so it waits until the reserving task is admitted or leaves
+    /// `backlog`. `conflicts` names the reserving task; reservations are
+    /// bounded per pass (see `surface_reservation`).
+    SurfaceReserved,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -629,12 +642,22 @@ fn backlog_snapshot_in_mode(
         }
         if !root_trigger.is_empty() {
             let mut kept = Vec::new();
+            // [ORB-14310] Lock-blocked tasks that reserve their surface this
+            // pass, in dispatch order: the backlog is still sorted here.
+            let mut reserving = Vec::new();
             for task in backlog {
                 let root_id = task_root_id(task, &task_lookup);
                 if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
+                    let direct = direct_conflicts.contains_key(&task.id);
+                    let reserves = direct
+                        && reserving.len() < MAX_SURFACE_RESERVATIONS
+                        && reserves_surface(task);
+                    if reserves {
+                        reserving.push(task);
+                    }
                     excluded.push(BacklogTaskExclusion {
                         id: task.id.clone(),
-                        reason: if direct_conflicts.contains_key(&task.id) {
+                        reason: if direct {
                             BacklogTaskExclusionReason::ContextLockConflict
                         } else {
                             BacklogTaskExclusionReason::GroupMemberConflict
@@ -644,13 +667,15 @@ fn backlog_snapshot_in_mode(
                             .cloned()
                             .unwrap_or_else(|| trigger_conflicts.clone()),
                         crew: None,
-                        detail: None,
+                        detail: reserves.then(reserving_detail),
                     });
                 } else {
                     kept.push(task);
                 }
             }
-            backlog = kept;
+            // A multi-lock task would otherwise lose every race: each lock it
+            // waits on is taken by lower-ranked work the moment it frees.
+            backlog = withhold_reserved_surfaces(kept, &reserving, workspace_root, &mut excluded);
         }
     }
     excluded.sort_by(|a, b| a.id.cmp(&b.id));

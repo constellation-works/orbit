@@ -2,7 +2,8 @@
 //!
 //! - Backlog admission (`list_backlog_tasks`, the deterministic action every
 //!   drain and ship selection runs): its total order, dependency readiness,
-//!   and exclusion of work whose files an active task holds.
+//!   exclusion of work whose files an active task holds, and the bounded
+//!   surface a lock-blocked high-priority task reserves [ORB-14310].
 //! - The operator's exclusive workspace claim [ORB-10709]: workflow
 //!   submission refuses everyone but the holder until the claim expires.
 //! - Review admission and settlement provenance [ORB-13916]: deterministic
@@ -544,6 +545,278 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
             }]
         }])
     );
+}
+
+/// Write each workspace-relative fixture file so its selector expands.
+fn write_files(repo: &Path, files: &[&str]) {
+    for file in files {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fixture\n").unwrap();
+    }
+}
+
+/// Move an active holder out of the lock surface, as a finished delivery does.
+fn release(runtime: &OrbitRuntime, task_id: &str) {
+    for status in [TaskStatus::Review, TaskStatus::Done] {
+        runtime
+            .update_task_as_human(
+                task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(status),
+                    execution_summary: Some("Fixture delivery finished.".into()),
+                    ..Default::default()
+                },
+                "fixture operator".into(),
+            )
+            .unwrap();
+    }
+}
+
+fn excluded_entry<'a>(output: &'a Value, task: &str) -> &'a Value {
+    output["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == task)
+        .unwrap_or_else(|| panic!("{task} is not excluded: {output:#}"))
+}
+
+/// A critical task that needs two locks, released one at a time, is admitted
+/// ahead of the lower-ranked task overlapping the lock that frees first. That
+/// task used to take the freed lock on every pass, so the critical task never
+/// saw all of its locks free at once [ORB-14310]. Work that does not overlap
+/// the reserved surface keeps admitting throughout.
+#[test]
+fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free() {
+    if !isolated("a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free")
+    {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    write_files(&repo, &["a.rs", "b.rs", "free.rs"]);
+    let holder_a = seed(
+        &runtime,
+        Seed {
+            title: "holder a",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["a.rs"]),
+            ..Seed::default()
+        },
+    );
+    let holder_b = seed(
+        &runtime,
+        Seed {
+            title: "holder b",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["b.rs"]),
+            ..Seed::default()
+        },
+    );
+    // Older than the critical task, so age alone would put it first.
+    let overlapping = seed(
+        &runtime,
+        Seed {
+            title: "overlapping",
+            context_files: Some(&["b.rs"]),
+            ..Seed::default()
+        },
+    );
+    let critical = seed(
+        &runtime,
+        Seed {
+            title: "critical",
+            priority: TaskPriority::Critical,
+            task_type: TaskType::Feature,
+            context_files: Some(&["a.rs", "b.rs"]),
+            ..Seed::default()
+        },
+    );
+    let unrelated = seed(
+        &runtime,
+        Seed {
+            title: "unrelated",
+            context_files: Some(&["free.rs"]),
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    // Both locks held: each waits on its holder, and the critical task's
+    // reservation covers nothing the lock filter has not already withheld.
+    let wave = classify(&runtime, &drain);
+    assert_eq!(wave["loose_task_ids"], json!([unrelated.id]), "{wave:#}");
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        excluded_entry(&output, &overlapping.id)["reason"],
+        "context_lock_conflict"
+    );
+
+    // The first lock frees. The overlapping task would take it; the
+    // reservation withholds it and names the critical task.
+    release(&runtime, &holder_b.id);
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([unrelated.id]),
+        "only non-overlapping work admits while the critical task waits: {wave:#}"
+    );
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![unrelated.id.clone()]);
+    let withheld = excluded_entry(&output, &overlapping.id);
+    assert_eq!(withheld["reason"], "surface_reserved", "{output:#}");
+    assert_eq!(
+        withheld["conflicts"],
+        json!([{"requested_file": "file:b.rs", "locking_task_id": critical.id}])
+    );
+    assert!(
+        withheld["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(&critical.id)),
+        "{withheld}"
+    );
+    let reserving = excluded_entry(&output, &critical.id);
+    assert_eq!(reserving["reason"], "context_lock_conflict");
+    assert_eq!(
+        reserving["conflicts"],
+        json!([{"requested_file": "file:a.rs", "locking_task_id": holder_a.id}])
+    );
+    assert!(reserving["detail"].is_string(), "{reserving}");
+
+    // The drain's persisted pass and readiness report the same wait.
+    let pass = runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("last pass");
+    let recorded = pass
+        .excluded
+        .iter()
+        .find(|task| task.task_id == overlapping.id)
+        .expect("the pass records the withheld task");
+    assert_eq!(recorded.reason.as_deref(), Some("surface_reserved"));
+    assert_eq!(recorded.blocked_by, vec![critical.id.clone()]);
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let waiting = readiness_task(&readiness, &overlapping.id);
+    assert_eq!(waiting["eligible"], false);
+    assert_eq!(waiting["reason"], "surface_reserved");
+    assert_eq!(waiting["blocking_task_ids"], json!([critical.id]));
+    assert_eq!(readiness_task(&readiness, &unrelated.id)["reason"], "ready");
+
+    // The second lock frees: the critical task takes the wave ahead of the
+    // overlapping task, which now defers behind it.
+    release(&runtime, &holder_a.id);
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([critical.id, unrelated.id]),
+        "{wave:#}"
+    );
+    let deferred = wave["deferred_conflicts"].as_array().unwrap();
+    assert_eq!(deferred.len(), 1, "{wave:#}");
+    assert_eq!(deferred[0]["task_id"], overlapping.id);
+    assert_eq!(deferred[0]["blocking_task_ids"], json!([critical.id]));
+}
+
+/// Reservations are bounded so a stuck task cannot freeze the queue
+/// [ORB-14310]: only critical and high-priority lock-blocked tasks reserve, at
+/// most two per pass in dispatch order, and a task ranked ahead of a reserving
+/// task is never withheld by it.
+#[test]
+fn surface_reservations_are_bounded_by_priority_count_and_rank() {
+    if !isolated("surface_reservations_are_bounded_by_priority_count_and_rank") {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    write_files(
+        &repo,
+        &[
+            "held/h1.rs",
+            "held/h2.rs",
+            "held/h3.rs",
+            "held/m.rs",
+            "h1.rs",
+            "h2.rs",
+            "h3.rs",
+            "m.rs",
+        ],
+    );
+    seed(
+        &runtime,
+        Seed {
+            title: "holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["dir:held"]),
+            ..Seed::default()
+        },
+    );
+    let lock_blocked = |title, priority, files: &'static [&'static str]| {
+        seed(
+            &runtime,
+            Seed {
+                title,
+                priority,
+                task_type: TaskType::Feature,
+                context_files: Some(files),
+                ..Seed::default()
+            },
+        )
+    };
+    let high_1 = lock_blocked("high 1", TaskPriority::High, &["held/h1.rs", "h1.rs"]);
+    let high_2 = lock_blocked("high 2", TaskPriority::High, &["held/h2.rs", "h2.rs"]);
+    let high_3 = lock_blocked("high 3", TaskPriority::High, &["held/h3.rs", "h3.rs"]);
+    let medium = lock_blocked("medium", TaskPriority::Medium, &["held/m.rs", "m.rs"]);
+    let low = |title, files: &'static [&'static str]| {
+        seed(
+            &runtime,
+            Seed {
+                title,
+                priority: TaskPriority::Low,
+                context_files: Some(files),
+                ..Seed::default()
+            },
+        )
+    };
+    let behind_1 = low("behind high 1", &["h1.rs"]);
+    let behind_2 = low("behind high 2", &["h2.rs"]);
+    let behind_3 = low("behind high 3", &["h3.rs"]);
+    let behind_medium = low("behind medium", &["m.rs"]);
+    let ahead = seed(
+        &runtime,
+        Seed {
+            title: "critical ahead",
+            priority: TaskPriority::Critical,
+            context_files: Some(&["h2.rs"]),
+            ..Seed::default()
+        },
+    );
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    assert_eq!(
+        admitted(&output),
+        vec![ahead.id, behind_3.id, behind_medium.id],
+        "a third high task and a medium task reserve nothing; a critical task \
+         ranked ahead of a reservation is not withheld by it: {output:#}"
+    );
+    for (withheld, reserving) in [(&behind_1, &high_1), (&behind_2, &high_2)] {
+        let entry = excluded_entry(&output, &withheld.id);
+        assert_eq!(entry["reason"], "surface_reserved", "{output:#}");
+        assert_eq!(entry["conflicts"][0]["locking_task_id"], reserving.id);
+    }
+    for (task, reserves) in [
+        (&high_1, true),
+        (&high_2, true),
+        (&high_3, false),
+        (&medium, false),
+    ] {
+        let entry = excluded_entry(&output, &task.id);
+        assert_eq!(entry["reason"], "context_lock_conflict");
+        assert_eq!(entry["detail"].is_string(), reserves, "{entry}");
+    }
 }
 
 /// An in-progress `no-diff-expected` task does not exclude overlapping backlog

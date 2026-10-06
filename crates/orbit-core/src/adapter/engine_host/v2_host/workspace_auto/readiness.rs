@@ -361,6 +361,26 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
                     }
+                    BacklogTaskExclusionReason::SurfaceReserved => {
+                        // [ORB-14310] Clears by itself once the reserving task
+                        // is admitted or leaves backlog; `blocking_task_ids`
+                        // names it so the text view prints `blocked-by`.
+                        let reserved_for = excluded
+                            .conflicts
+                            .iter()
+                            .map(|conflict| conflict.locking_task_id.as_str())
+                            .collect::<BTreeSet<_>>();
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("blocking_task_ids".to_string(), json!(reserved_for));
+                        object.insert(
+                            "conflicts".to_string(),
+                            json!(excluded.conflicts.iter().map(|conflict| json!({
+                                "requested_file": conflict.requested_file,
+                                "reserved_by_task_id": conflict.locking_task_id,
+                            })).collect::<Vec<_>>()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::ContextLockConflict
                     | BacklogTaskExclusionReason::GroupMemberConflict => {
                         object.insert(
@@ -378,6 +398,11 @@ pub fn explain_workspace_auto_readiness(
                                 "locking_task_id": conflict.locking_task_id,
                             })).collect::<Vec<_>>()),
                         );
+                        // [ORB-14310] Present when this task reserves its
+                        // surface against lower-ranked overlapping work.
+                        if let Some(detail) = &excluded.detail {
+                            object.insert("detail".to_string(), json!(detail));
+                        }
                     }
                 }
                 return Value::Object(object.clone());
