@@ -11,6 +11,10 @@ use std::process::Command;
 
 use chrono::{Duration, Utc};
 use orbit_core::application::automation::evaluate_auto_task;
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_types::workflow::automation::{
+    AutomationState, BatchAttempt, BatchState, EVIDENCE_AUTHORITY_ARTIFACT, ExaminationCheck,
+};
 use serde_json::{Value, json};
 
 use crate::auto_task_lifecycle_cli::{git, publish_origin_if_configured};
@@ -101,13 +105,17 @@ fn git_at_env(dir: &Path, home: &Path, args: &[&str], extra: &[(&str, &str)]) ->
 }
 
 fn trigger(max_wait_minutes: u32) -> Value {
+    trigger_with_retries(max_wait_minutes, 0)
+}
+
+fn trigger_with_retries(max_wait_minutes: u32, retries: u32) -> Value {
     json!({
         "branch": BRANCH,
         "threshold": 1,
         "max_wait_minutes": max_wait_minutes,
         "coverage": "landed_code_review_v1",
         "max_items": 20,
-        "retries": 0,
+        "retries": retries,
     })
 }
 
@@ -123,9 +131,14 @@ fn add_github_origin(fixture: &Fixture) {
     );
 }
 
-/// Baselined delivery consumer whose origin is a bare repo reached through
-/// the GitHub URL. The local branch is the baseline commit.
 fn baselined_remote_consumer(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+    baselined_remote_consumer_retries(fixture, 0)
+}
+
+/// Baselined delivery consumer whose origin is a bare repo reached through
+/// the GitHub URL. The local branch is the baseline commit. `retries` is the
+/// trigger's retry budget (`max_attempts` is one more).
+fn baselined_remote_consumer_retries(fixture: &Fixture, retries: u32) -> orbit_core::OrbitRuntime {
     git(fixture, &["checkout", "-b", BRANCH]);
     fs::write(fixture.repo.join("fixture.txt"), "baseline\n").unwrap();
     git(fixture, &["add", "fixture.txt"]);
@@ -138,7 +151,7 @@ fn baselined_remote_consumer(fixture: &Fixture) -> orbit_core::OrbitRuntime {
         "--name",
         CONSUMER,
         "--deliveries-landed",
-        &trigger(60).to_string(),
+        &trigger_with_retries(60, retries).to_string(),
         "--title",
         "Review remote deliveries",
         "--json",
@@ -387,6 +400,246 @@ fn force_pushed_remote_history_defers_as_history_diverged() {
         }
     }
     assert_eq!(local_branch(&fixture), local);
+}
+
+fn consumer_state(runtime: &orbit_core::OrbitRuntime) -> AutomationState {
+    let consumer =
+        orbit_core::application::automation::consumer_key(runtime, "auto-task", CONSUMER).unwrap();
+    runtime
+        .automation_store()
+        .unwrap()
+        .automation_state(&consumer)
+        .unwrap()
+        .expect("consumer state")
+}
+
+fn evaluate_consumer(
+    runtime: &orbit_core::OrbitRuntime,
+) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, orbit_common::OrbitError> {
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    evaluate_auto_task(runtime, &definition, false, Utc::now())
+}
+
+fn with_pull_lookup<T>(fixture: &Fixture, body: impl FnOnce() -> T) -> T {
+    let path = gh_path(fixture);
+    let _gh = orbit_common::test_env::scoped([("PATH", Some(path.as_str()))]);
+    body()
+}
+
+fn break_origin(fixture: &Fixture) {
+    let bare = fixture.repo.with_file_name("origin.git");
+    let key = format!("url.{}.insteadOf", bare.display());
+    git(fixture, &["config", "--unset", &key]);
+    git(
+        fixture,
+        &["remote", "set-url", "origin", "/no/such/remote.git"],
+    );
+}
+
+/// The publisher clone from admission is already on disk. A second clone into
+/// the same path would fail, so the rewrite runs there.
+fn force_push_unrelated_history(fixture: &Fixture) {
+    let publisher = fixture._temp.path().join("publisher");
+    assert!(
+        publisher.join(".git").is_dir(),
+        "admission did not leave a publisher clone"
+    );
+    git_at(
+        &publisher,
+        &fixture.home,
+        &["checkout", "--orphan", "diverged"],
+    );
+    git_at(
+        &publisher,
+        &fixture.home,
+        &["commit", "--allow-empty", "-m", "unrelated history"],
+    );
+    git_at(
+        &publisher,
+        &fixture.home,
+        &[
+            "push",
+            "--force",
+            "-q",
+            "origin",
+            &format!("HEAD:refs/heads/{BRANCH}"),
+        ],
+    );
+}
+
+fn automation_consumers_message(fixture: &Fixture) -> String {
+    let output = fixture.command(&["doctor", "--json"]).output().unwrap();
+    let rows: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "doctor json: {error}; stderr {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    rows.as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["check"] == "automation-consumers")
+                .and_then(|row| row["message"].as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| panic!("no automation-consumers message: {rows}"))
+}
+
+/// Lands one remote commit, admits its batch, attaches coverage from that
+/// batch's executor run, and rejects the review task. `retries` is the
+/// trigger budget, so a spent retry is visible when it is at least 1.
+fn stopped_action_with_coverage(
+    fixture: &Fixture,
+    retries: u32,
+) -> (orbit_core::OrbitRuntime, BatchAttempt) {
+    let runtime = baselined_remote_consumer_retries(fixture, retries);
+    let publisher = publisher(fixture);
+    fs::write(publisher.join("fixture.txt"), "landed on the remote only\n").unwrap();
+    git_at(
+        &publisher,
+        &fixture.home,
+        &["commit", "-am", "Squash-merge #42"],
+    );
+    let remote_sha = git_at(&publisher, &fixture.home, &["rev-parse", "HEAD"]);
+    git_at(
+        &publisher,
+        &fixture.home,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
+    );
+    install_pull(fixture, &remote_sha, 42);
+    with_pull_lookup(fixture, || {
+        evaluate_consumer(&runtime).expect("admit the remote delivery");
+    });
+
+    let attempt = consumer_state(&runtime).active.expect("admitted batch");
+    assert_eq!(attempt.attempt, 1);
+    assert_eq!(attempt.state, BatchState::Admitted);
+    let action_id = attempt.action_id.clone().expect("admitted action");
+
+    let run = RuntimeHost::insert_job_run(
+        &runtime,
+        "delivery-evidence",
+        1,
+        Utc::now(),
+        Some(json!({ "task_id": action_id })),
+        None,
+    )
+    .expect("insert the executor run");
+    RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &action_id,
+        TaskAutomationUpdate {
+            job_run_id: Some(run.run_id.clone()),
+            ..TaskAutomationUpdate::default()
+        },
+    )
+    .expect("bind the executor run");
+
+    let mut evidence = orbit_types::workflow::automation::evidence_template(&attempt);
+    evidence.examination_complete = true;
+    evidence.checks = vec![ExaminationCheck {
+        subject: "frozen range".into(),
+        method: "review".into(),
+        observation: "examined the commits named by the batch".into(),
+    }];
+    fs::write(
+        fixture.repo.join("automation-coverage.json"),
+        serde_json::to_vec(&evidence).expect("coverage serializes"),
+    )
+    .unwrap();
+    let input = json!({
+        "id": action_id,
+        "source_path": "automation-coverage.json",
+        "path": "automation-coverage.json",
+        "model": "grok",
+    })
+    .to_string();
+    fixture
+        .command(&["tool", "run", "orbit.task.artifact.put", "--input", &input])
+        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env("ORBIT_RUN_ID", &run.run_id)
+        .assert()
+        .success();
+    assert!(
+        runtime
+            .get_task_artifact(&action_id, EVIDENCE_AUTHORITY_ARTIFACT)
+            .expect("read authority")
+            .is_some(),
+        "coverage put did not record the executor run"
+    );
+    fixture.json(&[
+        "task", "update", &action_id, "--status", "rejected", "--force", "--json",
+    ]);
+    (runtime, attempt)
+}
+
+/// Evidence verification fetches origin. A fetch failure while a stopped
+/// action holds coverage defers the pass: the attempt and covered cursor stay
+/// put, and doctor does not report the action as wedged.
+#[test]
+fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() {
+    const TEST: &str = "delivery_remote_source::fetch_failure_during_evidence_verification_defers_without_spending_a_retry";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, _) = stopped_action_with_coverage(&fixture, 1);
+    let before = consumer_state(&runtime);
+    break_origin(&fixture);
+
+    let error = with_pull_lookup(&fixture, || evaluate_consumer(&runtime))
+        .expect_err("a fetch failure defers evidence verification");
+    assert!(error.to_string().contains("source_fetch_failed"), "{error}");
+    let after = consumer_state(&runtime);
+    assert_eq!(after.generation, before.generation, "{after:#?}");
+    assert_eq!(after.active, before.active);
+    assert_eq!(after.covered, before.covered);
+
+    let message = automation_consumers_message(&fixture);
+    assert!(
+        !message.contains("wedged"),
+        "origin outage reports a wedged action: {message}"
+    );
+    let still = consumer_state(&runtime);
+    assert_eq!(still.generation, before.generation);
+    assert_eq!(still.active, before.active);
+}
+
+/// A force-push is a real batch mismatch, so evidence is rejected and one
+/// retry is spent. Observation then sees the same divergence and may stall.
+/// The stall write only moves the marker, so the settled attempt remains.
+#[test]
+fn diverged_history_rejects_stopped_evidence_as_source_unverifiable() {
+    const TEST: &str =
+        "delivery_remote_source::diverged_history_rejects_stopped_evidence_as_source_unverifiable";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, _) = stopped_action_with_coverage(&fixture, 1);
+    let before = consumer_state(&runtime);
+    force_push_unrelated_history(&fixture);
+
+    let outcome = with_pull_lookup(&fixture, || evaluate_consumer(&runtime));
+    let after = consumer_state(&runtime);
+    let active = after.active.as_ref().unwrap_or_else(|| {
+        panic!("mismatch retired the batch: outcome={outcome:#?} state={after:#?}")
+    });
+    assert!(
+        active
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("source_unverifiable")),
+        "outcome={outcome:#?} active={active:#?}"
+    );
+    assert_eq!(
+        active.attempt,
+        before.active.as_ref().expect("admitted attempt").attempt + 1
+    );
+    assert_eq!(active.action_id, None);
+    assert_eq!(active.state, BatchState::Claimed);
+    assert_eq!(after.covered, before.covered);
 }
 
 fn enable_review_crew(fixture: &Fixture) {

@@ -140,6 +140,28 @@ fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState)
     (source, state)
 }
 
+#[test]
+fn missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let empty_bin = root.path().join("empty-bin");
+    std::fs::create_dir(&empty_bin).expect("empty PATH directory");
+    let path = empty_bin.to_str().expect("PATH is utf-8");
+    let _path = orbit_common::test_env::scoped([("PATH", Some(path))]);
+    let source = Source::new(root.path());
+
+    let error = source
+        .is_ancestor("older", "newer")
+        .expect_err("a missing Git executable is an operational failure");
+    assert!(
+        matches!(&error, AutomationError::Deferred(reason) if reason.starts_with("source_spawn_failed:")),
+        "unexpected error: {error}"
+    );
+    assert!(
+        !super::super::source::is_batch_mismatch(&error),
+        "a spawn failure must not become an unverifiable-coverage mismatch"
+    );
+}
+
 fn diverged_with_inserted_canonical_commit() -> Diverged {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = root.path();

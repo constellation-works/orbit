@@ -86,7 +86,7 @@ pub(super) fn outcome(
                     .unwrap_or_else(|| provenance.created_by.clone()),
                 artifact_digest: provenance.sha256.clone(),
                 authorized: owner.is_some(),
-                source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                source_verified: source_verified(source, &attempt.batch)?,
                 action_stopped: stopped,
             }));
         }
@@ -155,7 +155,7 @@ pub(super) fn job_outcome(
                 reference: format!("run:{id}/step:{}", step.step_index),
                 submitted_by: format!("run:{id}"),
                 authorized: true,
-                source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                source_verified: source_verified(source, &attempt.batch)?,
                 action_stopped: stopped,
             }));
         }
@@ -169,6 +169,17 @@ pub(super) fn job_outcome(
     }
 
     Ok(ActionOutcome::Pending)
+}
+
+/// `Ok(false)` is a frozen-batch mismatch. Fetch, deadline, budget, and
+/// spawn failures stay deferred so a closed action is not settled as
+/// unverifiable coverage and a retry is not spent.
+fn source_verified(source: &Source<'_>, batch: &CoverageBatch) -> Result<bool, AutomationError> {
+    match source.verify_batch(batch) {
+        Ok(()) => Ok(true),
+        Err(error) if super::source::is_batch_mismatch(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn evidence_owner(
