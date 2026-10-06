@@ -727,7 +727,7 @@ for arg in "$@"; do
   prev=$arg
 done
 if [ -z "$profile" ] && [ -f "$home/settings.toml" ]; then
-  profile=$(awk -F= '/^profile[[:space:]]*=/{gsub(/["'\''[:space:]]/, "", $2); print $2; exit}' "$home/settings.toml")
+  profile=$(awk -F= '/^profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$home/settings.toml")
 fi
 if [ -z "$profile" ]; then
   dir=$(pwd)
@@ -739,7 +739,7 @@ if [ -z "$profile" ]; then
       file="$dir/rust-toolchain.toml"
     fi
     if [ -n "$file" ]; then
-      profile=$(awk -F= '/^[[:space:]]*profile[[:space:]]*=/{gsub(/["'\''[:space:]]/, "", $2); print $2; exit}' "$file")
+      profile=$(awk -F= '/^[[:space:]]*profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$file")
       break
     fi
     dir=$(dirname "$dir")
@@ -1028,7 +1028,11 @@ fn minimal_settings_profile_auto_install_inside_workspace_succeeds() {
     let rustup = install_fake_rustup(&bin);
     let home = workspace.join(".orbit/tmp/minimal-profile");
     fs::create_dir_all(&home).expect("rustup home");
-    fs::write(home.join("settings.toml"), "profile = \"minimal\"\n").expect("settings");
+    fs::write(
+        home.join("settings.toml"),
+        "profile = \"minimal\" # rust-docs are not needed\n",
+    )
+    .expect("settings");
     let value = registry()
         .execute(
             "proc.spawn",
@@ -1129,4 +1133,54 @@ fn toolchain_file_minimal_profile_allows_proxy_auto_install() {
     assert_eq!(value["exit_code"], json!(0), "{value:?}");
     assert!(!docs_marker(&home).exists());
     assert!(home.join("invoked-args").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn valid_toml_table_comments_do_not_bypass_workspace_install_refusal() {
+    for scenario in ["toolchain-file", "settings-overrides"] {
+        let workspace = tempdir().expect("workspace");
+        let workspace = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace");
+        let bin = workspace.join("bin");
+        let rustup = install_fake_rustup(&bin);
+        let cargo = bin.join("cargo");
+        std::os::unix::fs::symlink(&rustup, &cargo).expect("cargo proxy");
+
+        let home = workspace.join(format!(".orbit/tmp/toml-{scenario}"));
+        fs::create_dir_all(&home).expect("rustup home");
+        match scenario {
+            "toolchain-file" => fs::write(
+                workspace.join("rust-toolchain.toml"),
+                "[ toolchain ] # valid TOML comment\nchannel = \"1.97.0\"\nprofile = \"default\"\n",
+            )
+            .expect("toolchain file"),
+            "settings-overrides" => fs::write(
+                home.join("settings.toml"),
+                format!(
+                    "profile = \"default\"\n[ overrides ] # valid TOML comment\n\"{}\" = \"1.97.0\"\n",
+                    workspace.display()
+                ),
+            )
+            .expect("settings"),
+            _ => unreachable!("known scenario"),
+        }
+
+        let err = registry()
+            .execute(
+                "proc.spawn",
+                &rustup_context(&workspace, &cargo, rustup_env(&home, &bin)),
+                json!({
+                    "program": cargo.display().to_string(),
+                    "args": ["build"],
+                    "timeout_ms": 5000,
+                }),
+            )
+            .expect_err("valid rustup settings must not bypass the default-profile refusal");
+        assert_install_refused(err);
+        assert!(!docs_marker(&home).exists());
+        assert!(!home.join("invoked-args").exists());
+    }
 }

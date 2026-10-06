@@ -722,12 +722,13 @@ fn parse_toml_toolchain(text: &str) -> DirFile {
     let mut components = Vec::new();
     let mut collecting = false;
     for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_toolchain = trimmed == "[toolchain]";
+        let uncommented = strip_toml_comment(line).trim();
+        if uncommented.starts_with('[') {
+            in_toolchain = table_header_name(uncommented) == Some("toolchain");
             collecting = false;
             continue;
         }
+        let trimmed = uncommented;
         if !in_toolchain || trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
@@ -787,9 +788,9 @@ fn settings_overrides_present(home: &Path) -> bool {
     };
     let mut in_overrides = false;
     for line in text.lines() {
-        let trimmed = line.trim();
+        let trimmed = strip_toml_comment(line).trim();
         if trimmed.starts_with('[') {
-            in_overrides = trimmed == "[overrides]";
+            in_overrides = table_header_name(trimmed) == Some("overrides");
             continue;
         }
         if in_overrides && !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -802,7 +803,7 @@ fn settings_overrides_present(home: &Path) -> bool {
 fn settings_value(home: &Path, key: &str) -> Option<String> {
     let text = fs::read_to_string(home.join("settings.toml")).ok()?;
     for line in text.lines() {
-        let trimmed = line.trim();
+        let trimmed = strip_toml_comment(line).trim();
         if trimmed.starts_with('[') {
             break;
         }
@@ -824,6 +825,38 @@ fn split_toml_assign(line: &str) -> Option<(&str, String)> {
         return None;
     }
     Some((key, unquote(value.trim())))
+}
+
+fn table_header_name(line: &str) -> Option<&str> {
+    let name = line.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .or_else(|| {
+            name.strip_prefix('\'')
+                .and_then(|name| name.strip_suffix('\''))
+        })
+        .unwrap_or(name);
+    Some(name.trim())
+}
+
+fn strip_toml_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        match quote {
+            Some('"') if ch == '\\' && !escaped => escaped = true,
+            Some(delimiter) if ch == delimiter && !escaped => quote = None,
+            Some(_) => escaped = false,
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch == '#' => return &line[..index],
+            None => {}
+        }
+        if ch != '\\' || !matches!(quote, Some('"')) {
+            escaped = false;
+        }
+    }
+    line
 }
 
 fn unquote(value: &str) -> String {
