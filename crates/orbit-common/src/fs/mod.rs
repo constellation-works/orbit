@@ -1,4 +1,5 @@
 pub mod cwd;
+pub mod directory_lock;
 pub mod file_lock;
 pub mod generation;
 pub mod git;
