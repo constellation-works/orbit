@@ -363,13 +363,33 @@ impl crate::OrbitRuntime {
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
     ) -> Result<AdmissionLookup, OrbitError> {
+        let mut admission_holds = self
+            .live_local_delivery_runs()?
+            .into_iter()
+            .map(|(task, run)| {
+                (
+                    task,
+                    format!("live local delivery run {run} is carrying it"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (task, runs) in
+            crate::application::automation::preparation::active_task_pilot_preparations(self)?
+        {
+            admission_holds.entry(task).or_insert_with(|| {
+                format!(
+                    "active task-pilot preparation holds it: {}",
+                    runs.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            });
+        }
         boundary.admit_task(
             identity,
             request,
             owner_binary_version(),
             &self.paths().repo_root,
             &self.data_root(),
-            &self.live_local_delivery_runs()?,
+            &admission_holds,
         )
     }
 

@@ -345,9 +345,9 @@ fn legacy_missing_target_is_reported_and_reauthorized_through_task_update() {
 }
 
 #[test]
-fn creation_grant_changed_after_preparation_is_stale() {
+fn creation_grant_changed_after_preparation_supersedes_the_write() {
     if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::creation_grant_changed_after_preparation_is_stale",
+        "task_pilot::creation::creation_grant_changed_after_preparation_supersedes_the_write",
     ) {
         return;
     }
@@ -362,7 +362,8 @@ fn creation_grant_changed_after_preparation_is_stale() {
     // under intent the preparation never captured.
     workspace.rescope(&task.id, &[EXISTING, NEW_MODULE], true);
     let applied = workspace.apply_one(&prepared, &task.context_files, &[EXISTING, NEW_MODULE]);
-    assert_eq!(outcome(&applied)["outcome"], "stale", "{applied}");
+    assert_eq!(outcome(&applied)["outcome"], "superseded", "{applied}");
+    assert_eq!(applied["status"], "succeeded");
     assert_eq!(outcome(&applied)["reason"], "context_creation_changed");
     let after = workspace.runtime.get_task(&task.id).unwrap();
     assert_eq!(after.context_files, task.context_files);
@@ -375,9 +376,9 @@ fn creation_grant_changed_after_preparation_is_stale() {
 }
 
 #[test]
-fn revoke_and_same_scope_reauthorization_stales_an_older_preparation() {
+fn revoke_and_same_scope_reauthorization_supersedes_an_older_preparation() {
     if !super::super::dispatch_admission::isolated(
-        "task_pilot::creation::revoke_and_same_scope_reauthorization_stales_an_older_preparation",
+        "task_pilot::creation::revoke_and_same_scope_reauthorization_supersedes_an_older_preparation",
     ) {
         return;
     }
@@ -392,7 +393,8 @@ fn revoke_and_same_scope_reauthorization_stales_an_older_preparation() {
     let current = workspace.runtime.get_task(&task.id).unwrap();
     let applied = workspace.apply_one(&prepared, &task.context_files, &[EXISTING, NEW_MODULE]);
 
-    assert_eq!(outcome(&applied)["outcome"], "stale", "{applied}");
+    assert_eq!(outcome(&applied)["outcome"], "superseded", "{applied}");
+    assert_eq!(applied["status"], "succeeded");
     assert_eq!(outcome(&applied)["reason"], "context_creation_changed");
     assert_eq!(current.context_files, task.context_files);
     assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), current);

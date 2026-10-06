@@ -75,6 +75,9 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// The task has no declared context surface. Task-pilot or an operator
     /// must prepare it before admission; side-effect-only work is exempt.
     Unprepared,
+    /// A live task-pilot run holds a successful preparation checkpoint for
+    /// this task. Delivery waits until that run settles its assessment.
+    ActivePilotPreparation,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
@@ -199,6 +202,7 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
         // Discovery reaches the same rule through the claim footprints
         // `backlog_snapshot` merges into its holders.
         let claimed_tasks = live_claim_task_ids(runtime, action)?;
+        let pilot_preparations = active_pilot_preparations(runtime, action)?;
         // The hierarchy the inherited-only diagnostic reads, materialized only
         // if an override actually names such a root: the explicit path is
         // deliberately a per-id load, and one selected ship should not pay for
@@ -213,6 +217,10 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
+            if pilot_preparations.contains_key(&task.id) {
+                excluded.push(pilot_preparation_exclusion(&task.id));
+                continue;
+            }
             if let Some(exclusion) = host_os_exclusion(runtime, &task) {
                 excluded.push(exclusion);
                 continue;
@@ -426,6 +434,14 @@ fn backlog_snapshot_in_mode(
         .collect();
     sort_tasks_for_automatic_dispatch(&mut backlog);
     let mut excluded = Vec::new();
+    let pilot_preparations = active_pilot_preparations(runtime, action)?;
+    backlog.retain(|task| {
+        if !pilot_preparations.contains_key(&task.id) {
+            return true;
+        }
+        excluded.push(pilot_preparation_exclusion(&task.id));
+        false
+    });
     // A root that declared no context of its own, while its descendants did,
     // inherits nothing now that epic execution is retired: it would take a slot
     // holding no reservation and race the very children that union covered.
@@ -675,6 +691,30 @@ fn unprepared_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
                 .to_string(),
         ),
     })
+}
+
+fn active_pilot_preparations(
+    runtime: &OrbitRuntime,
+    action: &str,
+) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, DispatchError> {
+    crate::application::automation::preparation::active_task_pilot_preparations(runtime).map_err(
+        |error| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("read active pilot preparations: {error}"),
+        },
+    )
+}
+
+fn pilot_preparation_exclusion(task_id: &str) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task_id.to_string(),
+        reason: BacklogTaskExclusionReason::ActivePilotPreparation,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(
+            "An active task-pilot preparation holds this task until its run settles.".into(),
+        ),
+    }
 }
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical

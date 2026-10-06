@@ -26,6 +26,7 @@ pub(super) enum ApplyTaskOutcome {
     Applied(Option<String>),
     AlreadyApplied(Option<String>),
     Stale(&'static str, String),
+    Superseded(Value),
 }
 
 pub(super) fn apply_task(
@@ -82,6 +83,10 @@ pub(super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
+            if let Some(superseded) = superseded_task(runtime, &task.task_id, &snapshot, policy)? {
+                outcome = Some(ApplyTaskOutcome::Superseded(superseded));
+                return Ok(());
+            }
             if let Some(reason) = task_snapshot_drift(runtime, &current, &snapshot, policy) {
                 if attempt == 0 && matches!(reason.0, "material_changed" | "status_changed") {
                     retry_fingerprint =
@@ -202,7 +207,14 @@ pub(super) fn apply_task(
             }
             Ok(())
         };
-        with_task_locks(runtime, &lock_ids, 0, &mut operation)?;
+        if let Err(error) = with_task_locks(runtime, &lock_ids, 0, &mut operation) {
+            // Claim admission fences ordinary writers before the closure can
+            // run. Re-read durable ownership instead of matching error prose.
+            if let Some(outcome) = superseded_task(runtime, &task.task_id, &snapshot, policy)? {
+                return Ok(ApplyTaskOutcome::Superseded(outcome));
+            }
+            return Err(error);
+        }
         if let Some((fingerprint, status)) = retry_fingerprint {
             // Admit this fresh fingerprint only once. The next pass releases
             // and reacquires the task/dependency locks, then reads them again.
@@ -516,6 +528,134 @@ pub(super) fn stale_task(task_id: &str, reason: &str, detail: &str) -> Value {
         "reason": reason,
         "detail": detail,
     })
+}
+
+/// A newer owner can make a prepared assessment unnecessary without making
+/// the pilot fail. Durable task edits still refuse the stale write, but settle
+/// it as superseded, as do admission, execution claims and terminal decisions.
+pub(super) fn superseded_task(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    snapshot: &PreparedTaskSnapshot,
+    policy: &PreparationPolicy,
+) -> Result<Option<Value>, OrbitError> {
+    if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+        return Ok(None);
+    }
+    let current = match runtime.get_task(task_id) {
+        Ok(task) => task,
+        Err(OrbitError::NotFound { .. }) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let superseded = |reason: &str, detail: &str| {
+        json!({
+            "task_id": task_id, "outcome": "superseded", "reason": reason,
+            "status": current.status, "detail": detail,
+        })
+    };
+    if matches!(
+        current.status,
+        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
+    ) {
+        return Ok(Some(superseded(
+            "task_terminal",
+            "task became terminal after preparation",
+        )));
+    }
+    if matches!(current.status, TaskStatus::InProgress | TaskStatus::Review)
+        && runtime
+            .inspect_execution_claims()?
+            .iter()
+            .any(|inspection| {
+                inspection.claim.task_id == task_id && inspection.claim.phase.protects_footprint()
+            })
+    {
+        return Ok(Some(superseded(
+            "execution_claim",
+            "an execution claim superseded preparation",
+        )));
+    }
+    let history = runtime.get_task_history(task_id)?;
+    let newer = &history[snapshot.history_len.unwrap_or(0).min(history.len())..];
+    let edited = snapshot.history_len.is_some()
+        && newer.iter().any(|entry| {
+            // The pilot's own atomic mutation can re-seal a creation grant.
+            // Its replay receipt remains authoritative for that same write.
+            entry.by != "task-pilot"
+                && matches!(
+                    entry.event.as_str(),
+                    "updated" | "renamed" | "crew_assigned" | "context_creation_authorized"
+                )
+        });
+    let structural_drift = current.context_files != snapshot.context_files
+        || current.complexity != snapshot.complexity
+        || current.title != snapshot.title
+        || current.tags != snapshot.tags;
+    let creation_drift =
+        runtime.context_creation_state(&current)?.identity() != snapshot.context_creation_identity;
+    if edited {
+        let material_drift = if let Some((_, revision)) = &snapshot.material {
+            let fresh = crate::application::automation::preparation::fingerprints(
+                runtime, &current, revision, policy,
+            )
+            .map_err(orbit_automation::automation_error_to_orbit)?;
+            snapshot
+                .status_neutral_fingerprint
+                .as_ref()
+                .is_some_and(|expected| expected != &fresh.status_neutral)
+        } else {
+            // No Git material hash: an actual field update after the captured
+            // history boundary is sufficient to withhold this old assessment.
+            true
+        };
+        if structural_drift || material_drift {
+            let (reason, detail) = task_snapshot_drift(runtime, &current, snapshot, policy)
+                .unwrap_or(("task_edited", "task fields changed after preparation"));
+            let detail = if reason == "material_changed" {
+                material_change_detail(runtime, &current, snapshot, policy)
+            } else {
+                detail.to_string()
+            };
+            return Ok(Some(superseded(reason, &detail)));
+        }
+        if creation_drift {
+            return Ok(Some(superseded(
+                CONTEXT_CREATION_CHANGED,
+                CONTEXT_CREATION_CHANGED_DETAIL,
+            )));
+        }
+    }
+    if snapshot.history_len.is_some()
+        && !matches!(current.status, TaskStatus::Proposed | TaskStatus::Backlog)
+        && newer
+            .iter()
+            .any(|entry| entry.to_status == Some(current.status))
+    {
+        return Ok(Some(superseded(
+            "status_changed",
+            "a durable task transition superseded preparation",
+        )));
+    }
+    if matches!(current.status, TaskStatus::InProgress | TaskStatus::Review)
+        && !structural_drift
+        && !creation_drift
+        && newer.iter().any(|entry| {
+            entry.to_status == Some(TaskStatus::InProgress)
+                && entry.by == "system"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.starts_with("workflow admission:"))
+        })
+        && (status_only_fingerprint(runtime, &current, snapshot, policy).is_some()
+            || (snapshot.material.is_none() && snapshot.history_len.is_some() && !edited))
+    {
+        return Ok(Some(superseded(
+            "workflow_admission",
+            "workflow admission superseded preparation",
+        )));
+    }
+    Ok(None)
 }
 
 pub(super) fn task_outcome(task_id: &str, outcome: &str, error: Option<String>) -> Value {

@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod creation;
+mod races;
 
 struct Workspace {
     root: TempDir,

@@ -297,6 +297,10 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("reason".to_string(), Value::String("unprepared".to_string()));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    BacklogTaskExclusionReason::ActivePilotPreparation => {
+                        object.insert("reason".to_string(), json!("active_pilot_preparation"));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::UnassessedComplexity => {
                         object.insert(
                             "reason".to_string(),
