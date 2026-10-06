@@ -570,7 +570,7 @@ impl RuntimeHost for ScriptedHost {
                 json!({ "summary": "partial review", "verdict": "accept", "timed_out": matches!(self.settlement, Settlement::Timeout) })
             }
             "review_gate_settle" => return self.settle(input),
-            "git_push" => json!({ "local_sha": head }),
+            "git_push" => json!({ "local_sha": head, "remote_sha_before": null }),
             "pr_open" => json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" }),
             "pr_promote" => json!({ "promoted": true }),
             "pr_complete" => json!({

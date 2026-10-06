@@ -981,6 +981,11 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     assert_eq!(completion_inputs[0]["reviewed_head_sha"], "candidate");
     assert_eq!(completion_inputs[1]["reviewed_head_sha"], "rebased-head");
     assert_eq!(completion_inputs[1]["published_head_sha"], "rebased-head");
+    assert!(completion_inputs[0]["previous_published_head_sha"].is_null());
+    assert_eq!(
+        completion_inputs[1]["previous_published_head_sha"],
+        "candidate"
+    );
 
     let invocations = host.invocations();
     assert_eq!(
@@ -1531,8 +1536,9 @@ impl RuntimeHost for CompletionReviewHost {
                     "review_fixes": "",
                 })
             }
-            "test_stub_push" => json!({ "local_sha": "candidate" }),
+            "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
             "test_stub_git_push" => json!({
+                "remote_sha_before": "candidate",
                 "local_sha": if input.get("branch").and_then(Value::as_str) == Some("rebased-branch") {
                     "rebased-head"
                 } else {

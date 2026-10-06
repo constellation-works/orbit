@@ -74,6 +74,7 @@ use super::super::handoff::load_handoff_context;
 use super::super::operations;
 use super::super::push::push_batch_changes;
 use super::delivery::{DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state};
+use super::head_lag::HeadLag;
 use super::merge::{MergeCapabilities, MergeStrategy, resolve_merge_capabilities};
 
 /// Default budget for waiting out required checks before giving up.
@@ -254,10 +255,35 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     // exactly once, when the bounded conflict repair below rewrites and
     // lease-pushes the same branch.
     let mut pin = DeliveryPin::from_input(input);
+    let mut head_lag = HeadLag::new(max_wait_seconds, poll_interval_seconds);
 
     loop {
         let status = read_pr_status(host, workspace_path, pr_number)?;
-        match classify_pr_state(&status) {
+        let state = classify_pr_state(&status);
+        if matches!(
+            state,
+            PrMergeState::Mergeable
+                | PrMergeState::Pending
+                | PrMergeState::Conflict
+                | PrMergeState::Blocked(_)
+        ) {
+            pin.ensure_candidate_identity(&status, pr_number)?;
+            if let Some(delay) = head_lag.poll_delay(
+                &status,
+                &pin,
+                reviewed_head_sha.as_deref(),
+                workspace_path,
+                pr_number,
+                max_wait_seconds.saturating_sub(waited_seconds),
+            )? {
+                sleep(Duration::from_secs(delay));
+                waited_seconds = waited_seconds.saturating_add(delay);
+                continue;
+            }
+            pin.ensure_pinned_candidate(&status, pr_number)?;
+            ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
+        }
+        match state {
             PrMergeState::Merged => {
                 let evidence = pin.ensure_delivered(&status, pr_number)?;
                 let landed_commit = status.pointer("/mergeCommit/oid").and_then(Value::as_str);
@@ -276,6 +302,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         "landed_commit": landed_commit,
                         "managed_merge": managed_merge,
                         "base_modified_refusals": base_modified_refusals,
+                        "stale_head_observations": head_lag.observations,
                         "reviewed_head_sha": reviewed_head_sha,
                         "delivery_evidence": evidence.as_json(),
                     }),
@@ -340,8 +367,6 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 continue;
             }
             PrMergeState::Mergeable => {
-                pin.ensure_pinned_candidate(&status, pr_number)?;
-                ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 if !merge_requested {
                     let capabilities = resolved_capabilities(
                         host,
@@ -401,8 +426,6 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }
             }
             PrMergeState::Pending => {
-                pin.ensure_pinned_candidate(&status, pr_number)?;
-                ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 // Auto-merge cannot retain a head condition. A reviewed head
                 // or a published candidate waits for the synchronous mutation
                 // once checks settle, including on queue-only branches where
