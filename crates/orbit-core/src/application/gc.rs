@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 
 use crate::{OrbitError, OrbitRuntime};
 
+mod tmp;
+pub use tmp::{TmpGcReport, TmpGcResult};
+
 impl OrbitRuntime {
     /// Every recorded run, without step rows. Worktree GC classifies live
     /// worktrees from non-terminal runs and never reads `agent_response_json`.

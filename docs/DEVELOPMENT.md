@@ -192,6 +192,38 @@ composition without nesting an OS sandbox.
 
 ## Testing & Coverage
 
+### Reclaim workspace scratch
+
+`orbit gc tmp` reports each top-level entry under the selected workspace
+checkout's `.orbit/tmp`, including nested run and step-recovery scratch.
+The default and `--dry-run` leave files intact; `--confirm` (or `--yes`)
+removes all contents and keeps the empty directory. Use `--workspace <selector>`
+to select a registered workspace and `--json` for a structured report:
+
+```sh
+orbit gc tmp --workspace my-workspace --dry-run --json
+orbit gc tmp --workspace my-workspace --confirm
+```
+
+Confirmed collection requires operator or runner authority, as worktree
+collection does. It refuses while any job run in that workspace is `pending`
+or `running`, naming the run IDs; it never reconciles stale owners as part of
+collection. Finish, cancel, or explicitly reconcile those runs first. Other
+workspace checkouts and job worktrees' scratch are outside this command's scope.
+
+Reports include `entries_removed` (top-level entries), per-entry and total
+`bytes_reclaimable`, and `bytes_reclaimed` (zero during preview). Byte counts
+sum regular-file lengths and symlink lengths; they exclude directory metadata
+and do not estimate physical blocks or account for shared hard links. Symlinks
+inside scratch are unlinked without traversing their targets; a symlinked
+`.orbit` or `tmp` directory refuses collection. Linux and macOS use pinned
+directory descriptors for traversal and removal; other platforms refuse the
+command. Reports display non-UTF-8 names with replacement characters while
+removal uses their original byte names. Collection is an explicit operator
+action, with no routine scheduling.
+
+### Authorization coverage
+
 Authorization coverage is generated from the live governed-operation and
 builtin tool registries by `authorization_matrix_matches_live_registry` in the
 CLI `output` integration binary (module `output_goldens`). `make goldens UPDATE=1` regenerates

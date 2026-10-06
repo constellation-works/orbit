@@ -25,13 +25,62 @@ pub enum GcTarget {
     /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done,
     /// or whose claim this follower has settled with its owner
     Worktrees(WorktreeGcArgs),
+    /// Reclaim this workspace checkout's scratch contents when no job runs are active
+    Tmp(TmpGcArgs),
 }
 
 impl Execute for GcTarget {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
             Self::Worktrees(args) => args.execute(runtime),
+            Self::Tmp(args) => args.execute(runtime),
         }
+    }
+}
+
+#[derive(Args)]
+pub struct TmpGcArgs {
+    /// Remove scratch contents; without this flag the command only reports
+    #[arg(long, visible_alias = "yes", conflicts_with = "dry_run")]
+    pub confirm: bool,
+
+    /// Explicitly request the default non-destructive mode
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+
+    /// Emit the complete report as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl Execute for TmpGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let result = runtime.gc_tmp(self.confirm)?;
+        let doc = serde_json::to_value(&result).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize tmp GC report: {error}"))
+        })?;
+        let mut lines: Vec<_> = result
+            .reports
+            .iter()
+            .map(|report| {
+                format!(
+                    "path={} action={} bytes_reclaimable={} bytes_reclaimed={}",
+                    report.path.display(),
+                    if result.dry_run {
+                        "would_remove"
+                    } else {
+                        "removed"
+                    },
+                    report.bytes_reclaimable,
+                    report.bytes_reclaimed,
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "entries_removed={} total_bytes_reclaimable={} total_bytes_reclaimed={}",
+            result.entries_removed, result.bytes_reclaimable, result.bytes_reclaimed,
+        ));
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
     }
 }
 

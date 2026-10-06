@@ -1,0 +1,26 @@
+Inspect and explicitly reap Orbit-managed garbage
+
+Usage: orbit gc [OPTIONS] <COMMAND>
+
+Commands:
+  worktrees  Reap job-run worktrees whose associated task has settled to rejected, archived, or done, or whose claim this follower has settled with its owner
+  tmp        Reclaim this workspace checkout's scratch contents when no job runs are active
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

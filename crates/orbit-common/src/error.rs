@@ -364,6 +364,10 @@ pub enum OrbitError {
         source_run_id: String,
         run_id: String,
     },
+    /// Scratch collection refuses every pending or running workspace job,
+    /// including a stale owner that has not explicitly been reconciled.
+    #[error("cannot collect workspace scratch while job runs are pending or running: {}", .run_ids.join(", "))]
+    TmpGcActiveRuns { run_ids: Vec<String> },
     /// A governed workflow operation was refused because another operator holds
     /// the exclusive workspace claim [ADR-0352, ORB-10709]. Raised by the shared
     /// run-submission path, so the refusal is identical on every surface, and
