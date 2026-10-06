@@ -64,10 +64,23 @@ fetch() {
   url="$1"
   sha="$2"
   name="${url##*/}"
-  [ -f "$out/$name" ] || curl -fsSL "$url" -o "$out/$name"
-  printf '%s  %s\n' "$sha" "$out/$name" | sha256sum -c - >/dev/null \
-    || fail "checksum mismatch for $name; expected $sha"
-  tar -xJf "$out/$name" -C "$work"
+  cached="$out/$name"
+  if [ -f "$cached" ]; then
+    if printf '%s  %s\n' "$sha" "$cached" | sha256sum -c - >/dev/null 2>&1; then
+      tar -xJf "$cached" -C "$work"
+      return
+    fi
+    rm -f "$cached"
+  fi
+
+  download="$work/$name"
+  if ! curl -fsSL "$url" -o "$download"; then
+    fail "download failed for $name"
+  fi
+  printf '%s  %s\n' "$sha" "$download" | sha256sum -c - >/dev/null \
+    || fail "checksum mismatch for downloaded $name; expected $sha"
+  mv "$download" "$cached"
+  tar -xJf "$cached" -C "$work"
 }
 
 fetch "$BWRAP_URL" "$BWRAP_SHA256"
