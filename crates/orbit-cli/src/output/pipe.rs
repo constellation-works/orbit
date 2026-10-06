@@ -26,7 +26,7 @@ pub fn install_handler() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if panicked_on_a_closed_stdout(info) {
-            std::process::exit(0);
+            orbit_common::observability::logging::exit(0);
         }
         previous(info);
     }));

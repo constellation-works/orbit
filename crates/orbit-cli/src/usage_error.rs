@@ -57,11 +57,14 @@ pub(crate) fn exit(error: clap::Error, requested: Option<FormatArg>, legacy_json
             let payload = crate::output::json::usage_error_payload(&message(&error));
             if let Ok(rendered) = crate::output::json::render(&payload, sink.pretty_json()) {
                 eprintln!("{rendered}");
-                std::process::exit(error.exit_code());
+                orbit_common::observability::logging::exit(error.exit_code());
             }
         }
     }
-    error.exit()
+    // `clap::Error::exit` leaves through `std::process::exit` and would skip
+    // the JSONL flush.
+    let _ = error.print();
+    orbit_common::observability::logging::exit(error.exit_code())
 }
 
 /// clap's rendered message without its styling or its `error: ` label, which
