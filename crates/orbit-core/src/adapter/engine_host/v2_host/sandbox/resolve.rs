@@ -481,13 +481,15 @@ fn append_contained_runtime_modify_root(
 
 /// Registered-checkout stores the host clock and operator config own.
 ///
-/// The default policy re-allows these as versioned exceptions under whichever
-/// directory the profile is anchored to. A managed worktree keeps the
-/// exceptions on its own `.orbit`. Anchoring at the registered checkout would
-/// grant the live auto-task definitions, routines, crew and sandbox config,
-/// and resources. Drop those grants and append a terminal deny so a later
-/// convenience root — a Codex subpath of `.orbit` on macOS — cannot reopen
-/// them. `.orbit/tmp/**` stays the worker scratch exception.
+/// The default policy re-allows these under whichever directory the profile is
+/// anchored to. On Linux, a managed-worktree anchor makes those exceptions
+/// refer to that worktree's `.orbit`; a registered-checkout anchor would grant
+/// the live auto-task definitions, routines, crew and sandbox config, and
+/// resources. Drop those grants and append a terminal deny so later
+/// convenience roots cannot reopen the registered stores. On macOS,
+/// implementer profiles stay anchored at the registered checkout, while the
+/// active-worktree re-allow separately keeps the worktree's own `.orbit`
+/// writable. `.orbit/tmp/**` stays the worker scratch exception.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn deny_registered_checkout_host_stores(
     runtime: &OrbitRuntime,
