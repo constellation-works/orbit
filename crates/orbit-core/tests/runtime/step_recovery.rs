@@ -901,11 +901,15 @@ fn a_claimed_follower_decides_from_its_own_run_local_file_without_owner_task_wri
         assert_eq!(observed.deliveries, deliveries, "{name}");
         assert_eq!(observed.task_writes, 0, "{name}: no owner task write");
         let tools = observed.envelopes[0]["tools"].as_array().unwrap();
-        for withheld in ["orbit.task.show", "orbit.task.update"] {
-            assert!(
-                !tools.iter().any(|tool| tool == withheld),
-                "{name}: a claimed leaf is never granted {withheld}"
-            );
-        }
+        assert!(
+            !tools.iter().any(|tool| tool == "orbit.task.update"),
+            "{name}: a claimed leaf is never granted orbit.task.update"
+        );
+        // [ORB-14260] The read stays granted; the run broker scopes it to the
+        // claimed task.
+        assert!(
+            tools.iter().any(|tool| tool == "orbit.task.show"),
+            "{name}: a claimed leaf may read its claimed task"
+        );
     }
 }

@@ -52,19 +52,19 @@ impl OwnerCoordinator for ToOwner {
 
 /// A claimed leaf on the follower, admitted from a before-PR owner and bound,
 /// with its implementation committed in the follower's checkout.
-struct ReviewedLeaf {
-    pair: Pair,
+pub(super) struct ReviewedLeaf {
+    pub(super) pair: Pair,
     drain: String,
     leaf: String,
-    task: String,
+    pub(super) task: String,
     /// The follower runtime bound to the leaf's claim, as its worker runs.
-    bound: OrbitRuntime,
+    pub(super) bound: OrbitRuntime,
     base: SourceRevision,
     gate_input: Value,
 }
 
 impl ReviewedLeaf {
-    fn admit() -> Self {
+    pub(super) fn admit() -> Self {
         let pair = Pair::with_owner_config(&before_pr_owner(REVIEW_CREW), &[None]);
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
@@ -219,7 +219,7 @@ impl ReviewedLeaf {
     }
 
     /// The claim the leaf is bound to, and the follower's invocation of it.
-    fn claim(&self) -> (String, ClaimInvocation) {
+    pub(super) fn claim(&self) -> (String, ClaimInvocation) {
         let claim = self
             .pair
             .admission(&self.leaf)

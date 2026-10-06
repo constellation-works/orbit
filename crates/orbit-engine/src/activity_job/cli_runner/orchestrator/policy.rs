@@ -114,12 +114,12 @@ pub fn activity_tool_policy_env(
 /// (distributed-drain design §3, "Claimed-mode implementation").
 ///
 /// A claimed leaf's task belongs to another machine. Its injected envelope is
-/// the task and the claim is the authority, so the agent re-reads nothing, and
-/// it returns its execution summary in its output for `claim_handoff` to carry
-/// instead of writing owner task state. Denying the two tools makes that the
-/// only path, rather than relying on the prompt alone; the sandbox in which
-/// the agent runs cannot reach a remote owner anyway.
-pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.update"];
+/// the task and the claim is the authority; `orbit.task.show` may re-read that
+/// task through the claim-scoped owner broker. The agent returns its execution
+/// summary in its output for `claim_handoff` to carry instead of writing owner
+/// task state. Denying task updates makes that the only write path, rather
+/// than relying on the prompt alone.
+pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 
 /// Whether this invocation runs inside a claimed leaf.
 ///

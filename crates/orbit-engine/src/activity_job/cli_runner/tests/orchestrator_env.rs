@@ -78,12 +78,11 @@ fi
     );
 }
 
-/// A claimed leaf's implementer writes no owner task state and re-reads
-/// nothing (distributed-drain design §3): in claimed mode the owner task
-/// tools are denied on top of the activity's own list, so the child can
-/// neither see nor call them, and the harness event records the widened list.
+/// A claimed leaf's implementer may read its claimed task through the scoped
+/// owner route, but cannot write owner task state (distributed-drain design
+/// §3). The task update denial is added on top of the activity's own list.
 #[test]
-fn run_cli_backend_denies_owner_task_tools_to_a_claimed_implementer() {
+fn run_cli_backend_keeps_claimed_task_read_but_denies_owner_task_updates() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("grok");
     write_executable(
@@ -95,8 +94,8 @@ fail() {
   exit 1
 }
 [ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
-[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*,orbit.task.show,orbit.task.update" ] || fail claimed_disallow_list_missing
-[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.search,github.run.list" ] || fail owner_task_tools_still_callable
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*,orbit.task.update" ] || fail claimed_disallow_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,github.run.list" ] || fail claimed_task_read_unavailable
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
 "#,
     );
@@ -124,7 +123,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
 
     assert!(
         outcome.success,
-        "child still had owner task tools: {:?}",
+        "child had an unexpected owner task policy: {:?}",
         outcome.output
     );
     let (effective_tools, tool_policy, tool_disallow_list) = audit
@@ -141,7 +140,10 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
             _ => None,
         })
         .expect("tool allowlist audit event");
-    assert_eq!(effective_tools, ["orbit.search", "github.run.list"]);
+    assert_eq!(
+        effective_tools,
+        ["orbit.task.show", "orbit.search", "github.run.list"]
+    );
     assert_eq!(tool_policy, Some(ActivityToolPolicyMode::Deny));
     assert_eq!(
         tool_disallow_list.as_deref(),
@@ -149,7 +151,6 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
             [
                 "orbit.workflow.ship".to_string(),
                 "proc.*".to_string(),
-                "orbit.task.show".to_string(),
                 "orbit.task.update".to_string(),
             ]
             .as_slice()

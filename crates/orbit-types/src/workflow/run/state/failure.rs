@@ -98,10 +98,22 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
 /// task's owner from where the step ran — the worker's owner route is masked
 /// or the owner is unreachable — as opposed to the candidate failing
 /// [ORB-14257]. The worker's owner route stamps it on a transport failure.
+///
+/// Inside the agent sandbox, which masks the SSH credentials, the nested
+/// `orbit` raises it when its run's coordinator — the step runner's broker —
+/// was not passed to it or had stopped [ORB-14260]. No repair agent can open
+/// that route from the same sandbox, so step and final recovery skip it.
 pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
 
 /// The bracketed marker form of [`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`].
 pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
+
+/// Whether a step failure says a claimed worker could not reach its owner.
+#[must_use]
+pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(OWNER_ROUTE_UNAVAILABLE_MARKER))
+}
 
 /// Token a step failure carries when its outcome was inconclusive for a
 /// reason that may not recur [ORB-14257]: claimed required validation stamps
@@ -212,10 +224,7 @@ impl ClaimFailureClass {
             Some(Self::Provider)
         } else if is_validation_environment_failure(error_code, message) {
             Some(Self::Environment)
-        } else if typed(
-            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
-            OWNER_ROUTE_UNAVAILABLE_MARKER,
-        ) {
+        } else if is_owner_route_unavailable(error_code, message) {
             Some(Self::OwnerRoute)
         } else if super::super::is_baseline_red_failure(error_code, message)
             && message
