@@ -349,16 +349,15 @@ fn profile_rules_within_exception(profile_rules: &[String], exception: &str) -> 
         resolved.push(exception.to_string());
     }
     for (index, rule) in profile_rules.iter().enumerate() {
+        // The last rule covering the whole subtree settled every earlier
+        // rule, including nested ones. Only later rules can carve it back.
+        // With no such cover, every overlapping rule still applies.
+        if last_cover.is_some_and(|cover| index <= cover) {
+            continue;
+        }
         let (negated, body) = split_rule(rule);
         if rule_covers_path_rule(exception, body) {
             resolved.push(scoped_rule(negated, body));
-            continue;
-        }
-        // A rule that covers the whole subtree already settled every path in
-        // it. Only a later rule can carve that settlement back. With no such
-        // cover, every overlapping rule still applies.
-        let after_settlement = last_cover.map(|cover| index > cover).unwrap_or(true);
-        if !after_settlement || rule_covers_path_rule(body, exception) {
             continue;
         }
         match glob_patterns_inside_subtree(body, prefix) {
