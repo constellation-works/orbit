@@ -277,7 +277,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         job_id: &str,
         input: serde_json::Value,
         key: &str,
-    ) -> Result<JobRun, OrbitError> {
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
         validate_path_stem(job_id, "job")?;
         super::super::automation::initialize(&self.store)?;
         self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -286,7 +286,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             if let Some(id)=existing {
                 let run=get_job_run_for_workspace_conn(conn,&self.workspace_id,&id)?.ok_or_else(|| OrbitError::Store("automation run missing".into()))?;
                 if run.job_id!=job_id || run.input.as_ref()!=Some(&input) {return Err(OrbitError::InvalidInput("automation job key input changed".into()));}
-                return Ok(run);
+                return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
             }
             let now=Utc::now();
             let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
@@ -294,7 +294,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
             conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
-            Ok(run)
+            Ok(KeyedJobRunAdmission::Admitted(Box::new(run)))
         })
     }
 

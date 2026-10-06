@@ -117,12 +117,16 @@ pub trait JobRunStoreBackend: Send + Sync {
             "automation action lookup unavailable".into(),
         ))
     }
+    /// Atomically insert a run for a durable automation action key, or resolve
+    /// the run already bound to it without writing that run. An existing key
+    /// must name the same job and input. The outcome is decided inside the
+    /// insertion transaction so callers can initialize only newly admitted runs.
     fn insert_automation_job_run(
         &self,
         _job_id: &str,
         _input: serde_json::Value,
         _key: &str,
-    ) -> Result<JobRun, OrbitError> {
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
         Err(OrbitError::Store(
             "automation job admission unavailable".into(),
         ))
@@ -362,12 +366,13 @@ pub struct KeyedJobRunParams {
     pub input: Value,
 }
 
+/// Outcome of an atomic retry-key or automation-key admission.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyedJobRunAdmission {
-    /// No run in the window carried the key; this one was inserted.
+    /// No matching run carried the key; this one was inserted.
     Admitted(Box<JobRun>),
-    /// The newest run in the window already carrying the key. Nothing was
-    /// written.
+    /// The run bound to the automation key, or the newest run in the retry
+    /// window carrying the key. Nothing was written.
     Existing(Box<JobRun>),
 }
 

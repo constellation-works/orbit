@@ -15,7 +15,7 @@ use orbit_core::application::automation::{
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
+use orbit_store::contracts::{JobRunStoreBackend, KeyedJobRunAdmission};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::automation::AutomationState;
 use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
@@ -190,14 +190,17 @@ impl Workspace {
         claimed.members.as_mut().unwrap().active = Some(attempt.clone());
         assert!(store.automation_commit(&state, &claimed, None).unwrap());
 
-        let run = self
+        let KeyedJobRunAdmission::Admitted(run) = self
             .jobs
             .insert_automation_job_run(
                 "task_pilot_pipeline",
                 json!({"state_automation": attempt}),
                 &attempt.action_key,
             )
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("a fresh fixture attempt must admit its own run");
+        };
         attempt.action_id = Some(run.run_id);
         let mut acknowledged = claimed.clone();
         acknowledged.generation += 1;
