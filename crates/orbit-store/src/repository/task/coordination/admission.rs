@@ -265,6 +265,8 @@ impl TaskCommitBoundary {
             }
         }
         let claims = self.execution_claims()?;
+        let host_released =
+            self.host_released_tasks(&identity.location().machine_id, &request.run_context.run_id)?;
         let reservations = self.store.inspect_active_task_reservations(
             &orbit_dir.to_string_lossy(),
             Some(&self.workspace_id),
@@ -348,6 +350,19 @@ impl TaskCommitBoundary {
                 receipt.crew_unavailable.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason,
+                });
+                continue;
+            }
+            // Nor one this drain already gave back for its host's failure
+            // [ORB-14257]; it stays for another host or a later drain.
+            if let Some(release) = host_released.get(&task.id) {
+                receipt.crew_unavailable.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: format!(
+                        "this drain released it ({}): {}",
+                        release.class.as_str(),
+                        release.reason
+                    ),
                 });
                 continue;
             }

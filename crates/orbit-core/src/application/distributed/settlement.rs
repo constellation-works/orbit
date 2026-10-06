@@ -13,7 +13,9 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionCrewCapability, ClaimMutation, LocalPullAdmission, LocalPullPhase,
 };
-use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
+use orbit_types::workflow::{
+    ClaimFailureClass, CrewExclusion, CrewExclusionSource, PullCrewPreflight,
+};
 use serde::Serialize;
 
 /// One admission carried by a settle-only pass.
@@ -257,6 +259,10 @@ pub struct PullLeafClaim {
     /// The owner's refusal of the pending settlement while it still holds
     /// the claim, and when delivery is next attempted.
     pub settlement_refusal: Option<RefusedPullSettlement>,
+    /// [ORB-14257] Why the leaf ended without its handoff, as its recorded
+    /// settlement types it; `None` until a failure or release is recorded,
+    /// and for a release of a leaf that never launched.
+    pub failure_class: Option<ClaimFailureClass>,
     /// What the phase means for the operator.
     pub guidance: String,
 }
@@ -265,8 +271,12 @@ impl PullLeafClaim {
     /// One line for a run page.
     #[must_use]
     pub fn describe(&self) -> String {
+        let failure = self
+            .failure_class
+            .map(|class| format!(" failure={}", class.as_str()))
+            .unwrap_or_default();
         format!(
-            "task {} claim {} owner {} drain {} settlement={} — {}",
+            "task {} claim {} owner {} drain {} settlement={}{failure} — {}",
             self.task_id.as_deref().unwrap_or("-"),
             self.claim_id.as_deref().unwrap_or("-"),
             self.owner,
@@ -391,6 +401,7 @@ impl PullCrewWindow {
             let source = match exclusion.source {
                 CrewExclusionSource::Preflight => "preflight",
                 CrewExclusionSource::ProviderUnavailable => "provider_unavailable",
+                CrewExclusionSource::LeafReleased => "leaf_released",
             };
             format!(
                 "excluded {} ({source}): {}",
@@ -559,6 +570,14 @@ impl crate::OrbitRuntime {
             .as_ref()
             .map(|preflight| preflight.excluded.clone())
             .unwrap_or_default();
+        let default_crew = match &preflight {
+            Some(preflight) => preflight.default_crew.clone(),
+            None => self
+                .context
+                .settings()
+                .default_crew()
+                .map(ToOwned::to_owned),
+        };
         for record in self
             .stores()
             .jobs()
@@ -567,25 +586,44 @@ impl crate::OrbitRuntime {
             let Some(ClaimMutation::Release(evidence)) = &record.settlement else {
                 continue;
             };
-            let Some(unavailable) = &evidence.provider_unavailable else {
-                continue;
-            };
-            let Some(crew) = unavailable.crew.as_deref() else {
-                continue;
-            };
-            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
-                continue;
-            }
             let task = record
                 .receipt
                 .as_ref()
                 .and_then(|receipt| receipt.claim.as_ref())
                 .map(|claim| claim.task_id.as_str())
                 .unwrap_or("a claimed task");
+            // [ORB-14257] A provider release keeps its own source; any other
+            // released failure whose class blames this host excludes the crew
+            // too.
+            let (crew, source, reason) = match (&evidence.provider_unavailable, &evidence.failure) {
+                (Some(unavailable), _) => (
+                    unavailable.crew.as_deref(),
+                    CrewExclusionSource::ProviderUnavailable,
+                    format!("{task} failed: {}", unavailable.reason),
+                ),
+                // A leaf whose task names no crew ran as the window's
+                // default, even when it died before resolving one.
+                (None, Some(failure)) if failure.class.excludes_crew() => (
+                    failure.crew.as_deref().or(default_crew.as_deref()),
+                    CrewExclusionSource::LeafReleased,
+                    format!(
+                        "{task} was released ({}): {}",
+                        failure.class.as_str(),
+                        failure.reason
+                    ),
+                ),
+                _ => continue,
+            };
+            let Some(crew) = crew else {
+                continue;
+            };
+            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                continue;
+            }
             excluded.push(CrewExclusion {
                 crew: crew.to_string(),
-                source: CrewExclusionSource::ProviderUnavailable,
-                reason: format!("{task} failed: {}", unavailable.reason),
+                source,
+                reason,
             });
         }
         let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
@@ -633,14 +671,7 @@ impl crate::OrbitRuntime {
                     .collect()
             }),
             reviewable,
-            default_crew: match preflight {
-                Some(preflight) => preflight.default_crew,
-                None => self
-                    .context
-                    .settings()
-                    .default_crew()
-                    .map(ToOwned::to_owned),
-            },
+            default_crew,
             excluded,
         })
     }
@@ -666,6 +697,12 @@ impl crate::OrbitRuntime {
             owner: admission.destination.selector.clone(),
             drain_run_id: admission.request.run_context.run_id.clone(),
             settlement_phase,
+            failure_class: match &admission.settlement {
+                Some(ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)) => {
+                    evidence.failure.as_ref().map(|failure| failure.class)
+                }
+                _ => None,
+            },
             refusal: admission.refusal.clone(),
             guidance: phase_guidance(
                 admission.phase,

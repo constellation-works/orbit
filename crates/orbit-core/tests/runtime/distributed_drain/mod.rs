@@ -60,6 +60,7 @@ mod before_pr;
 mod cancel;
 mod claimed_review;
 mod desktop_completion;
+mod failure_class;
 mod landing_attribution;
 mod recovery;
 mod settlement;

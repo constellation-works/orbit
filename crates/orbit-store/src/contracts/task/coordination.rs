@@ -246,8 +246,10 @@ impl AdmissionShipContract {
 /// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
 /// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
 /// [ORB-13908]; revision 8 captures the owner's required validation
-/// commands in the before-PR review contract [ORB-14192].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 8;
+/// commands in the before-PR review contract [ORB-14192]; revision 9 adds the
+/// settlement's typed failure and the `leaf_released` crew exclusion source
+/// [ORB-14257].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 9;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -547,6 +549,50 @@ pub struct ClaimEvidence {
     /// failed. An owner that predates the field ignores it and only blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery: Option<ClaimFinalRecovery>,
+    /// [ORB-14257] On a launched leaf's failure or release: why it ended
+    /// without its handoff. The owner blocks the task only for a class that
+    /// [blocks](orbit_types::workflow::ClaimFailureClass::blocks), and
+    /// releases any other within its per-task release budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ClaimFailure>,
+}
+
+/// Why a launched claimed leaf ended without its typed handoff [ORB-14257].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimFailure {
+    pub class: orbit_types::workflow::ClaimFailureClass,
+    /// What ended the leaf — the cancel, or its failed step's error — bounded.
+    pub reason: String,
+    /// The crew the leaf ran as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    /// The candidate the leaf published before it ended, so a later claim
+    /// can start from it rather than from the base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<ClaimCandidateRef>,
+}
+
+/// A candidate branch a claimed leaf pushed, as it pushed it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCandidateRef {
+    pub branch: String,
+    pub head_sha: String,
+    /// The pull request the leaf opened for it, when it got that far.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<String>,
+}
+
+/// A typed release the owner applied, kept on the claim's lifecycle state so
+/// the task's release budget can count it [ORB-14257].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimReleaseRecord {
+    pub class: orbit_types::workflow::ClaimFailureClass,
+    pub reason: String,
+    pub released_at: String,
+    /// Set on the settlement that exhausted the budget and blocked the task;
+    /// releases before it no longer count.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub budget_exhausted: bool,
 }
 
 /// A claimed leaf ended because its crew's provider could not be used on the
@@ -655,6 +701,9 @@ pub struct ClaimInspection {
     pub age_seconds: Option<i64>,
     pub unresolved_merge_intent: Option<String>,
     pub landing_invalidated: bool,
+    /// [ORB-14257] The typed failure release the owner applied to this claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ClaimReleaseRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

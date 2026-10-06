@@ -80,8 +80,8 @@ fn install_pull_job_assets(pair: &Pair) {
 /// Submit `orbit run auto --pull` with no window on `pair`'s follower,
 /// restricted to `allowed_crews`, and execute it in this process the way its
 /// detached worker would. Every leaf it launches has a worker that exits
-/// before claiming its run, so each claim settles as a startup failure a pass
-/// or two later.
+/// before claiming its run, so each claim is released as a transient failure
+/// a pass or two later, excluding its crew for the window [ORB-14257].
 pub(super) fn run_windowless_drain(pair: &Pair, slots: u32, allowed_crews: &[String]) -> String {
     run_single_pass_drain(pair, slots, allowed_crews, None)
 }
@@ -153,7 +153,10 @@ fn run_single_pass_drain(
 /// [ORB-14174] A drain started without `--for` ran for 62ms and claimed
 /// nothing, because its zero window was expired before its first request.
 /// Through the real job, it now claims up to its slots in one pass, admits no
-/// replacement as those claims settle, and ends once they have.
+/// replacement as those claims settle, and ends once they have. The tasks'
+/// crews differ so the second slot is filled whether or not the first leaf's
+/// release excluded its crew before the second request; the owner keeps the
+/// released task itself from this drain either way.
 #[test]
 fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
     if !isolated(
@@ -162,7 +165,7 @@ fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
     ) {
         return;
     }
-    let pair = Pair::new(3);
+    let pair = Pair::with_crews(&[Some("sol"), Some("luna"), Some("sol")]);
 
     let drain = run_windowless_drain(&pair, 2, &[]);
 
@@ -270,14 +273,18 @@ fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
     assert_eq!(pair.owner_claims().len(), 1);
     assert_eq!(pull_request_ids(&pair).len(), 1);
     assert!(single_pass_taken(&pair, &drain));
-    assert_eq!(
-        pair.tasks
-            .iter()
-            .filter(|task| pair.owner_status(task) == "backlog")
-            .count(),
-        1,
-        "the drain admits no replacement after its one slot settles"
-    );
+    let claimed = pair.owner_claims()[0]["claim"]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for task in &pair.tasks {
+        assert_eq!(
+            pair.owner_status(task),
+            "backlog",
+            "{task}: the claimed task is released, and no replacement is admitted after its one \
+             slot settles (claimed {claimed})"
+        );
+    }
 }
 
 /// A positive window that has run out is not a single pass: an expired timed

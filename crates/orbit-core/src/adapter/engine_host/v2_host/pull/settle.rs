@@ -59,7 +59,7 @@ use orbit_store::contracts::{
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
+    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -111,11 +111,8 @@ impl OrbitRuntime {
         if !run.state.is_terminal() {
             return Ok(Some(record));
         }
-        let final_recovery = jobs
-            .read_run_state(run_id)?
-            .and_then(|state| state.final_recovery);
-        let settlement =
-            leaf_failure_settlement(&record, &run, diagnostic, final_recovery.as_ref());
+        let state = jobs.read_run_state(run_id)?;
+        let settlement = leaf_failure_settlement(&record, &run, diagnostic, state.as_ref());
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -226,7 +223,7 @@ impl OrbitRuntime {
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
-            &LocalPullMutation::Settle(Box::new(release_settlement(record, why))),
+            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why))),
         ) {
             Ok(settling) => Ok(settling),
             Err(error) => {

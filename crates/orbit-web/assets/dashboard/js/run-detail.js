@@ -321,6 +321,11 @@ function buildClaimedLeaves(run, leaves) {
   return panel;
 }
 
+const CREW_EXCLUSION_SOURCES = {
+  provider_unavailable: "provider unavailable",
+  leaf_released: "leaf released",
+};
+
 // A pull drain's crew window: the crews its provider preflight found
 // runnable, and each crew it excluded for the window with the source and
 // reason. Mirrors the `Crews:` lines of `orbit run show`.
@@ -335,7 +340,7 @@ function buildCrewWindow(window) {
     : "crews: no preflight recorded";
   panel.appendChild(el("div", { class: "label", text: summary }));
   for (const exclusion of excluded) {
-    const source = exclusion.source === "provider_unavailable" ? "provider unavailable" : "preflight";
+    const source = CREW_EXCLUSION_SOURCES[exclusion.source] || "preflight";
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source}): ${exclusion.reason}` }),
     ]));

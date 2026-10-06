@@ -446,6 +446,28 @@ owns delivery:
   for the window. Neither step recovery nor its post-recovery attempt reruns the same model, and
   final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
   provider evidence.
+- *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a
+  `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
+  `candidate` (the default: the candidate's implementation, checks or review failed) and
+  `task_input` (final recovery decided `reject` or `archive`) settle as `Fail` and block the task.
+  Every other class settles as `Release` and returns it to `backlog`: `operator_cancel` (an
+  operator cancelled the launched leaf, with the cancel's reason), `provider` (the
+  `provider_unavailable` case above), `environment` (`[validation_environment]`), `owner_route`
+  (`[owner_route_unavailable]` or `unreachable_destination`), `baseline_red` (`[baseline_red]`)
+  and `transient` (`[transient_failure]`, or a leaf whose worker died and was reconciled
+  `interrupted`). The class is read from the last failed step's typed marker, then any provider
+  failure the run recorded, then the terminalizing diagnostic. `environment`, `transient`,
+  `owner_route` and `provider` also exclude the leaf's crew for the rest of the drain's window
+  (source `leaf_released`, or `provider_unavailable` for a provider), and the owner's admission
+  holds the released task itself from that drain run (`crew_unavailable`), so a release that
+  reaches the owner after the follower built its next request is not pulled straight back. When the leaf had pushed its
+  candidate, `candidate` names the branch, head and pull request, so the next attempt can start
+  from it. The owner bounds the releases: a task released twice within 24 hours for a budgeted
+  class (anything but `operator_cancel`) is blocked by its third, with one comment listing every
+  counted reason; releases before such a block no longer count. A `Release` naming a class that
+  blocks is applied as a block. The owner does not yet wait for a green base before re-offering a
+  `baseline_red` task, and the next claim does not yet resume the preserved candidate.
+  `orbit run show <leaf>` prints the class on its `Claim:` line (`pull_claim.failure_class`).
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -928,5 +950,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
 - [ORB-13894] — attributed handoff landings to their owner tasks in `deliveries_landed` batches.
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
+- [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

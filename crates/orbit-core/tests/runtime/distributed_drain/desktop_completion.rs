@@ -392,7 +392,10 @@ impl Delivery {
             .expect("the retained admission receipt for this claim");
         let mut stored: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(stored["state"], "full");
-        assert_eq!(stored["receipt"]["request"]["caller_schema"], 8);
+        assert_eq!(
+            stored["receipt"]["request"]["caller_schema"],
+            orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+        );
         assert_eq!(stored["receipt"]["request"]["ship"]["before_pr"], false);
         assert!(stored["receipt"]["request"]["ship"].get("review").is_none());
         stored["receipt"]["request"]["caller_schema"] = json!(7);
