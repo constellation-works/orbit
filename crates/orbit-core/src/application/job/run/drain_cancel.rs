@@ -132,12 +132,13 @@ impl OrbitRuntime {
         if force && run.job_id == LOCAL_DRAIN_JOB {
             return self.force_cancel_local_drain(&run, request, signal);
         }
-        self.cancel_job_run_with_reason_and_policy(
+        self.cancel_job_run_with_reason_and_policy_and_signal(
             run_id,
             request.actor,
             request.source,
             request.reason,
             request.block_task,
+            signal,
         )
     }
 

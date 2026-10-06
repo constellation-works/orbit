@@ -101,14 +101,35 @@ impl OrbitRuntime {
         reason: Option<&str>,
         block_task: bool,
     ) -> Result<JobRunCancelResult, OrbitError> {
+        self.cancel_job_run_with_reason_and_policy_and_signal(
+            run_id,
+            actor,
+            source,
+            reason,
+            block_task,
+            signal_run_owner_process,
+        )
+    }
+
+    pub(super) fn cancel_job_run_with_reason_and_policy_and_signal<F>(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        block_task: bool,
+        signal: F,
+    ) -> Result<JobRunCancelResult, OrbitError>
+    where
+        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
+    {
         let request = CancellationRequest {
             actor,
             source,
             reason,
             block_task,
         };
-        let mut result =
-            self.cancel_job_run_cascading(run_id, request, signal_run_owner_process, 0)?;
+        let mut result = self.cancel_job_run_cascading(run_id, request, signal, 0)?;
         result.pull_settlements = self.pull_settlements_after_cancel(run_id);
         Ok(result)
     }
