@@ -80,6 +80,7 @@ impl Execute for AutoTaskAddArgs {
             task_type: self.task_type,
             tags: self.tags,
             required_tools: self.required_tools,
+            context_files: Vec::new(),
             priority: self.priority,
             complexity: self.complexity,
             crew: self.crew,

@@ -236,6 +236,7 @@ pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams 
         acceptance_criteria: template.acceptance_criteria.clone(),
         tags,
         required_tools: template.required_tools.clone(),
+        context_files: template.context_files.clone(),
         priority: template.priority,
         // Legacy/custom definitions may omit an assessment. Preserve their
         // historical automated-creation behavior while allowing assessed

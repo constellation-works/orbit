@@ -123,6 +123,7 @@ impl Execute for AutoTaskUpdateArgs {
                     .as_deref()
                     .map(crate::parse::csv_to_vec)
                     .unwrap_or(current.required_tools),
+                context_files: current.context_files,
                 priority: self.priority.unwrap_or(current.priority),
                 complexity: self.complexity.or(current.complexity),
                 crew: self.crew.clone().or(current.crew),

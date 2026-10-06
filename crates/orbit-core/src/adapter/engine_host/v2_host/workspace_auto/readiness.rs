@@ -293,6 +293,10 @@ pub fn explain_workspace_auto_readiness(
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
                 match excluded.reason {
+                    BacklogTaskExclusionReason::Unprepared => {
+                        object.insert("reason".to_string(), Value::String("unprepared".to_string()));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::UnassessedComplexity => {
                         object.insert(
                             "reason".to_string(),

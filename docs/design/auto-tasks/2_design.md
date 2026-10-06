@@ -33,7 +33,11 @@ and unimplemented; existing scheduling and action semantics remain current.
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
-`crew`, and `status` (default `backlog`). An explicit complexity must be an
+`crew`, optional `context_files`, and `status` (default `backlog`).
+Context selectors are copied unchanged into minted tasks. Diff-producing
+chores must declare a scope in their YAML template; otherwise admission holds
+them for task-pilot. Older definitions without selectors remain readable.
+An explicit complexity must be an
 assessed `low`, `medium`, or `hard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
 definitions that omit `complexity` remain valid and mint

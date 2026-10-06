@@ -60,7 +60,10 @@ template:
   tags:
   - doc-duties
   - docs
-  - no-diff-expected
+  # A batch may edit docs/ and root or workspace-specific documentation.
+  # Reserve the workspace until the batch's concrete paths are known.
+  context_files:
+  - 'dir:.'
   priority: medium
   complexity: low
   crew: system

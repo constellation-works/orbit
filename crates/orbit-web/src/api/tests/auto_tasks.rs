@@ -26,6 +26,7 @@ fn chore_params(name: &str) -> AutoTaskAddParams {
             task_type: TaskType::Chore,
             tags: vec![],
             required_tools: Vec::new(),
+            context_files: Vec::new(),
             priority: TaskPriority::Medium,
             complexity: Some(TaskComplexity::Medium),
             crew: None,

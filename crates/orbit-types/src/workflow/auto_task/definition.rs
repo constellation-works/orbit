@@ -249,6 +249,11 @@ pub struct AutoTaskTemplate {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Canonical context selectors copied onto every minted task so admission
+    /// can serialize chores that may change repository files. Older definitions
+    /// omit this field and retain an empty context surface.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_files: Vec<String>,
     /// Priority (defaults to `medium`).
     #[serde(default = "default_priority")]
     pub priority: TaskPriority,

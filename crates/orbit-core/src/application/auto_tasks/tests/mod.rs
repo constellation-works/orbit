@@ -16,6 +16,7 @@ pub(super) fn template(title: &str) -> AutoTaskTemplate {
         task_type: TaskType::Chore,
         tags: vec![],
         required_tools: Vec::new(),
+        context_files: Vec::new(),
         priority: TaskPriority::Medium,
         complexity: None,
         crew: None,
