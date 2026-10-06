@@ -61,7 +61,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         "a different command is not a replacement without a shared check identity"
     );
 
-    // Identity on only one side does not bind to the other record's command.
+    // This explicit identity differs from the other record's normalized command.
     let one_sided = vec![
         superseded(Some("orbit-core-tests")),
         required(
@@ -74,7 +74,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
-        "a one-sided check identity is not an unambiguous replacement"
+        "different effective identities do not identify a replacement"
     );
 
     // Empty and whitespace identities relate nothing; only a shared command

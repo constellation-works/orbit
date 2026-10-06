@@ -208,9 +208,9 @@ impl Default for ValidationContext<'_> {
 /// the candidate's scope, and, when it runs on the candidate, not share its
 /// check with a required pass; an excluded action must have stayed
 /// unperformed; a superseded attempt must be followed by the required check
-/// that replaced it — the same command (whitespace and leading `NAME=value`
-/// assignments ignored), or the same non-empty `check` identity, whichever
-/// the two records share; a diagnostic must be an
+/// that replaced it — the same effective identity: a non-empty `check`,
+/// otherwise the command with whitespace and leading `NAME=value`
+/// assignments normalized; a diagnostic must be an
 /// observation that ran, and a failed one must name sources all outside the
 /// scope and not share its check with a required pass. Every classification
 /// other than `required` must explain itself, so an unexplained
@@ -508,14 +508,12 @@ fn explained(record: &ReviewValidation) -> bool {
 /// Whether a later record is the required check the superseded attempt was
 /// replaced by. Order carries the meaning: a supersession must be resolved
 /// after it, never by a check recorded before it. The later record must be
-/// the same check: the same command (whitespace-normalized, with leading
-/// POSIX environment assignments removed), or the same non-empty `check`
-/// identity when the command itself was corrected. Check identities and
-/// commands are compared only with their own kind, so one cannot impersonate
-/// the other, and a `check` one record
-/// omits never stops the commands from relating them: an optional field
-/// left out of an honest record must not turn a pass into a refusal. Any
-/// later required pass is not enough.
+/// the same check: its effective identity is a non-empty `check`, otherwise
+/// its command (whitespace-normalized, with leading POSIX environment
+/// assignments removed). An explicit identity can match another record's
+/// normalized command, including when a wrapper changed the command text.
+/// Different effective identities never match, even with identical commands.
+/// Any later required pass is not enough.
 fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewValidation]) -> bool {
     later.iter().any(|record| {
         record.role == ValidationRole::Required
@@ -525,15 +523,17 @@ fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewVali
 }
 
 fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
-    let same_identity = matches!(
-        (check_identity(left), check_identity(right)),
+    matches!(
+        (effective_check_identity(left), effective_check_identity(right)),
         (Some(left), Some(right)) if left == right
-    );
-    let same_command = matches!(
-        (normalized_command(left), normalized_command(right)),
-        (Some(left), Some(right)) if left == right
-    );
-    same_identity || same_command
+    )
+}
+
+/// The explicit identity takes precedence over the normalized command.
+fn effective_check_identity(record: &ReviewValidation) -> Option<String> {
+    check_identity(record)
+        .map(str::to_owned)
+        .or_else(|| normalized_command(record))
 }
 
 /// A present, non-empty `check` identity.
@@ -551,7 +551,7 @@ fn check_identity(record: &ReviewValidation) -> Option<&str> {
 /// different check. The command that remains is compared in full. A
 /// reviewer may also set `check` to the host command string when the run
 /// is wrapped in any other way (`env`, a shell prefix); that identity is
-/// the host command, not a match against another record's command text.
+/// the host command.
 fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool {
     let same_command = matches!(
         (
