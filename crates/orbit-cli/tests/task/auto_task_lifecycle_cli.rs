@@ -211,6 +211,110 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
+#[test]
+fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
+    use orbit_common::security::release::sha256_hex;
+    use orbit_core::application::auto_tasks::{
+        AutoTaskCursor, cursor_state_path, load_cursor_state,
+    };
+    use orbit_core::application::automation::consumer_key;
+    use orbit_types::workflow::AutoTaskPendingClaim;
+
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let name = definition.name.as_str();
+    let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_state(&consumer).unwrap().is_some());
+
+    // A pin whose ref lock is held cannot be deleted, so teardown fails after
+    // the consumer reset has already applied.
+    let pin = format!(
+        "refs/orbit/automation/{}/fixture-pin",
+        sha256_hex(consumer.as_bytes())
+    );
+    git(&fixture, &["update-ref", &pin, "HEAD"]);
+    let ref_lock = fixture.repo.join(git(
+        &fixture,
+        &["rev-parse", "--git-path", &format!("{pin}.lock")],
+    ));
+    fs::write(&ref_lock, "").unwrap();
+
+    let cursor_path = cursor_state_path(&runtime.paths().state_dir);
+    let mut cursors = load_cursor_state(&cursor_path).unwrap();
+    cursors.definitions.insert(
+        name.to_string(),
+        AutoTaskCursor {
+            baseline_at: "2026-01-01T00:00:00Z".to_string(),
+            last_slot: None,
+            last_fired_at: None,
+            last_task_id: None,
+            pending: Some(AutoTaskPendingClaim {
+                slot: "2026-01-01T01:00:00Z".to_string(),
+                task_id: None,
+            }),
+            last_skip: None,
+        },
+    );
+    fs::write(
+        &cursor_path,
+        serde_json::to_string_pretty(&cursors).unwrap(),
+    )
+    .unwrap();
+    // `automation` reports the consumer state, which the reset drops.
+    let show_definition = || {
+        let mut shown = fixture.json(&["auto-task", "show", name, "--json"]);
+        shown.as_object_mut().unwrap().remove("automation");
+        shown
+    };
+    let definition_before = show_definition();
+
+    fixture
+        .command(&[
+            "auto-task",
+            "delete",
+            name,
+            "--reason",
+            "Disposable failing delete",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    assert!(
+        store.automation_state(&consumer).unwrap().is_none(),
+        "the failure must come after teardown applied the consumer reset"
+    );
+    assert_eq!(
+        load_cursor_state(&cursor_path).unwrap(),
+        cursors,
+        "a failed delete must leave the scheduler cursor, pending claim included"
+    );
+    assert_eq!(show_definition(), definition_before);
+
+    fs::remove_file(&ref_lock).unwrap();
+    let removed = fixture.json(&[
+        "auto-task",
+        "delete",
+        name,
+        "--reason",
+        "Disposable delete",
+        "--json",
+    ]);
+    assert_eq!(removed["cursor_removed"], true);
+    assert_eq!(
+        removed["consumer"]["released_refs"],
+        serde_json::json!([pin])
+    );
+    assert!(
+        !load_cursor_state(&cursor_path)
+            .unwrap()
+            .definitions
+            .contains_key(name)
+    );
+    assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
+}
+
 /// Run one git command in the fixture repository, isolated from the caller's
 /// configuration, and return its trimmed stdout.
 pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {

@@ -517,12 +517,13 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
 ///
 /// A directory that was never reconciled gains a manifest here; without one
 /// the next seed would treat the directory as legacy and re-create the file.
+/// The returned record undoes the opt-out when a later step fails.
 pub(crate) fn record_managed_asset_opt_out(
     dir: &Path,
     asset_kind: &str,
     layout: ManagedAssetLayout,
     name: &str,
-) -> Result<(), OrbitError> {
+) -> Result<ManagedAssetOptOut, OrbitError> {
     validate_managed_asset_name(name, layout, "opted-out asset")?;
     let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
@@ -535,10 +536,42 @@ pub(crate) fn record_managed_asset_opt_out(
     });
     next.assets.remove(name);
     next.opted_out.insert(name.to_string());
-    if previous.as_ref() == Some(&next) {
-        return Ok(());
+    let changed = previous.as_ref() != Some(&next);
+    if changed {
+        write_managed_asset_manifest(&manifest_path, &next)?;
     }
-    write_managed_asset_manifest(&manifest_path, &next)
+    Ok(ManagedAssetOptOut {
+        manifest_path,
+        previous,
+        changed,
+    })
+}
+
+/// The manifest an opt-out replaced, kept so the caller can put it back.
+#[must_use = "revert the opt-out when the operation it belongs to fails"]
+pub(crate) struct ManagedAssetOptOut {
+    manifest_path: PathBuf,
+    previous: Option<ManagedAssetManifest>,
+    changed: bool,
+}
+
+impl ManagedAssetOptOut {
+    /// Restore the manifest as it stood before the opt-out, removing one the
+    /// opt-out created.
+    pub(crate) fn revert(self) -> Result<(), OrbitError> {
+        if !self.changed {
+            return Ok(());
+        }
+        match &self.previous {
+            Some(previous) => write_managed_asset_manifest(&self.manifest_path, previous),
+            None => fs::remove_file(&self.manifest_path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "remove managed asset manifest '{}': {error}",
+                    self.manifest_path.display()
+                ))
+            }),
+        }
+    }
 }
 
 /// Clear an operator opt-out and record `digest` as the provenance of the
