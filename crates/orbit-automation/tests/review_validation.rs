@@ -4,7 +4,7 @@
 //!
 //! A reviewer may file a failed attempt as `superseded`. The attempt then
 //! counts only when a later required check that passed replaced it: the same
-//! command, or the same non-empty `check` identity on both records. Both
+//! effective identity: a non-empty `check`, otherwise the normalized command. Both
 //! consumers of these rules are driven here. [`validation_evidence`] gives the
 //! reason the issuing gate escalates with. [`certificate_acceptable`] and
 //! [`exclusion`] decide whether an issued certificate covers a delivery. A
@@ -74,10 +74,10 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
             ],
         },
         Case {
-            name: "ambiguous: an identity equal to the attempt's command is not that command",
+            name: "missing: an explicit identity names a different command",
             records: vec![
                 superseded(ATTEMPT, None),
-                required(CORRECTED, Some(ATTEMPT), true),
+                required(CORRECTED, Some("cargo test --package orbit-types"), true),
             ],
         },
         Case {
@@ -166,10 +166,9 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
 }
 
 /// The accepting shapes the refusals above are measured against: the same
-/// command rerun, or a corrected command sharing the attempt's check identity.
-/// A `check` only one record carries never stops the same command from
-/// relating them [ORB-13894: a final `make ci-fast` pass without `check`
-/// settled a passing review as incomplete].
+/// effective identity, even when only one record explicitly supplies it
+/// [ORB-13894: a final `make ci-fast` pass without `check` settled a passing
+/// review as incomplete].
 #[test]
 fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
     for (name, records) in [
@@ -178,10 +177,17 @@ fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
             vec![superseded(ATTEMPT, None), required(ATTEMPT, None, true)],
         ),
         (
-            "same command rerun whose replacement omits the attempt's check",
+            "replacement command matches the attempt's explicit identity",
             vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
+                superseded(ATTEMPT, Some(ATTEMPT)),
                 required(ATTEMPT, None, true),
+            ],
+        ),
+        (
+            "replacement identity matches the attempt's command",
+            vec![
+                superseded(ATTEMPT, None),
+                required(CORRECTED, Some(ATTEMPT), true),
             ],
         ),
         (
@@ -410,6 +416,139 @@ fn retained(validation: ReviewValidation) -> RetainedObligation {
         report_sha256: "first-report".into(),
         observed_at: Utc.with_ymd_and_hms(2026, 10, 5, 9, 54, 0).unwrap(),
         validation,
+    }
+}
+
+/// Retained obligations match by effective identity across report revisions
+/// [ORB-14312], while different commands and explicit identities stay distinct.
+#[test]
+fn retained_obligations_match_effective_identities_across_report_revisions() {
+    const WRAPPED: &str = "set -o pipefail; make ci-fast 2>&1 | tee .orbit/tmp/review-ci-fast.log";
+    const PREFIXED: &str = "TMPDIR=\"$PWD/.orbit/tmp\" FOO='two words' make  ci-fast";
+    for (name, earlier_command, earlier_check, final_command, final_check, matches) in [
+        (
+            "command to wrapped explicit identity",
+            "make ci-fast",
+            None,
+            WRAPPED,
+            Some("make ci-fast"),
+            true,
+        ),
+        (
+            "wrapped explicit identity to command",
+            WRAPPED,
+            Some("make ci-fast"),
+            "make ci-fast",
+            None,
+            true,
+        ),
+        (
+            "normalized command to trimmed explicit identity",
+            PREFIXED,
+            None,
+            WRAPPED,
+            Some(" make ci-fast "),
+            true,
+        ),
+        (
+            "trimmed explicit identity to normalized command",
+            WRAPPED,
+            Some(" make ci-fast "),
+            PREFIXED,
+            None,
+            true,
+        ),
+        (
+            "different bare commands",
+            "make ci-fast",
+            None,
+            "make ci-lint",
+            None,
+            false,
+        ),
+        (
+            "different command suffix",
+            "make ci-fast",
+            None,
+            "make ci-fast-extra",
+            None,
+            false,
+        ),
+        (
+            "command differs from final explicit identity",
+            "make ci-fast",
+            None,
+            WRAPPED,
+            Some("make ci-lint"),
+            false,
+        ),
+        (
+            "earlier explicit identity differs from command",
+            WRAPPED,
+            Some("make ci-lint"),
+            "make ci-fast",
+            None,
+            false,
+        ),
+        (
+            "distinct explicit identities override identical commands",
+            "make ci-fast",
+            Some("fast-check"),
+            "make ci-fast",
+            Some("lint-check"),
+            false,
+        ),
+        (
+            "explicit identity overrides the earlier command",
+            "make ci-fast",
+            Some("fast-check"),
+            "make ci-fast",
+            None,
+            false,
+        ),
+    ] {
+        let obligations = vec![retained(record(
+            earlier_command,
+            earlier_check,
+            ValidationOutcome::NotRun,
+            ValidationRole::Required,
+            None,
+        ))];
+        let records = vec![required(final_command, final_check, true)];
+        let context = ValidationContext {
+            obligations: &obligations,
+            ..ValidationContext::default()
+        };
+        let expected = if matches {
+            Ok(())
+        } else {
+            Err(ValidationDefect::ObligationDropped {
+                command: earlier_command.into(),
+                outcome: ValidationOutcome::NotRun,
+                role: None,
+            })
+        };
+        assert_eq!(
+            validation_evidence(&records, &context),
+            expected,
+            "ORB-14312: {name}"
+        );
+        let certificate = certificate_with(records, &scope(), obligations);
+        let expected_coverage = if matches {
+            Ok(())
+        } else {
+            Err(ReviewInvalidation::ValidationIncomplete)
+        };
+        assert_eq!(
+            certificate_acceptable(&certificate),
+            expected_coverage,
+            "ORB-14312: {name}: certificate coverage"
+        );
+        assert_eq!(
+            exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ()),
+            expected_coverage,
+            "ORB-14312: {name}: delivery coverage"
+        );
     }
 }
 
@@ -738,8 +877,8 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
         (
             "a retained failure superseded and replaced by the same check",
             vec![
-                superseded(CODEQL, Some("codeql")),
-                required("ORBIT_RAM=1 codeql", Some("codeql"), true),
+                superseded(CODEQL, Some(CODEQL)),
+                required("ORBIT_RAM=1 codeql", Some(CODEQL), true),
             ],
             vec![retained(required(CODEQL, None, false))],
         ),

@@ -360,10 +360,12 @@ pub struct ReviewValidation {
     pub note: Option<String>,
     /// Identity of the logical check this record belongs to. A superseded
     /// attempt is replaced only by a later required passing record with the
-    /// same identity. When omitted, the command string is the identity, so a
-    /// same-command rerun still binds. An explicit value lets a corrected
-    /// command or environment replace the attempt without quoting the old
-    /// command. Empty or whitespace-only values match nothing.
+    /// same effective identity. A non-empty, trimmed value takes precedence
+    /// over the command; otherwise the normalized command is the identity
+    /// (whitespace collapsed and leading environment assignments removed).
+    /// An explicit identity can match another record's normalized command,
+    /// letting a wrapped or corrected command replace the attempt. Empty or
+    /// whitespace-only values supply no identity, so the command is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
     /// The kind of negative control an `expected_failure` record is; absent
