@@ -4,7 +4,7 @@ mod definition;
 mod error;
 mod invocation;
 pub use error::ToolError;
-pub use invocation::WorkerInvocation;
+pub use invocation::{CLAIMED_OWNER_TOOLS, WorkerInvocation, is_claimed_owner_tool};
 
 pub use definition::{
     ExecutionResult, McpCapability, McpToolAnnotations, McpToolDefinition, McpToolDefinitionError,

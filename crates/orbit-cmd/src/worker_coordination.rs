@@ -57,6 +57,20 @@ impl OwnerCoordinator for WorkerOwner {
                 .runtime
                 .execute_owner_coordination(name, input, session);
         }
+        // [ORB-14260] Inside a masked agent sandbox the SSH route can only
+        // fail on the masked `~/.ssh`. The nested `orbit` hands the calls
+        // the run's coordinator carries to it before they reach here; any
+        // other owner read from this process has no route at all.
+        #[cfg(unix)]
+        if orbit_core::runtime::plugin::sandbox_mask::plugin_trees_masked(
+            &self.runtime.global_root(),
+        ) {
+            return Err(orbit_core::adapter::command::owner_route_unavailable(
+                name,
+                "this sandboxed process has no owner route of its own; only the claimed-owner \
+                 tools cross the coordinator",
+            ));
+        }
         let remotes = federated::load_destinations(&federated::destinations_path(
             &self.runtime.global_root(),
         ))?;

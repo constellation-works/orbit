@@ -58,6 +58,7 @@ mod admission;
 mod allow_crew;
 mod before_pr;
 mod cancel;
+mod claimed_owner;
 mod claimed_review;
 mod desktop_completion;
 mod landing_attribution;

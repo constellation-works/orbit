@@ -238,8 +238,20 @@ pub(crate) fn execute(
                 .map_err(OrbitError::InvalidInput)?;
             return Ok(None);
         }
-        OrbitBuiltinAction::TaskAdd
-        | OrbitBuiltinAction::TaskDelete
+        // [ORB-14260] A claimed worker files follow-up work as ordinary
+        // creation, but only work spawned from its own claimed task, and only
+        // while the owner still holds that claim as active.
+        OrbitBuiltinAction::TaskAdd => {
+            binding
+                .validate_arguments(input)
+                .map_err(OrbitError::InvalidInput)?;
+            binding
+                .validate_spawned_relations(input)
+                .map_err(OrbitError::PolicyDenied)?;
+            require_active_claim(runtime, session)?;
+            return Ok(None);
+        }
+        OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskReject
         | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset

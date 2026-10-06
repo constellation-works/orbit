@@ -7,7 +7,7 @@
 //! socket for deployments that need one.
 
 #[cfg(unix)]
-mod claimed_review;
+mod claimed_owner;
 mod command;
 mod listen;
 mod server;

@@ -456,19 +456,19 @@ fn sandbox_fixture() {
         "schema_version": 1, "attempt_id": "attempt-held", "lineage_key": LINEAGE,
         "run_id": LEAF, "candidate": candidate, "task_meaning_digest": "digest",
         "requirements": [{"kind": "hosted_ci", "name": "CI", "command": "make ci",
-                          "artifact": "evidence/ci.json"}],
+                          "artifact": "review-evidence-ci.json"}],
     })
     .to_string();
     let result = json!({
         "schema_version": 1, "attempt_id": "attempt-held", "candidate": candidate,
         "kind": "hosted_ci", "name": "CI", "command": "make ci",
-        "outcome": "passed", "log_artifact": "evidence/ci.log",
+        "outcome": "passed", "log_artifact": "review-evidence-ci.log",
     })
     .to_string();
     attach(REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.as_bytes());
-    attach("evidence/ci.json", result.as_bytes());
-    attach("evidence/ci.log", b"ci passed\n");
-    attach("evidence/unnamed.log", b"not named by the hold\n");
+    attach("review-evidence-ci.json", result.as_bytes());
+    attach("review-evidence-ci.log", b"ci passed\n");
+    attach("review-evidence-unnamed.log", b"not named by the hold\n");
 
     // The reviewer's sources: its report, the one it first attaches over
     // MCP, one for another attempt, an oversize file and a link out of the
@@ -628,8 +628,8 @@ fn sandbox_fixture() {
     for (path, expected) in [
         (REVIEW_REPORT_ARTIFACT, mcp_report.as_slice()),
         (REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.as_bytes()),
-        ("evidence/ci.json", result.as_bytes()),
-        ("evidence/ci.log", b"ci passed\n".as_slice()),
+        ("review-evidence-ci.json", result.as_bytes()),
+        ("review-evidence-ci.log", b"ci passed\n".as_slice()),
     ] {
         for read in [
             &running["evidence_reads"][path]["output"],
@@ -643,10 +643,11 @@ fn sandbox_fixture() {
         }
     }
     refused(&running["wrong_path"], "claimed_review_bridge_refused");
-    refused(&running["cross_task"], "claimed_review_bridge_refused");
+    // The claim's scope refuses another task before the reviewer's does.
+    refused(&running["cross_task"], "claimed_owner_bridge_refused");
     refused(
         &running["cross_task_evidence"],
-        "claimed_review_bridge_refused",
+        "claimed_owner_bridge_refused",
     );
     refused(&running["stale_report"], "claimed_review_bridge_refused");
     refused(&running["symlink"], "");
@@ -655,16 +656,20 @@ fn sandbox_fixture() {
     let mcp = &running["mcp_refusals"];
     mcp_refused(&mcp["wrong_path"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["gate_record"], "claimed_review_bridge_refused");
-    mcp_refused(&mcp["cross_task"], "claimed_review_bridge_refused");
+    mcp_refused(&mcp["cross_task"], "claimed_owner_bridge_refused");
     mcp_refused(&mcp["stale_report"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["symlink"], "");
     mcp_refused(&mcp["oversize"], "");
-    mcp_refused(&mcp["unrelated"], "");
+    mcp_refused(&mcp["unlisted"], "");
     mcp_refused(&mcp["other_owner"], "");
-    assert_ne!(
-        running["unrelated"]["code"], 0,
-        "no other tool is forwarded; its own route still needs SSH: {running}"
+    // The claimed task's record is an owner call the broker carries too; a
+    // coordination tool outside that list is refused, never tried over SSH.
+    assert_eq!(running["task_show"]["code"], 0, "{running}");
+    assert!(
+        mcp["task_show"].get("error").is_none(),
+        "the MCP read crosses the broker too: {running}"
     );
+    assert_ne!(running["unlisted"]["code"], 0, "{running}");
     for (forged, response) in running["forged"].as_object().unwrap() {
         assert_eq!(
             response["ok"], false,
@@ -1313,21 +1318,22 @@ if mode == 'running':
     wait(mcp_checked)
     source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
     evidence = [REPORT, 'review-report-history.json', 'review-evidence-hold.json',
-                'evidence/ci.json', 'evidence/ci.log']
+                'review-evidence-ci.json', 'review-evidence-ci.log']
     report['evidence_reads'] = {path: tool('orbit.task.artifact.get', {'id': task, 'path': path})
                                 for path in evidence}
     report['evidence_mcp_reads'] = dict(zip(evidence, mcp([
         ('orbit_task_artifact_get', {'id': task, 'path': path}) for path in evidence])))
     names = ['wrong_path', 'gate_record', 'cross_task', 'stale_report', 'symlink', 'oversize',
-             'unrelated', 'other_owner']
+             'task_show', 'unlisted', 'other_owner']
     report['mcp_refusals'] = dict(zip(names, mcp([
-        ('orbit_task_artifact_get', {'id': task, 'path': 'evidence/unnamed.log'}),
+        ('orbit_task_artifact_get', {'id': task, 'path': 'review-evidence-unnamed.log'}),
         ('orbit_task_artifact_get', {'id': task, 'path': 'review-gate.json'}),
         ('orbit_task_artifact_get', {'id': 'TSO-999', 'path': MANIFEST}),
         ('orbit_task_artifact_put', source('stale')),
         ('orbit_task_artifact_put', source('link')),
         ('orbit_task_artifact_put', source('oversize')),
         ('orbit_task_show', {'id': task}),
+        ('orbit_task_update', {'id': task, 'status': 'done'}),
         ('orbit_task_artifact_get', dict(get, workspace='another-owner/ws_other')),
     ])))
     # From a subdirectory, naming the owner's selector explicitly.
@@ -1341,14 +1347,15 @@ if mode == 'running':
     open(lose, 'w').close()
     report['lost_put'] = tool('orbit.task.artifact.put', put)
     report['retry_put'] = tool('orbit.task.artifact.put', put)
-    report['wrong_path'] = tool('orbit.task.artifact.get', {'id': task, 'path': 'evidence/unnamed.log'})
+    report['wrong_path'] = tool('orbit.task.artifact.get', {'id': task, 'path': 'review-evidence-unnamed.log'})
     report['cross_task'] = tool('orbit.task.artifact.get', {'id': 'TSO-999', 'path': MANIFEST})
     report['cross_task_evidence'] = tool('orbit.task.artifact.get',
-        {'id': 'TSO-999', 'path': 'evidence/ci.json'})
+        {'id': 'TSO-999', 'path': 'review-evidence-ci.json'})
     for name in ('stale', 'link', 'oversize'):
         key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
         report[key] = tool('orbit.task.artifact.put', dict(put, source_path=os.path.join(scratch, name + '.json')))
-    report['unrelated'] = tool('orbit.task.show', {'id': task})
+    report['task_show'] = tool('orbit.task.show', {'id': task})
+    report['unlisted'] = tool('orbit.task.update', {'id': task, 'status': 'done'})
     content = __import__('base64').b64encode(open(os.path.join(scratch, 'report.json'), 'rb').read()).decode()
     report['forged'] = {
         'claim_override': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,

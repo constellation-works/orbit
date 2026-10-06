@@ -91,6 +91,12 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-14260] Nor can it reach a claimed task's owner when the step's
+    // own coordinator could not: its sandbox masks the same credentials.
+    // Preserve the marker for claimed-leaf settlement.
+    if orbit_types::workflow::is_owner_route_unavailable(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     // [ORB-14258] Nor can it fix a required command the base itself fails;
     // the task is held until the command passes on a new base instead.
     if orbit_types::workflow::is_baseline_red_failure(None, Some(&failure.diagnostic())) {
