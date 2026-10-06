@@ -27,6 +27,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 
 ## Supervision Invariants
 
+- **Cleanup ownership.** From successful spawn through streaming stdout relay setup and supervision, a cleanup guard owns the child. Relay allocation, pipe setup, signal-handler setup and wait errors kill the child's process group and reap the direct child before returning; dropping a bare `Child` would do neither.
 - **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
 - **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.

@@ -172,6 +172,9 @@ pub fn supervise_child_cancellable(
 /// output: at the child's EOF, or once the drain budget has elapsed after the
 /// child is gone while a descendant outside its process group still holds
 /// stdout. `consume` should read to EOF or drop the stream.
+///
+/// If stdout relay setup or supervision fails after spawning, the runner
+/// kills the child's process group and reaps the child before returning the error.
 pub fn run_process_streaming_stdout<T, F>(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -184,8 +187,10 @@ where
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let mut child = sandbox.spawn(req)?;
-    let (stdout, relay) = stdout_relay(&mut child)?;
+    // Own cleanup before allocating the relay, and transfer the same guard
+    // into supervision so no fallible setup operation can strand the child.
+    let mut child = crate::supervision::SupervisedChild::new(sandbox.spawn(req)?);
+    let (stdout, relay) = stdout_relay(child.process_mut())?;
     let stdout_thread = thread::spawn(move || consume(stdout));
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),

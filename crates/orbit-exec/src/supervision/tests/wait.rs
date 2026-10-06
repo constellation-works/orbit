@@ -16,7 +16,7 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
 
     use super::super::cleanup::kill_process_group;
     use super::super::wait::{
-        SupervisionFailure, wait_with_stdout_relay, with_supervision_failure,
+        SupervisedChild, SupervisionFailure, wait_with_stdout_relay, with_supervision_failure,
     };
 
     struct ProcessGroup {
@@ -86,8 +86,14 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
         let supervise = || {
             if relay {
                 let (_reader, writer) = std::io::pipe().expect("relay pipe");
-                wait_with_stdout_relay(child, req.timeout_ms, false, Some(payload), Some(writer))
-                    .map(|_| ())
+                wait_with_stdout_relay(
+                    SupervisedChild::new(child),
+                    req.timeout_ms,
+                    false,
+                    Some(payload),
+                    Some(writer),
+                )
+                .map(|_| ())
             } else {
                 crate::runner::supervise_child(child, req.timeout_ms, Some(payload)).map(|_| ())
             }
