@@ -8,4 +8,5 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod dep_boundary;
+mod listener;
 mod mcp_wire_roundtrip;

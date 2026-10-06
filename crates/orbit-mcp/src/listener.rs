@@ -40,12 +40,10 @@ pub const DEFAULT_MAX_MCP_SESSIONS: usize = 64;
 /// trying again, instead of spinning or giving up.
 const ACCEPT_EXHAUSTION_BACKOFF: Duration = Duration::from_millis(250);
 
-/// How long an accepted connection may stay silent before the listener drops
-/// it. The peer must send the first byte of a JSON object promptly: a real
-/// client writes `initialize` immediately, while a peer that connects and sends
-/// nothing would otherwise hold one of the session permits indefinitely, and
-/// enough of them starve every legitimate client.
-const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an accepted connection has to complete initialization, including
+/// the framing check, receiving the request, and sending its response. Silent
+/// peers and incomplete messages must not hold session permits indefinitely.
+const INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Longest single JSON-RPC message, in bytes, a listener session accepts.
 ///
@@ -78,7 +76,7 @@ pub struct McpListener {
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
     sessions: Arc<Semaphore>,
-    first_byte_timeout: Duration,
+    initialization_timeout: Duration,
     max_message_bytes: usize,
 }
 
@@ -103,16 +101,23 @@ impl McpListener {
             host,
             trusted_context,
             sessions: Arc::new(Semaphore::new(DEFAULT_MAX_MCP_SESSIONS)),
-            first_byte_timeout: FIRST_BYTE_TIMEOUT,
+            initialization_timeout: INITIALIZATION_TIMEOUT,
             max_message_bytes: DEFAULT_MAX_MCP_MESSAGE_BYTES,
         })
     }
 
-    /// Replace how long an accepted connection may stay silent before it is
-    /// closed and its session slot released.
-    pub fn with_first_byte_timeout(mut self, timeout: Duration) -> Self {
-        self.first_byte_timeout = timeout;
+    /// Replace how long an accepted connection has to complete initialization
+    /// before it is closed and its session slot released. Established sessions
+    /// have no idle timeout.
+    pub fn with_initialization_timeout(mut self, timeout: Duration) -> Self {
+        self.initialization_timeout = timeout;
         self
+    }
+
+    /// Compatibility alias for [`Self::with_initialization_timeout`]. The
+    /// budget now covers all initialization, including the first byte.
+    pub fn with_first_byte_timeout(self, timeout: Duration) -> Self {
+        self.with_initialization_timeout(timeout)
     }
 
     /// Replace the longest message a session may send before it is closed.
@@ -167,6 +172,7 @@ impl McpListener {
                     return Err(OrbitError::Execution(format!("mcp listen accept: {error}")));
                 }
             };
+            let initialization_deadline = tokio::time::Instant::now() + self.initialization_timeout;
             let server = OrbitToolServer::new_with_context(
                 Arc::clone(&self.host),
                 self.session_context_for(peer),
@@ -176,7 +182,7 @@ impl McpListener {
                 stream,
                 peer,
                 permit,
-                self.first_byte_timeout,
+                initialization_deadline,
                 self.max_message_bytes,
             ));
         }
@@ -215,16 +221,16 @@ async fn serve_connection(
     stream: TcpStream,
     peer: SocketAddr,
     _permit: OwnedSemaphorePermit,
-    first_byte_timeout: Duration,
+    initialization_deadline: tokio::time::Instant,
     max_message_bytes: usize,
 ) {
     // rmcp ignores unparsable lines. An HTTP request line and its headers are
     // unparsable, but JSON-RPC lines in a POST body are not. Check the first
     // byte without consuming it so only a JSON object can start a session.
-    // The wait is bounded because this task holds a session permit: a silent
-    // peer must not keep it.
+    // Both this peek and rmcp initialization share the deadline set at accept:
+    // receiving one byte must not buy a peer another budget to hold the slot.
     let mut first = [0];
-    match tokio::time::timeout(first_byte_timeout, stream.peek(&mut first)).await {
+    match tokio::time::timeout_at(initialization_deadline, stream.peek(&mut first)).await {
         Ok(Ok(1)) if first[0] == b'{' => {}
         Ok(Ok(_)) => {
             tracing::debug!(peer = %peer, "mcp listener rejected non-JSON framing");
@@ -237,7 +243,6 @@ async fn serve_connection(
         Err(_) => {
             tracing::warn!(
                 peer = %peer,
-                timeout_ms = first_byte_timeout.as_millis() as u64,
                 "mcp listener closed a connection that sent nothing"
             );
             return;
@@ -245,13 +250,21 @@ async fn serve_connection(
     }
     let (reader, writer) = tokio::io::split(stream);
     let transport = (MessageLimited::new(reader, max_message_bytes), writer);
-    let running = match server.serve(transport).await {
-        Ok(running) => running,
-        Err(error) => {
-            tracing::warn!(peer = %peer, error = %error, "mcp listener session did not start");
-            return;
-        }
-    };
+    let running =
+        match tokio::time::timeout_at(initialization_deadline, server.serve(transport)).await {
+            Ok(Ok(running)) => running,
+            Ok(Err(error)) => {
+                tracing::warn!(peer = %peer, error = %error, "mcp listener session did not start");
+                return;
+            }
+            Err(_) => {
+                // Dropping the initialization future closes its transport; returning
+                // also releases the session permit. Only established sessions wait
+                // below, outside the initialization deadline.
+                tracing::warn!(peer = %peer, "mcp listener initialization timed out");
+                return;
+            }
+        };
     if let Err(error) = running.waiting().await {
         tracing::warn!(peer = %peer, error = %error, "mcp listener session ended with an error");
     }
