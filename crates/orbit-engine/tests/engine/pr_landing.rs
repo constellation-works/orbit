@@ -32,11 +32,13 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::Utc;
-use orbit_common::{NotFoundKind, OrbitError, process::run_bounded_capped, test_env};
+use orbit_common::{
+    NotFoundKind, OrbitError, RecoverableVcsConflict, process::run_bounded_capped, test_env,
+};
 use orbit_engine::{
-    BaselineHoldStatus, ClaimExecutionContext, ReviewLandingRequest, ReviewReleaseRequest,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status,
-    execute_deterministic_action, review_gate,
+    BaselineHoldStatus, ClaimExecutionContext, DispatchError, RebaseRecoveryAttemptScope,
+    ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
+    TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action, review_gate,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
@@ -45,8 +47,8 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, ReviewTiming, ReviewVerdict,
-    is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, PipelineState, ReviewTiming,
+    ReviewVerdict, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1889,6 +1891,239 @@ fn a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// A base that advances after completion's conflict recovery [ORB-14393]
+// ---------------------------------------------------------------------------
+
+/// The completion step's id, which the dispatcher names in its input and
+/// conflict recovery certifies under.
+const COMPLETE_STEP: &str = "complete_pr";
+/// The candidate's file, which a conflicting base advance also writes.
+const FEATURE: &str = "src/feature.txt";
+
+/// ORB-14344's shape: completion's rebase conflicts on base B, recovery
+/// certifies the candidate on B, and the base advances to B' before the retry,
+/// which re-pins to B'. A clean advance carries the recovered HEAD onto B',
+/// certifies that result as the step's newest recovery, and lands it, where
+/// the retry used to refuse the provenance and block. The provenance guard
+/// still refuses a recovered HEAD whose checkpoint is not the one this
+/// attempt prepared.
+#[test]
+fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands() {
+    isolated(
+        "a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            open_for_completion(&fx, &host);
+            fx.commit_on_base(FEATURE, "base change\n");
+            let base = fx.local_tip(BASE);
+            fx.script_checks(&["dirty", "dirty", "success"]);
+            let input = completion_with_step(&fx);
+
+            let conflict = completion_conflict(action(&host, "pr_complete", &input));
+            assert_eq!(conflict.target_base_sha, base);
+            let recovered = recover_completion(&fx, &host, &conflict, "resolved\n");
+
+            fx.commit_on_base("other.txt", "advanced\n");
+            let advanced = fx.local_tip(BASE);
+
+            let forged = json!({
+                "workspace_path": fx.repo,
+                "job_run_id": RUN_ID,
+                "completed_task_ids": [TASK_ID],
+                "step_id": COMPLETE_STEP,
+                "head": BRANCH,
+                "head_sha": fx.candidate,
+                "base": BASE,
+                "base_ref": BASE,
+                "base_sha": advanced,
+                "remote_sha": "0".repeat(40),
+                "commits_behind": 2,
+                "sync_required": true,
+            });
+            let error = action(&host, "git_rebase", &forged)
+                .expect_err("a checkpoint for another published head is not this attempt's");
+            assert!(
+                error.to_string().contains("provenance does not match"),
+                "{error}"
+            );
+            assert_eq!(fx.head(), recovered, "the refusal touches nothing");
+
+            let completed = action(&host, "pr_complete", &input)
+                .expect("the recovered head follows the advanced base and lands");
+            let landed = fx.head();
+            assert_ne!(landed, recovered);
+            assert!(is_ancestor(&fx.repo, &advanced, &landed));
+            assert_eq!(
+                fs::read_to_string(fx.repo.join(FEATURE)).unwrap(),
+                "resolved\n",
+                "the certified resolution is carried, not redone"
+            );
+            assert_eq!(completed["merge"]["merged"], true);
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={landed} merge_method=squash")]
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+
+            let certificates = host.recovery_certificates();
+            let [_, (_, step, chased)] = certificates.as_slice() else {
+                panic!("expected the recovery and its chase, got {certificates:#?}");
+            };
+            assert_eq!(step, COMPLETE_STEP);
+            assert_eq!(chased["head_sha"], landed);
+            assert_eq!(chased["head_sha_before"], fx.candidate);
+            assert_eq!(chased["target_base_sha"], advanced);
+            assert_eq!(chased["base_sha"], advanced);
+            assert_eq!(chased["chased_from"], recovered);
+            assert_eq!(chased["recovery_attempt"], 2);
+        },
+    );
+}
+
+/// The same race where every advance also conflicts with the certified
+/// resolution. Each one is redone from the published head onto the new base,
+/// a stopped rebase the next bounded conflict recovery can be admitted on,
+/// until the step has followed its base as often as allowed. The next advance
+/// blocks as `base_chase_exhausted`, keeping the last certified recovery and
+/// requesting no merge.
+#[test]
+fn conflicting_base_advances_after_recovery_are_chased_until_the_bound() {
+    isolated(
+        "conflicting_base_advances_after_recovery_are_chased_until_the_bound",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            open_for_completion(&fx, &host);
+            fx.commit_on_base(FEATURE, "base change 0\n");
+            fx.script_checks(&["dirty"]);
+            let input = completion_with_step(&fx);
+
+            let conflict = completion_conflict(action(&host, "pr_complete", &input));
+            let mut recovered = recover_completion(&fx, &host, &conflict, "resolved 0\n");
+            let mut chased = 0;
+            let exhausted = loop {
+                assert!(chased <= 5, "the chase must be bounded");
+                fx.commit_on_base(FEATURE, &format!("base change {}\n", chased + 1));
+                let advanced = fx.local_tip(BASE);
+                let conflict = match action(&host, "pr_complete", &input) {
+                    Err(OrbitError::RecoverableVcsConflict(conflict)) => conflict,
+                    Err(error) => break error,
+                    Ok(output) => panic!("a conflicting chase cannot merge: {output:#}"),
+                };
+                assert_eq!(conflict.target_base_sha, advanced);
+                assert_eq!(
+                    rebase_state(&fx.repo, "orig-head"),
+                    fx.candidate,
+                    "the redo starts from the published head recovery is admitted on"
+                );
+                assert!(conflict.diagnostic.contains(&recovered), "{conflict:?}");
+                chased += 1;
+                recovered =
+                    recover_completion(&fx, &host, &conflict, &format!("resolved {chased}\n"));
+            };
+            assert!(
+                exhausted.to_string().contains("base_chase_exhausted:"),
+                "{exhausted}"
+            );
+            assert!(chased >= 1, "at least one more bounded recovery ran");
+            assert_eq!(fx.head(), recovered, "the last certified recovery is kept");
+            assert_eq!(git(&fx.repo, &["status", "--porcelain"]), "");
+            assert!(fx.merge_requests().is_empty());
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+        },
+    );
+}
+
+/// [`Fixture::complete_ungated_input`] as the dispatcher hands it to the
+/// completion step.
+fn completion_with_step(fx: &Fixture) -> Value {
+    let mut input = fx.complete_ungated_input();
+    input["step_id"] = json!(COMPLETE_STEP);
+    input
+}
+
+fn completion_conflict(outcome: Result<Value, OrbitError>) -> RecoverableVcsConflict {
+    match outcome {
+        Err(OrbitError::RecoverableVcsConflict(conflict)) => *conflict,
+        other => panic!("expected a recoverable completion conflict, got {other:?}"),
+    }
+}
+
+/// Resolve completion's stopped rebase with `resolution` and certify it the
+/// way conflict recovery's host continuation does, returning the recovered
+/// HEAD.
+fn recover_completion(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    conflict: &RecoverableVcsConflict,
+    resolution: &str,
+) -> String {
+    fs::write(fx.repo.join(FEATURE), resolution).unwrap();
+    git(&fx.repo, &["add", FEATURE]);
+    git(
+        &fx.repo,
+        &["-c", "core.editor=true", "rebase", "--continue"],
+    );
+    let head = fx.head();
+    let attempt = host
+        .begin_rebase_recovery_attempt(
+            RUN_ID,
+            COMPLETE_STEP,
+            &RebaseRecoveryAttemptScope {
+                workspace_path: path_str(&fx.repo).to_string(),
+                head_sha_before: fx.candidate.clone(),
+                target_base_sha: conflict.target_base_sha.clone(),
+            },
+        )
+        .unwrap();
+    host.checkpoint_rebase_recovery(
+        RUN_ID,
+        COMPLETE_STEP,
+        &json!({
+            "run_id": RUN_ID,
+            "step_id": COMPLETE_STEP,
+            "task_ids": [TASK_ID],
+            "workspace_path": fx.repo,
+            "head": BRANCH,
+            "head_sha_before": fx.candidate,
+            "original_base_sha": conflict.original_base_sha,
+            "base_ref": format!("refs/heads/{BASE}"),
+            "target_base_sha": conflict.target_base_sha,
+            "base_sha": conflict.target_base_sha,
+            "remote_sha_before": fx.candidate,
+            "head_sha": head,
+            "companion_paths": [],
+            "rewritten": true,
+            "recovery_attempt": attempt,
+        }),
+    )
+    .unwrap();
+    head
+}
+
+/// A file of the checkout's stopped rebase.
+fn rebase_state(checkout: &Path, name: &str) -> String {
+    let path = git(
+        checkout,
+        &["rev-parse", "--git-path", &format!("rebase-merge/{name}")],
+    );
+    fs::read_to_string(checkout.join(path))
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
+    Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(repo)
+        .status()
+        .unwrap()
+        .success()
+}
+
 /// Without `workflow.required_validation_commands` the step changes nothing:
 /// no command runs, no evidence is attached, and even a checkout that would be
 /// refused is passed through as today.
@@ -2409,7 +2644,9 @@ impl Fixture {
     /// Commit `file` on the base and push it, leaving the candidate checked out.
     fn commit_on_base(&self, file: &str, contents: &str) {
         git(&self.repo, &["checkout", BASE]);
-        fs::write(self.repo.join(file), contents).unwrap();
+        let path = self.repo.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
         git(&self.repo, &["add", file]);
         git(
             &self.repo,
@@ -2718,6 +2955,12 @@ struct DeliveryHost {
     ship_mode: Mutex<String>,
     /// Status history written by automation updates, as (task, event, note).
     status_events: Mutex<Vec<StatusEvent>>,
+    /// Rebase recovery attempts reserved, as (run, step, scope), oldest first.
+    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
+    /// Certified rebase recoveries, as (run, step, checkpoint), oldest first.
+    recovery_certificates: Mutex<Vec<(String, String, Value)>>,
+    /// Run-store copies of the certified recoveries, by run.
+    run_states: Mutex<BTreeMap<String, PipelineState>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -2742,6 +2985,9 @@ impl DeliveryHost {
             handoffs: Mutex::default(),
             ship_mode: Mutex::new("local".to_string()),
             status_events: Mutex::default(),
+            recovery_attempts: Mutex::default(),
+            recovery_certificates: Mutex::default(),
+            run_states: Mutex::default(),
         }
     }
 
@@ -2818,9 +3064,106 @@ impl DeliveryHost {
     fn widenings(&self) -> Vec<Widening> {
         self.widenings.lock().unwrap().clone()
     }
+
+    fn recovery_certificates(&self) -> Vec<(String, String, Value)> {
+        self.recovery_certificates.lock().unwrap().clone()
+    }
 }
 
 impl RuntimeHost for DeliveryHost {
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        let mut attempts = self.recovery_attempts.lock().unwrap();
+        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+        Ok(attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .count() as u64)
+    }
+
+    /// Like the runtime's recovery authority, certify only the newest
+    /// reservation of the step, for exactly the HEAD and base it reserved,
+    /// then copy the evidence into the run store `git_rebase` reads.
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        let attempts = self.recovery_attempts.lock().unwrap();
+        let reserved = attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .collect::<Vec<_>>();
+        let Some((_, _, scope)) = reserved.last() else {
+            return Err(DispatchError::JobExecution("no reserved attempt".into()));
+        };
+        if output["recovery_attempt"] != json!(reserved.len())
+            || output["head_sha_before"] != json!(scope.head_sha_before)
+            || output["target_base_sha"] != json!(scope.target_base_sha)
+        {
+            return Err(DispatchError::JobExecution(
+                "evidence does not describe the newest reserved attempt".into(),
+            ));
+        }
+        self.recovery_certificates.lock().unwrap().push((
+            run_id.to_string(),
+            step_id.to_string(),
+            output.clone(),
+        ));
+        self.run_states
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| {
+                PipelineState::new(
+                    run_id.to_string(),
+                    "task_pr_pipeline".to_string(),
+                    json!({}),
+                )
+            })
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
+        Ok(())
+    }
+
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .recovery_certificates()
+            .iter()
+            .rev()
+            .find(|(run, step, _)| run == run_id && step == step_id)
+            .is_some_and(|(_, _, certified)| certified == checkpoint))
+    }
+
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        Ok(self
+            .recovery_attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .map(|(_, _, scope)| scope.clone())
+            .collect())
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    }
+
     fn widen_task_context_files(
         &self,
         task_id: &str,

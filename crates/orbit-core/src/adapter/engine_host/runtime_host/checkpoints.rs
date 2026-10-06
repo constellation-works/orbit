@@ -161,3 +161,11 @@ pub(super) fn verify_rebase_recovery(
 ) -> Result<bool, OrbitError> {
     RecoveryAuthority::open(&runtime.global_root())?.verify(run_id, step_id, checkpoint)
 }
+
+pub(super) fn rebase_recovery_attempts(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+    RecoveryAuthority::open(&runtime.global_root())?.attempts(run_id, step_id)
+}

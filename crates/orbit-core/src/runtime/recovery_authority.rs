@@ -301,6 +301,34 @@ impl RecoveryAuthority {
         Ok(recorded == Some(binding))
     }
 
+    /// Every attempt reserved for `run_id` / `step_id`, oldest first.
+    pub(crate) fn attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT workspace_path, head_sha_before, target_base_sha
+                 FROM rebase_recovery_attempt
+                 WHERE run_id = ?1 AND step_id = ?2
+                 ORDER BY attempt",
+            )
+            .map_err(|error| authority_error("read rebase recovery attempts", error))?;
+        let rows = statement
+            .query_map(params![run_id, step_id], |row| {
+                Ok(RebaseRecoveryAttemptScope {
+                    workspace_path: row.get(0)?,
+                    head_sha_before: row.get(1)?,
+                    target_base_sha: row.get(2)?,
+                })
+            })
+            .map_err(|error| authority_error("read rebase recovery attempts", error))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| authority_error("read rebase recovery attempts", error))
+    }
+
     /// Run `body` in one `BEGIN IMMEDIATE` transaction, so a check and the
     /// write it guards are atomic against every other host connection.
     fn immediate<T>(

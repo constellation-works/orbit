@@ -568,7 +568,11 @@ and `pr_conflict_recovery`, and one more round of the same steps
 `complete_reviewed_pr_2`) reviews, republishes and completes the head it
 rebased. A conflict at `complete_reviewed_pr_2`, a caller without the flag, a
 non-accept re-review, or a failed revalidation keeps the published PR and the
-task in review.
+task in review. When the base advances again between a step's conflict
+recovery and its retry, the retry carries the certified recovered head onto
+the new base, or recovers a conflicting advance once more, before handing the
+head to re-review; a step that has already followed its base twice fails as
+`base_chase_exhausted` [ORB-14393].
 `complete_pr` is skipped on review-only and no-diff routes, and a `when:` may
 not read a skippable step's output, so `re_review_gate_admit` and
 `re_review_gate_settle` always run: with `re_review_after: complete_pr` the

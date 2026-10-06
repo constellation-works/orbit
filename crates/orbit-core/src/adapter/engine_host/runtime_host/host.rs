@@ -792,6 +792,14 @@ impl RuntimeHost for OrbitRuntime {
         checkpoints::verify_rebase_recovery(self, run_id, step_id, checkpoint)
     }
 
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        checkpoints::rebase_recovery_attempts(self, run_id, step_id)
+    }
+
     fn tool_context_for_activity(
         &self,
         run_id: Option<&str>,

@@ -29,7 +29,9 @@
 #   failure preserves that exact candidate and review state for a safe retry.
 # - A reviewed PR that conflicts at completion is rebased (conflict recovery
 #   repairing each stop), re-reviewed and republished, for at most two rounds;
-#   a conflict after the second keeps the PR and the task in review.
+#   a conflict after the second keeps the PR and the task in review. A base
+#   that advances again after a completion step's recovery is followed a
+#   bounded number of times before failing as base_chase_exhausted.
 #
 schemaVersion: 2
 kind: Job
@@ -356,6 +358,11 @@ spec:
       # ORB-13890: a DIRTY PR whose head the gate reviewed is rebased locally
       # but not published; `re_review_required` routes it through the steps
       # below instead of leaving the task in review as review_gate_stale.
+      # ORB-14393: the retry after conflict recovery re-pins to the base it
+      # fetches. A base that advanced past the certified recovery is chased:
+      # a clean rebase of the recovered head is certified for the new base, a
+      # conflicting one is redone from the published head for another bounded
+      # recovery, and a step that keeps chasing fails as base_chase_exhausted.
       recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
