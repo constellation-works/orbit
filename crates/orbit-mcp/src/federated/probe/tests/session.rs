@@ -186,6 +186,8 @@ for line in sys.stdin:
         exchange(call_id, 'ping')
         exchange(call_id + 100, 'ping')
         exchange('peer-ping', 'ping')
+        exchange(4.5, 'ping')
+        exchange(None, 'ping')
         exchange(call_id, 'roots/list', -32601)
         exchange('peer-unsupported', 'sampling/createMessage', -32601)
         exchange('peer-invalid', 42, -32600)
