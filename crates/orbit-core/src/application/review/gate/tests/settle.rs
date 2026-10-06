@@ -311,3 +311,58 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
         assert!(comment.contains(finding), "{finding} in {comment}");
     }
 }
+
+/// A repair outside the admitted selectors widens them and changes the
+/// task-meaning digest. Consumption stays the runtime of the attempt that
+/// was reserved under the admission digest.
+#[test]
+fn widening_selectors_reports_the_reviewers_consumed_time() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"]
+        .as_str()
+        .expect("attempt")
+        .to_string();
+    let admitted_digest = gated.ledger(&admission).attempts[0]
+        .task_meaning_digest
+        .clone();
+    gated.reviewer_ran(&gated.run_id, &admission, 900);
+    fs::write(
+        gated.fixture.repo.join("README.md"),
+        "fixture\nreviewed outside the admitted selectors\n",
+    )
+    .expect("reviewer repair outside selectors");
+    let mut repaired = report(&attempt_id, ReviewVerdict::AcceptWithFixes, true);
+    repaired.findings[0].paths = vec!["README.md".to_string()];
+    repaired.findings[0].change = Some("Noted the out-of-scope repair".to_string());
+    write_report(&gated.fixture.runtime, &gated.task_id, &repaired);
+
+    let settled = gated
+        .settle(&admission)
+        .expect("a repair outside the admitted selectors still settles");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["consumed"]["seconds"], 900);
+
+    let certificate = gated.certificate();
+    assert_eq!(
+        certificate.consumed.seconds, 900,
+        "widening selectors must not zero the reviewer's consumed time"
+    );
+    assert!(
+        certificate
+            .selectors_widened
+            .iter()
+            .any(|selector| selector == "file:README.md"),
+        "the repair outside the admitted selectors widens them: {:?}",
+        certificate.selectors_widened
+    );
+    assert_ne!(
+        certificate.task_meaning_digest, admitted_digest,
+        "the certificate keeps the post-widening task-meaning digest"
+    );
+    assert_eq!(
+        gated.ledger(&admission).attempts[0].task_meaning_digest,
+        admitted_digest,
+        "settlement leaves the attempt on the digest it was admitted under"
+    );
+}

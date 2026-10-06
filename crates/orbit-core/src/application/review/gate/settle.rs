@@ -339,7 +339,12 @@ fn settle(
         retained_obligations: judgement.retained_obligations.clone(),
         validation_scope,
         reviewer,
-        consumed: settled.consumed_for(&reviewed.head, &judgement.task_meaning_digest, now),
+        // The attempt was reserved under its admission digest. Selector
+        // widening replaces `judgement.task_meaning_digest` with the
+        // post-widening value, which `consumed_for` does not match, so the
+        // certificate would record zero reviewer runtime. Coverage and
+        // replay still bind to that post-widening digest above.
+        consumed: settled.consumed_for(&reviewed.head, &attempt.task_meaning_digest, now),
         budget: settled.budget,
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),
