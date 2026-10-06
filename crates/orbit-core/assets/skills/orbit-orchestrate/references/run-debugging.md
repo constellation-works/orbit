@@ -226,7 +226,7 @@ ps -o pid,ppid,pgid,stat,etime,command -p <pid>
 ps -axo pid,ppid,pgid,stat,etime,command | rg '<run_id>|<workspace_path>|<task_id>'
 ```
 
-If cancellation is authorized, prefer `orbit run cancel <run_id>` on the owning
+If cancellation is authorized, prefer `orbit run cancel <run_id> --confirm` on the owning
 host and inspect its result. If process cleanup is still required: match run id → task id(s) → `pid` → `pgid` → command; prefer process-group termination (`kill -TERM -<pgid>`, wait, verify with `ps ... | awk '$3==<pgid>'`); escalate to `kill -KILL -<pgid>` only if children remain and the human clearly asked to kill it; if the killed child belongs to a parent gate/auto run for the same task, inspect the parent and kill it only after verifying it owns the same task(s); report whether the run record updated to `failed`/`cancelled` or still says `running` despite no live process.
 
 ## Report Format

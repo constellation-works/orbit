@@ -288,7 +288,7 @@ identical to a pre-`--complete` submission. See
 ## Cancelling
 
 ```bash
-orbit run cancel <run_id>
+orbit run cancel <run_id> --confirm
 ```
 
 For a run that is stuck rather than merely slow, diagnose before killing:
