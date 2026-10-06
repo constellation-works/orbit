@@ -1299,8 +1299,8 @@ pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> Clai
 }
 
 /// [`release_settlement`] for a launched leaf an operator stopped: typed
-/// [`ClaimFailureClass::OperatorCancel`], so the owner neither blocks the
-/// task nor spends its release budget on it.
+/// [`ClaimFailureClass::OperatorCancel`], so the owner returns the task to
+/// backlog with the cancel reason and counts the release against its budget.
 pub(crate) fn operator_cancel_release(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
     let mut evidence = release_evidence(record, why);
     evidence.failure = Some(ClaimFailure {
