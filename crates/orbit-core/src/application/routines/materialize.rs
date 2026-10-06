@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orbit_automation::routines::loader::retired_routine_job_reason;
@@ -864,9 +863,12 @@ fn refuse_unconfined_preservation(
 
 /// Write a managed routine definition under the catalog confinement
 /// contract: the catalog must be a real directory (created when absent) and
-/// the definition a regular file or absent. On Unix the open also refuses a
-/// final-component link (`O_NOFOLLOW`), so a link that appears after
-/// inspection is still not written through.
+/// the definition a regular file or absent. Stage and sync the complete
+/// content before renaming it into place, then sync the catalog directory.
+/// Readers keep the previous complete file until replacement, and a failed
+/// staging write leaves it untouched. The staging file is created exclusively
+/// with `O_NOFOLLOW` on Unix; rename replaces a final-component link that
+/// appears after inspection without writing through it.
 pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), OrbitError> {
     let routines_dir = path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -889,20 +891,10 @@ pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), O
     if inspect_catalog_entry(path, CatalogEntryKind::File)? == CatalogEntry::Unsafe {
         return Err(OrbitError::InvalidInput(unconfined_detail(path)));
     }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    options
-        .open(path)
-        .and_then(|mut file| file.write_all(content.as_bytes()))
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "write managed routine '{}': {error}",
-                path.display()
-            ))
-        })
+    atomic_write_text(path, content).map_err(|error| {
+        OrbitError::Io(format!(
+            "write managed routine '{}': {error}",
+            path.display()
+        ))
+    })
 }
