@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the static Bubblewrap that Orbit bundles for Linux hosts whose own
-# bwrap is missing or lacks --bind-fd (docs/runbooks/linux-sandbox.md).
+# bwrap is missing or lacks descriptor-backed bind mounts (docs/runbooks/linux-sandbox.md).
 #
 # Usage: scripts/build-bundled-bwrap.sh <output-dir>
 #
@@ -27,7 +27,7 @@
 set -eu
 
 # Keep BWRAP_VERSION in step with BUNDLED_BWRAP_VERSION in
-# crates/orbit-exec/src/linux_sandbox/wrapper.rs. --bind-fd arrived in 0.8.0.
+# crates/orbit-exec/src/linux_sandbox/wrapper.rs. Descriptor-backed bind mounts arrived in 0.8.0.
 BWRAP_VERSION=0.12.0
 BWRAP_SHA256=9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314
 BWRAP_URL="https://github.com/containers/bubblewrap/releases/download/v${BWRAP_VERSION}/bubblewrap-${BWRAP_VERSION}.tar.xz"
@@ -124,6 +124,8 @@ fi
   || fail "$binary does not report bubblewrap ${BWRAP_VERSION}"
 "$binary" --help | grep -q -- '--bind-fd' \
   || fail "$binary does not support --bind-fd"
+"$binary" --help | grep -q -- '--ro-bind-fd' \
+  || fail "$binary does not support --ro-bind-fd"
 
 {
   printf 'bubblewrap %s sha256 %s\n' "$BWRAP_VERSION" "$BWRAP_SHA256"

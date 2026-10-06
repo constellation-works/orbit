@@ -317,11 +317,33 @@ printf written > result.txt
         // It also covers independent gitdir/common-dir resolution above.
         for metadata in [&git_dir, &common] {
             let rendered = metadata.display().to_string();
+            let bind = plan
+                .args
+                .windows(3)
+                .find(|args| args[0] == "--ro-bind-fd" && args[2] == rendered)
+                .expect("metadata source must use a descriptor-backed read-only bind");
+            let fd = bind[1].parse::<i32>().expect("numeric metadata descriptor");
+            assert!(
+                unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0,
+                "plan must retain Git metadata descriptor {fd}"
+            );
             assert!(
                 plan.args
-                    .windows(3)
-                    .any(|args| args == ["--ro-bind", &rendered, &rendered]),
-                "linked Git metadata must be mounted read-only: {}",
+                    .windows(2)
+                    .position(|args| args == ["--tmpfs", "/tmp"])
+                    .zip(
+                        plan.args
+                            .windows(3)
+                            .position(|args| args[0] == "--ro-bind-fd" && args[2] == rendered)
+                    )
+                    .is_some_and(|(private_tmp, metadata_bind)| private_tmp < metadata_bind),
+                "Git metadata must be rebound after the private /tmp"
+            );
+            assert!(
+                !plan.args.windows(3).any(|args| {
+                    args[0] == "--ro-bind" && args[1] == rendered && args[2] == rendered
+                }),
+                "Git metadata source paths must not be resolved after /tmp is hidden: {}",
                 metadata.display()
             );
         }

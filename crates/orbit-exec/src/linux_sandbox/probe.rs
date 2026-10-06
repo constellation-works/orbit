@@ -35,9 +35,10 @@ pub fn bwrap_path() -> Option<PathBuf> {
 /// present binary as usable. The host network namespace is retained
 /// explicitly with `--share-net`.
 ///
-/// The host's `/usr/bin/bwrap` is selected whenever it advertises
-/// `--bind-fd`. Only when it is missing or lacks that option is the bundled
-/// binary considered, and only after it passes the root-ownership check.
+/// The host's `/usr/bin/bwrap` is selected whenever it advertises both
+/// descriptor-backed bind options. Only when it is missing or lacks either
+/// option is the bundled binary considered, and only after it passes the
+/// root-ownership check.
 ///
 /// Memoised per process only after a successful capability probe. A package
 /// install or upgrade can make an absent or incompatible binary usable in a
@@ -162,7 +163,7 @@ fn probe_bwrap_now_for(identity: Option<(u32, u32)>) -> BwrapProbeMemo {
 }
 
 /// Pick the wrapper to capability-probe. A host binary that advertises
-/// `--bind-fd` always wins; a host binary that cannot be inspected is
+/// descriptor-backed bind support always wins; a host binary that cannot be inspected is
 /// reported rather than bypassed.
 fn select_wrapper(identity: Option<(u32, u32)>) -> Result<BwrapSource, BwrapProbeOutcome> {
     let unavailable = |trusted_path: &str, detail: String| BwrapProbeOutcome {
@@ -207,7 +208,8 @@ fn select_wrapper(identity: Option<(u32, u32)>) -> Result<BwrapSource, BwrapProb
 }
 
 /// Fixed wording `orbit init` keys on to install a capable wrapper.
-const MISSING_BIND_FD: &str = "does not support the required --bind-fd object-authority mount";
+const MISSING_BIND_FD: &str =
+    "does not support the required --bind-fd and --ro-bind-fd object-authority mounts";
 
 fn advertises_bind_fd(
     source: BwrapSource,
@@ -218,7 +220,10 @@ fn advertises_bind_fd(
         .stdin(Stdio::null())
         .output()
         .map_err(|error| could_not_execute(source, error))?;
-    Ok(help.status.success() && String::from_utf8_lossy(&help.stdout).contains("--bind-fd"))
+    let capabilities = String::from_utf8_lossy(&help.stdout);
+    Ok(help.status.success()
+        && capabilities.contains("--bind-fd")
+        && capabilities.contains("--ro-bind-fd"))
 }
 
 /// `bubblewrap 0.12.0` → `0.12.0`. Diagnostic only; a missing version never

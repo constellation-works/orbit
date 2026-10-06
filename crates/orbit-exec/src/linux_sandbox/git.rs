@@ -6,6 +6,7 @@ use super::*;
 pub(super) fn append_git_metadata_mounts(
     out: &mut Vec<String>,
     cwd: &Path,
+    mount_sources: &mut Vec<Arc<File>>,
 ) -> Result<(), OrbitError> {
     for root in cwd.ancestors() {
         let pointer = root.join(".git");
@@ -46,7 +47,25 @@ pub(super) fn append_git_metadata_mounts(
                 )));
             }
             if path.starts_with("/tmp") {
-                push_mount(out, "--ro-bind", &path);
+                let source =
+                    Arc::new(File::open(&path).map_err(|error| pointer_error(&path, error))?);
+                let source = prepare_mount_source(source)?;
+                #[cfg(unix)]
+                {
+                    out.extend([
+                        "--ro-bind-fd".to_string(),
+                        source.as_raw_fd().to_string(),
+                        path.display().to_string(),
+                    ]);
+                }
+                #[cfg(not(unix))]
+                {
+                    return Err(OrbitError::Execution(
+                        "Linux sandbox Git metadata mounts require Unix file descriptors"
+                            .to_string(),
+                    ));
+                }
+                mount_sources.push(source);
             }
         }
         return Ok(());

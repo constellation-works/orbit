@@ -10,11 +10,12 @@
 
 use super::*;
 
-/// The distribution's Bubblewrap. Preferred whenever it advertises `--bind-fd`.
+/// The distribution's Bubblewrap. Preferred whenever it advertises both
+/// `--bind-fd` and `--ro-bind-fd`.
 pub const HOST_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 /// Fixed root-owned location of the Bubblewrap Orbit ships for hosts whose
-/// own is missing or lacks `--bind-fd`.
+/// own is missing or lacks either required descriptor-backed bind option.
 pub const BUNDLED_BWRAP_PATH: &str = "/usr/local/libexec/orbit/bwrap";
 
 /// Upstream Bubblewrap release the bundled binary is built from. Keep in step

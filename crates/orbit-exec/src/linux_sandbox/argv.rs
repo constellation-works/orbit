@@ -86,11 +86,12 @@ pub(super) fn compile_plan_with_credentials(
         "--tmpfs".to_string(),
         "/tmp".to_string(),
     ]);
+    let mut mount_sources = Vec::new();
     let cwd = cwd
         .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
         .transpose()?;
     if let Some(cwd) = &cwd {
-        append_git_metadata_mounts(&mut out, cwd)?;
+        append_git_metadata_mounts(&mut out, cwd, &mut mount_sources)?;
     }
     let writable_roots = positive_mount_roots(profile, &expanded)?;
     let mut anchors = BTreeSet::new();
@@ -223,7 +224,7 @@ pub(super) fn compile_plan_with_credentials(
         wrapper: bwrap_program_for_audit().to_string(),
         args: out,
         dropped_grants,
-        mount_sources: Vec::new(),
+        mount_sources,
         mount_evidence: Vec::new(),
         post_run_guard,
     })
