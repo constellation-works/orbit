@@ -31,7 +31,7 @@ impl Workspace {
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::write(
             repo.join(".orbit/config.toml"),
-            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n",
+            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.sol]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.grok]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n",
         )
         .unwrap();
         let git = |args: &[&str]| {
@@ -96,6 +96,30 @@ impl Workspace {
                 tags: tags.iter().map(|tag| tag.to_string()).collect(),
                 context_files: context.iter().map(|file| file.to_string()).collect(),
                 complexity,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn task_with_crew(
+        &self,
+        title: &str,
+        tags: &[&str],
+        context: &[&str],
+        complexity: TaskComplexity,
+        crew: Option<&str>,
+    ) -> Task {
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Ship {title}."),
+                acceptance_criteria: vec!["The change is in place.".into()],
+                plan: "Edit README.md.".into(),
+                status: Some(TaskStatus::Proposed),
+                tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                context_files: context.iter().map(|file| file.to_string()).collect(),
+                complexity,
+                crew: crew.map(ToString::to_string),
                 ..Default::default()
             })
             .unwrap()
@@ -733,4 +757,127 @@ fn selected(selection: &Value, task: &Task) -> bool {
     selection["task_ids"]
         .as_array()
         .is_some_and(|task_ids| task_ids.contains(&json!(task.id)))
+}
+
+#[test]
+fn proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let drain = workspace.running(
+        "workspace_auto_pipeline",
+        json!({"approve_proposed": true, "for_seconds": 3600}),
+    );
+    let task_a1 = workspace.task_with_crew(
+        "task_a1",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        Some("sol"),
+    );
+    let task_b = workspace.task_with_crew(
+        "task_b",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        Some("grok"),
+    );
+    let task_a2 = workspace.task_with_crew(
+        "task_a2",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        Some("sol"),
+    );
+
+    // Pass 1: selection returns only the A tasks, in order, and reports the B task as deferred.
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([task_a1.id, task_a2.id]));
+    assert_eq!(selection["candidate_count"], 2);
+    assert_eq!(selection["deferred_candidates"], 1);
+
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![assessment(&task_a1), assessment(&task_a2)],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(workspace.status(&task_a1), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&task_a2), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&task_b), TaskStatus::Proposed);
+
+    // Pass 2: following pass selects the B task.
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([task_b.id]));
+    assert_eq!(next["candidate_count"], 1);
+    assert_eq!(next["deferred_candidates"], 0);
+}
+
+#[test]
+fn candidates_with_no_crew_are_never_bundled_with_crewed_candidates() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::candidates_with_no_crew_are_never_bundled_with_crewed_candidates",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let drain = workspace.running(
+        "workspace_auto_pipeline",
+        json!({"approve_proposed": true, "for_seconds": 3600}),
+    );
+    let task_uncrewed_1 = workspace.task_with_crew(
+        "uncrewed_1",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        None,
+    );
+    let task_crewed = workspace.task_with_crew(
+        "crewed",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        Some("sol"),
+    );
+    let task_uncrewed_2 = workspace.task_with_crew(
+        "uncrewed_2",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        None,
+    );
+
+    // Pass 1: only uncrewed tasks are selected in order; crewed task is deferred.
+    let selection = workspace.select(&drain);
+    assert_eq!(
+        selection["task_ids"],
+        json!([task_uncrewed_1.id, task_uncrewed_2.id])
+    );
+    assert_eq!(selection["candidate_count"], 2);
+    assert_eq!(selection["deferred_candidates"], 1);
+
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![assessment(&task_uncrewed_1), assessment(&task_uncrewed_2)],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(workspace.status(&task_uncrewed_1), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&task_uncrewed_2), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&task_crewed), TaskStatus::Proposed);
+
+    // Pass 2: following pass selects the crewed task alone.
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([task_crewed.id]));
+    assert_eq!(next["candidate_count"], 1);
+    assert_eq!(next["deferred_candidates"], 0);
 }

@@ -769,7 +769,7 @@ fn claimed_task_from_input(input: &Value) -> Result<Option<ClaimedTaskSnapshot>,
     }
 }
 
-fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
+pub(crate) fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
