@@ -3,8 +3,8 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-09-24
-last_validated: 2026-09-16
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: auditability
 doc_role: decisions
@@ -190,6 +190,7 @@ Add one `emit_job_event` dual-write helper for job lifecycle tracing, migrate li
 ## Friction scorekeeping derives from lifecycle history
 
 **Recorded:** 2026-07-26 21:51:40.343066Z · [T20260510-13], [ORB-10458]
+**Superseded by:** [Keep frictions as distinct workspace-scoped records backed by SQLite](#keep-frictions-as-distinct-workspace-scoped-records-backed-by-sqlite).
 
 ### Context
 
@@ -269,11 +270,11 @@ Move tool-invocation audit to `OrbitRuntime::execute_tool_command_dispatch`, tag
 SQLite command-audit rows recorded tool invocations but had no direct link to the task, job run, activity, or step that caused them.
 
 ### Decision
-Add nullable `task_id`, `job_run_id`, `activity_id`, and `step_index` columns, populate them at runtime tool dispatch from caller JSON first and engine env vars second, index task/run ids, and render the fields in dashboard detail rows.
+Add nullable `task_id`, `job_run_id`, `activity_id`, and `step_index` columns and render them in dashboard detail rows. CLI dispatch uses caller JSON before managed-run environment values; MCP dispatch ignores model-authored correlation inputs and uses only the trusted managed-process envelope.
 
 ### Consequences
 - Operators can drill from a tool row to the originating task and run context without out-of-band correlation.
-- Cost: historical rows remain NULL, and caller-asserted JSON values are weaker evidence than engine-supplied env context.
+- Cost: historical rows remain NULL; CLI callers can still supply correlation values in tool JSON, while MCP uses only managed-process provenance.
 
 ## Scoreboard tool-call totals project from command audit
 
@@ -589,6 +590,7 @@ The result is clamped to `FRICTION_TITLE_MAX_CHARS` (120) at a word boundary. An
 ## Tool-call provenance is model-first
 
 **Recorded:** 2026-05-11 02:06:39.325095Z · [T20260427-52]
+**Superseded by:** [Collapse agent identity to family and move model strings to configuration](../agent-families/4_decisions.md#collapse-agent-identity-to-family-and-move-model-strings-to-configuration).
 
 ### Context
 Asking agents to pass both `agent` and `model` duplicated information and allowed exact models to be paired with the wrong family.
