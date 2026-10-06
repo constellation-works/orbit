@@ -274,6 +274,36 @@ impl OrbitRuntime {
                         {
                             return Ok(());
                         }
+                        // A review timeout has already requeued a continuation;
+                        // an external-evidence hold has a named resumption condition.
+                        // Do not turn either decision into an operator-only block.
+                        if self
+                            .get_task_history(&task.id)?
+                            .iter()
+                            .rev()
+                            .find(|entry| {
+                                entry.to_status.is_some()
+                                    || matches!(
+                                        entry.event.as_str(),
+                                        "review_timeout_incomplete"
+                                            | "review_awaiting_evidence"
+                                            | "review_evidence_received"
+                                    )
+                            })
+                            .is_some_and(|entry| {
+                                matches!(
+                                    entry.event.as_str(),
+                                    "review_timeout_incomplete"
+                                        | "review_awaiting_evidence"
+                                        | "review_evidence_received"
+                                ) && entry.note.as_deref().is_some_and(|note| {
+                                    note.contains(&format!("run={run_id},"))
+                                        || note.starts_with(&format!("run={run_id};"))
+                                })
+                            })
+                        {
+                            return Ok(());
+                        }
                         let update = blocked_update(
                             &run.job_id,
                             run_id,

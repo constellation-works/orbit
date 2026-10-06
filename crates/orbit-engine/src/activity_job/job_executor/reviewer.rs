@@ -89,9 +89,12 @@ impl ReviewerInvocation {
 
     /// Report the reviewer's end with the runtime it actually took, whether
     /// it succeeded, failed or timed out.
-    pub(super) fn finish(mut self, ctx: &ExecCtx<'_>) {
-        self.request.event = ReviewerInvocationEvent::Finished {
-            runtime_seconds: self.started.elapsed().as_secs(),
+    pub(super) fn finish(mut self, ctx: &ExecCtx<'_>, timed_out: bool) {
+        let runtime_seconds = self.started.elapsed().as_secs();
+        self.request.event = if timed_out {
+            ReviewerInvocationEvent::TimedOut { runtime_seconds }
+        } else {
+            ReviewerInvocationEvent::Finished { runtime_seconds }
         };
         let _ = record(ctx, &self.request);
     }

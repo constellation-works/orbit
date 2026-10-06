@@ -39,8 +39,8 @@ use orbit_engine::{
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
-    ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment,
-    TaskPriority, TaskStatus, TaskType,
+    ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
+    TaskComment, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{ReviewTiming, ReviewVerdict};
@@ -1483,6 +1483,110 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
     );
 }
 
+#[test]
+fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
+    isolated(
+        "a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let handoff = action(&host, "pr_failure_handoff", &json!({
+            "failed_step_id": "review", "error_code": "deterministic_action_refused",
+            "error_message": "review_timeout_incomplete: reviewer exceeded its wall clock",
+            "run_id": RUN_ID, "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+            "pipeline": {
+                "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                "review_gate_admit": {"applies": true, "attempt_id": "rvw-partial", "lineage_key": "lineage",
+                    "reviewer": {"provider": "codex", "model": "review-model"}},
+            },
+        })).unwrap();
+            assert_eq!(handoff["decision"], "incomplete_review_timeout");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+            assert_eq!(fx.forge_state("pr-head"), None);
+        },
+    );
+}
+
+#[test]
+fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
+    isolated(
+        "an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let hold = json!({
+                "schema_version": 1, "attempt_id": "rvw-held", "lineage_key": "lineage", "run_id": RUN_ID,
+                "candidate": {"commit": fx.candidate, "tree": git(&fx.repo, &["rev-parse", "HEAD^{tree}"])},
+                "task_meaning_digest": "meaning",
+                "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
+            });
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&hold).unwrap(),
+            );
+            host.artifact_creators.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                "system".into(),
+            );
+            let mut input = json!({
+                "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+                "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
+                "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+                "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                    "review_gate_admit": {"attempt_id": "rvw-held", "lineage_key": "lineage"}},
+            });
+            let held = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(held["decision"], "awaiting_review_evidence");
+            assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+            assert_eq!(fx.forge_state("pr-head"), None);
+            let mut stale_hold = hold.clone();
+            stale_hold["attempt_id"] = json!("rvw-stale");
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&stale_hold).unwrap(),
+            );
+            let stale = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(
+                stale["decision"], "blocked_review_gate",
+                "a system hold must match the admitted attempt"
+            );
+            input["error_message"] = json!("review_gate_blocked: changes_required; wrong approach");
+            let rejected = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(rejected["decision"], "blocked_review_gate");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+
+            let forged_fx = Fixture::new(sandbox);
+            let forged_host = DeliveryHost::new(&forged_fx.repo, TaskStatus::InProgress);
+            let forged_hold = json!({
+                "schema_version": 1, "attempt_id": "rvw-forged", "lineage_key": "lineage", "run_id": RUN_ID,
+                "candidate": {"commit": forged_fx.candidate, "tree": git(&forged_fx.repo, &["rev-parse", "HEAD^{tree}"])},
+                "task_meaning_digest": "meaning",
+                "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
+            });
+            forged_host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&forged_hold).unwrap(),
+            );
+            let forged = action(&forged_host, "pr_failure_handoff", &json!({
+                "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+                "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
+                "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+                "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": forged_fx.repo},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                    "review_gate_admit": {"attempt_id": "rvw-forged", "lineage_key": "lineage"}},
+            })).unwrap();
+            assert_eq!(
+                forged["decision"], "blocked_review_gate",
+                "attached holds are not settlement evidence"
+            );
+            assert_eq!(forged_host.status(TASK_ID), TaskStatus::Blocked);
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -1751,6 +1855,8 @@ struct DeliveryHost {
     required_commands: Mutex<Vec<String>>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+    /// Trusted system artifacts, by task id and path.
+    artifact_creators: Mutex<BTreeMap<(String, String), String>>,
     releases: Mutex<Vec<ReviewReleaseRequest>>,
     /// The resolved validation environment, standing in for the owner's
     /// resolver; `None` keeps the trait default.
@@ -1775,6 +1881,7 @@ impl DeliveryHost {
             landings: Mutex::default(),
             required_commands: Mutex::default(),
             artifacts: Mutex::default(),
+            artifact_creators: Mutex::default(),
             releases: Mutex::default(),
             validation_env: Mutex::default(),
             widenings: Mutex::default(),
@@ -1881,6 +1988,27 @@ impl RuntimeHost for DeliveryHost {
             task.context_files.extend(selectors.iter().cloned());
         }
         Ok(selectors)
+    }
+
+    fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        Ok(self
+            .artifacts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((id, _), _)| id == task_id)
+            .map(|((_, path), content)| TaskArtifact {
+                path: path.clone(),
+                content: content.clone(),
+                media_type: "application/json".into(),
+                created_by: self
+                    .artifact_creators
+                    .lock()
+                    .unwrap()
+                    .get(&(task_id.to_string(), path.clone()))
+                    .cloned(),
+            })
+            .collect())
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {

@@ -128,7 +128,10 @@ pub(super) fn record_invocation(
             let spent = ledger
                 .consumed_for(&attempt.candidate, &attempt.task_meaning_digest, now)
                 .seconds;
-            let bounded = timeout_seconds.min(budget_seconds.saturating_sub(spent));
+            // Keep time for a continuation if this invocation hits its deadline.
+            // Actual process runtime still counts; no time is refunded.
+            let remaining = budget_seconds.saturating_sub(spent);
+            let bounded = timeout_seconds.min(remaining / 2);
             let attempt = &mut ledger.attempts[position];
             let timeout = Duration::seconds(i64::try_from(bounded).unwrap_or(i64::MAX));
             attempt.reviewer_running = Some(ReviewerInvocation {
@@ -137,11 +140,15 @@ pub(super) fn record_invocation(
                 deadline: now.checked_add_signed(timeout).unwrap_or(now),
             });
         }
-        ReviewerInvocationEvent::Finished { runtime_seconds } => {
+        ReviewerInvocationEvent::Finished { runtime_seconds }
+        | ReviewerInvocationEvent::TimedOut { runtime_seconds } => {
             let attempt = &mut ledger.attempts[position];
             attempt.reviewer_running = None;
             attempt.reviewer_seconds = attempt.reviewer_seconds.saturating_add(runtime_seconds);
         }
+    }
+    if matches!(event, ReviewerInvocationEvent::TimedOut { .. }) {
+        release_attempt(ledger, attempt_id, now, now);
     }
     true
 }

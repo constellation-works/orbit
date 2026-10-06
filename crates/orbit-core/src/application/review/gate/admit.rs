@@ -123,11 +123,13 @@ pub(crate) fn review_gate_admit(
         .get("preflight")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let outcome = if preflight {
-        preflight_budget(runtime, &context)
-    } else {
-        admit(runtime, &context, &admission, rebase.as_ref())
-    };
+    let outcome = require_external_evidence(runtime, &context).and_then(|()| {
+        if preflight {
+            preflight_budget(runtime, &context)
+        } else {
+            admit(runtime, &context, &admission, rebase.as_ref())
+        }
+    });
     let audit_args = json!({
         "phase": if preflight { "preflight" } else { "admit" },
         "run_id": context.run_id,
@@ -151,6 +153,23 @@ pub(crate) fn review_gate_admit(
         )
         .map_err(|error| failed(error.to_string()))?;
     outcome.map_err(refused_or_failed)
+}
+
+fn require_external_evidence(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+) -> Result<(), OrbitError> {
+    for task in &context.tasks {
+        if let Some(hold) = super::super::evidence::evidence_hold(runtime, &task.id)?
+            && hold.task_meaning_digest == context.task_digests.1
+            && orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?.tree
+                == hold.candidate.tree
+            && !super::super::evidence::evidence_ready(runtime, &task.id, &hold)?
+        {
+            return Err(OrbitError::CapabilityDenied("review_awaiting_evidence: named external checks have not arrived for the held candidate".into()));
+        }
+    }
+    Ok(())
 }
 
 /// The head a completion step rebased onto a new base and left unpublished
@@ -280,7 +299,11 @@ fn admit(
         }
     };
 
+    let previous_report = runtime
+        .get_task_artifact(&context.task_ids[0], REVIEW_REPORT_ARTIFACT)?
+        .and_then(|artifact| orbit_types::workflow::ReviewReport::parse(&artifact.content).ok());
     let manifest = ReviewManifest {
+        previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),
         lineage_key: lineage_key.clone(),

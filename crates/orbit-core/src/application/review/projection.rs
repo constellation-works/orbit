@@ -42,6 +42,8 @@ pub fn task_review_projection(
             })));
         }
     };
+    let evidence_hold = super::evidence::evidence_hold(runtime, &task.id)?
+        .filter(|hold| hold.attempt_id == certificate.attempt_id && !certificate.verdict.passed());
     let store = runtime.review_store()?;
     let ledger = store.review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?;
     let landings = store.review_landings(&certificate.attempt_id)?;
@@ -56,6 +58,7 @@ pub fn task_review_projection(
         "attempt_id": certificate.attempt_id,
         "lineage_key": certificate.lineage_key,
         "verdict": certificate.verdict.as_str(),
+        "evidence_hold": evidence_hold,
         "assurance": certificate.assurance.map(|assurance| assurance.as_str()),
         "passed": certificate.verdict.passed(),
         "escalation": certificate.escalation,

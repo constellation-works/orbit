@@ -124,6 +124,23 @@ impl ReviewStoreBackend for Store {
                 return reserve_new(conn, workspace_id, ledger, request);
             }
 
+            // Continue the latest unfinished review with the same attempt and
+            // report identity; a timeout is not a final reviewer verdict.
+            if let Some(attempt) = ledger
+                .latest_attempt()
+                .filter(|attempt| {
+                    attempt.released_at.is_some()
+                        && attempt.candidate == *request.candidate
+                        && attempt.task_meaning_digest == request.task_meaning_digest
+                })
+                .cloned()
+            {
+                if let Some(exhausted) = review_spent(&ledger, request) {
+                    return Ok((exhausted, ledger));
+                }
+                return Ok((ReviewReservation::Resumed { attempt }, ledger));
+            }
+
             let reserved = reserve_new_in(conn, workspace_id, previous_revision, ledger, request)?;
             Ok(reserved)
         })

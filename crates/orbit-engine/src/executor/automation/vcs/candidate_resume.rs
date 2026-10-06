@@ -48,6 +48,8 @@ const PRESERVING_DECISIONS: &[&str] = &[
     "blocked_failure_pr",
     "blocked_conflict_pr",
     "blocked_review_gate",
+    "awaiting_review_evidence",
+    "incomplete_review_timeout",
     "blocked_validation_environment",
 ];
 /// The settlement step whose failure is the review's verdict on the
@@ -99,6 +101,7 @@ struct Candidate {
     branch: String,
     head_sha: String,
     failed_step_id: String,
+    needs_review_repair: bool,
 }
 
 /// What the task's last run left to resume.
@@ -197,6 +200,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         branch,
         head_sha: head_sha.clone(),
         failed_step_id: checkpoint.failed_step_id,
+        needs_review_repair: evidence["decision"] == "blocked_review_gate",
     };
 
     // The operator escape hatch: a discard recorded since that run began.
@@ -313,7 +317,7 @@ fn resume<H: RuntimeHost + ?Sized>(
             ),
         })));
     }
-    if candidate.failed_step_id == REVIEW_VERDICT_STEP {
+    if candidate.failed_step_id == REVIEW_VERDICT_STEP && candidate.needs_review_repair {
         return Ok(Outcome::Repair(json!({
             "trigger": "review",
             "failed_step_id": candidate.failed_step_id,

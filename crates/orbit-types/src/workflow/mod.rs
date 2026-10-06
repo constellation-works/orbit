@@ -10,6 +10,7 @@ pub mod handoff;
 mod job;
 mod reconciliation;
 mod review;
+mod review_evidence;
 mod routine;
 mod run;
 mod ship;
@@ -83,6 +84,10 @@ pub use review::{
     ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict,
     ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome,
     ValidationRole, seconds_between,
+};
+pub use review_evidence::{
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, ReviewEvidenceHold, ReviewEvidenceKind,
+    ReviewEvidenceRequirement, ReviewExternalEvidence,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,

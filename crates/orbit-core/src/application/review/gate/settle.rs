@@ -90,7 +90,7 @@ pub(crate) fn review_gate_settle(
     );
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
-        Ok(Settled::Blocked { certificate }) => (
+        Ok(Settled::Blocked { certificate, .. }) => (
             AuditEventStatus::Success,
             json!({
                 "verdict": certificate.verdict.as_str(),
@@ -124,11 +124,19 @@ pub(crate) fn review_gate_settle(
 
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
-        Ok(Settled::Blocked { certificate }) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::Blocked {
+            certificate,
+            awaiting_evidence,
+        }) => Err(DispatchError::DeterministicActionRefused {
             action: action.to_string(),
             message: format!(
-                "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; the candidate \
+                "{}: verdict {} ({}); {} finding(s) recorded; the candidate \
                  stays unpublished until a recorded decision resumes delivery",
+                if awaiting_evidence {
+                    "review_awaiting_evidence"
+                } else {
+                    "review_gate_blocked"
+                },
                 certificate.verdict.as_str(),
                 certificate
                     .escalation
@@ -143,7 +151,10 @@ pub(crate) fn review_gate_settle(
 
 enum Settled {
     Passed(Value),
-    Blocked { certificate: Box<ReviewCertificate> },
+    Blocked {
+        certificate: Box<ReviewCertificate>,
+        awaiting_evidence: bool,
+    },
 }
 
 fn settle(
@@ -337,6 +348,28 @@ fn settle(
         selectors_widened: judgement.selectors_widened.clone(),
         issued_at: now,
     };
+    if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
+        let hold = orbit_types::workflow::ReviewEvidenceHold {
+            schema_version: 1,
+            attempt_id: certificate.attempt_id.clone(),
+            lineage_key: certificate.lineage_key.clone(),
+            run_id: context.run_id.clone(),
+            candidate: certificate.final_candidate.clone(),
+            task_meaning_digest: certificate.task_meaning_digest.clone(),
+            requirements: judgement.external_evidence,
+        };
+        let bytes = serde_json::to_vec_pretty(&hold)
+            .map_err(|error| OrbitError::Execution(format!("serialize evidence hold: {error}")))?;
+        for task in &context.tasks {
+            write_artifact(
+                runtime,
+                &task.id,
+                &context.run_id,
+                orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT,
+                &bytes,
+            )?;
+        }
+    }
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publish_certificate(runtime, context, &certificate)?;
     settled_outcome(runtime, context, certificate)
@@ -484,7 +517,19 @@ fn settled_outcome(
     certificate: ReviewCertificate,
 ) -> Result<Settled, OrbitError> {
     if !certificate.verdict.passed() {
+        let mut awaiting_evidence = false;
+        for task_id in &context.task_ids {
+            awaiting_evidence |= super::super::evidence::evidence_hold(runtime, task_id)?
+                .is_some_and(|hold| {
+                    hold.schema_version == 1
+                        && super::super::evidence::evidence_only(&certificate, &hold.requirements)
+                        && hold.attempt_id == certificate.attempt_id
+                        && hold.candidate == certificate.final_candidate
+                        && hold.task_meaning_digest == certificate.task_meaning_digest
+                });
+        }
         return Ok(Settled::Blocked {
+            awaiting_evidence,
             certificate: Box::new(certificate),
         });
     }

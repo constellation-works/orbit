@@ -520,6 +520,10 @@ pub struct ReviewFinding {
 /// and the repository state; it is a claim, not a certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewReport {
+    /// Named external checks still needed; only an otherwise complete review
+    /// with no open defects may enter an evidence hold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_evidence: Vec<super::ReviewEvidenceRequirement>,
     pub schema_version: u32,
     /// Must name the attempt the manifest was issued for.
     pub attempt_id: String,
@@ -735,6 +739,10 @@ fn normalize_label_field(
 /// The pinned, immutable input handed to the reviewer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewManifest {
+    /// Earlier report on this task, retained as advisory continuation context.
+    /// A new attempt still needs a report naming its own attempt identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_report: Option<ReviewReport>,
     pub schema_version: u32,
     pub attempt_id: String,
     pub lineage_key: String,
@@ -972,6 +980,9 @@ pub enum ReviewerInvocationEvent {
     /// The reviewer process ended, successfully or not, after running this
     /// long.
     Finished { runtime_seconds: u64 },
+    /// The reviewer exceeded its invocation deadline; retain its partial
+    /// report and release this attempt as incomplete for continuation.
+    TimedOut { runtime_seconds: u64 },
 }
 
 fn is_zero(value: &u64) -> bool {
