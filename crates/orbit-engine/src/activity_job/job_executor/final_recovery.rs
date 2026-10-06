@@ -112,6 +112,13 @@ pub(super) fn attempt_final_recovery(
              did not cause it",
         );
     }
+    // [ORB-14269] Nor does another agent clear a blocker the implementer
+    // declared. The failure handoff records the kind and keeps the candidate.
+    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(error_message)) {
+        return skip(
+            "the implementer declared a blocker; the candidate was not judged by another agent",
+        );
+    }
     // [ORB-14149] Nor does any decision give the provider's model capacity;
     // the candidate stays in the worktree for a resume.
     if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {

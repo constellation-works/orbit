@@ -82,11 +82,50 @@ pub(super) fn run_target(
             message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
         });
     }
+    let (success, message) = apply_implementer_blocker(
+        step,
+        t,
+        dispatch.success,
+        dispatch.message,
+        &dispatch.output,
+    );
     Ok(StepOutcome {
-        success: dispatch.success,
+        success,
         output: dispatch.output,
-        message: dispatch.message,
+        message,
     })
+}
+
+/// Turn a well-formed `blocker` on an implementer step into
+/// [`TASK_BLOCKED_BY_AGENT_ERROR_CODE`](orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE).
+///
+/// Detection is here, before retry and recovery see the outcome. A malformed
+/// blocker stays the dispatch's own outcome. The step id is `implement_one`
+/// in the shipped pipelines; `activity_name` covers a resolved
+/// `agent_implement` target whose id differs.
+fn apply_implementer_blocker(
+    step: &JobV2Step,
+    target: &TargetStep,
+    success: bool,
+    message: Option<String>,
+    output: &Value,
+) -> (bool, Option<String>) {
+    if !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    let Some(blocker) = orbit_types::workflow::agent_blocker_from_output(output) else {
+        return (success, message);
+    };
+    (
+        false,
+        Some(orbit_types::workflow::task_blocked_by_agent_message(
+            &blocker,
+        )),
+    )
+}
+
+fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {
+    step.id == "implement_one" || target.activity_name.as_deref() == Some("agent_implement")
 }
 
 /// Persist the invocation trace for a dispatched step.

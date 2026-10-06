@@ -1036,6 +1036,74 @@ fn a_missing_validation_tool_is_an_environment_failure() {
     );
 }
 
+/// An implementer blocker arrives before commit, so the worktree may be dirty.
+/// The handoff blocks the task with the kind, leaves the uncommitted file and
+/// the head where they are, and opens no `[BLOCKED]` PR.
+#[test]
+fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
+    isolated(
+        "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
+        |sandbox| {
+            let _ = sandbox;
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fs::write(fx.repo.join("src/wip.txt"), "still drafting\n").unwrap();
+            let message = orbit_types::workflow::task_blocked_by_agent_message(
+                &orbit_types::workflow::AgentBlocker {
+                    kind: "environment".to_string(),
+                    evidence: "the toolchain the task needs is not installed".to_string(),
+                },
+            );
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "implement_bundle",
+                    "error_code": "task_blocked_by_agent",
+                    "error_message": message,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the implementer blocker");
+
+            assert_eq!(handoff["decision"], "blocked_by_agent");
+            assert_eq!(handoff["blocker_kind"], "environment");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_eq!(handoff["head_sha"], head_before);
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(fx.head(), head_before, "the dirty tree is not committed");
+            assert_eq!(
+                fs::read_to_string(fx.repo.join("src/wip.txt")).unwrap(),
+                "still drafting\n"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+            let (_, event, note) = host.status_events.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(event.as_deref(), Some("task_blocked_by_agent"));
+            let note = note.expect("the block records a note");
+            assert!(
+                note.contains("kind=environment")
+                    && orbit_types::workflow::is_task_blocked_by_agent(None, Some(&note)),
+                "the history note records the kind: {note}"
+            );
+            assert!(
+                host.comments(TASK_ID)
+                    .iter()
+                    .any(|comment| comment.message.contains("kind=environment")),
+                "the task comment records the kind"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A red base and network flakes [ORB-14258]
 // ---------------------------------------------------------------------------

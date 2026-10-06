@@ -3,6 +3,9 @@
 # Failure semantics:
 # - `implement_bundle` runs one task at a time in the shared worktree.
 # - If `implement_one` fails, pending changes remain in the shared worktree for inspection.
+# - An implementer-declared blocker (`task_blocked_by_agent`) stops the bundle
+#   before the next step. Step and final recovery do not run, and pending
+#   changes stay in the worktree.
 # - If all implementations succeed, `commit` snapshots the bundle branch before merge.
 # - `validate` runs `workflow.required_validation_commands` on that committed
 #   candidate; a failing command stops the run before anything is merged.

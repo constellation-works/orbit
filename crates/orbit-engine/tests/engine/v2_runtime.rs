@@ -1074,6 +1074,238 @@ fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     );
 }
 
+/// A typed `{kind, evidence}` blocker on `implement_one` ends the bundle.
+/// The nested step is configured to retry and recover, a later commit step
+/// follows, and the job has final recovery plus a failure activity. None of
+/// the retry, step recovery, commit, or final recovery dispatches run. The
+/// failure activity is invoked once with `task_blocked_by_agent` and the kind.
+#[test]
+fn an_implementer_blocker_ends_implement_one_without_recovery() {
+    let marker = orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER;
+    let host = ScriptedHost {
+        implement_output: json!({
+            "summary": "stopped",
+            "blocker": {
+                "kind": "environment",
+                "evidence": "the toolchain the task needs is not installed",
+            },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let (outcome, events) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+    let actions = host.actions();
+
+    assert!(
+        !outcome.success,
+        "a declared blocker is not a successful job: {outcome:?}"
+    );
+    let message = outcome.message.expect("the job records the blocker");
+    assert!(
+        message.contains(marker) && message.contains("kind=environment"),
+        "the job outcome carries the marker and kind: {message}"
+    );
+    assert_eq!(
+        actions,
+        vec!["implement".to_string(), "preserve_candidate".to_string()],
+        "one implementer dispatch, then the failure activity; no retry, recovery, commit, or final look: {actions:?}"
+    );
+    let preserve = host
+        .calls
+        .lock()
+        .expect("call log")
+        .iter()
+        .find(|(action, _)| action == "preserve_candidate")
+        .expect("failure activity ran")
+        .1
+        .clone();
+    assert_eq!(preserve["error_code"], "task_blocked_by_agent");
+    let error_message = preserve["error_message"].as_str().expect("error message");
+    assert!(
+        error_message.contains(marker) && error_message.contains("kind=environment"),
+        "the failure activity receives the kind: {error_message}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            V2AuditEventKind::StepRetry { .. } | V2AuditEventKind::StepRecoveryAttempted { .. }
+        )),
+        "a blocker does not retry or enter step recovery: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.kind,
+            V2AuditEventKind::StepFinished { step_id, outcome, error_message }
+                if step_id == "implement_one"
+                    && outcome == "failed"
+                    && error_message.as_deref().is_some_and(|message| {
+                        message.contains(marker) && message.contains("kind=environment")
+                    })
+        )),
+        "implement_one itself ends with the blocker: {events:?}"
+    );
+}
+
+/// A blocker shape that is not `{kind, evidence}` stays ordinary success, and
+/// a resolved `agent_implement` target honors a well-formed blocker even when
+/// the step id is not `implement_one`.
+#[test]
+fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
+    let malformed = ScriptedHost {
+        implement_output: json!({
+            "blocker": { "kind": "", "evidence": "missing kind" },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let (outcome, _) = run_blocker_job(&malformed, json!({ "tasks": ["one", "two"] }));
+    assert!(
+        outcome.success,
+        "a malformed blocker does not fail the step: {outcome:?}"
+    );
+    assert_eq!(
+        malformed.actions(),
+        vec![
+            "implement".to_string(),
+            "implement".to_string(),
+            "commit".to_string()
+        ],
+    );
+
+    let named = ScriptedHost {
+        implement_output: json!({
+            "blocker": { "kind": "conflict", "evidence": "the requirements contradict" },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let mut job = job_asset(json!([{
+        "id": "work",
+        "recovery_activity": "step_recovery",
+        "retry": { "max_attempts": 3, "initial_backoff_ms": 1, "backoff_cap_ms": 1 },
+        "spec": { "type": "deterministic", "action": "implement", "config": {} },
+    }]));
+    resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog()).expect("resolve recovery");
+    // Inline specs have no catalog name until something sets it. The shipped
+    // resolver does that for `target: activity:agent_implement`.
+    if let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) =
+        &mut job.steps[0].body
+    {
+        target.activity_name = Some("agent_implement".to_string());
+    }
+    let audit = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), "named-blocker");
+    let outcome = execute_job_with_resume(&job, json!({}), "named-blocker", writer, &named, None)
+        .expect("the named activity runs to an outcome");
+    assert!(!outcome.success, "agent_implement honors the blocker");
+    assert_eq!(named.actions(), vec!["implement".to_string()]);
+    assert!(
+        outcome
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("kind=conflict")),
+        "the kind is on the outcome: {outcome:?}"
+    );
+}
+
+struct ScriptedHost {
+    implement_output: Value,
+    calls: Mutex<Vec<(String, Value)>>,
+}
+
+impl ScriptedHost {
+    fn actions(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .iter()
+            .map(|(action, _)| action.clone())
+            .collect()
+    }
+}
+
+impl RuntimeHost for ScriptedHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _: &Value,
+        input: &Value,
+        _: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((action.to_string(), input.clone()));
+        if action == "implement" {
+            Ok(self.implement_output.clone())
+        } else {
+            Ok(json!({}))
+        }
+    }
+}
+
+fn blocker_catalog() -> V2ActivityCatalog {
+    let mut catalog = V2ActivityCatalog::new();
+    for name in ["step_recovery", "preserve_candidate", "final_look"] {
+        catalog.insert(name.to_string(), scripted_activity(name));
+    }
+    catalog
+}
+
+fn scripted_activity(action: &str) -> ActivityV2 {
+    ActivityV2 {
+        description: String::new(),
+        input_schema_json: Value::Null,
+        output_schema_json: Value::Null,
+        fs_profile: None,
+        spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: action.to_string(),
+            config: Value::Null,
+        }),
+    }
+}
+
+fn run_blocker_job(host: &ScriptedHost, input: Value) -> (JobOutcome, Vec<V2AuditEvent>) {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": { "name": "blocker_fixture" },
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "failure_activity": "preserve_candidate",
+            "final_recovery_activity": "final_look",
+            "steps": [{
+                "id": "implement_bundle",
+                "loop": {
+                    "items": "{{ input.tasks }}",
+                    "max_iterations": 4,
+                    "steps": [{
+                        "id": "implement_one",
+                        "recovery_activity": "step_recovery",
+                        "retry": {
+                            "max_attempts": 3,
+                            "initial_backoff_ms": 1,
+                            "backoff_cap_ms": 1
+                        },
+                        "spec": { "type": "deterministic", "action": "implement", "config": {} }
+                    }]
+                }
+            }, {
+                "id": "commit",
+                "spec": { "type": "deterministic", "action": "commit", "config": {} }
+            }]
+        }
+    });
+    let mut job = load_job_asset(&asset.to_string())
+        .expect("blocker fixture loads")
+        .spec;
+    resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog()).expect("resolve hooks");
+    let audit = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), "blocker-run");
+    let outcome = execute_job_with_resume(&job, input, "blocker-run", writer.clone(), host, None)
+        .expect("the blocker job runs to an outcome");
+    let events = writer.events_snapshot().expect("persisted audit events");
+    (outcome, events)
+}
+
 /// Stub worktree and admission steps followed by the shipped `review` step,
 /// whose reviewer and recovery activities resolve to scripted actions. Only
 /// the backoff sleep is shortened; attempts and recovery stay as shipped.

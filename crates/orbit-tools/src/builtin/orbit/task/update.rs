@@ -213,6 +213,15 @@ impl Tool for OrbitTaskUpdateTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        // [ORB-14269] Before both the guarded edit and the ordinary update.
+        // An implementation activity used to set `blocked` mid-run; the
+        // executor never re-reads status, so later steps still ran.
+        if implementation_activity_sets_blocked(ctx, &input) {
+            return Err(OrbitError::InvalidInput(
+                "an implementation activity cannot set status to blocked; return result.blocker as {kind, evidence} so the step boundary records the blocker and stops the run"
+                    .to_string(),
+            ));
+        }
         if super::guarded::is_guarded(&input) {
             return super::guarded::write(ctx, input, false);
         }
@@ -241,4 +250,23 @@ impl Tool for OrbitTaskUpdateTool {
         super::super::reject_unknown_tool_arguments(&input, &self.schema())?;
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate)
     }
+}
+
+/// `implement_one` and a resolved `agent_implement` target. Deny mode stamps
+/// the step id as the activity name; the catalog name is accepted too.
+fn implementation_activity_sets_blocked(ctx: &ToolContext, input: &Value) -> bool {
+    let Some(activity) = ctx
+        .tool_deny_policy
+        .as_ref()
+        .map(|policy| policy.activity.as_str())
+    else {
+        return false;
+    };
+    if activity != "implement_one" && activity != "agent_implement" {
+        return false;
+    }
+    input
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status.eq_ignore_ascii_case("blocked"))
 }

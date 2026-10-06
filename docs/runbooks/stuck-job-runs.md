@@ -307,7 +307,10 @@ Early implementation retries still restore `in-progress`. A block the same
 lineage wrote through its failure handoff (`pr_failure_handoff`,
 `pr_conflict_blocked`, `validation_environment_blocked`,
 `review_gate_escalation`) is readmitted the same way, including back to
-`review` when the checkpoint rules above hold. Missing stage evidence,
+`review` when the checkpoint rules above hold. An implementer-declared
+blocker (`task_blocked_by_agent`) is not in that list: resume leaves the
+task blocked, and an operator moves it back once the blocker is gone.
+Missing stage evidence,
 an unrelated or superseding attempt, a manual block, and withdrawn or terminal
 states cannot gain review through this repair. A merged PR alone is not review
 authority: normal candidate, merge and task-completion guards still run after

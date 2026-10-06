@@ -1,8 +1,14 @@
+mod agent_blocker;
 mod baseline;
 mod delivery;
 mod id;
 mod state;
 
+pub use agent_blocker::{
+    AgentBlocker, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
+    TASK_BLOCKED_BY_AGENT_MARKER, agent_blocker_from_output, is_task_blocked_by_agent,
+    task_blocked_by_agent_kind, task_blocked_by_agent_message,
+};
 pub use baseline::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,
     is_baseline_red_failure,
