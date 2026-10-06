@@ -88,8 +88,11 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "pr_complete",
             "review_gate_admit",
             "review_gate_settle",
+            "review_gate_admit",
+            "review_gate_settle",
         ],
-        "one review, no revalidation, then delivery"
+        "one review, no revalidation, then delivery; both completion re-review \
+         rounds only admit and settle as not applicable"
     );
     let pr_open = &host.inputs("pr_open")[0];
     assert_eq!(pr_open["reviewed_head_sha"], "candidate");

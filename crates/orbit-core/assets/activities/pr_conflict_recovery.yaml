@@ -115,9 +115,12 @@ spec:
     The executor has already proved that its existing `git_rebase` boundary
     stopped on actual unmerged index entries. The failed step is either
     `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
-    published PR only under retained `completion: done` authorization. It will
-    retry that same failed deterministic step exactly once after you return
-    success. You repair only; you do not restart implementation, dispatch or
+    published PR only under retained `completion: done` authorization. It
+    retries that same failed deterministic step after you return success. A
+    candidate with several commits can stop again on a later commit of the
+    same rebase; the retry then reports that stop and you are invoked again
+    for its paths, a bounded number of times. Resolve only the stop you are
+    given. You repair only; you do not restart implementation, dispatch or
     resume a job, create another task or branch, open another PR, push, merge,
     or change lifecycle status. The executor owns the lease-checked push and
     reuses the existing PR after a completion conflict.
@@ -179,8 +182,9 @@ spec:
        branch, original HEAD, stopped-rebase metadata, and conflict-path
        identity; it then stages the supplied conflict paths together with
        every other path you changed, continues the existing rebase onto
-       `target_base_sha`, and, when `origin/<base>` has advanced past that
-       pin, rebases the continued candidate onto the current tip. Orbit widens
+       `target_base_sha` (keeping your resolution when a later commit stops
+       again), and, when `origin/<base>` has advanced past that pin, rebases
+       the continued candidate onto the current tip. Orbit widens
        the task's selectors to cover the companion paths. Write scratch only
        under `.orbit/tmp/`; it is never staged.
     4. Confirm every supplied conflict file is fully repaired (no conflict

@@ -34,6 +34,18 @@ pub(super) struct RebaseRecoveryCheckpoint {
     remote_sha_before: Option<String>,
 }
 
+/// How the host continuation of an admitted stopped rebase ended.
+pub(super) enum RebaseContinuation {
+    /// The rebase finished on the pinned base (and followed an advanced
+    /// tip when it could); the payload is the checkpoint the host certifies.
+    Completed(Value),
+    /// `rebase --continue` committed the repaired pick, then stopped on a
+    /// later commit of the same pinned rebase with new unmerged paths. The
+    /// progress is kept: the executor's retry reports the new stop as a
+    /// typed conflict and the next bounded recovery round resolves it.
+    StoppedAgain,
+}
+
 impl WorktreeBoundaryGuard {
     /// Admit file repair for the already stopped, checkpoint-matching rebase.
     /// The provider remains unable to write Git metadata; after it exits, the
@@ -194,12 +206,26 @@ impl WorktreeBoundaryGuard {
             .success)
     }
 
+    /// Whether the assigned worktree is still inside this recovery's pinned
+    /// rebase, stopped on unmerged paths: the shape a host continuation that
+    /// stopped on a later commit leaves behind.
+    pub(super) fn stopped_authorized_rebase(&self) -> Result<bool, DispatchError> {
+        let Some(checkpoint) = &self.rebase_recovery else {
+            return Ok(false);
+        };
+        let invalid = |reason: &str| DispatchError::CliInvocationPermanent(reason.to_string());
+        Ok(self
+            .validate_rebase_checkpoint(checkpoint, &invalid)
+            .is_ok()
+            && !unmerged_paths(&self.assigned_root)?.is_empty())
+    }
+
     pub(super) fn complete_rebase_recovery(
         &self,
         host: &dyn RuntimeHost,
         step_id: &str,
         task_ids: &[String],
-    ) -> Result<Value, DispatchError> {
+    ) -> Result<RebaseContinuation, DispatchError> {
         let checkpoint = self.rebase_recovery.as_ref().ok_or_else(|| {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery has no authenticated rebase checkpoint".to_string(),
@@ -304,6 +330,26 @@ impl WorktreeBoundaryGuard {
         )?;
         if !continued.success {
             let additional = unmerged_paths(&self.assigned_root)?;
+            // A candidate with several commits can conflict again on a later
+            // pick. The repaired pick is committed; keep that progress for
+            // the next bounded recovery round instead of refusing it.
+            if !additional.is_empty() && self.stopped_authorized_rebase()? {
+                self.widen_task(
+                    host,
+                    task_ids,
+                    ContextWideningStep::Recovery,
+                    &companion_paths,
+                );
+                tracing::warn!(
+                    target: "orbit.engine.cli_runner",
+                    run_id = %self.run_id,
+                    step_id,
+                    pinned_base = %checkpoint.target_base_sha,
+                    additional_conflicting_paths = ?additional,
+                    "conflict recovery continued the rebase onto a later commit that conflicts again"
+                );
+                return Ok(RebaseContinuation::StoppedAgain);
+            }
             let diagnostic = continued.stderr.trim().to_string();
             return Err(invalid(&format!(
                 "rebase --continue failed; additional_conflicting_paths={additional:?}; diagnostic={diagnostic}"
@@ -328,7 +374,7 @@ impl WorktreeBoundaryGuard {
             ContextWideningStep::Recovery,
             &companion_paths,
         );
-        Ok(serde_json::json!({
+        Ok(RebaseContinuation::Completed(serde_json::json!({
             "run_id": self.run_id,
             "step_id": step_id,
             "task_ids": task_ids,
@@ -344,7 +390,7 @@ impl WorktreeBoundaryGuard {
             "companion_paths": companion_paths,
             "rewritten": true,
             "recovery_attempt": checkpoint.attempt,
-        }))
+        })))
     }
 
     /// The stopped index includes every nonconflicting candidate change.
@@ -618,7 +664,9 @@ fn recovery_metadata_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Di
 }
 
 /// The failed step a conflict recovery may complete, when its input
-/// describes one of the two rebasing steps consistently.
+/// describes one of the rebasing steps consistently: `sync_base`, or a
+/// completion that rebases a conflicting published PR (`complete_pr`, and
+/// `complete_reviewed_pr` once the base moved again after a re-review).
 fn validate_failed_step_identity<'a>(
     input: &'a Value,
     prepared: &Value,
@@ -628,7 +676,9 @@ fn validate_failed_step_identity<'a>(
     let failed_step_id = input.get("failed_step_id")?.as_str()?;
     if !matches!(
         (failed_step_id, activity_name),
-        ("sync_base", "git_rebase") | ("complete_pr", "pr_complete")
+        ("sync_base", "git_rebase")
+            | ("complete_pr", "pr_complete")
+            | ("complete_reviewed_pr", "pr_complete")
     ) {
         return None;
     }

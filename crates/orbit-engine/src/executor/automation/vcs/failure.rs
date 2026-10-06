@@ -53,7 +53,8 @@ pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] = &[
 const REVIEW_VALIDATION_STEP: &str = "review_validate";
 
 /// Completion-stage steps: merging the published PR, and re-reviewing and
-/// republishing it after completion rebased a conflicting reviewed head.
+/// republishing it after completion rebased a conflicting reviewed head —
+/// up to two rounds, when the base moved again during the first.
 const COMPLETION_STEPS: &[&str] = &[
     "complete_pr",
     "re_review_gate_admit",
@@ -62,10 +63,20 @@ const COMPLETION_STEPS: &[&str] = &[
     "re_review_validate",
     "re_push",
     "complete_reviewed_pr",
+    "re_review_gate_admit_2",
+    "re_review_2",
+    "re_review_gate_settle_2",
+    "re_review_validate_2",
+    "re_push_2",
+    "complete_reviewed_pr_2",
 ];
 
 /// Admission checkpoints whose attempt a failing run must close.
-const REVIEW_ADMISSION_STEPS: &[&str] = &["review_gate_admit", "re_review_gate_admit"];
+const REVIEW_ADMISSION_STEPS: &[&str] = &[
+    "review_gate_admit",
+    "re_review_gate_admit",
+    "re_review_gate_admit_2",
+];
 
 /// Terminal hook for `task_pr_pipeline`.
 ///

@@ -552,16 +552,23 @@ rebased head as a new review in the same lineage (`re_review_gate_admit`,
 `re_review`, `re_review_gate_settle`, and `re_review_validate` when that
 reviewer committed fixes), republishes the reviewed final candidate under a
 lease on the old published head (`re_push`), and completes it
-(`complete_reviewed_pr`). A second conflict there, a caller without the
-flag, a non-accept re-review, or a failed revalidation keeps the published
-PR and the task in review.
+(`complete_reviewed_pr`). The base can move again under that re-review
+[ORB-14332], so `complete_reviewed_pr` also runs with `re_review_on_conflict`
+and `pr_conflict_recovery`, and one more round of the same steps
+(`re_review_gate_admit_2` with `re_review_after: complete_reviewed_pr`,
+`re_review_2`, `re_review_gate_settle_2`, `re_review_validate_2`, `re_push_2`,
+`complete_reviewed_pr_2`) reviews, republishes and completes the head it
+rebased. A conflict at `complete_reviewed_pr_2`, a caller without the flag, a
+non-accept re-review, or a failed revalidation keeps the published PR and the
+task in review.
 `complete_pr` is skipped on review-only and no-diff routes, and a `when:` may
 not read a skippable step's output, so `re_review_gate_admit` and
 `re_review_gate_settle` always run: with `re_review_after: complete_pr` the
 admission reads that step's checkpoint from the run's recorded pipeline (a
 resume inherits it), answers `re_review_not_required` unless it asked for a
 re-review, pins the recorded rebase base, and fails when the worktree head is
-not the recorded rebased head. Its `applies` gates the remaining steps.
+not the recorded rebased head. Its `applies` gates the remaining steps of
+its round; the second round reads `complete_reviewed_pr` the same way.
 
 After the verified merge, completion reads the merge commit,
 fetches it, and records a landing: `fast_forward`, `squash`, `merge_commit`,

@@ -36,8 +36,9 @@
 //! pinned `git_rebase` (a real conflict still reaches conflict recovery),
 //! publishes nothing, and returns `re_review_required` with the rebase
 //! checkpoint; the pipeline then reviews, republishes and completes the new
-//! head. Without the flag, or on a second conflict, it stays
-//! `review_gate_stale`.
+//! head. Without the flag it stays `review_gate_stale`; the pipeline sets it
+//! on every completion round but its last, so a base that keeps moving under
+//! re-review ends in review rather than in an unbounded loop [ORB-14332].
 //!
 //! [ORB-13444] Ungated completion is held to that same candidate. The
 //! published head is checked before any merge or auto-merge request, and that

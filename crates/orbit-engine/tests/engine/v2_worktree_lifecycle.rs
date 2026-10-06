@@ -1774,6 +1774,121 @@ fn conflict_recovery_commits_companion_edits_with_the_resolution() {
     );
 }
 
+/// [ORB-14332] Both commits of a two-commit candidate conflict with the
+/// advanced base. The first recovery resolves the first stop; continuing the
+/// rebase stops again on the second commit, which the host keeps instead of
+/// refusing: the resolved pick stays, nothing is certified, and the retried
+/// `git_rebase` reports the new stop pinned to the same base. A second
+/// recovery round resolves it and certifies the whole rewrite, which the
+/// retry then delivers.
+#[cfg(unix)]
+#[test]
+fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
+    isolated(
+        "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
+        || {
+            let prepared = PreparedRebase::with_commits(
+                "jrun-multi-stop",
+                &[("README.md", "candidate\n"), ("base.txt", "candidate v2\n")],
+                &[("README.md", "target\n"), ("base.txt", "target v2\n")],
+            );
+            let target = prepared.target.clone();
+            let checkout = &prepared.checkout.path;
+            let provider = prepared.fixture.root.path().join("codex");
+
+            let first = stopped_conflict(&prepared);
+            assert_eq!(first["conflicting_paths"], json!(["README.md"]));
+            write_executable(
+                &provider,
+                &provider_script("printf 'candidate and target\\n' > README.md"),
+            );
+            let host = prepared.host.with_provider(&provider);
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                conflict_recovery_input(&prepared, &first),
+            )
+            .expect("the first stop is recovered although the rebase stops again");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert!(rebase_in_progress(checkout), "stopped on the second commit");
+            assert!(
+                host.checkpoints().is_empty(),
+                "an unfinished rebase is not certified"
+            );
+            assert_eq!(
+                git(checkout, &["show", "HEAD:README.md"]),
+                "candidate and target",
+                "the first resolution is kept"
+            );
+
+            let OrbitError::RecoverableVcsConflict(second) = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect_err("the retry reports the new stop")
+            else {
+                panic!("expected a recoverable conflict");
+            };
+            assert_eq!(second.conflicting_paths, ["base.txt"]);
+            assert_eq!(second.target_base_sha, target);
+            assert!(rebase_in_progress(checkout), "the retry touches nothing");
+            let second = json!({
+                "operation": second.operation,
+                "original_base_sha": second.original_base_sha,
+                "target_base_sha": second.target_base_sha,
+                "conflicting_paths": second.conflicting_paths,
+            });
+
+            write_executable(
+                &provider,
+                &provider_script("printf 'candidate and target v2\\n' > base.txt"),
+            );
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                conflict_recovery_input(&prepared, &second),
+            )
+            .expect("the second stop completes the rebase");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert!(!rebase_in_progress(checkout));
+            let head = prepared.head();
+            assert_eq!(
+                git(
+                    checkout,
+                    &["rev-list", "--count", &format!("{target}..HEAD")]
+                ),
+                "2",
+                "both candidate commits sit on the pinned base"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.join("README.md")).unwrap(),
+                "candidate and target\n"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.join("base.txt")).unwrap(),
+                "candidate and target v2\n"
+            );
+            let checkpoints = host.checkpoints();
+            let [(_, step_id, checkpoint)] = checkpoints.as_slice() else {
+                panic!("expected one recovery checkpoint, got {checkpoints:#?}");
+            };
+            assert_eq!(step_id, "sync_base");
+            assert_eq!(checkpoint["head_sha"], head);
+            assert_eq!(checkpoint["head_sha_before"], prepared.candidate);
+            assert_eq!(checkpoint["base_sha"], target);
+            assert_eq!(
+                checkpoint["recovery_attempt"], 2,
+                "each round reserves its own attempt"
+            );
+
+            let retried = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect("the retry delivers the rewrite");
+            assert_eq!(retried["decision"], "reused_recovery");
+            assert_eq!(retried["head_sha"], head);
+            assert_eq!(retried["base_sha"], target);
+        },
+    );
+}
+
 /// [ORB-13990] Companion edits never excuse the conflict itself: a conflict
 /// path left unrepaired, or repaired with markers still in it, refuses the
 /// continuation with the rebase left stopped and nothing widened. Staging
@@ -2779,6 +2894,16 @@ struct PreparedRebase {
 
 impl PreparedRebase {
     fn new(run_id: &str, candidate_file: &str, base_file: &str) -> Self {
+        Self::with_commits(
+            run_id,
+            &[(candidate_file, "candidate\n")],
+            &[(base_file, "target\n")],
+        )
+    }
+
+    /// A candidate of one commit per `candidate` file write, prepared against
+    /// a base advanced by one commit per `base` file write.
+    fn with_commits(run_id: &str, candidate: &[(&str, &str)], base: &[(&str, &str)]) -> Self {
         let fixture = Fixture::new();
         let host = LifecycleHost::new(&fixture.repo);
         host.add_task("T-REBASE", TaskStatus::Backlog);
@@ -2786,8 +2911,16 @@ impl PreparedRebase {
             .expect("worktree setup");
         let checkout = Checkout::from_setup(&setup);
         let base_sha = setup["base_sha"].as_str().unwrap().to_string();
-        let candidate = commit_file(&checkout.path, candidate_file, "candidate\n");
-        let target = commit_file(&fixture.repo, base_file, "target\n");
+        let commit_all = |repo: &Path, writes: &[(&str, &str)]| {
+            writes
+                .iter()
+                .fold(None, |_, (file, contents)| {
+                    Some(commit_file(repo, file, contents))
+                })
+                .expect("at least one commit")
+        };
+        let candidate = commit_all(&checkout.path, candidate);
+        let target = commit_all(&fixture.repo, base);
         let common = json!({
             "workspace_path": checkout.path,
             "job_run_id": run_id,

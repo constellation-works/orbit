@@ -226,8 +226,9 @@ pub enum DispatchError {
 
     /// A deterministic VCS action proved that it stopped on actual unmerged
     /// index entries and supplied the pinned base evidence needed for one
-    /// bounded repair. This bypasses ordinary retry so the configured conflict
-    /// recovery agent is the only additional attempt.
+    /// bounded repair. This bypasses ordinary retry: the configured conflict
+    /// recovery agent repairs the stop and the step is retried, again for each
+    /// later commit of the same rebase that stops, within a fixed round bound.
     #[error(
         "recoverable VCS conflict during '{operation}': original base '{original_base_sha}', target base '{target_base_sha}'; {diagnostic}; conflicting paths: {}",
         conflicting_paths.join(", ")
