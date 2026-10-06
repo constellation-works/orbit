@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 
+use super::admission_waiters::{self, ExclusiveWaiter};
 use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::image::process_digest;
 use super::paths::{ADMISSION_LOCK, GENERATION_LOCK, validated_generation_root};
@@ -80,6 +81,8 @@ pub(super) enum Admission {
 /// asks why at that interval: a pending switch not targeting `joining`, or an
 /// update holding the generation exclusively, refuses at once rather than
 /// queueing behind the upgrade.
+/// Exclusive waiters publish locked intent records before polling, preventing
+/// a stream of shared admissions from overtaking a widening or reseeding join.
 pub(super) fn admission(
     root: &Path,
     mode: Admission,
@@ -88,13 +91,30 @@ pub(super) fn admission(
 ) -> Result<Record, OrbitError> {
     // Admission is held by lock alone, so a read-only descriptor serves.
     let file = open(root, ADMISSION_LOCK)?;
+    let _waiter = if mode == Admission::Exclusive {
+        ExclusiveWaiter::publish(root)?
+    } else {
+        None
+    };
     let started = Instant::now();
     let deadline = started + wait;
     let mut probe_at = started + UPGRADE_PROBE;
     loop {
         let attempt = match mode {
+            Admission::Shared if admission_waiters::pending(root, false)? => {
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
             Admission::Shared => FileExt::try_lock_shared(&file.file),
             Admission::Exclusive => FileExt::try_lock_exclusive(&file.file),
+        };
+        // Close the race with an exclusive waiter publishing between the
+        // first intent check and this shared lock acquisition.
+        let attempt = match attempt {
+            Ok(()) if mode == Admission::Shared && admission_waiters::pending(root, false)? => {
+                FileExt::unlock(&file.file).map_err(refusal)?;
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+            other => other,
         };
         match attempt {
             Ok(()) => return Ok(file),

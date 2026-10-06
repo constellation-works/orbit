@@ -1,5 +1,5 @@
-//! Generation admission forgets participants that have exited, and ordinary
-//! startups never wait for one another.
+//! Generation admission forgets participants that have exited, admits ordinary
+//! startups in parallel, and lets exclusive waiters progress under startup load.
 //!
 //! `.generation-compat.json` is the envelope of identities admitted since the
 //! authority last had no holder of `.generation.lock`. A guard drop does not
@@ -15,6 +15,8 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
@@ -345,6 +347,150 @@ fn concurrent_compatible_joins_beside_a_live_writer_never_wait() {
     }
     assert_envelope(&root, store(10, 10, 0, Some(10)), Some(1));
     drop(outcomes);
+    drop(live);
+}
+
+#[test]
+fn envelope_widening_progresses_beside_a_continuous_shared_join_stream() {
+    const JOINERS: usize = 32;
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let live = join(
+        &root,
+        &digest(10),
+        &identity(10, 0),
+        ParticipantRole::McpServe,
+        Access::Write,
+    )
+    .expect("v10 writer holds the authority");
+    // Model an in-flight shared admission that takes time to finish, while
+    // real startups keep replenishing the shared holders around it.
+    let in_flight = OpenOptions::new()
+        .read(true)
+        .open(root.join(".generation-admission.lock"))
+        .expect("admission lock");
+    in_flight.lock_shared().expect("in-flight shared admission");
+    let stop = Arc::new(AtomicBool::new(false));
+    let (ready, started) = sync_channel(JOINERS);
+    let streams = (0..JOINERS)
+        .map(|_| {
+            let (root, stop, ready) = (root.clone(), Arc::clone(&stop), ready.clone());
+            std::thread::spawn(move || {
+                let mut count = 0;
+                loop {
+                    drop(
+                        join_within(
+                            &root,
+                            &digest(10),
+                            &identity(10, 0),
+                            Access::ReadOnly,
+                            Duration::from_secs(10),
+                            || Ok(10),
+                        )
+                        .expect("ordinary startups in the stream are admitted"),
+                    );
+                    count += 1;
+                    if count == 1 {
+                        ready.send(()).expect("stream started");
+                    }
+                    if stop.load(Ordering::Acquire) {
+                        return count;
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    drop(ready);
+    for _ in 0..JOINERS {
+        started
+            .recv_timeout(Duration::from_secs(10))
+            .expect("every shared stream has started");
+    }
+    let widening = std::thread::spawn({
+        let root = root.clone();
+        move || {
+            join_within(
+                &root,
+                &digest(11),
+                &identity(11, 0),
+                Access::Write,
+                Duration::from_secs(3),
+                || Ok(10),
+            )
+            .map_err(|error| error.to_string())
+        }
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    drop(in_flight);
+    let outcome = widening.join().expect("widening thread");
+    stop.store(true, Ordering::Release);
+    for stream in streams {
+        assert!(stream.join().expect("shared stream") > 0);
+    }
+    let widened = outcome.expect(
+        "an ordinary envelope-widening startup must progress while shared startups keep arriving",
+    );
+    assert_envelope(&root, store(10, 11, 0, Some(10)), Some(1));
+    assert!(pending_switch(&root).is_none());
+    drop(widened);
+    drop(live);
+}
+
+#[test]
+fn timed_out_and_abandoned_exclusive_waiters_do_not_block_shared_startups() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let live = join(
+        root,
+        &digest(10),
+        &identity(10, 0),
+        ParticipantRole::McpServe,
+        Access::Write,
+    )
+    .expect("live v10 writer");
+    let in_flight = OpenOptions::new()
+        .read(true)
+        .open(root.join(".generation-admission.lock"))
+        .expect("admission lock");
+    in_flight.lock_shared().expect("in-flight admission");
+    let outcome = join_within(
+        root,
+        &digest(11),
+        &identity(11, 0),
+        Access::Write,
+        Duration::from_millis(100),
+        || Ok(10),
+    );
+    assert!(outcome.is_err(), "a held admission outlives the bound");
+    // An exited waiter's file survives but its OS lock does not. Liveness
+    // must be decided by that lock, without waiting for a lease to expire.
+    std::fs::write(
+        root.join(".generation-admission-waiters/abandoned.waiting"),
+        [],
+    )
+    .expect("abandoned waiter record");
+    let reader = join_within(
+        root,
+        &digest(10),
+        &identity(10, 0),
+        Access::ReadOnly,
+        Duration::ZERO,
+        || Ok(10),
+    )
+    .expect("neither timed-out nor abandoned waiters delay shared startups");
+    drop(reader);
+    drop(in_flight);
+    let widened = join_within(
+        root,
+        &digest(11),
+        &identity(11, 0),
+        Access::Write,
+        Duration::from_secs(3),
+        || Ok(10),
+    )
+    .expect("a later exclusive join can progress too");
+    assert_envelope(root, store(10, 11, 0, Some(10)), Some(1));
+    drop(widened);
     drop(live);
 }
 

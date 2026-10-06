@@ -230,7 +230,7 @@ pub(super) fn live_participants(
 
 /// Remove a staged record nobody holds that is too old to be one a live
 /// registration created and has yet to lock.
-fn collect_abandoned_stage(path: &Path) {
+pub(super) fn collect_abandoned_stage(path: &Path) {
     let abandoned = std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()

@@ -41,11 +41,18 @@
 //! reads beside a v1-owned record — holds it shared, so concurrent startups
 //! never wait for one another (registration is per process). A join that
 //! must reseed, widen or rewrite a record, take over or record a pending
-//! switch, and [`GenerationUpdate`], hold it exclusively. A wait that other
+//! switch, and [`GenerationUpdate`], hold it exclusively. Exclusive waiters
+//! publish locked records under `.generation-admission-waiters/` before
+//! waiting: new shared admissions yield until existing admissions drain and
+//! the exclusive waiter acquires the lock. A continuous shared startup stream
+//! therefore cannot starve an envelope-widening join. A wait that other
 //! startups cause lasts up to [`quiesce_bound`] and then refuses as
 //! contention. A wait behind a pending switch (other than one the joiner
 //! targets) or an update refuses within about a second instead of queueing,
 //! and says which upgrade held it.
+//! Read-only observers need no writes to check waiter liveness. A participant
+//! that cannot publish intent retains lock-only admission. Crashed waiters
+//! release their OS locks and cannot keep shared admissions waiting.
 //!
 //! # Yielding and handing over
 //!
@@ -77,6 +84,7 @@
 use std::time::Duration;
 
 mod admission;
+mod admission_waiters;
 mod clock_hold;
 mod handoff;
 mod identity;

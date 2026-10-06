@@ -176,11 +176,18 @@ Quiesce those through their owners (or let long steps finish) and retry. An **ol
 binary never displaces newer processes: it is refused as incompatible, and a
 read-only command whose readers would break is refused the same way.
 
-Ordinary startups do not queue behind one another: a process whose identity the
-recorded envelope already admits joins under **shared** admission, so any number of
+Ordinary startups whose identities the recorded envelope already admits join under
+**shared** admission, so any number of
 concurrent commands, workers and clients start side by side. Only a join that must
 change the authority (reseed it, widen the envelope, take over, or wait for a switch)
-and `orbit update` take admission exclusively. A process that finds admission held by
+and `orbit update` take admission exclusively. An exclusive waiter publishes a locked
+record under `.generation-admission-waiters/` before waiting. New shared admissions
+yield while that waiter is live, so existing admissions drain and an envelope-widening
+startup progresses even while more compatible startups arrive. Dropping the waiter
+(success or timeout) withdraws its record; a crash releases its lock, so an abandoned
+record cannot block admission. Observing waiters requires only read permission; a
+participant unable to publish a record retains lock-only admission.
+A process that finds admission held by
 an upgrade is refused within about a second rather than queued: `an upgrade is pending
 (a generation switch is pending: ...)` for a switch, or `an upgrade is in progress` for
 an update or takeover. One held only by other startups waits up to
@@ -304,7 +311,8 @@ participant reads the cache but never writes it, so a read-only join leaves the
 root byte-identical.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
-`.generation-compat.json`, `.generation-pending.json` or `.generation-participants/`
+`.generation-compat.json`, `.generation-pending.json`, `.generation-participants/`
+or live records under `.generation-admission-waiters/`
 to force admission. Keep them in the authoritative root and out of lock-file garbage
 collection. A participant record left by a process that exited without cleanup is
 unlocked, and the next admission collects it.
