@@ -342,8 +342,9 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
                     BacklogTaskExclusionReason::BaselineRedHold => {
-                        // [ORB-14258] Lifts by itself once the base moves; the
-                        // detail names the base and the command.
+                        // [ORB-14258] Lifts by itself once the command passes
+                        // on a new base tip; the detail names the base and
+                        // the command.
                         object.insert(
                             "reason".to_string(),
                             Value::String("baseline_red_hold".to_string()),

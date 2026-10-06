@@ -285,12 +285,6 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
     }
 }
 
-/// The cached result of `command` on `base_sha` in `repo`'s shared Git
-/// directory, when a candidate on this host already ran it.
-pub fn cached_base_result(repo: &Path, base_sha: &str, command: &str) -> Option<BaseCommandResult> {
-    read_cached(&cache_paths(repo, base_sha, command).ok()?.result)
-}
-
 struct CachePaths {
     result: PathBuf,
     lock: PathBuf,
@@ -444,18 +438,20 @@ pub enum BaselineHoldStatus {
 
 /// Decide whether a [`BaselineRedHold`] still stands in `repo`.
 ///
-/// The hold stands while its base ref still points at the red commit, or at a
-/// commit this host has already seen fail the command. Any other tip lifts it:
-/// the next delivery validates the candidate there, and a base still red there
-/// holds the task again on the new commit, from the shared cache when one
-/// exists. A remote-tracking ref is refreshed from `origin` at most every
-/// [`HOLD_FETCH_INTERVAL`] per repository and branch, so a held backlog does
-/// not wait on some other delivery to fetch. A ref that cannot be read lifts
-/// the hold rather than stranding the task.
-pub fn baseline_hold_status(repo: &Path, hold: &BaselineRedHold) -> BaselineHoldStatus {
+/// The hold stands while its base ref still points at the red commit. When
+/// that ref advances, run the command on the new tip (or use the shared
+/// result cache) and lift the hold only after it passes. A failed or
+/// inconclusive check keeps the task held. A remote-tracking ref is refreshed
+/// from `origin` at most every [`HOLD_FETCH_INTERVAL`] per repository and
+/// branch, so a held backlog does not wait on some other delivery to fetch.
+pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
+    host: &H,
+    repo: &Path,
+    hold: &BaselineRedHold,
+) -> BaselineHoldStatus {
     let base_ref = hold.base_ref.trim();
     if base_ref.is_empty() {
-        return BaselineHoldStatus::Lifted("the hold names no base ref".to_string());
+        return BaselineHoldStatus::Holding("the hold names no base ref".to_string());
     }
     if let Some(branch) = base_ref.strip_prefix("origin/")
         && fetch_due(repo, branch)
@@ -474,7 +470,9 @@ pub fn baseline_hold_status(repo: &Path, hold: &BaselineRedHold) -> BaselineHold
     ) {
         Ok(tip) => tip,
         Err(error) => {
-            return BaselineHoldStatus::Lifted(format!("`{base_ref}` cannot be read: {error}"));
+            return BaselineHoldStatus::Holding(format!(
+                "`{base_ref}` cannot be read, so the new base cannot be checked: {error}"
+            ));
         }
     };
     if tip == hold.base_sha {
@@ -483,14 +481,19 @@ pub fn baseline_hold_status(repo: &Path, hold: &BaselineRedHold) -> BaselineHold
             hold.command
         ));
     }
-    match cached_base_result(repo, &tip, &hold.command) {
-        Some(result) if !result.passed => BaselineHoldStatus::Holding(format!(
-            "`{base_ref}` moved to {tip}, where required validation `{}` also fails",
+    let check = compare_with_base(host, repo, &tip, &hold.command);
+    match check.result {
+        Ok(result) if result.passed => BaselineHoldStatus::Lifted(format!(
+            "`{base_ref}` moved from {} to {tip}, where required validation `{}` passes",
+            hold.base_sha, hold.command
+        )),
+        Ok(_) => BaselineHoldStatus::Holding(format!(
+            "`{base_ref}` moved to {tip}, where required validation `{}` still fails",
             hold.command
         )),
-        _ => BaselineHoldStatus::Lifted(format!(
-            "`{base_ref}` moved from {} to {tip}",
-            hold.base_sha
+        Err(reason) => BaselineHoldStatus::Holding(format!(
+            "`{base_ref}` moved to {tip}, but required validation `{}` could not be checked: {reason}",
+            hold.command
         )),
     }
 }

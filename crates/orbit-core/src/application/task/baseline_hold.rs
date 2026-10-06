@@ -10,9 +10,9 @@
 //! The hold is the task's latest status decision. Any later status change —
 //! an operator moving the task, another run admitting it — supersedes it.
 //! Whether it still stands is the engine's
-//! [`baseline_hold_status`](orbit_engine::baseline_hold_status): it does while
-//! the base ref still points at the red commit, or at one this host has seen
-//! fail the same command.
+//! [`baseline_hold_status`](orbit_engine::baseline_hold_status): after the
+//! base ref moves, the owner runs the command there and releases the task only
+//! after it passes.
 
 use orbit_common::OrbitError;
 use orbit_engine::{BaselineHoldStatus, baseline_hold_status};
@@ -32,13 +32,15 @@ impl OrbitRuntime {
         let Some(hold) = latest_baseline_hold(&history) else {
             return Ok(None);
         };
-        Ok(match baseline_hold_status(&self.paths().repo_root, &hold) {
-            BaselineHoldStatus::Holding(why) => Some(why),
-            BaselineHoldStatus::Lifted(why) => {
-                tracing::debug!(task_id = %task.id, why, "baseline red hold lifted");
-                None
-            }
-        })
+        Ok(
+            match baseline_hold_status(self, &self.paths().repo_root, &hold) {
+                BaselineHoldStatus::Holding(why) => Some(why),
+                BaselineHoldStatus::Lifted(why) => {
+                    tracing::debug!(task_id = %task.id, why, "baseline red hold lifted");
+                    None
+                }
+            },
+        )
     }
 }
 

@@ -185,7 +185,8 @@ no origin or PR credentials.
   then attaches the logs without running the commands again. A command that fails the same way on
   the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
   `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
-  Owner pull admission defers the task until the base moves ([ORB-14258];
+  Owner pull admission defers the task until the held command passes on a new
+  base tip ([ORB-14258];
   [CONFIG.md](../../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner

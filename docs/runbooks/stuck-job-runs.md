@@ -344,10 +344,11 @@ its candidate is kept. `orbit run readiness --json` reports the task with
 `reason: "baseline_red_hold"`. Its `detail` names the red base commit.
 
 Fix the base instead: land a repair of the failing command on the integration
-branch. The hold lifts once the base ref points at another commit, unless this
-host has already seen that commit fail the same command. The next run then
-resumes the kept candidate. A claimed leaf on a follower releases its claim the
-same way, and the owner withholds the task from pulls until its own base moves.
+branch. After the ref advances, the owner runs the held command on its new tip;
+the hold lifts only when that check passes. A failing or inconclusive check
+keeps the task in the backlog. The next run then resumes the kept candidate. A
+claimed leaf on a follower releases its claim the same way, and the owner
+withholds the task from pulls until its own base passes.
 Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
 `validation/<run>/<n>.baseline.json`. See
 [CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).

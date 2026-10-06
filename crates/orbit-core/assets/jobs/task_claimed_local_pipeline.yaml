@@ -22,7 +22,8 @@
 # - `claim_validate` fails the run when a required command does not pass on the
 #   exact candidate, so no handoff is ever recorded for unvalidated work. A
 #   failure the base shares (`baseline_red`) releases the claim with a hold
-#   instead, so the owner keeps the task in its backlog until the base moves.
+#   instead, so the owner keeps the task in its backlog until the required
+#   command passes on a new base tip.
 #
 schemaVersion: 2
 kind: Job

@@ -105,7 +105,7 @@ pub(super) fn attempt_final_recovery(
         );
     }
     // [ORB-14258] Nor fix a required command the base fails the same way; the
-    // failure handoff holds the task until the base moves.
+    // failure handoff holds the task until the command passes on a new base.
     if orbit_types::workflow::is_baseline_red_failure(None, Some(error_message)) {
         return skip(
             "required validation fails on the base exactly as on the candidate; the candidate \

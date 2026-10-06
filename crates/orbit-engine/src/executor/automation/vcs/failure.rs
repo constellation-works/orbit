@@ -462,8 +462,8 @@ fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
          candidate, so the candidate did not cause it. No repair ran, no review or rework budget \
          was spent, and no PR was opened.\n\n- Run: `{run_id}`\n- Failed step: \
          `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
-         The task is back in the backlog and admission skips it while {base_ref} still fails \
-         the command. Once the base moves, the next delivery resumes this candidate and \
+         The task is back in the backlog and admission skips it while {base_ref} fails \
+         the command. Once it passes on a new base tip, the next delivery resumes this candidate and \
          validates it again; fixing the base is the way forward.\n\n## Failure\n\n```text\n{}{}\n```",
         hold.command,
         hold.base_sha,

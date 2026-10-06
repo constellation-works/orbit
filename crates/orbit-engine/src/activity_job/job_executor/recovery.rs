@@ -87,7 +87,7 @@ pub(super) fn recover_or_return_original(
         return failure.into_result();
     }
     // [ORB-14258] Nor can it fix a required command the base itself fails;
-    // the task is held until the base moves instead.
+    // the task is held until the command passes on a new base instead.
     if orbit_types::workflow::is_baseline_red_failure(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }

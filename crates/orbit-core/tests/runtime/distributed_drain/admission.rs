@@ -863,12 +863,13 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
 /// exactly as on the candidate releases its claim with the hold. The owner's
 /// task returns to the backlog under that hold, and the failure breaker does
 /// not count it. The owner's admission withholds the task while the base still
-/// points at the red commit, and offers it again once the base moves.
+/// points at the red commit and after it moves to another failing tip, then
+/// offers it once the required command passes on the new base.
 #[test]
-fn a_red_base_failure_releases_the_claim_and_holds_the_task_until_the_base_moves() {
+fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
     if !isolated(
         module_path!(),
-        "a_red_base_failure_releases_the_claim_and_holds_the_task_until_the_base_moves",
+        "a_red_base_failure_releases_the_claim_until_the_command_passes",
     ) {
         return;
     }
@@ -876,6 +877,11 @@ fn a_red_base_failure_releases_the_claim_and_holds_the_task_until_the_base_moves
     let repo = &pair.owner_repo;
     git(repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is red >&2; exit 2\n",
+    )
+    .unwrap();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "red base"]);
     let red = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
@@ -940,12 +946,28 @@ fn a_red_base_failure_releases_the_claim_and_holds_the_task_until_the_base_moves
     );
     assert_eq!(pair.owner_status(&task), "backlog");
 
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "fix lint"]);
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is still red >&2; exit 2\n",
+    )
+    .unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "still red"]);
+    let moved_red = pair.pass(&drain);
+    assert_eq!(
+        moved_red["admitted"], 0,
+        "the new tip is still red: {moved_red}"
+    );
+    assert_eq!(pair.leaf_runs(), leaves, "a still-red base is not pulled");
+
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "fix lint"]);
     let next = pair.queued_leaf(&drain, 1);
     assert_eq!(
         pair.claimed_task(&next),
         task,
-        "the base moved off the red commit, so the task is offered again"
+        "the required command passes on the new base, so the task is offered again"
     );
 }
 

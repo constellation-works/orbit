@@ -584,7 +584,8 @@ pub struct ClaimEvidence {
     pub provider_unavailable: Option<ProviderUnavailable>,
     /// [ORB-14258] Set on a release whose leaf's required command fails on
     /// its base exactly as on the candidate. The owner records the hold with
-    /// the release, so its admission withholds the task until the base moves.
+    /// the release, so its admission withholds the task until the held command
+    /// passes on a new base tip.
     /// An owner that predates the field releases the task unheld.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_red: Option<orbit_types::workflow::BaselineRedHold>,

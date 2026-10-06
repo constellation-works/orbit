@@ -45,7 +45,8 @@ spec:
       base_sha:
         type: [string, "null"]
       # The ref the run synchronized onto (`origin/<base>` or the local
-      # branch). A `baseline_red` hold lifts once it moves off `base_sha`.
+      # branch). A `baseline_red` hold lifts only after the command passes on
+      # a new tip of this ref.
       base_ref:
         type: [string, "null"]
       # The implementation head a before-PR reviewer commit sits on. Paths

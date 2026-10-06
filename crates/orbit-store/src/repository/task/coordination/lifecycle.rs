@@ -532,7 +532,7 @@ impl TaskCommitBoundary {
                 release = true;
                 // [ORB-14258] A release for a red base is recorded as the
                 // hold itself, so owner admission withholds the task until
-                // the base moves.
+                // the command passes on a new base tip.
                 if let Some(hold) = &value.baseline_red {
                     params.status_note = Some(hold.text(reason));
                     state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();

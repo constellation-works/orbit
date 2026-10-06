@@ -1143,7 +1143,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
 
             assert!(
                 matches!(
-                    baseline_hold_status(&fx.repo, &hold),
+                    baseline_hold_status(&host, &fx.repo, &hold),
                     BaselineHoldStatus::Holding(_)
                 ),
                 "the base ref still points at the red commit"
@@ -1151,7 +1151,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
             fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
             assert!(
                 matches!(
-                    baseline_hold_status(&fx.repo, &hold),
+                    baseline_hold_status(&host, &fx.repo, &hold),
                     BaselineHoldStatus::Lifted(_)
                 ),
                 "the base moved to a commit where the command passes"

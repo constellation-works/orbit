@@ -37,8 +37,9 @@ pub fn is_baseline_red_failure(error_code: Option<&str>, message: Option<&str>) 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaselineRedHold {
     /// The ref the run synchronized onto (`origin/agent-main`, say). The hold
-    /// lifts once it no longer points at `base_sha`. Empty when the run did
-    /// not report it; the hold then lifts on the next admission.
+    /// lifts only after this ref points at a new commit where the command
+    /// passes. Empty when the run did not report it; admission keeps the hold
+    /// until the base ref can be resolved.
     #[serde(default)]
     pub base_ref: String,
     /// The base commit the command failed on.

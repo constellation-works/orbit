@@ -86,7 +86,8 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// The task's last delivery failed a required command its base fails the
     /// same way, and the base has not moved to a commit that may pass it
     /// [ORB-14258]. The task stays in `backlog`; the hold lifts by itself once
-    /// the base moves, and `detail` names the base and command.
+    /// the command passes on a new base tip, and `detail` names the base and
+    /// command.
     BaselineRedHold,
 }
 
@@ -510,7 +511,8 @@ fn backlog_snapshot_in_mode(
         excluded.push(exclusion);
         false
     });
-    // [ORB-14258] A task held for a red base waits until the base moves;
+    // [ORB-14258] A task held for a red base waits until the command passes
+    // on a new base tip;
     // dispatching it would only fail the same command again. A hold that
     // cannot be read is not one: the delivery's own validation decides.
     backlog.retain(|task| match runtime.standing_baseline_hold(task) {

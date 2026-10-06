@@ -33,7 +33,7 @@ fn create_backlog_task(
     _repo_root: &std::path::Path,
     id_hint: &str,
 ) -> String {
-    create_task(runtime, id_hint, None)
+    create_task(runtime, id_hint, None, Vec::new())
 }
 
 /// A backlog task, with `complexity` when admission needs one assessed.
@@ -41,6 +41,7 @@ fn create_task(
     runtime: &OrbitRuntime,
     id_hint: &str,
     complexity: Option<TaskComplexity>,
+    context_files: Vec<String>,
 ) -> String {
     runtime
         .stores()
@@ -57,7 +58,7 @@ fn create_task(
             required_tools: Vec::new(),
             plan: String::new(),
             execution_summary: String::new(),
-            context_files: Vec::new(),
+            context_files,
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,
@@ -257,11 +258,17 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
 /// [ORB-14258] A run whose required validation failed on its base exactly as
 /// on the candidate holds its task in the backlog instead of blocking it. The
 /// backlog snapshot withholds the task while the base still points at the red
-/// commit, and admits it once the base moves.
+/// commit and after it moves to another failing tip, then admits it only after
+/// the command passes on a new base tip.
 #[test]
-fn a_red_base_failure_holds_the_task_in_the_backlog_until_the_base_moves() {
+fn a_red_base_failure_holds_the_task_until_the_command_passes() {
     let (_root, runtime, repo_root) = test_runtime();
     std::fs::write(repo_root.join(".gitignore"), "/.orbit/\n").expect("ignore");
+    std::fs::write(
+        repo_root.join("Makefile"),
+        "ci-lint:\n\t@echo lint is red >&2; exit 2\n",
+    )
+    .expect("write red-base command");
     git(&repo_root, &["init", "-q", "-b", "main"]);
     git(&repo_root, &["add", "-A"]);
     git(&repo_root, &["commit", "-q", "-m", "red base"]);
@@ -271,7 +278,12 @@ fn a_red_base_failure_holds_the_task_in_the_backlog_until_the_base_moves() {
         command: "make ci-lint".to_string(),
         run_id: String::new(),
     };
-    let task_id = create_task(&runtime, "red-base", Some(TaskComplexity::Low));
+    let task_id = create_task(
+        &runtime,
+        "red-base",
+        Some(TaskComplexity::Low),
+        vec!["file:.gitignore".to_string()],
+    );
     let run = insert_running_pipeline_run(&runtime);
     couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
     record_failing_step_with_message(
@@ -325,10 +337,32 @@ fn a_red_base_failure_holds_the_task_in_the_backlog_until_the_base_moves() {
         "{held}"
     );
 
-    git(
-        &repo_root,
-        &["commit", "-q", "--allow-empty", "-m", "fix lint"],
+    std::fs::write(
+        repo_root.join("Makefile"),
+        "ci-lint:\n\t@echo lint is still red >&2; exit 2\n",
+    )
+    .expect("write still-red base command");
+    git(&repo_root, &["add", "Makefile"]);
+    git(&repo_root, &["commit", "-q", "-m", "still red"]);
+    let still_held = backlog(&runtime);
+    assert_eq!(
+        still_held["task_ids"],
+        serde_json::json!([]),
+        "{still_held}"
     );
+    assert!(
+        still_held["excluded"].as_array().is_some_and(|excluded| {
+            excluded.iter().any(|entry| {
+                entry["id"] == task_id.as_str() && entry["reason"] == "baseline_red_hold"
+            })
+        }),
+        "a moved but still-red base keeps the task held: {still_held}"
+    );
+
+    std::fs::write(repo_root.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n")
+        .expect("write passing-base command");
+    git(&repo_root, &["add", "Makefile"]);
+    git(&repo_root, &["commit", "-q", "-m", "fix lint"]);
     let lifted = backlog(&runtime);
     assert_eq!(lifted["task_ids"], serde_json::json!([task_id]), "{lifted}");
 }

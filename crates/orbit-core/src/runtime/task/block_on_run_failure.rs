@@ -9,7 +9,8 @@
 //! [ORB-14258] A run that failed because a required command fails on its
 //! base exactly as on the candidate (`[baseline_red]`) holds its tasks in the
 //! backlog instead (`baseline_red_hold`): nothing about the work is wrong, and
-//! admission releases the hold once the base moves. A task the run's failure
+//! admission releases the hold once the required command passes on a new base.
+//! A task the run's failure
 //! handoff already held is left as it is.
 //!
 //! This is the symmetric counterpart to the coupling-in that

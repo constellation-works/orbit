@@ -17,7 +17,7 @@
 #   candidate is published and the task is blocked for reconciliation. A
 #   required command its base fails the same way (`baseline_red`) is the
 #   exception: the candidate is kept unpublished and the task is held in the
-#   backlog until the base moves. Once a
+#   backlog until the required command passes on a new base tip. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
 #
