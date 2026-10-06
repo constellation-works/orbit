@@ -47,7 +47,8 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 ///
 /// Losing the answer is not the same fact for every request. The phases that
 /// decide a route are read-only and repeatable, so silence there means the
-/// host did not answer. A routed `tools/call` may already have run and
+/// host did not answer. An unreadable answer has the same uncertainty as a
+/// missing one. A routed `tools/call` may already have run and
 /// committed on the destination, and killing the SSH child does not undo it,
 /// so silence there is genuine ambiguity: reporting it as a delivery miss
 /// invites the retry that duplicates the write [ORB-11023].
@@ -439,9 +440,10 @@ impl DestinationSession {
             let message: Value = match serde_json::from_str(line.trim()) {
                 Ok(message) => message,
                 Err(error) => {
-                    return Err(unreachable(
+                    return Err(lost.classify(
                         &self.destination,
-                        format!("emitted invalid JSON: {error}"),
+                        id,
+                        format!("emitted invalid JSON while awaiting '{method}': {error}"),
                     ));
                 }
             };
