@@ -85,6 +85,21 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        // Let the artifact store finish its rejection checks before publishing
+        // document or status/history edits. Keeping those checks in the store
+        // also covers reserved evidence paths and malformed coverage payloads.
+        if params.has_artifact_changes() {
+            self.artifact.upsert_task_artifacts(
+                id,
+                TaskArtifactUpdateParams {
+                    origin: params.artifact_origin.clone(),
+                    owner_run_id: params.artifact_owner_run_id.clone(),
+                    actor: params.actor.clone(),
+                    upsert_artifacts: params.upsert_artifacts.clone(),
+                },
+            )?;
+        }
+
         if params.has_document_changes() {
             self.document.update_task_document(
                 id,
@@ -128,18 +143,6 @@ impl TaskRecordService<'_> {
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),
-                },
-            )?;
-        }
-
-        if params.has_artifact_changes() {
-            self.artifact.upsert_task_artifacts(
-                id,
-                TaskArtifactUpdateParams {
-                    origin: params.artifact_origin.clone(),
-                    owner_run_id: params.artifact_owner_run_id.clone(),
-                    actor: params.actor.clone(),
-                    upsert_artifacts: params.upsert_artifacts.clone(),
                 },
             )?;
         }

@@ -35,4 +35,5 @@ mod provider_failure_hold;
 mod task_delivery;
 mod task_pilot;
 mod task_pr_closure;
+mod task_update;
 mod upgrade_resume;
