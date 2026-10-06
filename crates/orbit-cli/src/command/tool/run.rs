@@ -13,6 +13,17 @@ use serde_json::{Map, Value};
 
 use crate::command::{CommandOut, Execute, Payload};
 
+/// Runtime route for one `orbit tool run` invocation, chosen before bootstrap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolRunBootstrap {
+    /// Explicit `workspace` in otherwise valid JSON. A fail-closed filter.
+    SelectedWorkspace(String),
+    /// Id-resolved tool with a non-empty `id` and no workspace selector.
+    TaskOwner(String),
+    /// Valid input that does not select a workspace or a task owner.
+    CwdWorkspace,
+}
+
 #[derive(Args)]
 pub struct ToolRunArgs {
     /// Tool name
@@ -54,16 +65,23 @@ pub struct ToolRunArgs {
 }
 
 impl ToolRunArgs {
-    /// Selector supplied by a tool call, available before runtime bootstrap.
-    /// Invalid input is reported by `execute` through `parsed_input`.
-    pub(crate) fn input_workspace_selector(&self) -> Option<String> {
-        self.parsed_input()
-            .ok()?
-            .get("workspace")?
-            .as_str()
-            .map(str::trim)
-            .filter(|selector| !selector.is_empty())
-            .map(ToOwned::to_owned)
+    /// Choose the runtime from tool input.
+    ///
+    /// A JSON parse failure or an unreadable `--input-file` is returned to the
+    /// caller. Collapsing that error into "no selector" makes `main` open the
+    /// cwd workspace — applying pending layout and schema migrations — or exit
+    /// with the bootstrap error before `execute` can report the input error.
+    pub(crate) fn bootstrap_route(&self) -> Result<ToolRunBootstrap, OrbitError> {
+        let value = self.parsed_input()?;
+        if let Some(selector) = trimmed_string_field(&value, "workspace") {
+            return Ok(ToolRunBootstrap::SelectedWorkspace(selector));
+        }
+        if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str())
+            && let Some(task_id) = trimmed_string_field(&value, "id")
+        {
+            return Ok(ToolRunBootstrap::TaskOwner(task_id));
+        }
+        Ok(ToolRunBootstrap::CwdWorkspace)
     }
 
     /// Read and parse tool input once for all pre-dispatch and execution paths
@@ -98,18 +116,28 @@ impl ToolRunArgs {
     /// [ORB-10961] and `orbit task artifact get` [ORB-12263]. Sharing that
     /// list with the MCP server's own routing keeps the two surfaces from
     /// drifting apart. Other tools keep the ordinary workspace runtime.
+    ///
+    /// `orbit tool run` must not use this for bootstrap. A parse failure
+    /// becomes `None`, which is indistinguishable from a missing id.
+    /// [`Self::bootstrap_route`] preserves that error. Plugin command groups
+    /// call this only, and their tool names are not on the id-resolved list,
+    /// so they return before parsing.
     pub(crate) fn id_resolved_task_id(&self) -> Option<String> {
         if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str()) {
             return None;
         }
         let value = self.parsed_input().ok()?;
-        value
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(ToOwned::to_owned)
+        trimmed_string_field(&value, "id")
     }
+}
+
+fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 impl Execute for ToolRunArgs {

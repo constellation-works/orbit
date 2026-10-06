@@ -13,3 +13,4 @@ mod support;
 
 pub use command::{ToolCommand, ToolSubcommand};
 pub use run::ToolRunArgs;
+pub(crate) use run::ToolRunBootstrap;
