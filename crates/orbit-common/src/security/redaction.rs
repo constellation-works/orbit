@@ -418,6 +418,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::WorkspaceClaimHeld(claim) => {
             OrbitError::WorkspaceClaimHeld(redact_workspace_claim_held(*claim, redact))
         }
+        OrbitError::TmpGcActiveRuns { run_ids } => OrbitError::TmpGcActiveRuns {
+            run_ids: run_ids.iter().map(|id| redact(id)).collect(),
+        },
         OrbitError::JobRunStateTransition(m) => OrbitError::JobRunStateTransition(redact(&m)),
         OrbitError::JobRunStartConflict(m) => OrbitError::JobRunStartConflict(redact(&m)),
         OrbitError::JobRunControlConflict(m) => OrbitError::JobRunControlConflict(redact(&m)),

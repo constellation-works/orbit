@@ -563,6 +563,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator, McpCapability::Runner],
         rationale: "collection force-removes worktrees and deletes their branches",
     },
+    GovernedOperation {
+        id: "gc tmp",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "collection permanently deletes workspace scratch contents",
+    },
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,

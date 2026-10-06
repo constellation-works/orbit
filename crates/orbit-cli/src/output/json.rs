@@ -38,6 +38,11 @@ pub fn error_payload(error: &OrbitError) -> Value {
         object.insert("source_run_id".to_string(), json!(source_run_id));
         object.insert("run_id".to_string(), json!(run_id));
     }
+    if let OrbitError::TmpGcActiveRuns { run_ids } = error
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("run_ids".to_string(), json!(run_ids));
+    }
     if let Some((task_id, path, reason)) = error.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -129,6 +134,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
+        OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
         OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
         // New OrbitError variants must remain JSON-serializable before this
         // boundary assigns them a dedicated stable code.

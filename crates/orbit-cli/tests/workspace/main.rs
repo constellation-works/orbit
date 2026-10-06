@@ -25,6 +25,8 @@ mod routine_state_seed;
 mod ship_sweep_root;
 mod sweep_root;
 mod sweep_workspace;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod tmp_gc;
 mod workspace_selector;
 mod workspace_source_remote;
 mod workspace_sync;

@@ -14,6 +14,20 @@
   },
   {
     "surface": "cli_command",
+    "operation": "gc tmp",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
     "operation": "gc worktrees",
     "required_any": [
       "operator",
