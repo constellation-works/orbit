@@ -353,3 +353,73 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
         }
     }
 }
+
+#[test]
+fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes() {
+    if isolated("concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes") {
+        return;
+    }
+    use orbit_store::contracts::KeyedJobRunAdmission;
+    use serde_json::json;
+    use std::sync::{Arc, Barrier};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.db");
+    let base = Store::open(&path).unwrap();
+    let jobs = compose::workspace_job_run_store(base.clone(), "workspace");
+    let other = compose::workspace_job_run_store(Store::open(&path).unwrap(), "workspace");
+    let barrier = Arc::new(Barrier::new(2));
+    let input = json!({"batch": "fixture"});
+    let admissions = [jobs.clone(), other].map(|store| {
+        let barrier = barrier.clone();
+        let input = input.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            store
+                .insert_automation_job_run("automation_fixture", input, "action")
+                .unwrap()
+        })
+    });
+    let outcomes = admissions.map(|thread| thread.join().unwrap());
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, KeyedJobRunAdmission::Admitted(_)))
+            .count(),
+        1,
+        "concurrent submissions must identify exactly one initializer"
+    );
+    let run_ids = outcomes.map(|outcome| match outcome {
+        KeyedJobRunAdmission::Admitted(run) | KeyedJobRunAdmission::Existing(run) => run.run_id,
+    });
+    assert_eq!(run_ids[0], run_ids[1]);
+    assert_eq!(jobs.list_job_runs("automation_fixture").unwrap().len(), 1);
+    let run_id = &run_ids[0];
+    let mut state = jobs.read_run_state(run_id).unwrap().unwrap();
+    state.next_step_index = 3;
+    state.step_outputs.insert(2, json!({"checkpoint": true}));
+    jobs.write_run_state(run_id, &state).unwrap();
+    base.connection()
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_run_rewrite BEFORE UPDATE ON job_runs \
+         BEGIN SELECT RAISE(ABORT, 'existing admission rewrote a run'); END;",
+        )
+        .unwrap();
+
+    let existing = jobs
+        .insert_automation_job_run("automation_fixture", input.clone(), "action")
+        .unwrap();
+    assert!(matches!(existing, KeyedJobRunAdmission::Existing(run) if run.run_id == *run_id));
+    for (job, altered) in [
+        ("automation_fixture", json!({"batch": "changed"})),
+        ("other_job", input),
+    ] {
+        assert!(matches!(
+            jobs.insert_automation_job_run(job, altered, "action"),
+            Err(orbit_common::OrbitError::InvalidInput(_))
+        ));
+    }
+    assert_eq!(jobs.read_run_state(run_id).unwrap(), Some(state));
+}

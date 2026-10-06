@@ -188,3 +188,213 @@ fn audit_failure_preserves_admitted_runs_and_submission_errors() {
         }
     }
 }
+
+/// SQLite busy-handler fault injection forces the competing checkpoint/control
+/// commit at the trigger writer's lock acquisition (unit admission criterion 2).
+#[cfg(unix)]
+#[test]
+fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &trigger_recording_preserves_a_competing_checkpoint_and_drain_controls,
+    )) {
+        return;
+    }
+    use chrono::Utc;
+    use orbit_types::workflow::{DrainAdmissionsStop, DrainCancelRequest, JobRunTrigger};
+    use serde_json::json;
+    use std::cell::RefCell;
+    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+    use std::time::Duration;
+
+    type UnlockGate = (SyncSender<()>, Receiver<()>);
+    thread_local! {
+        static UNLOCK: RefCell<Option<UnlockGate>> = const { RefCell::new(None) };
+    }
+
+    let (_root, runtime) = test_runtime();
+    let jobs = runtime.stores().jobs();
+    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = jobs
+        .insert_automation_job_run("trigger_fixture", json!({}), "action")
+        .unwrap()
+    else {
+        panic!("fresh action must be admitted");
+    };
+    let mut expected = runtime.read_run_state(&run.run_id).unwrap().unwrap();
+    expected.next_step_index = 1;
+    expected.step_outputs.insert(0, json!({"checkpoint": true}));
+    expected.drain_admissions_stop = Some(DrainAdmissionsStop {
+        actor: "operator".into(),
+        reason: Some("stop admissions".into()),
+        stopped_at: Utc::now(),
+    });
+    expected.drain_cancel = Some(DrainCancelRequest {
+        actor: "operator".into(),
+        source: "fixture".into(),
+        reason: None,
+        requested_at: Utc::now(),
+    });
+
+    let store = runtime.sqlite_store().unwrap();
+    let path = store
+        .connection()
+        .lock()
+        .unwrap()
+        .path()
+        .unwrap()
+        .to_owned();
+    let mut competing = rusqlite::Connection::open(path).unwrap();
+    let transaction = competing
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE job_runs SET pipeline_state_json = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
+            rusqlite::params![
+                serde_json::to_string(&expected).unwrap(),
+                runtime.workspace_id().unwrap(),
+                run.run_id
+            ],
+        )
+        .unwrap();
+    let (waiting_tx, waiting_rx) = sync_channel(1);
+    let (committed_tx, committed_rx) = sync_channel(1);
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .busy_handler(Some(|_| {
+            UNLOCK.with(|gate| {
+                let Some((waiting, committed)) = gate.borrow_mut().take() else {
+                    return false;
+                };
+                waiting.send(()).unwrap();
+                committed.recv_timeout(Duration::from_secs(5)).is_ok()
+            })
+        }))
+        .unwrap();
+    let worker_runtime = runtime.clone();
+    let run_id = run.run_id.clone();
+    let writer = std::thread::spawn(move || {
+        UNLOCK.with(|gate| *gate.borrow_mut() = Some((waiting_tx, committed_rx)));
+        worker_runtime.record_run_trigger(&run_id, &JobRunTrigger::cli())
+    });
+    waiting_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("trigger writer reached the competing transaction");
+    transaction.commit().unwrap();
+    committed_tx.send(()).unwrap();
+    writer.join().unwrap().unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .busy_handler(None)
+        .unwrap();
+
+    expected.trigger = Some(JobRunTrigger::cli());
+    assert_eq!(
+        runtime.read_run_state(&run.run_id).unwrap(),
+        Some(expected),
+        "trigger recording must preserve checkpoints and ORB-11283 operator controls committed before its write"
+    );
+}
+
+/// A rejecting SQLite trigger detects even an otherwise identical state write
+/// through the crate-private automation entry point (unit criterion 2).
+#[cfg(unix)]
+#[test]
+fn repeated_automation_admission_preserves_pending_running_and_terminal_state() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &repeated_automation_admission_preserves_pending_running_and_terminal_state,
+    )) {
+        return;
+    }
+    use chrono::Utc;
+    use orbit_types::workflow::{JobRunState, JobRunTrigger};
+    use serde_json::json;
+
+    let (_root, runtime) = test_runtime();
+    let jobs_dir = runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(jobs_dir.join("snapshot_fixture.yaml"), SNAPSHOT_YAML).unwrap();
+    crate::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let admitted = runtime
+        .submit_automation_pipeline_run(
+            "snapshot_fixture",
+            json!({}),
+            "action",
+            JobRunTrigger::cli(),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime
+            .read_run_state(&admitted.run_id)
+            .unwrap()
+            .unwrap()
+            .trigger,
+        Some(JobRunTrigger::cli())
+    );
+    let jobs = runtime.stores().jobs();
+    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = jobs
+        .insert_automation_job_run("snapshot_fixture", json!({"guard": true}), "repeat-action")
+        .unwrap()
+    else {
+        panic!("fresh action must be admitted");
+    };
+    // A live incumbent makes the harmless replacement workers benign
+    // duplicate deliveries; they cannot race this fixture's lifecycle changes.
+    jobs.claim_pending_job_run_owner(&run.run_id, std::process::id())
+        .unwrap();
+    let mut expected = runtime.read_run_state(&run.run_id).unwrap().unwrap();
+    expected.trigger = Some(JobRunTrigger::cli());
+    expected.next_step_index = 1;
+    expected.step_outputs.insert(0, json!({"checkpoint": true}));
+    runtime.write_run_state(&run.run_id, &expected).unwrap();
+
+    for state in [
+        JobRunState::Pending,
+        JobRunState::Running,
+        JobRunState::Success,
+    ] {
+        match state {
+            JobRunState::Running => {
+                jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+                    .unwrap();
+            }
+            JobRunState::Success => {
+                jobs.finalize_job_run(&run.run_id, state, Utc::now(), None)
+                    .unwrap();
+            }
+            _ => {}
+        }
+        runtime.sqlite_store().unwrap().connection().lock().unwrap().execute_batch(
+            "CREATE TRIGGER refuse_pipeline_rewrite BEFORE UPDATE OF pipeline_state_json ON job_runs \
+             WHEN json_extract(OLD.input_json, '$.guard') = 1 \
+             BEGIN SELECT RAISE(ABORT, 'repeated admission rewrote pipeline state'); END;"
+        ).unwrap();
+        let repeated = runtime
+            .submit_automation_pipeline_run(
+                "snapshot_fixture",
+                json!({"guard": true}),
+                "repeat-action",
+                JobRunTrigger::child(),
+            )
+            .unwrap();
+        assert_eq!(repeated.run_id, run.run_id);
+        assert_eq!(jobs.get_job_run(&run.run_id).unwrap().unwrap().state, state);
+        assert_eq!(
+            runtime.read_run_state(&run.run_id).unwrap(),
+            Some(expected.clone()),
+            "repeated {state:?} admission must preserve the original trigger and every checkpoint"
+        );
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_pipeline_rewrite;")
+            .unwrap();
+    }
+    assert_eq!(jobs.list_job_runs("snapshot_fixture").unwrap().len(), 2);
+}

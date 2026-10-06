@@ -134,6 +134,7 @@ impl OrbitRuntime {
             }
 
             let submitted_at = Utc::now();
+            let mut existing_automation_run = false;
             let run = if let Some(admission) = admission {
                 match self
                     .stores()
@@ -154,9 +155,17 @@ impl OrbitRuntime {
                     }
                 }
             } else if let Some(key) = action_key {
-                self.stores()
-                    .jobs()
-                    .insert_automation_job_run(job_name, input.clone(), key)?
+                match self.stores().jobs().insert_automation_job_run(
+                    job_name,
+                    input.clone(),
+                    key,
+                )? {
+                    KeyedJobRunAdmission::Admitted(run) => *run,
+                    KeyedJobRunAdmission::Existing(run) => {
+                        existing_automation_run = true;
+                        *run
+                    }
+                }
             } else if let Some(retry_key) = retry_key {
                 // [ORB-13560] The retry-key probe and the insert are one store
                 // transaction, so concurrent submitters of one key — in any
@@ -225,7 +234,12 @@ impl OrbitRuntime {
             } else {
                 trigger
             };
-            self.record_run_trigger(&run.run_id, &trigger)?;
+            // The transaction's outcome, rather than the run's pending/running
+            // state, decides initialization. A retry may resolve a pending run
+            // whose worker has already started writing checkpoints or controls.
+            if !existing_automation_run {
+                self.record_run_trigger(&run.run_id, &trigger)?;
+            }
 
             // Pin the definition before the worker can exist. A direct-path
             // submission must not depend on the source file surviving
@@ -423,11 +437,13 @@ impl OrbitRuntime {
         run_id: &str,
         trigger: &JobRunTrigger,
     ) -> Result<(), OrbitError> {
-        let Some(mut state) = self.read_run_state(run_id)? else {
-            return Ok(());
-        };
-        state.trigger = Some(trigger.clone());
-        self.write_run_state(run_id, &state)
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.trigger = Some(trigger.clone());
+                Ok(())
+            })?;
+        Ok(())
     }
 }
 
