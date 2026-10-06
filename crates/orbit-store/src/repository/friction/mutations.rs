@@ -304,6 +304,7 @@ impl FrictionStore {
 struct PreparedAdd {
     model: String,
     tags: Vec<String>,
+    status: FrictionStatus,
     month: String,
     title: Option<String>,
     body: String,
@@ -328,6 +329,7 @@ fn prepare_add(files_root: &Path, params: FrictionAddParams) -> Result<PreparedA
     Ok(PreparedAdd {
         model,
         tags,
+        status: params.status,
         month,
         title,
         body: params.body,
@@ -347,9 +349,9 @@ fn allocate_record(
         title: prepared.title.clone(),
         model: prepared.model.clone(),
         created_at: prepared.created_at,
-        status: FrictionStatus::Open,
+        status: prepared.status,
         tags: prepared.tags.clone(),
-        resolved_at: None,
+        resolved_at: (prepared.status == FrictionStatus::Resolved).then_some(prepared.created_at),
         during_task: prepared.during_task.clone(),
         resolved_by_task: None,
         rehome_to: None,

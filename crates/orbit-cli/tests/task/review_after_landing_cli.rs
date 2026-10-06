@@ -657,17 +657,51 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
         recoveries[0].reason
     );
     let frictions = fixture.json(&["friction", "list", "--json"]);
-    let adoptions = frictions
+    let adoption = frictions
         .as_array()
         .unwrap()
         .iter()
-        .filter(|friction| {
+        .find(|friction| {
             friction["title"]
                 .as_str()
                 .is_some_and(|title| title.contains("adopted changed settings"))
         })
-        .count();
-    assert_eq!(adoptions, 1, "{frictions}");
+        .expect("the automatic adoption notice is listed");
+    assert_eq!(adoption["status"], "resolved", "{adoption}");
+    assert_eq!(
+        adoption["resolved_at"], adoption["created_at"],
+        "informational notices resolve at creation"
+    );
+
+    let friction_id = adoption["id"].as_str().expect("friction id");
+    let search = fixture.json(&[
+        "search",
+        "automation-settings-adopted",
+        "--kind",
+        "friction",
+        "--all",
+        "--json",
+    ]);
+    assert!(
+        search["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| { hit["id"] == friction_id && hit["status"] == "resolved" }),
+        "resolved automation notices remain discoverable with --all: {search}"
+    );
+
+    let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
+    assert!(
+        preview["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|recovery| {
+                recovery["by"] == "system:automation" && recovery["adopted_settings"] == true
+            }),
+        "the automatically adopted notice remains visible in recovery preview history: {preview}"
+    );
     assert_eq!(doctor_row(&fixture).0["status"], "ok");
 
     let mut moved = retuned.clone();
