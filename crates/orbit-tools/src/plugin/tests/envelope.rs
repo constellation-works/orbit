@@ -85,6 +85,40 @@ fn secret_spec(root: &Path, source: Arc<RecordingSource>) -> PluginBackendSpec {
 
 #[test]
 fn a_delivered_value_in_an_update_name_cannot_reach_diagnostics_or_audit() {
+    // ORB-14389: tracing-core's single-dispatcher fast path registers a
+    // callsite using the current thread's subscriber. A parallel call to
+    // apply_secret_updates without our scoped subscriber can cache `never`
+    // for the shared warning and suppress it here. Own the process so this
+    // test registers and observes the warning without sibling interference.
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .expect("test module belongs to this crate");
+    let test =
+        format!("{module}::a_delivered_value_in_an_update_name_cannot_reach_diagnostics_or_audit");
+    if std::env::var("ORBIT_TEST_PLUGIN_DIAGNOSTIC_CHILD").as_deref() != Ok(test.as_str()) {
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        command
+            .args(["--exact", &test, "--nocapture"])
+            .env("ORBIT_TEST_PLUGIN_DIAGNOSTIC_CHILD", &test);
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )
+        .expect("run isolated diagnostic test");
+        orbit_common::test_env::assert_child_test_passed(
+            &test,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+
     let temp = tempfile::tempdir().expect("tempdir");
     // Valid secret-name syntax alone cannot prevent an opaque value being
     // smuggled into the backend-controlled name of a refused update.
