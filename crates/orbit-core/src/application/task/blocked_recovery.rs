@@ -151,8 +151,18 @@ impl BlockEpisode {
         // [ORB-14269] An implementer-declared blocker is the same shape of
         // stop: another agent does not clear it. The marker is what a
         // `workflow_run_failed` fallback note still carries.
+        // A claimed leaf records its failure diagnostic in the task's
+        // execution summary; its `claim_failed` history entry may have no
+        // status note. Check that durable evidence too, or the backstop would
+        // spend a recovery agent immediately after the implementer stopped.
+        let agent_blocker = orbit_types::workflow::is_task_blocked_by_agent(None, Some(&note))
+            || (source == BlockSource::ClaimFailed
+                && orbit_types::workflow::is_task_blocked_by_agent(
+                    None,
+                    Some(&task.execution_summary),
+                ));
         if orbit_types::workflow::is_validation_environment_failure(None, Some(&note))
-            || orbit_types::workflow::is_task_blocked_by_agent(None, Some(&note))
+            || agent_blocker
         {
             return None;
         }

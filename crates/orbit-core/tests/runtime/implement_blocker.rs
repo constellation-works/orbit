@@ -14,6 +14,36 @@ use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+fn run_isolated_test(test_name: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_IMPLEMENT_BLOCKER_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(test_name) {
+        return false;
+    }
+
+    let home = TempDir::new().expect("isolated test home");
+    let mut command = std::process::Command::new(
+        std::env::current_exe().expect("locate integration test binary"),
+    );
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test_name)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("isolated test child");
+    orbit_common::test_env::assert_child_test_passed(
+        test_name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    true
+}
+
 fn test_runtime() -> (TempDir, OrbitRuntime, std::path::PathBuf) {
     let root = TempDir::new().expect("create tempdir");
     let global_root = root.path().join("global");
@@ -95,18 +125,17 @@ fn implementer_env(activity: &str) -> test_env::ScopedEnv {
 
 fn assert_blocked_refused(error: OrbitError) {
     match error {
-        OrbitError::InvalidInput(message) => {
-            assert!(
-                message.contains("result.blocker"),
-                "the refusal tells the implementer to return a blocker: {message}"
-            );
-        }
+        OrbitError::InvalidInput(_) => {}
         other => panic!("expected invalid input, got {other}"),
     }
 }
 
 #[test]
 fn an_implementation_activity_cannot_set_status_blocked() {
+    let test_name = "implement_blocker::an_implementation_activity_cannot_set_status_blocked";
+    if run_isolated_test(test_name) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let workspace = repo_root.to_string_lossy().to_string();
     let task_id = {

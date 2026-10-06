@@ -239,6 +239,22 @@ fn every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bou
     );
     let claim = in_progress_task(&runtime, "Claim settlement failed");
     block_with(&runtime, &claim, claim_failed_update());
+    let claimed_blocker = in_progress_task(&runtime, "Claimed implementer blocker");
+    block_with(
+        &runtime,
+        &claimed_blocker,
+        TaskAutomationUpdate {
+            execution_summary: Some(format!(
+                "Outcome: failed\nError: {} kind=environment toolchain unavailable",
+                orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER,
+            )),
+            status: Some(TaskStatus::Blocked),
+            status_event: Some("claim_failed".to_string()),
+            // Claimed failure settlements put their diagnostic in the task
+            // summary; the history event itself has no status note.
+            ..TaskAutomationUpdate::default()
+        },
+    );
     // A block a human set by hand is not the backstop's.
     let manual = in_progress_task(&runtime, "Blocked by hand");
     runtime
@@ -292,6 +308,12 @@ fn every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bou
     assert_eq!(source_of(by_task(&gate)), "gate_failed");
     assert_eq!(source_of(by_task(&interrupted)), "run_interrupted");
     assert_eq!(source_of(by_task(&claim)), "claim_failed");
+    assert!(
+        inputs
+            .iter()
+            .all(|input| input["task_id"] != json!(claimed_blocker.id)),
+        "a claimed implementer blocker does not dispatch another recovery agent"
+    );
     assert!(
         inputs
             .iter()
