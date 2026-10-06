@@ -73,7 +73,7 @@ copy. Run `orbit routine list` to see their names on this host.
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
-| `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
+| `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ## Built in: final recovery of blocked tasks
 
