@@ -218,12 +218,15 @@ impl OrbitRuntime {
             ));
         }
 
+        if let Some(detail) =
+            crate::application::review::upgrade_resume_admission_mismatch(self, run)
+        {
+            return Ok(Skip::new("review_admission_changed", detail));
+        }
+
         let state = self.read_run_state(&run.run_id)?;
         if DRAIN_JOBS.contains(&run.job_id.as_str()) {
-            if state
-                .as_ref()
-                .is_some_and(|state| state.admissions_stopped() || state.drain_cancelling())
-            {
+            if self.upgrade_resume_drain_stopped(run, state.as_ref())? {
                 return Ok(Skip::new(
                     "drain_admissions_stopped",
                     "an operator stopped this drain's admissions",
@@ -258,6 +261,34 @@ impl OrbitRuntime {
             return Ok(Skip::new("not_resumable", error.to_string()));
         }
         Ok(None)
+    }
+
+    /// A ship wrapper delegates its admission window and stop control to its
+    /// blocking `workspace_auto_pipeline` child.
+    fn upgrade_resume_drain_stopped(
+        &self,
+        run: &JobRun,
+        state: Option<&PipelineState>,
+    ) -> Result<bool, OrbitError> {
+        if state.is_some_and(|state| state.admissions_stopped() || state.drain_cancelling()) {
+            return Ok(true);
+        }
+        if run.job_id != "workspace_ship_pipeline" {
+            return Ok(false);
+        }
+        for dispatch in state
+            .iter()
+            .flat_map(|state| &state.child_dispatches)
+            .filter(|dispatch| dispatch.job_name == "workspace_auto_pipeline")
+        {
+            if self
+                .read_run_state(&dispatch.child_run_id)?
+                .is_some_and(|state| state.admissions_stopped() || state.drain_cancelling())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// A claimed follower leaf or a run bound to an execution claim.
