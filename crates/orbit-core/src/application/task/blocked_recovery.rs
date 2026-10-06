@@ -15,11 +15,11 @@
 //!
 //! - a final-recovery decision was already recorded on or after the block;
 //! - someone other than Orbit's own automation commented on the task,
-//!   changed its status or attached an artifact after the block — a human's
-//!   call stands;
+//!   changed its fields or status, or attached an artifact after the block —
+//!   a human's attributed call stands;
 //! - the task was written after the block by a change no actor is recorded
-//!   for — a field-only edit leaves no history, so the backstop cannot prove
-//!   it was not a human's and leaves the task alone;
+//!   for — a legacy field-only write may leave no history, so the backstop
+//!   cannot prove it was not a human's and leaves the task alone;
 //! - a recovery run for the episode already exists (the episode key is also
 //!   the run's admission key, so two ticks cannot admit two runs);
 //! - the block is older than [`MAX_EPISODE_AGE_HOURS`];
@@ -221,8 +221,8 @@ pub enum EpisodeDisposition {
         /// Who acted.
         by: String,
     },
-    /// The task was written after the block with no recorded actor (a
-    /// field-only edit), so a human's edit cannot be ruled out.
+    /// The task was written after the block with no recorded actor (for
+    /// example, a legacy field-only write), so a human's edit cannot be ruled out.
     UnexplainedChange {
         /// The unattributed write.
         changed_at: DateTime<Utc>,
