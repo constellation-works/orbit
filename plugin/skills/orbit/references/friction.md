@@ -133,6 +133,32 @@ operator CLI path; an agent instead runs `orbit tool run orbit.friction.update
 metadata — or land a covering task there. Do not count a foreign `resolves`
 edge as coverage.
 
+### Closing legacy records on a replica
+
+A checkout re-registered as a replica keeps its host-local friction corpus.
+Its friction reads still show those records, including reports authored before
+the role change. They are separate from the owner's corpus: identical IDs on
+the two hosts can name unrelated reports.
+
+Close a local legacy report from that replica using the normal audited path:
+
+```bash
+orbit --workspace <replica-workspace> friction resolve <ID>
+orbit tool run orbit.friction.update --input '{"workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>","model":"<agent-family>"}'
+```
+
+The update must explicitly set `status: resolved`; it may include body, title,
+tags, and a `rehome_to` disposition with `move: false`. Preserve the original
+report when adding evidence, since `body` replaces it. Resolution keeps the
+local ID, attribution, creation time, task reference, and first `resolved_at`
+timestamp. It records the normal command audit and requires no connection to
+the owner. Select the replica host and workspace explicitly over federated MCP.
+
+This exception only closes existing records in the local workspace partition.
+Additions, reopening, triage-only or metadata-only updates, and actual moves
+remain refused on replicas, even with operator authority. Claimed workers
+continue to use the owner route for friction writes.
+
 ## Re-homing a friction to its owning workspace
 
 A friction is sometimes filed in the wrong workspace: a product workspace's

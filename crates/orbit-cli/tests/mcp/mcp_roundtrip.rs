@@ -1035,9 +1035,90 @@ fn a_replica_checkout_refuses_a_coordination_write_with_capability_refused() {
     );
 }
 
-/// The destination MCP host must enforce checkout capability classes on the
-/// production dispatch path — including control-plane tools that never pass
-/// through Core's task-write guard [ORB-11021].
+/// Legacy local friction resolution reaches Core through the production MCP
+/// capability gate; reopening remains owner-only.
+#[test]
+fn a_replica_mcp_session_closes_legacy_local_frictions() {
+    let workspace = McpWorkspace::init();
+    let added = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "friction",
+            "add",
+            "--body",
+            "Legacy MCP report",
+            "--model",
+            "codex",
+            "--json",
+        ]),
+    );
+    let record: Value = serde_json::from_slice(&added.stdout).expect("created record");
+    let id = record["id"].as_str().expect("friction ID");
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["workspace", "remove", "mcp-roundtrip"]),
+    );
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "mcp-roundtrip",
+            "--role",
+            "replica",
+            "--owner",
+            "hm_remote_owner",
+        ]),
+    );
+
+    let mut client = workspace.serve();
+    let resolved = client.call_tool_ok(
+        "orbit_friction_update",
+        json!({
+            "id": id, "status": "resolved", "body": "Legacy MCP report\n\nVerified fixed.",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(resolved["status"], "resolved", "{resolved}");
+    assert!(resolved["resolved_at"].is_string(), "{resolved}");
+    assert_eq!(resolved["created_at"], record["created_at"]);
+    let reopened = client.call_tool_err(
+        "orbit_friction_update",
+        json!({
+            "id": id, "status": "open", "model": "codex",
+        }),
+    );
+    assert_eq!(reopened["code"], "capability_refused", "{reopened}");
+    let persisted = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["friction", "show", id, "--json"]),
+    );
+    let persisted: Value = serde_json::from_slice(&persisted.stdout).expect("persisted record");
+    assert_eq!(persisted["status"], "resolved");
+    assert_eq!(persisted["body"], resolved["body"]);
+    assert_eq!(persisted["resolved_at"], resolved["resolved_at"]);
+    let audit = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "audit",
+            "list",
+            "--tool",
+            "orbit.friction.update",
+            "--status",
+            "success",
+            "--json",
+        ]),
+    );
+    let audit: Value = serde_json::from_slice(&audit.stdout).expect("audit rows");
+    assert!(
+        audit
+            .as_array()
+            .expect("audit array")
+            .iter()
+            .any(|row| row["tool_name"] == "orbit.friction.update"),
+        "MCP resolution must leave durable audit evidence: {audit}"
+    );
+}
+
 #[test]
 fn a_replica_mcp_session_enforces_checkout_capability_classes() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");

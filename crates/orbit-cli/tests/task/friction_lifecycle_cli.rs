@@ -3,8 +3,257 @@
 
 use std::path::PathBuf;
 
+use serde_json::json;
+
 use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
+
+#[test]
+fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
+    let mut fixture = Fixture::new();
+    fixture.root = PathBuf::new();
+    fixture
+        .command(&[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "legacy-friction-qa",
+            "--task-prefix",
+            "LF",
+        ])
+        .assert()
+        .success();
+    fixture
+        .command(&["workspace", "init", "--name", "legacy-friction"])
+        .assert()
+        .success();
+    let task = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Legacy friction task",
+        "--complexity",
+        "low",
+        "--json",
+    ]);
+    let mut ids = Vec::new();
+    for body in ["Legacy open report", "Legacy triaged report"] {
+        let created = fixture.json(&[
+            "friction",
+            "add",
+            "--body",
+            body,
+            "--model",
+            "codex",
+            "--during-task",
+            task["id"].as_str().unwrap(),
+            "--json",
+        ]);
+        ids.push(created["id"].as_str().unwrap().to_string());
+    }
+    fixture.json(&[
+        "friction", "update", &ids[1], "--status", "triaged", "--json",
+    ]);
+    let before = fixture.json(&["friction", "list", "--json"]);
+
+    // Monthly IDs may collide with unrelated records on the owner. All writes
+    // must stay in the replica's local partition, including a missing-local ID.
+    let owner_repo = fixture._temp.path().join("owner-repo");
+    git_repo::init(&owner_repo);
+    fixture
+        .command(&["workspace", "init", "--name", "friction-owner"])
+        .current_dir(&owner_repo)
+        .assert()
+        .success();
+    let owner = owner_repo.to_str().unwrap();
+    let mut owner_only_id = String::new();
+    for _ in 0..3 {
+        let created = fixture.json(&[
+            "--workspace",
+            owner,
+            "friction",
+            "add",
+            "--body",
+            "Unrelated owner report",
+            "--model",
+            "codex",
+            "--json",
+        ]);
+        owner_only_id = created["id"].as_str().unwrap().to_string();
+    }
+    let owner_before = fixture.json(&["--workspace", owner, "friction", "list", "--json"]);
+    assert!(
+        owner_before
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == ids[0])
+    );
+
+    // Exercise the supported owner-to-replica registration change, preserving
+    // the checkout and its host store instead of seeding replica rows directly.
+    fixture
+        .command(&["workspace", "remove", "legacy-friction"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    fixture
+        .command(&[
+            "workspace",
+            "init",
+            "--name",
+            "legacy-friction",
+            "--role",
+            "replica",
+            "--owner",
+            "hm_fixture_remote",
+        ])
+        .assert()
+        .success();
+    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+
+    for args in [
+        vec![
+            "friction",
+            "add",
+            "--body",
+            "Refused new report",
+            "--model",
+            "codex",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "update",
+            &ids[0],
+            "--status",
+            "triaged",
+            "--body",
+            "Refused edit",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "update",
+            &ids[0],
+            "--body",
+            "Refused evidence-only edit",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "rehome",
+            &ids[0],
+            "--to-workspace",
+            "friction-owner",
+            "--json",
+        ],
+        vec![
+            "task",
+            "add",
+            "--title",
+            "Refused replica task",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+    ] {
+        fixture
+            .command(&args)
+            .env("ORBIT_OPERATOR", "1")
+            .assert()
+            .failure();
+        assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    }
+    let refused_move = json!({
+        "id": ids[0], "status": "resolved", "body": "Must remain unchanged",
+        "rehome_to": "friction-owner", "model": "codex",
+    })
+    .to_string();
+    fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.friction.update",
+            "--input",
+            &refused_move,
+        ])
+        .assert()
+        .failure();
+    fixture
+        .command(&["friction", "resolve", &owner_only_id, "--json"])
+        .assert()
+        .failure();
+    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    let prior_audit = fixture.json(&["audit", "list", "--json"]);
+    let prior_audit_id = prior_audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["id"].as_i64())
+        .max()
+        .unwrap();
+
+    let evidence = "Legacy open report\n\nDisposition: the covering fix was verified on this host.";
+    let update = json!({
+        "id": ids[0], "status": "resolved", "body": evidence, "model": "codex",
+        "rehome_to": "hm_fixture_remote/ws_owner", "move": false,
+    })
+    .to_string();
+    let resolved = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &update]);
+    assert_eq!(resolved["status"], "resolved");
+    assert_eq!(resolved["body"], evidence);
+    assert_eq!(resolved["rehome_to"], "hm_fixture_remote/ws_owner");
+    assert_eq!(resolved["during_task"], task["id"]);
+    let first_resolution = resolved["resolved_at"].as_str().unwrap();
+    let resolved_again = fixture.json(&["friction", "resolve", &ids[0], "--json"]);
+    assert_eq!(resolved_again["resolved_at"], first_resolution);
+    let triaged_resolution = fixture.json(&["friction", "resolve", &ids[1], "--json"]);
+    assert_eq!(triaged_resolution["status"], "resolved");
+    assert!(triaged_resolution["resolved_at"].is_string());
+    assert!(
+        fixture
+            .json(&["friction", "list", "--status", "open", "--json"])
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fixture.json(&["friction", "stats", "--json"])["resolved"],
+        2
+    );
+    let after = fixture.json(&["friction", "list", "--json"]);
+    for status in ["open", "triaged"] {
+        fixture
+            .command(&["friction", "update", &ids[0], "--status", status, "--json"])
+            .assert()
+            .failure();
+        assert_eq!(fixture.json(&["friction", "list", "--json"]), after);
+    }
+    assert_eq!(
+        fixture.json(&["--workspace", owner, "friction", "list", "--json"]),
+        owner_before
+    );
+
+    let audit = fixture.json(&["audit", "list", "--status", "success", "--json"]);
+    let rows = audit.as_array().unwrap();
+    assert!(
+        rows.iter().any(|row| {
+            row["tool_name"] == "orbit.friction.update"
+                && row["id"].as_i64().unwrap() > prior_audit_id
+        }),
+        "the update tool must leave durable audit evidence: {audit}"
+    );
+    assert!(
+        rows.iter().any(|row| {
+            row["command"] == "friction"
+                && row["subcommand"] == "resolve"
+                && row["target_id"] == ids[1]
+                && row["id"].as_i64().unwrap() > prior_audit_id
+        }),
+        "CLI resolution must leave durable audit evidence: {audit}"
+    );
+}
 
 #[test]
 fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {

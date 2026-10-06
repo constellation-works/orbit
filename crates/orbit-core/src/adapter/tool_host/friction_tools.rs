@@ -38,10 +38,7 @@ pub(super) fn dispatch(
     input: Value,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    if matches!(
-        verb,
-        FrictionVerb::Add | FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome
-    ) {
+    if matches!(verb, FrictionVerb::Add | FrictionVerb::Rehome) {
         runtime.ensure_coordination_task_write_permitted()?;
     }
     match verb {
@@ -241,6 +238,14 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         || edits.tags.is_some()
         || edits.body.is_some()
         || edits.title.is_some();
+    // A replica may close its local legacy records with supporting evidence,
+    // including a recorded owner disposition, but may not move or reopen them.
+    let moving = matches!(rehome_to, Some(Some(_))) && move_record != Some(false);
+    if edits.status == Some(FrictionStatus::Resolved) && !moving {
+        runtime.ensure_local_friction_resolution_permitted(&id)?;
+    } else {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
     if let Some(Some(to_workspace)) = &rehome_to
         && move_record != Some(false)
     {
@@ -260,6 +265,7 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 
 fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
+    runtime.ensure_local_friction_resolution_permitted(&id)?;
     let stored = crate::runtime::friction::store_for(runtime)?.resolve(&id, Utc::now())?;
     record_to_json(stored)
 }

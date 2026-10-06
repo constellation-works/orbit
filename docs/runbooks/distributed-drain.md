@@ -196,6 +196,17 @@ not originate owner-only task mutations or publish/restore the owner's live
 task set. Route those operations to the owner. See
 [multi-host setup](../../crates/orbit-core/assets/skills/orbit-setup/references/multi-host.md).
 
+The role change also keeps the host's local friction corpus. List it on the
+replica with `orbit friction list --status open`, then close each legacy report
+with `orbit friction resolve <ID>` or an audited `orbit.friction.update` with
+`status: resolved` and disposition evidence. These operations resolve only
+existing records in the replica's local workspace partition; the owner's
+records are untouched even when IDs collide. New reports, reopening, and actual
+re-homing still require owner authority. No owner connection or store migration
+is needed to close local legacy reports. See
+[friction lifecycle](../../crates/orbit-core/assets/skills/orbit/references/friction.md#closing-legacy-records-on-a-replica)
+for tool inputs and audit behavior.
+
 ### 3. Transfer remaining tasks from evidence, not by copying the store
 
 On the demoted host, after drains are quiet:
