@@ -1,18 +1,27 @@
-//! Generation admission forgets participants that have exited.
+//! Generation admission forgets participants that have exited, and ordinary
+//! startups never wait for one another.
 //!
 //! `.generation-compat.json` is the envelope of identities admitted since the
 //! authority last had no holder of `.generation.lock`. A guard drop does not
 //! rewrite that file; the next join must, or a departed writer keeps refusing
 //! newcomers and forcing live, compatible processes to yield.
+//!
+//! Joins that write nothing shared hold admission shared, so concurrent
+//! startups are admitted side by side; a breaking upgrade or an update still
+//! excludes them. A join that cannot get admission within its bound says
+//! whether an upgrade held it or other startups did.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Arc, Barrier};
+use std::time::{Duration, Instant};
 
+use fs2::FileExt;
 use orbit_common::fs::generation::{
-    Access, CompatibilityIdentity, GenerationGuard, LedgerCompatibility, Participant,
-    ParticipantRole, pending_switch,
+    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, LedgerCompatibility,
+    Participant, ParticipantRole, pending_switch,
 };
 use serde_json::{Value, json};
 
@@ -207,4 +216,261 @@ fn live_writer_is_not_treated_as_an_empty_authority() {
     assert!(pending_switch(root).is_none(), "{refused}");
     assert_envelope(root, store(10, 10, 0, Some(10)), Some(1));
     drop(live);
+}
+
+fn join_within(
+    root: &Path,
+    digest: &str,
+    identity: &CompatibilityIdentity,
+    access: Access,
+    bound: Duration,
+    store_schema: impl FnOnce() -> Result<u32, orbit_common::OrbitError>,
+) -> Result<GenerationGuard, orbit_common::OrbitError> {
+    let participant = Participant {
+        digest,
+        identity,
+        role: ParticipantRole::Command,
+        access,
+    };
+    GenerationGuard::join(root, &participant, bound, store_schema)
+}
+
+/// Start `count` joins at once and return each outcome with the elapsed time.
+fn concurrent_joins<F>(count: usize, join: F) -> (Vec<Result<GenerationGuard, String>>, Duration)
+where
+    F: Fn(usize) -> Result<GenerationGuard, orbit_common::OrbitError> + Send + Sync + 'static,
+{
+    let join = Arc::new(join);
+    let start = Arc::new(Barrier::new(count + 1));
+    let handles = (0..count)
+        .map(|index| {
+            let (join, start) = (Arc::clone(&join), Arc::clone(&start));
+            std::thread::spawn(move || {
+                start.wait();
+                join(index).map_err(|error| error.to_string())
+            })
+        })
+        .collect::<Vec<_>>();
+    start.wait();
+    let began = Instant::now();
+    let outcomes = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("join thread"))
+        .collect();
+    (outcomes, began.elapsed())
+}
+
+#[test]
+fn concurrent_readers_of_a_v1_record_read_the_store_schema_in_parallel() {
+    const JOINERS: usize = 32;
+    const SCHEMA_READ: Duration = Duration::from_millis(250);
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    // A v1 process owns the record, so each reader consults the store schema.
+    std::fs::write(root.join(".generation.lock"), format!("1:{}\n", digest(1)))
+        .expect("v1 generation record");
+    let reader = identity(5, 0);
+
+    let (outcomes, elapsed) = concurrent_joins(JOINERS, {
+        let root = root.clone();
+        move |_| {
+            // A zero bound refuses at once if any join waited for admission.
+            join_within(
+                &root,
+                &digest(2),
+                &reader,
+                Access::ReadOnly,
+                Duration::ZERO,
+                || {
+                    std::thread::sleep(SCHEMA_READ);
+                    Ok(5)
+                },
+            )
+        }
+    });
+
+    for outcome in &outcomes {
+        let guard = outcome
+            .as_ref()
+            .expect("every concurrent reader is admitted");
+        assert!(guard.joined_foreign_generation());
+    }
+    let serial = SCHEMA_READ * JOINERS as u32;
+    assert!(
+        elapsed < serial / 4,
+        "{JOINERS} joins took {elapsed:?}; serialised schema reads would take {serial:?}"
+    );
+}
+
+#[test]
+fn concurrent_compatible_joins_beside_a_live_writer_never_wait() {
+    const JOINERS: usize = 32;
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let live_identity = identity(10, 0);
+    let live = join(
+        &root,
+        &digest(10),
+        &live_identity,
+        ParticipantRole::McpServe,
+        Access::Write,
+    )
+    .expect("v10 writer holds the authority");
+
+    let (outcomes, _) = concurrent_joins(JOINERS, {
+        let root = root.clone();
+        move |index| {
+            let access = if index % 2 == 0 {
+                Access::Write
+            } else {
+                Access::ReadOnly
+            };
+            join_within(
+                &root,
+                &digest(10),
+                &identity(10, 0),
+                access,
+                Duration::ZERO,
+                || Ok(10),
+            )
+        }
+    });
+
+    for outcome in &outcomes {
+        assert!(
+            outcome.is_ok(),
+            "{outcome:?}",
+            outcome = outcome.as_ref().err()
+        );
+    }
+    assert_envelope(&root, store(10, 10, 0, Some(10)), Some(1));
+    drop(outcomes);
+    drop(live);
+}
+
+#[test]
+fn contended_admission_waits_for_the_bound_then_names_contention() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".generation-admission.lock"))
+        .expect("admission lock");
+    held.lock_exclusive().expect("hold admission");
+
+    // Longer than the point where a wait asks whether an upgrade holds it.
+    let bound = Duration::from_millis(1500);
+    let began = Instant::now();
+    let refused = match join_within(
+        root,
+        &digest(10),
+        &identity(10, 0),
+        Access::Write,
+        bound,
+        || Ok(10),
+    ) {
+        Ok(_guard) => panic!("a held admission lock refuses past the bound"),
+        Err(error) => error.to_string(),
+    };
+    assert!(began.elapsed() >= bound, "waited the configured bound");
+    assert!(refused.contains("contended"), "{refused}");
+    assert!(refused.contains("no upgrade pending"), "{refused}");
+    assert!(!refused.contains("upgrade is"), "{refused}");
+}
+
+#[test]
+fn an_update_holding_admission_refuses_joins_promptly_as_an_upgrade_in_progress() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let update = GenerationUpdate::acquire(root).expect("updater takes the authority");
+
+    let began = Instant::now();
+    let refused = match join_within(
+        root,
+        &digest(10),
+        &identity(10, 0),
+        Access::ReadOnly,
+        Duration::from_secs(60),
+        || Ok(10),
+    ) {
+        Ok(_guard) => panic!("an update excludes ordinary joins"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "a join is refused during an update, not queued for the whole bound"
+    );
+    assert!(refused.contains("upgrade is in progress"), "{refused}");
+    assert!(!refused.contains("contended"), "{refused}");
+    drop(update);
+}
+
+#[test]
+fn a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let old = identity(10, 0);
+    let live = join(
+        &root,
+        &digest(10),
+        &old,
+        ParticipantRole::McpServe,
+        Access::Write,
+    )
+    .expect("v10 writer holds the authority");
+
+    let upgrader = std::thread::spawn({
+        let root = root.clone();
+        move || {
+            join_within(
+                &root,
+                &digest(12),
+                &identity(12, 12),
+                Access::Write,
+                Duration::from_secs(30),
+                || Ok(10),
+            )
+            .map_err(|error| error.to_string())
+        }
+    });
+    let waiting = Instant::now();
+    while pending_switch(&root).is_none() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "the breaking writer records a pending switch"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let refused = match join(
+        &root,
+        &digest(10),
+        &old,
+        ParticipantRole::Command,
+        Access::ReadOnly,
+    ) {
+        Ok(_guard) => panic!("a pending switch refuses an old-identity newcomer"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        refused.contains("generation switch is pending"),
+        "{refused}"
+    );
+    assert!(!refused.contains("contended"), "{refused}");
+    assert!(
+        GenerationUpdate::acquire(&root).is_err(),
+        "an update is refused while a switch is pending"
+    );
+
+    drop(live);
+    let upgraded = upgrader
+        .join()
+        .expect("upgrader thread")
+        .expect("the breaking writer takes over once the live writer yields");
+    assert!(pending_switch(&root).is_none());
+    assert_envelope(&root, store(12, 12, 12, Some(12)), Some(1));
+    drop(upgraded);
 }

@@ -176,6 +176,17 @@ Quiesce those through their owners (or let long steps finish) and retry. An **ol
 binary never displaces newer processes: it is refused as incompatible, and a
 read-only command whose readers would break is refused the same way.
 
+Ordinary startups do not queue behind one another: a process whose identity the
+recorded envelope already admits joins under **shared** admission, so any number of
+concurrent commands, workers and clients start side by side. Only a join that must
+change the authority (reseed it, widen the envelope, take over, or wait for a switch)
+and `orbit update` take admission exclusively. A process that finds admission held by
+an upgrade is refused within about a second rather than queued: `an upgrade is pending
+(a generation switch is pending: ...)` for a switch, or `an upgrade is in progress` for
+an update or takeover. One held only by other startups waits up to
+`ORBIT_UPGRADE_QUIESCE_SECS`, then is refused with `admission stayed contended by other
+starting Orbit processes ..., with no upgrade pending`, which is safe to retry.
+
 #### Handing a long-lived process over to a replaced executable
 
 `orbit mcp serve`, the dashboard, and drain coordinators notice when the installed

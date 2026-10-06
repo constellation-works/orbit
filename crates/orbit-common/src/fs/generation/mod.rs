@@ -33,6 +33,20 @@
 //! Participants register PID, role and start time under
 //! `.generation-participants/`, each record held by its own lock.
 //!
+//! # Admission
+//!
+//! `.generation-admission.lock` orders joins against anything that changes
+//! the authority. A join that writes nothing shared — its identity already
+//! fits the envelope unchanged and the authority is visibly not empty, or it
+//! reads beside a v1-owned record — holds it shared, so concurrent startups
+//! never wait for one another (registration is per process). A join that
+//! must reseed, widen or rewrite a record, take over or record a pending
+//! switch, and [`GenerationUpdate`], hold it exclusively. A wait that other
+//! startups cause lasts up to [`quiesce_bound`] and then refuses as
+//! contention. A wait behind a pending switch (other than one the joiner
+//! targets) or an update refuses within about a second instead of queueing,
+//! and says which upgrade held it.
+//!
 //! # Yielding and handing over
 //!
 //! Long-lived participants ([`ParticipantRole::is_long_lived`]) check

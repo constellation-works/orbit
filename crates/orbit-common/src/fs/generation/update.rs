@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::admission::{GenerationGuard, Participant, admission};
+use super::admission::{
+    Admission, GenerationGuard, Participant, admission, lock_generation_exclusive, quiesce_bound,
+};
 use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_generation, write_compat};
@@ -24,7 +26,7 @@ impl GenerationUpdate {
     /// Refuse before installation/resource/store writes if any process is
     /// live or a generation switch is pending.
     pub fn acquire(root: &Path) -> Result<Self, OrbitError> {
-        let admission = admission(root)?;
+        let admission = admission(root, Admission::Exclusive, quiesce_bound(), None)?;
         if let Some(switch) = pending_switch(root) {
             return Err(refusal(format!(
                 "{SWITCH_PENDING} (pid {} is waiting to migrate to {})",
@@ -32,7 +34,7 @@ impl GenerationUpdate {
             )));
         }
         let mut generation = open(root, GENERATION_LOCK)?;
-        if FileExt::try_lock_exclusive(&generation.file).is_err() {
+        if !lock_generation_exclusive(&generation) {
             let live = registry::live_participants(root, None, false);
             return Err(refusal(format!(
                 "Orbit clients or commands are still running: {}",

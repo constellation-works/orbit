@@ -11,7 +11,10 @@ use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::image::process_digest;
 use super::paths::{ADMISSION_LOCK, GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_compat, read_generation, write_compat};
-use super::refusal::{SWITCH_PENDING, WRITES_WHILE_FOREIGN, quiesce_timeout, refusal, unwritable};
+use super::refusal::{
+    SWITCH_PENDING, WRITES_WHILE_FOREIGN, contended, quiesce_timeout, refusal, switch_pending,
+    unwritable, upgrade_holds_admission,
+};
 use super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingClaim, PendingSwitch, Registration,
     pending_switch,
@@ -21,14 +24,23 @@ use super::{DEFAULT_QUIESCE_TIMEOUT, QUIESCE_TIMEOUT_ENV};
 use crate::OrbitError;
 
 const QUIESCE_POLL: Duration = Duration::from_millis(200);
+const ADMISSION_POLL: Duration = Duration::from_millis(10);
+/// How long admission may stay unavailable before a wait asks whether an
+/// upgrade holds it. Ordinary holders release it within milliseconds.
+const UPGRADE_PROBE: Duration = Duration::from_secs(1);
+/// How long an [`upgrade_holding`] probe can hold the generation lock.
+const PROBE_SETTLE: Duration = Duration::from_millis(20);
 
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
+    // Declared before the record so it drops first: a live registration then
+    // always means its owner still holds the generation lock, which the
+    // shared join relies on to know the authority is not empty.
+    _registration: Option<Registration>,
     _record: Record,
     /// True when this process joined a recorded generation other than its own
     /// digest, without rewriting the record (read-only same-schema join).
     joined_foreign: bool,
-    _registration: Option<Registration>,
 }
 
 /// One process asking to participate under the v2 protocol.
@@ -49,18 +61,102 @@ pub fn quiesce_bound() -> Duration {
         .map_or(DEFAULT_QUIESCE_TIMEOUT, Duration::from_secs)
 }
 
-pub(super) fn admission(root: &Path) -> Result<Record, OrbitError> {
+/// How a process holds `.generation-admission.lock`.
+///
+/// Ordinary joins that write nothing shared hold it shared, so they never
+/// wait for one another. Anything that rewrites the generation or compat
+/// record, probes the generation lock exclusively, or records a pending
+/// switch holds it exclusively, which waits for every in-flight join.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Admission {
+    Shared,
+    Exclusive,
+}
+
+/// Take admission in `mode`, waiting up to `wait` while other startups hold
+/// it.
+///
+/// Once admission has stayed unavailable past [`UPGRADE_PROBE`], the wait
+/// asks why at that interval: a pending switch not targeting `joining`, or an
+/// update holding the generation exclusively, refuses at once rather than
+/// queueing behind the upgrade.
+pub(super) fn admission(
+    root: &Path,
+    mode: Admission,
+    wait: Duration,
+    joining: Option<&CompatibilityIdentity>,
+) -> Result<Record, OrbitError> {
     // Admission is held by lock alone, so a read-only descriptor serves.
     let file = open(root, ADMISSION_LOCK)?;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let started = Instant::now();
+    let deadline = started + wait;
+    let mut probe_at = started + UPGRADE_PROBE;
     loop {
-        match FileExt::try_lock_exclusive(&file.file) {
+        let attempt = match mode {
+            Admission::Shared => FileExt::try_lock_shared(&file.file),
+            Admission::Exclusive => FileExt::try_lock_exclusive(&file.file),
+        };
+        match attempt {
             Ok(()) => return Ok(file),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let now = Instant::now();
+                if now >= deadline {
+                    // Even the switch this joiner waits behind is the cause.
+                    return Err(upgrade_holding(root, None).unwrap_or_else(|| contended(wait)));
+                }
+                if now >= probe_at {
+                    if let Some(upgrade) = upgrade_holding(root, joining) {
+                        return Err(upgrade);
+                    }
+                    probe_at = now + UPGRADE_PROBE;
+                }
+                std::thread::sleep(ADMISSION_POLL);
             }
             Err(e) => return Err(refusal(e)),
         }
+    }
+}
+
+/// The upgrade holding admission, if one is: a pending switch other than the
+/// one `joining` waits behind, or an updater or takeover holding the
+/// generation exclusively (which happens only under exclusive admission).
+fn upgrade_holding(root: &Path, joining: Option<&CompatibilityIdentity>) -> Option<OrbitError> {
+    if let Some(switch) = pending_switch(root) {
+        return (joining != Some(&switch.target)).then(|| upgrade_holds_admission(Some(&switch)));
+    }
+    let generation = open(root, GENERATION_LOCK).ok()?;
+    FileExt::try_lock_shared(&generation.file)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+        .then(|| upgrade_holds_admission(None))
+}
+
+/// Take the generation lock exclusively under exclusive admission.
+///
+/// A waiting joiner's [`upgrade_holding`] probe may hold it shared for an
+/// instant, so a short retry tells that apart from a live participant.
+pub(super) fn lock_generation_exclusive(generation: &Record) -> bool {
+    let settle = Instant::now() + PROBE_SETTLE;
+    loop {
+        match FileExt::try_lock_exclusive(&generation.file) {
+            Ok(()) => return true,
+            Err(_) if Instant::now() < settle => std::thread::sleep(Duration::from_millis(1)),
+            Err(_) => return false,
+        }
+    }
+}
+
+/// The live store schema, read at most once per join.
+struct LiveSchema<F> {
+    read: Option<F>,
+    value: Option<u32>,
+}
+
+impl<F: FnOnce() -> Result<u32, OrbitError>> LiveSchema<F> {
+    fn get(&mut self) -> Option<u32> {
+        if let Some(read) = self.read.take() {
+            self.value = read().ok();
+        }
+        self.value
     }
 }
 
@@ -150,8 +246,9 @@ impl GenerationGuard {
     /// Join under `compatibility-generation-v2`; see the module docs.
     ///
     /// `quiesce` bounds how long a superseding writer waits for incompatible
-    /// participants to yield. `store_schema` reads the live store schema and
-    /// is consulted only for a read-only join of a v1-owned record.
+    /// participants to yield, and how long any join waits for admission.
+    /// `store_schema` reads the live store schema and is consulted only for a
+    /// read-only join of a v1-owned record.
     pub fn join<F>(
         root: &Path,
         participant: &Participant<'_>,
@@ -161,7 +258,82 @@ impl GenerationGuard {
     where
         F: FnOnce() -> Result<u32, OrbitError>,
     {
-        let admission = admitted_past_pending(root, participant)?;
+        let mut store_schema = LiveSchema {
+            read: Some(store_schema),
+            value: None,
+        };
+        if let Some(guard) = Self::join_shared(root, participant, quiesce, &mut store_schema)? {
+            return Ok(guard);
+        }
+        Self::join_exclusive(root, participant, quiesce, &mut store_schema)
+    }
+
+    /// Join under shared admission when joining writes nothing shared: the
+    /// recorded envelope already admits this identity unchanged and would not
+    /// be reseeded, or a v1-owned record admits this reader. `None` means the
+    /// join needs exclusive admission.
+    fn join_shared<F>(
+        root: &Path,
+        participant: &Participant<'_>,
+        quiesce: Duration,
+        store_schema: &mut LiveSchema<F>,
+    ) -> Result<Option<Self>, OrbitError>
+    where
+        F: FnOnce() -> Result<u32, OrbitError>,
+    {
+        let admission = admitted_past_pending(root, participant, Admission::Shared, quiesce)?;
+        let mut generation = open(root, GENERATION_LOCK)?;
+        // Only exclusive admission takes the generation lock exclusively.
+        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        let recorded = read_generation(&mut generation.file)?;
+        let (identity, access) = (participant.identity, participant.access);
+        let joined_foreign = match read_compat(root, &recorded) {
+            Some(envelope) => {
+                if envelope.refusal(identity, access).is_some()
+                    || envelope.widened(identity, access) != envelope
+                {
+                    return Ok(None);
+                }
+                // A reseed is a no-op when it would record this envelope, or
+                // when another registered participant (which holds the
+                // generation lock until it withdraws) keeps the authority
+                // non-empty. Otherwise only an exclusive probe can tell.
+                if envelope != Envelope::of(identity, access)
+                    && registry::live_participants(root, None, false).is_empty()
+                {
+                    return Ok(None);
+                }
+                access == Access::ReadOnly && participant.digest != recorded
+            }
+            None if access == Access::ReadOnly
+                && !recorded.is_empty()
+                && recorded != participant.digest =>
+            {
+                let Some(live) = store_schema.get() else {
+                    return Ok(None);
+                };
+                legacy_schema_check(identity, live)?;
+                true
+            }
+            None => return Ok(None),
+        };
+        let guard = Self::holding(generation, joined_foreign).registered(root, participant);
+        drop(admission);
+        Ok(Some(guard))
+    }
+
+    /// Join under exclusive admission: every join that may rewrite a record,
+    /// reseed an empty authority, take over or quiesce.
+    fn join_exclusive<F>(
+        root: &Path,
+        participant: &Participant<'_>,
+        quiesce: Duration,
+        store_schema: &mut LiveSchema<F>,
+    ) -> Result<Self, OrbitError>
+    where
+        F: FnOnce() -> Result<u32, OrbitError>,
+    {
+        let admission = admitted_past_pending(root, participant, Admission::Exclusive, quiesce)?;
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         let recorded = read_generation(&mut generation.file)?;
@@ -224,7 +396,7 @@ impl GenerationGuard {
         generation: Record,
         participant: &Participant<'_>,
         recorded: &str,
-        store_schema: F,
+        store_schema: &mut LiveSchema<F>,
     ) -> Result<Self, OrbitError>
     where
         F: FnOnce() -> Result<u32, OrbitError>,
@@ -242,21 +414,15 @@ impl GenerationGuard {
         }
         if access == Access::ReadOnly
             && !recorded.is_empty()
-            && let Ok(live) = store_schema()
+            && let Some(live) = store_schema.get()
         {
-            let compiled = participant.identity.store_schema.version;
-            if compiled != live {
-                return Err(refusal(format!(
-                    "another executable generation is still running \
-                     (store schema {live} differs from compiled schema {compiled})"
-                )));
-            }
+            legacy_schema_check(participant.identity, live)?;
             let guard = Self::holding(generation, true).registered(root, participant);
             drop(admission);
             return Ok(guard);
         }
         FileExt::unlock(&generation.file).map_err(refusal)?;
-        if FileExt::try_lock_exclusive(&generation.file).is_err() {
+        if !lock_generation_exclusive(&generation) {
             return Err(refusal(WRITES_WHILE_FOREIGN));
         }
         GenerationUpdate {
@@ -306,7 +472,13 @@ impl GenerationGuard {
         loop {
             let held = match admission.take() {
                 Some(held) => Some(held),
-                None => self::admission(root).ok(),
+                None => self::admission(
+                    root,
+                    Admission::Exclusive,
+                    QUIESCE_POLL,
+                    Some(participant.identity),
+                )
+                .ok(),
             };
             if let Some(held) = held {
                 if FileExt::try_lock_exclusive(&generation.file).is_ok() {
@@ -338,18 +510,20 @@ impl GenerationGuard {
         }
     }
 
-    /// Pin an exact digest under `executable-generation-v1` rules. The
-    /// admission mutex makes lock conversion atomic with respect to other
+    /// Pin an exact digest under `executable-generation-v1` rules. Exclusive
+    /// admission makes lock conversion atomic with respect to other
     /// participants (flock conversion alone is not atomic).
     pub fn acquire(root: &Path, digest: &str) -> Result<Self, OrbitError> {
-        let admission = admission(root)?;
+        let admission = admission(root, Admission::Exclusive, quiesce_bound(), None)?;
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
             return Ok(Self::holding(generation, false));
         }
         FileExt::unlock(&generation.file).map_err(refusal)?;
-        FileExt::try_lock_exclusive(&generation.file).map_err(|_| refusal(WRITES_WHILE_FOREIGN))?;
+        if !lock_generation_exclusive(&generation) {
+            return Err(refusal(WRITES_WHILE_FOREIGN));
+        }
         GenerationUpdate {
             root: validated_generation_root(root)?,
             admission,
@@ -359,11 +533,24 @@ impl GenerationGuard {
     }
 }
 
+/// A v1-owned record admits a reader whose compiled store schema is live.
+fn legacy_schema_check(identity: &CompatibilityIdentity, live: u32) -> Result<(), OrbitError> {
+    let compiled = identity.store_schema.version;
+    if compiled != live {
+        return Err(refusal(format!(
+            "another executable generation is still running \
+             (store schema {live} differs from compiled schema {compiled})"
+        )));
+    }
+    Ok(())
+}
+
 /// Replace `envelope` when no other process holds the generation lock.
 ///
-/// The caller holds admission. Releasing this descriptor cannot admit another
-/// participant, and a live participant holds the lock until it exits, so a
-/// successful exclusive probe means every identity in `envelope` has exited.
+/// The caller holds exclusive admission. Releasing this descriptor cannot
+/// admit another participant, and a live participant holds the lock until it
+/// exits, so a successful exclusive probe means every identity in `envelope`
+/// has exited.
 /// The v1 digest in the lock file stays: the compat record is valid only
 /// while its `record_digest` matches that digest.
 fn reseed_if_unheld(
@@ -400,27 +587,24 @@ fn reseed_if_unheld(
     Ok(fresh)
 }
 
-/// Take the admission mutex once no pending switch stands in the way.
+/// Take admission in `mode` once no pending switch stands in the way.
 ///
 /// The switch's own target waits for it to resolve and then joins the
 /// generation it pinned; any other newcomer is refused so no participant the
 /// switch would have to wait for is admitted meanwhile.
-fn admitted_past_pending(root: &Path, participant: &Participant<'_>) -> Result<Record, OrbitError> {
+fn admitted_past_pending(
+    root: &Path,
+    participant: &Participant<'_>,
+    mode: Admission,
+    wait: Duration,
+) -> Result<Record, OrbitError> {
     loop {
-        let held = admission(root)?;
+        let held = admission(root, mode, wait, Some(participant.identity))?;
         let Some(switch) = pending_switch(root) else {
             return Ok(held);
         };
         if switch.target != *participant.identity {
-            return Err(refusal(format!(
-                "{SWITCH_PENDING}: pid {} ({}) is waiting until {} to migrate to {}",
-                switch.pid,
-                switch.role,
-                switch
-                    .deadline
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                switch.target
-            )));
+            return Err(refusal(switch_pending(&switch)));
         }
         drop(held);
         // A waiter that outlives its own deadline (stopped, not exiting)
