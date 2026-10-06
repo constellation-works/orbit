@@ -114,6 +114,62 @@ fn allowed_program_runs_under_lockdown() {
 }
 
 #[test]
+fn timeout_metadata_reports_defaults_explicit_deadlines_and_clamping() {
+    let ctx = unrestricted_activity_context(vec!["/bin/echo".to_string()]);
+    let registry = registry();
+    for (requested, applied, clamped) in [
+        (None, 15_000, false),
+        (Some(5_000), 5_000, false),
+        (Some(60_000), 60_000, false),
+        (Some(60_001), 60_000, true),
+        (Some(u64::MAX), 60_000, true),
+    ] {
+        let mut input = json!({ "program": "/bin/echo", "args": ["ok"] });
+        if let Some(requested) = requested {
+            input["timeout_ms"] = json!(requested);
+        }
+        let value = registry
+            .execute("proc.spawn", &ctx, input)
+            .expect("bounded command should run");
+        assert_eq!(value["success"], json!(true), "{value:?}");
+        assert_eq!(value["stdout"], json!("ok\n"));
+        assert_eq!(value["timeout_ms"], json!(applied));
+        assert_eq!(value["timeout_clamped"], json!(clamped));
+        assert_eq!(
+            value.get("requested_timeout_ms").cloned(),
+            requested.map(|ms| json!(ms))
+        );
+        assert_eq!(value["timed_out"], json!(false));
+        assert!(
+            value.get("hint").is_none(),
+            "completed command needs no timeout hint"
+        );
+    }
+}
+
+#[test]
+fn timed_out_command_recommends_native_shell_transport() {
+    let ctx = unrestricted_activity_context(vec!["/bin/sleep".to_string()]);
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "/bin/sleep", "args": ["10"], "timeout_ms": 50 }),
+        )
+        .expect("command timeout should be returned as a process result");
+    assert_eq!(value["success"], json!(false));
+    assert_eq!(value["timed_out"], json!(true));
+    assert_eq!(value["timeout_ms"], json!(50));
+    assert_eq!(value["timeout_clamped"], json!(false));
+    assert_eq!(value["hint"]["transport"], json!("native_shell"));
+    assert!(
+        value["hint"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+}
+
+#[test]
 fn ambient_credential_is_excluded_unless_policy_admits_it() {
     let ctx = ToolContext {
         proc_spawn_environment: Some(vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]),

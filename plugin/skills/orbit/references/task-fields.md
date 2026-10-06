@@ -67,6 +67,16 @@ task is admitted. A finding never rejects a task; it names the repair.
   is registered CLI-only, so a criterion that requires it over MCP can never
   pass — drive it through `orbit tool run proc.spawn` instead. Never ask for
   the MCP surface to be widened to match a criterion's wording.
+  Use `proc.spawn` for short bounded commands: its timeout ceiling is 60 seconds
+  (60000 ms), and larger requests are clamped. Its result reports the applied
+  `timeout_ms`, `timeout_clamped`, and the explicit `requested_timeout_ms` when
+  supplied. A timed-out result includes a `hint` with `transport: native_shell`
+  and a message directing long validation to that transport. Run build, test,
+  cargo and make validation that can take minutes in the provider's native
+  shell session (Codex: `exec_command`/`write_stdin`) or another long-running
+  transport the lane provides. A `proc.spawn` timeout on cargo/make is never a
+  validation blocker; rerun there and await completion, including shared
+  build-budget admission. Preserve sandboxing and build-budget admission.
 - **Allowlist.** A tool outside the implementation activity's baseline has to
   be in `required_tools`, or the criterion is unreachable from the lane.
 - **Operator capability.** Governed operations — workflow run observation and
