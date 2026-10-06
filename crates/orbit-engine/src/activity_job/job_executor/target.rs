@@ -57,15 +57,20 @@ pub(super) fn run_target(
         .as_ref()
         .and_then(|reviewer| reviewer.bounded_spec(dispatched_spec));
     let dispatched_spec = bounded_spec.as_ref().unwrap_or(dispatched_spec);
-    let dispatch = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &step.id,
-        spec: dispatched_spec,
-        fs_profile: t.fs_profile.as_deref(),
-        input: rendered_input.clone(),
-        audit: ctx.audit.clone(),
-        run_id: &ctx.run_id,
-        host: Some(ctx.host),
-    });
+    // Events keep the step id; policy and broker identity use the catalog
+    // activity the step targets (a step `review` runs `agent_review_repair`).
+    let dispatch = dispatch_v2_target_activity(
+        V2DispatchInput {
+            activity_name: &step.id,
+            spec: dispatched_spec,
+            fs_profile: t.fs_profile.as_deref(),
+            input: rendered_input.clone(),
+            audit: ctx.audit.clone(),
+            run_id: &ctx.run_id,
+            host: Some(ctx.host),
+        },
+        t.activity_name.as_deref(),
+    );
     let timed_out = reviewer.is_some()
         && dispatch.as_ref().is_ok_and(|outcome| {
             outcome.output.get("timed_out").and_then(Value::as_bool) == Some(true)

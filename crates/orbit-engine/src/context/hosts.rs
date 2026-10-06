@@ -355,7 +355,7 @@ pub struct HandoffLandingUpdate {
 /// Environment name that tells a sandboxed agent where its run's plugin broker
 /// listens. The value locates the socket and proves nothing: the broker
 /// authenticates each connection by the kernel's peer identity.
-pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+pub use orbit_common::security::child_env::PLUGIN_BROKER_ENV;
 
 /// The dispatching run as its plugin broker authorizes and executes brokered
 /// calls (`docs/design/plugins/2_agent_call_broker.md` §4.3). Every field

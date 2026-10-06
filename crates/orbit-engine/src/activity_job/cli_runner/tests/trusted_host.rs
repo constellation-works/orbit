@@ -4,18 +4,20 @@
 //! submission admits it — and only both halves together, with a well-formed
 //! admission, may run an unsandboxed process.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::NullSink;
+use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::{
-    TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEventKind,
+    TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEvent, V2AuditEventKind,
 };
 use tempfile::tempdir;
 
-use super::super::super::audit_writer::V2AuditWriter;
+use crate::activity_job::audit_writer::{EnvelopeSink, V2AuditWriter};
+
 use super::super::super::dispatcher::DispatchError;
-use super::super::run_cli_backend;
+use super::super::{run_cli_backend, run_cli_backend_for_step};
 use super::test_support::{TestHost, persisted_writer, test_agent_loop_spec_for, write_executable};
 
 fn admitted_input() -> serde_json::Value {
@@ -115,4 +117,59 @@ fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
         })
         .expect("started event");
     assert_eq!(backend, None);
+}
+
+/// The target activity controls authorization, while the audit event keeps
+/// the pipeline step id for operators reading the run trace.
+#[test]
+fn distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit() {
+    let temp = tempdir().expect("tempdir");
+    let host = TestHost::with_command(echoing_provider(temp.path()));
+    let mut spec = test_agent_loop_spec_for("codex", Duration::from_secs(10));
+    spec.trusted_host_execution = true;
+    let captured = Arc::new(CapturedEnvelopes::default());
+    let audit = Arc::new(
+        V2AuditWriter::new(
+            "job-trusted-distinct-target",
+            "codex:gpt-5.5",
+            Arc::new(NullSink),
+        )
+        .with_envelope_sink(captured.clone()),
+    );
+
+    let outcome = run_cli_backend_for_step(
+        &host,
+        &spec,
+        "review",
+        "agent_review_repair",
+        "job-trusted-distinct-target",
+        audit.clone(),
+        &admitted_input(),
+        None,
+    )
+    .expect("admitted trusted-host activity runs");
+    assert!(outcome.success);
+
+    let events = captured.0.lock().expect("captured events");
+    let activity = events.iter().find_map(|event| match &event.kind {
+        V2AuditEventKind::TrustedHostExecutionAdmitted { activity_name, .. } => {
+            Some(activity_name.as_str())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        activity,
+        Some("review"),
+        "trusted-host audit labels retain the step id while policy uses the target activity"
+    );
+}
+
+#[derive(Default)]
+struct CapturedEnvelopes(Mutex<Vec<V2AuditEvent>>);
+
+impl EnvelopeSink for CapturedEnvelopes {
+    fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
+        self.0.lock().expect("captured events").push(event.clone());
+        Ok(())
+    }
 }

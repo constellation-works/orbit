@@ -19,7 +19,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::{run_cli_backend, task_id_from_input};
+use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCliExecutor {
@@ -354,17 +354,34 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
 /// Dispatch a v2 activity by type. Emits §7 activity.started/finished
 /// events around the per-type runner and nests the runner's events beneath.
 pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, true)
+    dispatch_v2_activity_inner(input, None, true)
+}
+
+/// Dispatch a pipeline step whose id may differ from the catalog activity it
+/// targets.
+///
+/// `input.activity_name` stays the step id, which labels the activity events
+/// and failure messages. `target_activity` is the catalog name: an agent
+/// loop's tool policy, `ORBIT_ACTIVITY_NAME`, tool denials and plugin broker
+/// identity are keyed by it, so a step `review` targeting
+/// `agent_review_repair` is authorized as the reviewer. `None` (an inline
+/// spec, which has no catalog name) falls back to the step id.
+pub(crate) fn dispatch_v2_target_activity(
+    input: V2DispatchInput<'_>,
+    target_activity: Option<&str>,
+) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_v2_activity_inner(input, target_activity, true)
 }
 
 pub(crate) fn dispatch_v2_activity_without_run_id_injection(
     input: V2DispatchInput<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, false)
+    dispatch_v2_activity_inner(input, None, false)
 }
 
 fn dispatch_v2_activity_inner(
     input: V2DispatchInput<'_>,
+    target_activity: Option<&str>,
     inject_run_id_into_input: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let activity_input = if inject_run_id_into_input {
@@ -394,6 +411,7 @@ fn dispatch_v2_activity_inner(
             Some(host) => run_agent_loop_activity(
                 host,
                 input.activity_name,
+                target_activity.unwrap_or(input.activity_name),
                 spec,
                 input.run_id,
                 input.audit.clone(),
@@ -559,17 +577,28 @@ fn run_deterministic(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_agent_loop_activity(
     host: &dyn RuntimeHost,
-    activity_name: &str,
+    step_id: &str,
+    target_activity: &str,
     spec: &AgentLoopSpec,
     run_id: &str,
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    run_cli_backend(host, spec, activity_name, run_id, audit, input, fs_profile)
-        .map(|outcome| label_failure_with_step(activity_name, outcome))
+    run_cli_backend_for_step(
+        host,
+        spec,
+        step_id,
+        target_activity,
+        run_id,
+        audit,
+        input,
+        fs_profile,
+    )
+    .map(|outcome| label_failure_with_step(step_id, outcome))
 }
 
 /// [ORB-10449] Prefix a failing CLI agent-loop message with the step that
