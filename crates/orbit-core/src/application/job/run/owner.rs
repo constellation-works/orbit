@@ -51,6 +51,7 @@ pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitErro
     let pgid = owner_process_group_id(pid);
     if let Some(pgid) = pgid
         && pgid > 1
+        && pgid as u32 == pid
     {
         if pgid == unsafe { libc::getpgrp() } {
             return Ok("owner_process_group_matches_current_process".to_string());
@@ -91,9 +92,10 @@ pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitErro
             .map(|()| "killed_process_group".to_string());
     }
 
-    // Fallback for platforms/configurations where the owner process group
-    // cannot be resolved. The PID identity guard above still protects against
-    // killing a reused PID.
+    // Foreground owners can inherit a group shared with their caller and
+    // siblings. Signal and verify only the owner unless it leads the group;
+    // also use this fallback when the group cannot be resolved. The identity
+    // guard above still protects against killing a reused PID.
     send_signal_to_pid(pid, libc::SIGTERM)?;
     if wait_for_owner_exit(pid, RUN_OWNER_TERMINATION_GRACE)
         && verify_owner_termination(pid, None, true, false).is_ok()
@@ -124,7 +126,7 @@ pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str>
     match classify_run_owner(run) {
         OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
         OwnerIdentity::Verified => match owner_process_group_id(pid) {
-            Some(pgid) if pgid == unsafe { libc::getpgrp() } => {
+            Some(pgid) if pgid as u32 == pid && pgid == unsafe { libc::getpgrp() } => {
                 Some("its worker shares this process's group")
             }
             _ => None,

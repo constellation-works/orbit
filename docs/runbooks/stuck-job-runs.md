@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-05
+last_validated: 2026-10-06
 ---
 
 # Recover Stuck Job Runs
@@ -189,7 +189,10 @@ returning to the backlog with its candidate preserved.
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.
 
-Cancellation signals the run's owner process group, then stops every agent process the
+Cancellation signals the run's owner process group only when the owner leads that
+group. A foreground owner that shares its caller's group is signalled by PID alone,
+and cancellation verifies only that owner's exit, leaving the caller and siblings
+alive. It then stops every agent process the
 run's audit trail still shows open (`provider processes stopped: N` counts the requested
 run's own agents; each cascaded child run stops its own). Agents run in their
 own process groups, so the owner signal alone never reaches them. A process is signalled

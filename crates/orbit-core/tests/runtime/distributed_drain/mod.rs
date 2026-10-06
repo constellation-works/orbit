@@ -776,8 +776,8 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
         .expect("executor");
 }
 
-/// A stand-in leaf worker: on Unix it leads its own process group, and is
-/// reaped the moment it exits so a stop can see it gone.
+/// A stand-in worker, reaped the moment it exits so a stop can see it gone.
+/// On Unix it leads its own group unless a test supplies a shared group.
 struct Worker {
     pid: u32,
     exited: std::sync::mpsc::Receiver<()>,
@@ -792,6 +792,19 @@ impl Worker {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
+        Self::spawn_command(command)
+    }
+
+    #[cfg(unix)]
+    fn spawn_in_group(pgid: libc::pid_t) -> Self {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = std::process::Command::new("sleep");
+        command.arg("600").process_group(pgid);
+        Self::spawn_command(command)
+    }
+
+    fn spawn_command(mut command: std::process::Command) -> Self {
         let mut child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
