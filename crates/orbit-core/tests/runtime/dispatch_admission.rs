@@ -415,6 +415,182 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
     );
 }
 
+/// An in-progress `no-diff-expected` task does not exclude overlapping backlog
+/// work. An ordinary holder still does, and the tagged task still waits on
+/// its own dependency and on that ordinary lock [ORB-14247].
+#[test]
+fn no_diff_expected_does_not_hold_a_context_lock() {
+    if !isolated("no_diff_expected_does_not_hold_a_context_lock") {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    for file in [
+        "crates/review/lib.rs",
+        "crates/ordinary/lib.rs",
+        "crates/elsewhere/lib.rs",
+    ] {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "fixture\n").unwrap();
+    }
+    let review = seed(
+        &runtime,
+        Seed {
+            title: "review holder",
+            status: TaskStatus::InProgress,
+            tags: &["no-diff-expected"],
+            context_files: &["dir:crates/review"],
+            ..Seed::default()
+        },
+    );
+    let repair = seed(
+        &runtime,
+        Seed {
+            title: "overlapping repair",
+            context_files: &["file:crates/review/lib.rs"],
+            ..Seed::default()
+        },
+    );
+    let ordinary = seed(
+        &runtime,
+        Seed {
+            title: "ordinary holder",
+            status: TaskStatus::InProgress,
+            context_files: &["file:crates/ordinary/lib.rs"],
+            ..Seed::default()
+        },
+    );
+    let ordinary_overlap = seed(
+        &runtime,
+        Seed {
+            title: "ordinary overlap",
+            context_files: &["file:crates/ordinary/lib.rs"],
+            ..Seed::default()
+        },
+    );
+    let tagged_overlap = seed(
+        &runtime,
+        Seed {
+            title: "tagged task still waits on an ordinary lock",
+            tags: &["no-diff-expected"],
+            context_files: &["file:crates/ordinary/lib.rs"],
+            ..Seed::default()
+        },
+    );
+    let unfinished = seed(
+        &runtime,
+        Seed {
+            title: "unfinished dependency",
+            status: TaskStatus::InProgress,
+            ..Seed::default()
+        },
+    );
+    let tagged_dependent = seed(
+        &runtime,
+        Seed {
+            title: "tagged task still waits on its dependency",
+            tags: &["no-diff-expected"],
+            dependencies: vec![unfinished.id.clone()],
+            context_files: &["file:crates/elsewhere/lib.rs"],
+            ..Seed::default()
+        },
+    );
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![repair.id.clone()], "{output}");
+    let excluded = output["excluded"].as_array().expect("excluded");
+    assert!(
+        excluded.iter().all(|entry| entry["id"] != repair.id),
+        "the repair overlapping only the no-diff holder must not be excluded: {output}"
+    );
+    assert!(
+        excluded.iter().all(|entry| {
+            entry["conflicts"].as_array().is_none_or(|conflicts| {
+                conflicts
+                    .iter()
+                    .all(|conflict| conflict["locking_task_id"] != review.id)
+            })
+        }),
+        "no context_lock_conflict names the no-diff-expected task: {output}"
+    );
+    let ordinary_exclusion = excluded
+        .iter()
+        .find(|entry| entry["id"] == ordinary_overlap.id)
+        .expect("ordinary overlap is excluded");
+    assert_eq!(ordinary_exclusion["reason"], "context_lock_conflict");
+    assert_eq!(
+        ordinary_exclusion["conflicts"],
+        json!([{
+            "requested_file": ordinary_overlap.context_files[0],
+            "locking_task_id": ordinary.id
+        }])
+    );
+    let tagged_exclusion = excluded
+        .iter()
+        .find(|entry| entry["id"] == tagged_overlap.id)
+        .expect("a tagged task still conflicts with an ordinary holder");
+    assert_eq!(tagged_exclusion["reason"], "context_lock_conflict");
+    assert_eq!(
+        tagged_exclusion["conflicts"][0]["locking_task_id"],
+        ordinary.id
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .expect("readiness");
+    let repair_ready = readiness_task(&readiness, &repair.id);
+    assert_eq!(repair_ready["eligible"], true, "{repair_ready}");
+    assert_eq!(repair_ready["reason"], "ready", "{repair_ready}");
+    let ordinary_waiting = readiness_task(&readiness, &ordinary_overlap.id);
+    assert_eq!(ordinary_waiting["reason"], "context_lock_conflict");
+    assert_eq!(
+        ordinary_waiting["conflicts"][0]["locking_task_id"],
+        ordinary.id
+    );
+    let dependent = readiness_task(&readiness, &tagged_dependent.id);
+    assert_eq!(dependent["reason"], "unmet_dependency", "{dependent}");
+    assert!(
+        !admitted(&output).contains(&tagged_dependent.id),
+        "a tagged task with an unfinished dependency is not admitted"
+    );
+
+    let review_grant = reserve_locks(&runtime, &review.id);
+    assert_eq!(review_grant["reserved"], true, "{review_grant}");
+    assert_eq!(review_grant["reserved_files"], json!([]), "{review_grant}");
+    assert!(
+        review_grant["reservation_id"].as_str().is_some(),
+        "release still has a reservation id: {review_grant}"
+    );
+    let repair_grant = reserve_locks(&runtime, &repair.id);
+    assert_eq!(
+        repair_grant["reserved"], true,
+        "a drain's lock grant is not blocked by the no-diff reservation: {repair_grant}"
+    );
+    let ordinary_grant = reserve_locks(&runtime, &ordinary_overlap.id);
+    assert_eq!(ordinary_grant["reserved"], false, "{ordinary_grant}");
+    assert!(
+        ordinary_grant["conflicts"]
+            .as_array()
+            .is_some_and(|conflicts| {
+                conflicts
+                    .iter()
+                    .any(|conflict| conflict["held_by_id"] == ordinary.id)
+            }),
+        "an ordinary holder still denies the grant: {ordinary_grant}"
+    );
+}
+
+fn reserve_locks(runtime: &OrbitRuntime, task_id: &str) -> Value {
+    runtime
+        .run_deterministic(
+            "reserve_locks",
+            &json!({}),
+            &json!({ "task_ids": [task_id], "ttl_seconds": 120 }),
+            ToolContext::default(),
+        )
+        .expect("reserve locks")
+}
+
 // ---------------------------------------------------------------------------
 // Operator workspace claim
 // ---------------------------------------------------------------------------

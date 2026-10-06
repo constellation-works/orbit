@@ -9,7 +9,10 @@ spec:
     the auto-pipeline. In automatic mode it filters to `status: backlog` with
     all task dependencies satisfied and drops any backlog parent/subtask group
     whose `context_files` overlap the active task-lock surface from
-    `in-progress` or `review` tasks. Parent/child relations order nothing here:
+    `in-progress` or `review` tasks. A task tagged `no-diff-expected` is not
+    part of that surface: it still waits on its own dependencies and on locks
+    other tasks hold, and it does not exclude overlapping backlog work.
+    Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
     `context_files` of its own while a descendant does: it inherits no

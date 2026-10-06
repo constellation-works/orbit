@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-04
+last_updated: 2026-10-06
 last_validated: 2026-10-04
 status: Draft
 feature: distributed-drain
@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247]
 ---
 
 # Distributed Drain — Design
@@ -497,7 +497,14 @@ authorized and audited.
 **Manual reclamation only**: no heartbeat or failure inference. The claim listing shows age,
 phase, reservation expiry, execution machine/run and last event; none of these proves death.
 `scan_unresolved_work` is not a remote-claim detector. Status locks on `in-progress` and `review`
-tasks survive reservation expiry using the live claim footprint.
+tasks survive reservation expiry using the live claim footprint. A task tagged `no-diff-expected`
+is not one of those holders ([No-diff-expected work does not hold context locks](./4_decisions.md#no-diff-expected-work-does-not-hold-context-locks)).
+Readiness, `list_backlog_tasks`, and `reserve_locks` treat its context as unlocked, so an
+overlapping backlog task stays eligible and a drain can admit it. The tagged task still waits on
+its own dependencies, on locks other tasks hold, and on its claim. Its own `reserve_locks` grant
+records a reservation with no files, so release still has an id and the grant does not serialize
+anyone else. An unexpected diff is not refused: `git_commit` commits a non-empty stage and
+`sync_base` reports a recoverable rebase conflict the same way it does for any other shipment.
 
 **Recovery** preserves branch, PR and failure evidence; an authorized operator or supervised
 orchestrator revokes the claim and picks the transition (usually `blocked` or `backlog`).
@@ -853,6 +860,7 @@ Acceptance criteria, not reported as passing.
 | Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
+| In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
@@ -916,5 +924,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13756] — let claimed runs deliver new files inside their frozen footprint.
 - [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
 - [ORB-13894] — attributed handoff landings to their owner tasks in `deliveries_landed` batches.
+- [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

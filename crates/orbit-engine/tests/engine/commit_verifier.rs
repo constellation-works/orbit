@@ -610,3 +610,43 @@ fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
         );
     }
 }
+
+/// A `no-diff-expected` task skips a clean stage and commits an unexpected
+/// diff. The commit is the normal shipment commit; `sync_base` remains the
+/// conflict boundary for that diff [ORB-14247].
+#[test]
+fn no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree() {
+    let clean = tempdir().expect("create tempdir");
+    init_git_repo(clean.path());
+    let clean_head = git_head(clean.path());
+    let mut clean_task = fixture_task();
+    clean_task.tags = vec!["no-diff-expected".to_string()];
+    let clean_host = VerifierHost::new(clean.path(), clean_task);
+    let skipped = action(&clean_host, &commit_input(clean.path(), &clean_head))
+        .expect("a clean no-diff-expected tree skips the commit");
+    assert_eq!(skipped["decision"], "skipped_no_diff_expected");
+    assert_eq!(skipped["committed"], false);
+    assert_eq!(skipped["skipped_no_diff_expected"], true);
+    assert_eq!(git_head(clean.path()), clean_head);
+
+    let dirty = tempdir().expect("create tempdir");
+    init_git_repo(dirty.path());
+    let dirty_head = git_head(dirty.path());
+    let mut dirty_task = fixture_task();
+    dirty_task.tags = vec!["no-diff-expected".to_string()];
+    dirty_task.execution_summary =
+        "Outcome: success\n\nThe review edited the tree, so delivery commits that diff."
+            .to_string();
+    let dirty_host = VerifierHost::new(dirty.path(), dirty_task);
+    fs::write(dirty.path().join("README.md"), "review edit\n").expect("dirty tree");
+    let committed = action(&dirty_host, &commit_input(dirty.path(), &dirty_head))
+        .expect("an unexpected diff on a no-diff-expected task commits");
+    assert_eq!(committed["decision"], "performed", "{committed}");
+    assert_eq!(committed["committed"], true, "{committed}");
+    assert_eq!(committed["skipped_no_diff_expected"], false, "{committed}");
+    assert_ne!(git_head(dirty.path()), dirty_head);
+    assert_eq!(
+        fs::read_to_string(dirty.path().join("README.md")).unwrap(),
+        "review edit\n"
+    );
+}

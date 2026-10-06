@@ -18,7 +18,7 @@ use orbit_store::contracts::{
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::task::{
-    EpicHierarchyNode, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
+    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
     inherited_only_epic_roots,
 };
 use orbit_types::telemetry::AuditEventStatus;
@@ -301,6 +301,16 @@ pub(crate) fn reserve_with_index(
     };
     runtime.reconcile_stale_owned_reservations_for_files(&requested_files, 32)?;
     let mut conflicts = task_lock_conflicts_indexed(index, &task_ids, &requested_files, repo_root);
+    // A `no-diff-expected` scope still waits on other holders. When that check
+    // is clear, the grant records no files: `release_locks` keeps a
+    // reservation id, and the row cannot block a later overlapping task
+    // [ORB-14247].
+    let stored_files =
+        if conflicts.is_empty() && reservation_context_lock_exempt(index, &reservation_scope) {
+            Vec::new()
+        } else {
+            requested_files.clone()
+        };
 
     record_task_lock_audit_event(
         runtime,
@@ -328,7 +338,7 @@ pub(crate) fn reserve_with_index(
                 workspace_orbit_dir: workspace_orbit_dir(runtime),
                 workspace_id: workspace_id.clone(),
                 task_ids: task_ids.clone(),
-                requested_files: requested_files.clone(),
+                requested_files: stored_files,
                 actor: actor.clone(),
                 ttl_seconds,
                 owner_run_id: reservation_owner
@@ -518,6 +528,35 @@ pub(crate) fn workspace_task_reservation_id(
     }
 }
 
+/// An `in-progress` or `review` task holds its context against other work,
+/// unless it carries [`NO_DIFF_EXPECTED_TAG`] [ORB-14247].
+fn holds_context_lock(status: TaskStatus, tags: &[String]) -> bool {
+    matches!(status, TaskStatus::InProgress | TaskStatus::Review) && !context_lock_exempt(tags)
+}
+
+fn context_lock_exempt(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+}
+
+/// A task-id reservation holds nothing when every named task is
+/// `no-diff-expected`. An explicit `files` reservation is an operator lock
+/// and is never exempt. A missing envelope is not exempt: the caller has
+/// already rejected unknown ids, and a gap must not drop a real surface.
+fn reservation_context_lock_exempt(
+    index: &TaskLockIndex,
+    scope: &TaskLockReservationScope,
+) -> bool {
+    let TaskLockReservationScope::TaskIds(task_ids) = scope else {
+        return false;
+    };
+    !task_ids.is_empty()
+        && task_ids.iter().all(|task_id| {
+            index
+                .get(task_id)
+                .is_some_and(|task| context_lock_exempt(&task.tags))
+        })
+}
+
 /// Return the effective lock surface for one task.
 ///
 /// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
@@ -547,13 +586,17 @@ pub(crate) struct TaskLockOverlap {
 /// every selector is checked against the filesystem — so automatic admission
 /// and `orbit task eligible` both build this map once and read it rather than
 /// expanding again. Holder lists are sorted and deduplicated.
+///
+/// A task tagged [`NO_DIFF_EXPECTED_TAG`] is not a holder [ORB-14247]. It
+/// still waits on its own dependencies, on locks other tasks hold, and on
+/// its claim.
 pub(crate) fn active_task_lock_holders<'a>(
     tasks: impl IntoIterator<Item = &'a Task>,
     workspace_root: &Path,
 ) -> BTreeMap<String, Vec<String>> {
     let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in tasks {
-        if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
+        if holds_context_lock(task.status, &task.tags) {
             for file in lock_context_files_for_task(task, workspace_root) {
                 holders.entry(file).or_default().push(task.id.clone());
             }
@@ -686,7 +729,7 @@ impl TaskLockIndex {
         let mut active_ids = self
             .tasks
             .values()
-            .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
+            .filter(|task| holds_context_lock(task.status, &task.tags))
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
         active_ids.sort_by_key(|task_id| {
@@ -827,8 +870,7 @@ pub(crate) fn task_lock_conflicts_indexed(
     let mut tasks: Vec<&TaskEnvelopeV2> = index
         .tasks()
         .filter(|task| {
-            matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
-                && !bundle_ids.contains(&task.id)
+            holds_context_lock(task.status, &task.tags) && !bundle_ids.contains(&task.id)
         })
         .collect();
     tasks.sort_by_key(|task| {

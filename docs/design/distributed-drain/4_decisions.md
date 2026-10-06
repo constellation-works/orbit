@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-04
+last_updated: 2026-10-06
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
@@ -11,7 +11,7 @@ summary: Pull-based admission, durable request and attempt identity, machine-sco
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-13992, ORB-13908]
+related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247]
 ---
 
 # Distributed Drain — Decisions
@@ -703,6 +703,33 @@ is off on the Mac by design.
 - Cost: a cancelled drain's unlaunched claims end as `blocked` with evidence rather than returning
   to the backlog; returning work to the backlog stays an owner-operator recovery.
 
+## No-diff-expected work does not hold context locks
+
+**Recorded:** 2026-10-06 · [ORB-14247]
+**Paths:** `crates/orbit-core/src/runtime/task/locks.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+
+### Context
+
+Full-crate review chores tagged `no-diff-expected` sit `in-progress` for hours. Every `in-progress` or `review` task was an exclusive context-lock holder, so those chores serialized the backlog, including CI repairs that overlapped the same `dir:` selectors. The tag already means the run's durable result is outside the repository. Holding a lock on files it is not supposed to change spends the lock on a reader.
+
+The open question was what happens when that contract is wrong and the task ends with a diff. Refusing the commit would fail the run closed. Letting the existing commit and `sync_base` path deliver it reuses the conflict handling every other shipment already has.
+
+### Decision
+
+A task tagged `no-diff-expected` does not hold context locks. Readiness, backlog exclusion, eligibility, lock listing, and `task_lock_conflicts_indexed` omit it. It still waits on its own dependencies, on locks other tasks hold, and on its claim: the claim journal still fences its own writes, and a live claim is still not dispatched twice.
+
+Its `reserve_locks` grant, once other holders are clear, records a reservation with no files. Release still has an id. The row does not block a later overlapping task. An explicit `files` reservation is unchanged.
+
+An unexpected diff is committed. `git_commit` treats a non-empty stage as a normal shipment commit (`decision: performed`). A clean stage still skips. `sync_base` (`git_rebase`) is the conflict boundary and reports `RecoverableVcsConflict` the same way it does for any other task. The tag does not refuse the diff.
+
+### Consequences
+
+- Overlapping backlog work stays eligible while a `no-diff-expected` task is `in-progress` or `review`, and a drain can admit it.
+- Two ordinary overlapping tasks still conflict.
+- A tagged task that produces a diff lands through the same rebase conflict path as every other shipment, including a clean merge when the edits do not overlap.
+- Cost: a tagged run that edits files can race an implementation task on the same paths. The race is visible at `sync_base`, not prevented by admission. A mistagged implementation task therefore no longer serializes its neighbours.
+- Cost: the empty reservation means `orbit task locks` does not show the tagged task's selectors as held. Operators inspecting locks will not see that review as a holder, which is the point of the exemption.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
@@ -713,5 +740,6 @@ is off on the Mac by design.
 - [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
 - [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
 - [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
+- [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

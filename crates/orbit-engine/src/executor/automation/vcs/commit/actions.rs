@@ -362,6 +362,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         )?);
     }
 
+    // ORB-14247: a `no-diff-expected` task that still has a diff is committed
+    // like any other shipment. The tag only skips a clean stage. It does not
+    // hold context locks, so a concurrent task may edit the same files;
+    // `sync_base` (`git_rebase`) is the conflict boundary and reports
+    // `RecoverableVcsConflict` the same way it does for every other task.
+
     // Widen the task's selectors over every delivered path they do not yet
     // cover. A claimed leaf's host widens nothing: the owner does at handoff.
     attribute_candidate_paths(
