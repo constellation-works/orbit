@@ -388,6 +388,17 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let global = root.join(machine).join("global");
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    let git_boundary = std::process::Command::new("git")
+        .args(["init", "--bare", "--initial-branch=main", "-q"])
+        .arg(repo.join(".git"))
+        .output()
+        .unwrap();
+    assert!(
+        git_boundary.status.success(),
+        "initialize fixture Git discovery boundary: {}",
+        String::from_utf8_lossy(&git_boundary.stderr)
+    );
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
