@@ -126,7 +126,11 @@ pub(super) fn resolve_executor_sandbox_on(
                 if grants_workspace_modify {
                     append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
                 }
-                deny_registered_auto_task_definition_writes(runtime, &mut resolved);
+                // Implementer profiles are anchored at the registered checkout
+                // even when the cwd is a worktree, so the policy carve-outs
+                // name the live host-clock stores. Deny them after the Codex
+                // side root and the worktree re-allow.
+                deny_registered_checkout_host_stores(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 Ok(Some(ResolvedSandbox {
@@ -175,6 +179,12 @@ pub(super) fn resolve_executor_sandbox_on(
                     &mut runtime_write_authority,
                 )?;
                 append_linux_provider_state_roots(provider, &mut resolved)?;
+                // A worktree cwd absolutizes the versioned exceptions under
+                // that worktree. The registered checkout does not: the same
+                // carve-outs would grant its live host-clock stores.
+                if anchored_at_registered_checkout(runtime, subprocess_cwd) {
+                    deny_registered_checkout_host_stores(runtime, &mut resolved);
+                }
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 // Host Git state is never a provider convenience grant. Append
                 // these last so even a side root inside metadata stays denied.
@@ -469,11 +479,19 @@ fn append_contained_runtime_modify_root(
     append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
 }
 
-/// Keep registered scheduler definitions behind the host-brokered auto-task
-/// tools. The default policy exception is for host-side writes; nested provider
-/// children must not inherit it as direct filesystem authority.
-#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
-pub(super) fn deny_registered_auto_task_definition_writes(
+/// Registered-checkout stores the host clock and operator config own.
+///
+/// The default policy re-allows these under whichever directory the profile is
+/// anchored to. On Linux, a managed-worktree anchor makes those exceptions
+/// refer to that worktree's `.orbit`; a registered-checkout anchor would grant
+/// the live auto-task definitions, routines, crew and sandbox config, and
+/// resources. Drop those grants and append a terminal deny so later
+/// convenience roots cannot reopen the registered stores. On macOS,
+/// implementer profiles stay anchored at the registered checkout, while the
+/// active-worktree re-allow separately keeps the worktree's own `.orbit`
+/// writable. `.orbit/tmp/**` stays the worker scratch exception.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn deny_registered_checkout_host_stores(
     runtime: &OrbitRuntime,
     resolved: &mut ResolvedFsProfile,
 ) {
@@ -482,16 +500,66 @@ pub(super) fn deny_registered_auto_task_definition_writes(
         .orbit_dir
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
-    let auto_tasks = workspace_orbit.join("auto_tasks").display().to_string();
-    let auto_tasks_descendants = format!("{auto_tasks}/");
+    // `(relative, subtree)`: directories are denied as `<path>/**`, the config
+    // file as that exact path.
+    let stores = [
+        ("auto_tasks", true),
+        ("routines", true),
+        ("config.toml", false),
+        ("resources", true),
+    ];
+    let anchored: Vec<(String, bool)> = stores
+        .into_iter()
+        .map(|(relative, subtree)| {
+            (
+                format!("{}/{}", workspace_orbit.display(), relative),
+                subtree,
+            )
+        })
+        .collect();
 
     resolved.modify.retain(|rule| {
         if rule.starts_with('!') {
             return true;
         }
-        rule != &auto_tasks && !rule.starts_with(&auto_tasks_descendants)
+        !anchored
+            .iter()
+            .any(|(store, _)| rule_names_registered_store(rule, store))
     });
-    resolved.modify.push(format!("!{auto_tasks}/**"));
+    for (store, subtree) in &anchored {
+        let deny = if *subtree {
+            format!("!{store}/**")
+        } else {
+            format!("!{store}")
+        };
+        resolved.modify.push(deny);
+    }
+}
+
+/// True when `rule` is a positive grant of `store` or of a path inside it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rule_names_registered_store(rule: &str, store: &str) -> bool {
+    let body = rule.strip_suffix("/**").unwrap_or(rule);
+    body == store || rule.starts_with(&format!("{store}/"))
+}
+
+/// The activity profile is absolutized against the registered checkout.
+///
+/// A missing cwd uses that checkout. A managed worktree, an inspection
+/// checkout, or any other directory does not, so their versioned `.orbit`
+/// exceptions stay local to that directory.
+#[cfg(target_os = "linux")]
+fn anchored_at_registered_checkout(runtime: &OrbitRuntime, subprocess_cwd: Option<&Path>) -> bool {
+    let repo = canonical_or_lexical(&runtime.paths().repo_root);
+    match subprocess_cwd {
+        None => true,
+        Some(cwd) => canonical_or_lexical(cwd) == repo,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_or_lexical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Deny the host-only recovery authority store, after every convenience grant.
