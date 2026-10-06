@@ -225,6 +225,8 @@ struct Run {
     result: Result<JobOutcome, DispatchError>,
     /// `(outcome, decision)` of every `job.final_recovery_attempted` event.
     attempts: Vec<(String, Option<String>)>,
+    /// Detail of each attempt, in the same order as `attempts`.
+    details: Vec<Option<String>>,
 }
 
 fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run {
@@ -279,18 +281,25 @@ fn run_with_evidence(
         host,
         resume,
     );
-    let attempts = writer
-        .events_snapshot()
-        .expect("audit events")
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            V2AuditEventKind::FinalRecoveryAttempted {
-                outcome, decision, ..
-            } => Some((outcome, decision)),
-            _ => None,
-        })
-        .collect();
-    Run { result, attempts }
+    let mut attempts = Vec::new();
+    let mut details = Vec::new();
+    for event in writer.events_snapshot().expect("audit events") {
+        if let V2AuditEventKind::FinalRecoveryAttempted {
+            outcome,
+            decision,
+            detail,
+            ..
+        } = event.kind
+        {
+            attempts.push((outcome, decision));
+            details.push(detail);
+        }
+    }
+    Run {
+        result,
+        attempts,
+        details,
+    }
 }
 
 fn resume_to(step_id: &str) -> Reply {
@@ -554,6 +563,48 @@ fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
     assert_eq!(applications[0].resume_step_index, None);
     assert_eq!(host.count("handoff"), 0, "settled work gets no blocked PR");
     assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
+}
+
+#[test]
+fn a_provider_authentication_failure_skips_final_recovery() {
+    let host = RecoveryHost::new([
+        (
+            "work",
+            vec![Reply::Diagnostic(
+                "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+                 Failed to authenticate: OAuth token revoked."
+                    .into(),
+            )],
+        ),
+        ("step_fix", vec![Reply::Ok(json!({ "repaired": true }))]),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(true), &host, None);
+
+    assert!(
+        run.result.is_err(),
+        "authentication is not a successful job"
+    );
+    assert_eq!(
+        host.count("step_fix"),
+        0,
+        "step recovery cannot sign the provider in"
+    );
+    assert_eq!(host.count("decide"), 0, "final recovery is not dispatched");
+    assert!(
+        host.admissions.lock().unwrap().is_empty(),
+        "the hook is not admitted"
+    );
+    assert_eq!(host.count("handoff"), 1, "the failure path still runs");
+    assert_eq!(run.attempts, [attempt("skipped", None)]);
+    assert!(
+        run.details
+            .first()
+            .and_then(|detail| detail.as_deref())
+            .is_some_and(|detail| detail.contains("could not be used on this host")),
+        "the skip is recorded: {:?}",
+        run.details
+    );
 }
 
 #[test]

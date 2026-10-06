@@ -463,10 +463,23 @@ impl Pair {
     /// [`Self::with_crews`] with the owner opened over `config` as its
     /// workspace `config.toml`.
     fn with_owner_config(config: &str, crews: &[Option<&str>]) -> Self {
+        Self::with_configs(config, "", crews)
+    }
+
+    /// [`Self::with_owner_config`] with `follower_config` on the follower.
+    /// An empty follower config leaves the built-in crews. The follower's
+    /// window groups providers from its own registry, so an alias such as
+    /// `anthropic` has to be configured there to be excluded with `claude`.
+    fn with_configs(owner_config: &str, follower_config: &str, crews: &[Option<&str>]) -> Self {
         let root = TempDir::new().unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
-        std::fs::write(orbit.join("config.toml"), config).unwrap();
+        std::fs::write(orbit.join("config.toml"), owner_config).unwrap();
+        if !follower_config.is_empty() {
+            let follower_orbit = root.path().join(FOLLOWER).join("repo/.orbit");
+            std::fs::create_dir_all(&follower_orbit).unwrap();
+            std::fs::write(follower_orbit.join("config.toml"), follower_config).unwrap();
+        }
         let (owner, owner_repo) = open_runtime(root.path(), OWNER);
         let tasks = crews
             .iter()

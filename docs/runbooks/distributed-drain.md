@@ -483,8 +483,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   base passes), `transient` (validation could not reach the network after its
   reruns, or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
-  breaker does not count a release. After `operator_cancel`, `provider` or
-  `transient`, the drain stops offering that crew for the rest of its window.
+  breaker does not count a release. After `operator_cancel` or `transient`,
+  the drain stops offering that crew for the rest of its window. After
+  `provider`, an authentication failure stops every crew of that provider
+  (an `anthropic` crew is the same provider as `claude`); a capacity failure
+  stops only the crew the leaf ran.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
   `crews.host_suppressed`); fix the host and start a new drain. In either
@@ -510,8 +513,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   panel). The first line names the runnable crews. Each excluded crew is
   listed with its source and the reason: `preflight` (disabled, executor
   unresolved, or CLI not found), `provider_unavailable` (a claimed leaf's
-  provider could not authenticate or reported its selected model at
-  capacity, with the task and error) or `leaf_released` (a claimed leaf was
+  provider could not authenticate, which lists every crew of that provider,
+  or reported its selected model at capacity, which lists that crew, with
+  the task and error) or `leaf_released` (a claimed leaf was
   released for a `transient` failure, with the task, class and reason). Each iteration's output carries
   the same window as `crews`. To use an excluded crew again, fix the provider
   on this host (for example, sign the CLI in) or wait for model capacity,

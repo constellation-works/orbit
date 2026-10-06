@@ -873,6 +873,124 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     );
 }
 
+/// [ORB-14262] One provider's authentication failure closes every crew that
+/// resolves to it. `sonnet` is configured as the `anthropic` alias of
+/// `claude`, so a 401 on `opus` must keep `sonnet` out of the window while
+/// `sol`, on codex, is still admitted.
+#[test]
+fn a_provider_auth_failure_excludes_every_crew_of_that_provider() {
+    if !isolated(
+        module_path!(),
+        "a_provider_auth_failure_excludes_every_crew_of_that_provider",
+    ) {
+        return;
+    }
+    let config = "\
+[workflow]
+default_crew = \"sol\"
+
+[crews.opus]
+provider = \"claude\"
+model = \"claude-opus\"
+
+[crews.sonnet]
+provider = \"anthropic\"
+model = \"claude-sonnet\"
+
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+";
+    // Oldest first, which is admission order: opus fails, then sonnet would
+    // be next if the alias were still runnable, and sol is the other provider.
+    let pair = Pair::with_configs(config, config, &[Some("opus"), Some("sonnet"), Some("sol")]);
+    let (opus, sonnet, sol) = (
+        pair.tasks[0].clone(),
+        pair.tasks[1].clone(),
+        pair.tasks[2].clone(),
+    );
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), opus);
+
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+    );
+    let pass = pair.pass(&drain);
+
+    for crew in ["opus", "sonnet"] {
+        let exclusion = excluded(&pass, crew);
+        assert_eq!(
+            exclusion["source"], "provider_unavailable",
+            "{crew}: {pass}"
+        );
+        assert!(
+            exclusion["reason"].as_str().is_some_and(
+                |text| text.contains(opus.as_str()) && text.contains("OAuth token revoked")
+            ),
+            "{crew}: {pass}"
+        );
+    }
+    assert!(excluded(&pass, "sol").is_null(), "{pass}");
+
+    let claims = pair.owner_claims();
+    let phase = |task: &str| {
+        claims.iter().find_map(|claim| {
+            (claim["claim"]["task_id"] == task).then(|| claim["claim"]["phase"].as_str().unwrap())
+        })
+    };
+    assert_eq!(phase(&opus), Some("revoked"), "{claims:#?}");
+    assert_eq!(
+        phase(&sonnet),
+        None,
+        "the alias crew is not admitted: {claims:#?}"
+    );
+    // This test binary cannot re-exec a worker, so the admitted sol leaf's
+    // launch fails and the owner blocks that task. The claim phase is the
+    // launch failure, which is how an admitted crew shows up here.
+    assert!(
+        launch_refused(&pass),
+        "sol was admitted far enough to launch: {pass}"
+    );
+    assert_eq!(
+        phase(&sol),
+        Some("failed"),
+        "the other provider is admitted, then its launch fails: {claims:#?}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert!(
+        settles.iter().any(|call| {
+            call["settlement"]["Fail"]["summary"]
+                .as_str()
+                .is_some_and(|summary| summary.starts_with("leaf launch failed"))
+        }),
+        "sol's admission reached launch: {settles:?}"
+    );
+    assert_eq!(pair.owner_status(&sonnet), "backlog");
+    assert_eq!(pair.owner_status(&opus), "backlog");
+    assert_eq!(
+        pair.owner_status(&sol),
+        "blocked",
+        "the launch refusal blocks the admitted task"
+    );
+
+    let window = pair
+        .follower
+        .pull_drain_crew_window(&drain)
+        .unwrap()
+        .expect("a pull drain has a crew window");
+    let runnable = window.runnable.as_ref().expect("preflight ran");
+    assert!(runnable.iter().any(|crew| crew == "sol"), "{window:#?}");
+    assert!(
+        runnable
+            .iter()
+            .all(|crew| crew != "opus" && crew != "sonnet"),
+        "{window:#?}"
+    );
+}
+
 /// [ORB-14258] A claimed leaf whose required validation failed on its base
 /// exactly as on the candidate releases its claim with the hold. The owner's
 /// task returns to the backlog under that hold, and the failure breaker does
