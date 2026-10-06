@@ -16,6 +16,10 @@
 //!
 //! Failure during abort/recovery: pending remains. The next recover retries.
 //! A settled event/envelope mismatch with no pending file is corruption.
+//!
+//! Every bundle writer must recover before it mutates: [`PendingWriteGuard`]
+//! does so on `begin`, and the repository's bundle write lock does so for
+//! every writer it admits, including coordinated commits and their replay.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};

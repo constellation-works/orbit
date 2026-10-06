@@ -20,7 +20,7 @@ pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, 
 use crate::driver::file::task_bundle::{
     append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
     read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
-    write_bundle_at,
+    recover_pending_write, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -69,20 +69,24 @@ impl TaskBundleStoreV2 {
     /// unit to a reader that observes the same lock. This store owns the lock
     /// target for both sides ([`bundle_lock_target`]) precisely so a reader and
     /// a writer cannot drift onto different files (ORB-11349).
+    ///
+    /// A leftover `.pending-write.yaml` is settled before `op` runs. Reads
+    /// hide an aborted write's rows while the files still hold them, so a
+    /// writer that skipped recovery would number new rows from the hidden
+    /// view, append after the aborted ones, and republish the envelope —
+    /// which recovery then takes as proof the aborted write committed.
     pub(crate) fn with_bundle_write_lock<T, F>(&self, task_id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        with_exclusive_file_lock(
-            &bundle_lock_target(&self.bundle_path(task_id)?),
-            "task artifact v2",
-            || {
-                // A queued writer may resume after deletion. Check under the
-                // stable lock before any helper can create parent directories.
-                read_envelope_at(&self.bundle_path(task_id)?)?;
-                op()
-            },
-        )
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_exclusive_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+            // A queued writer may resume after deletion. Check under the
+            // stable lock before any helper can create parent directories.
+            read_envelope_at(&bundle_dir)?;
+            recover_pending_write(&bundle_dir)?;
+            op()
+        })
     }
 
     /// The caller has durably reserved this ID for one action and input digest.

@@ -51,7 +51,10 @@ use orbit_store::workflow::task::{
 };
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ORB_TASK_ID_MAX,
-    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType,
+    TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME,
+    TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME,
+    TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME, TaskArtifact, TaskCommentRowV2,
+    TaskComplexity, TaskEventRowV2, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
@@ -2224,6 +2227,154 @@ fn claim_evidence_stores_canonical_artifact_paths() {
         .expect("canonical notes");
     assert_eq!(notes.path, "notes");
     assert_eq!(notes.content, b"final");
+}
+
+fn jsonl_rows<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A plain write dies after appending and before publishing `task.yaml`,
+/// leaving `.pending-write.yaml`. The next writer is a claim Evidence commit
+/// that changes no status: it must roll the aborted rows back first, or it
+/// reuses their IDs, keeps the aborted status event as the last one, and
+/// leaves a bundle that no longer reads.
+#[test]
+fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
+    if !isolated("coordinated_commit_rolls_back_a_leftover_pending_write_first") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let task = owner.create_task("pending write");
+    let claim = owner.pull(&owner_request("pending")).claim.expect("claim");
+    assert_eq!(owner.task_status(&task.id), TaskStatus::InProgress);
+    let bundle = owner
+        .registry
+        .canonical_task_bundle_path(PARTITION_ID, &task.id)
+        .unwrap();
+    let events_path = bundle.join(TASK_EVENTS_FILE_NAME);
+    let comments_path = bundle.join(TASK_COMMENTS_FILE_NAME);
+    let description_path = bundle.join(TASK_DESCRIPTION_FILE_NAME);
+
+    // Steps 1 and 2 of the bundle write protocol, then a crash: the pending
+    // record holds the pre-image, the rows and document rewrite are applied,
+    // and the envelope is never published.
+    let documents: BTreeMap<String, String> = [
+        TASK_DESCRIPTION_FILE_NAME,
+        TASK_ACCEPTANCE_FILE_NAME,
+        TASK_PLAN_FILE_NAME,
+        TASK_EXECUTION_SUMMARY_FILE_NAME,
+    ]
+    .into_iter()
+    .map(|name| {
+        let body = std::fs::read_to_string(bundle.join(name)).unwrap();
+        (name.to_string(), body)
+    })
+    .collect();
+    let pending = serde_json::json!({
+        "schema_version": 1,
+        "events_len": std::fs::metadata(&events_path).unwrap().len(),
+        "comments_len": std::fs::metadata(&comments_path).map_or(0, |m| m.len()),
+        "envelope_sha256": format!(
+            "{:x}",
+            Sha256::digest(std::fs::read(bundle.join(TASK_ENVELOPE_FILE_NAME)).unwrap())
+        ),
+        "documents": documents,
+    });
+    std::fs::write(
+        bundle.join(".pending-write.yaml"),
+        serde_yaml::to_string(&pending).unwrap(),
+    )
+    .unwrap();
+    let events: Vec<TaskEventRowV2> = jsonl_rows(&events_path);
+    let comments: Vec<TaskCommentRowV2> = if comments_path.exists() {
+        jsonl_rows(&comments_path)
+    } else {
+        Vec::new()
+    };
+    let aborted_event = TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: format!("EV-{:04}", events.len() + 1),
+        at: Utc::now(),
+        by: "aborted-writer".into(),
+        event_type: "status_changed".into(),
+        note: None,
+        from_status: Some(TaskStatus::InProgress),
+        to_status: Some(TaskStatus::Done),
+    };
+    let aborted_comment = TaskCommentRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        comment_id: format!("C-{:04}", comments.len() + 1),
+        at: Utc::now(),
+        by: "aborted-writer".into(),
+        body: "aborted".into(),
+    };
+    let append = |path: &Path, row: String| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(file, "{row}").unwrap();
+    };
+    append(&events_path, serde_json::to_string(&aborted_event).unwrap());
+    append(
+        &comments_path,
+        serde_json::to_string(&aborted_comment).unwrap(),
+    );
+    std::fs::write(&description_path, "aborted description").unwrap();
+
+    let unbound = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        None,
+    );
+    owner
+        .backends
+        .commit_boundary
+        .mutate_execution_claim(
+            Some(&unbound),
+            "evidence-after-abort",
+            &ClaimMutation::Evidence(ClaimEvidence {
+                comment: Some("kept".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("evidence commit");
+
+    let read = owner
+        .backends
+        .task
+        .task
+        .get_task(&task.id)
+        .expect("the bundle reads after the coordinated commit")
+        .unwrap();
+    assert_eq!(read.status, TaskStatus::InProgress);
+    assert_eq!(read.description, task.description);
+    assert!(
+        !bundle.join(".pending-write.yaml").exists(),
+        "the leftover pending write is settled"
+    );
+    let events: Vec<TaskEventRowV2> = jsonl_rows(&events_path);
+    let comments: Vec<TaskCommentRowV2> = jsonl_rows(&comments_path);
+    assert!(
+        events.iter().all(|event| event.by != "aborted-writer")
+            && comments
+                .iter()
+                .all(|comment| comment.by != "aborted-writer"),
+        "no aborted row survives: {events:?} {comments:?}"
+    );
+    assert!(comments.iter().any(|comment| comment.body == "kept"));
+    let event_ids: HashSet<_> = events.iter().map(|event| &event.event_id).collect();
+    let comment_ids: HashSet<_> = comments.iter().map(|comment| &comment.comment_id).collect();
+    assert_eq!(event_ids.len(), events.len(), "event IDs are unique");
+    assert_eq!(comment_ids.len(), comments.len(), "comment IDs are unique");
 }
 
 fn review_report(verdict: &str) -> TaskArtifact {
