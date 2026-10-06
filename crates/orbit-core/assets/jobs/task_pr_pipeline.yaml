@@ -424,8 +424,9 @@ spec:
         admission: "{{ steps.re_review_gate_admit.output }}"
 
     # ORB-13989: a reviewer commit on the rebased head is revalidated exactly
-    # like `review_validate` before it is republished; a failure keeps the
-    # published PR and the task in review.
+    # like `review_validate` before it is republished. A baseline-red failure
+    # holds the task in backlog with the old published PR unchanged; the
+    # failing rebased head is not pushed.
     - id: re_review_validate
       when: "{{ steps.re_review_gate_settle.output.reviewer_fixed }} == true"
       target: activity:candidate_validate
@@ -434,6 +435,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.complete_pr.output.rebased.base_sha }}"
+        base_ref: "{{ steps.complete_pr.output.rebased.base_ref }}"
         ownership_base_sha: "{{ steps.re_review_gate_settle.output.implementation_head_sha }}"
 
     - id: re_push

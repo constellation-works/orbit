@@ -1160,6 +1160,76 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
     );
 }
 
+/// A red base discovered while revalidating a rebased, already-published PR
+/// still holds the task. The earlier completion-failure path used to preserve
+/// every PR failure in `review`, bypassing the baseline hold.
+#[test]
+fn a_red_base_during_pr_revalidation_holds_the_task() {
+    isolated(
+        "a_red_base_during_pr_revalidation_holds_the_task",
+        |sandbox| {
+            let runs = sandbox.join("lint-runs");
+            let fx = Fixture::with_red_lint(sandbox, &runs);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_LINT]);
+            host.publish_pr(TASK_ID);
+            host.set_status(TASK_ID, TaskStatus::Review);
+            let remote_before = fx.remote_tip(BRANCH);
+            let hold = BaselineRedHold {
+                base_ref: BASE.to_string(),
+                base_sha: fx.base_sha.clone(),
+                command: RED_LINT.to_string(),
+                run_id: RUN_ID.to_string(),
+            };
+            let diagnostic = hold.text("the rebased candidate shares the base failure");
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "re_review_validate",
+                    "error_code": "baseline_red",
+                    "error_message": diagnostic,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("a red base is held before completion failures preserve review status");
+
+            assert_eq!(handoff["decision"], "held_baseline_red");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+            assert_eq!(
+                fx.remote_tip(BRANCH),
+                remote_before,
+                "the failing head is not pushed"
+            );
+            let (_, event, note) = host.status_events.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
+            assert_eq!(
+                note.as_deref().and_then(BaselineRedHold::from_text),
+                Some(hold.clone()),
+                "the hold retains the base ref needed for automatic lift"
+            );
+            assert!(
+                host.comments(TASK_ID).last().is_some_and(|comment| comment
+                    .message
+                    .contains(&format!("existing PR #{PR_NUMBER} remains"))),
+                "the existing PR is described as preserved at its last published head"
+            );
+
+            fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
+            assert!(matches!(
+                baseline_hold_status(&host, &fx.repo, &hold),
+                BaselineHoldStatus::Lifted(_)
+            ));
+        },
+    );
+}
+
 /// A failure that looks network-inconclusive is rerun after a backoff. One
 /// that clears passes, with the rerun recorded. One that persists stops after
 /// two reruns and is judged as any failure is.

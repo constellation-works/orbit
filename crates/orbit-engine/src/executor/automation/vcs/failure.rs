@@ -109,6 +109,29 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     let task = host.get_task(task_id)?;
     ensure_failure_handoff_ownership(host, input, &task, run_id)?;
 
+    // [ORB-14258] Completion failures normally preserve their published PR,
+    // but a required check that the base shares is not a candidate failure.
+    // Handle it before that preservation path so the task is held with the
+    // typed base condition instead of left in review indefinitely.
+    if orbit_types::workflow::is_baseline_red_failure(Some(error_code), Some(error_message))
+        && let Some(hold) = orbit_types::workflow::BaselineRedHold::from_text(error_message)
+    {
+        let worktree = pipeline_step(input, "worktree")?;
+        let workspace_path = canonicalize_existing_dir(
+            required_input_string(worktree, "workspace_path")?,
+            "pipeline.worktree.workspace_path",
+        )?;
+        return hold_baseline_red_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &hold,
+            &workspace_path,
+        );
+    }
+
     if COMPLETION_STEPS.contains(&failed_step_id)
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
@@ -181,25 +204,6 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             run_id,
             failed_step_id,
             error_message,
-            &workspace_path,
-        );
-    }
-
-    // [ORB-14258] A required command the base fails exactly as the candidate
-    // does says nothing about the candidate. It is kept as validated, with
-    // no `[BLOCKED]` PR, and the task is held in the backlog until the base
-    // moves. Checked before the review-gate branch for the same reason as
-    // the validation environment above.
-    if orbit_types::workflow::is_baseline_red_failure(Some(error_code), Some(error_message))
-        && let Some(hold) = orbit_types::workflow::BaselineRedHold::from_text(error_message)
-    {
-        return hold_baseline_red_candidate(
-            host,
-            &task,
-            run_id,
-            failed_step_id,
-            error_message,
-            &hold,
             &workspace_path,
         );
     }
@@ -451,16 +455,25 @@ fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
     } else {
         format!("`{}`", hold.base_ref)
     };
+    let publication = task.github_pr_number().map_or_else(
+        || "no PR was opened".to_string(),
+        |number| {
+            format!(
+                "existing PR #{number} remains on its previously published head; this failing \
+                 candidate was not pushed"
+            )
+        },
+    );
     let note = hold.text(&format!(
         "required validation `{}` is red on base {}: run={run_id}, failed_step={failed_step_id}, \
          candidate={head_sha}, branch={branch}; held in the backlog until {base_ref} moves to a \
-         base where it passes, and no PR was opened",
+         base where it passes; {publication}",
         hold.command, hold.base_sha
     ));
     let body = format!(
         "## Red base\n\nRequired validation `{}` fails on base `{}` exactly as it fails on this \
-         candidate, so the candidate did not cause it. No repair ran, no review or rework budget \
-         was spent, and no PR was opened.\n\n- Run: `{run_id}`\n- Failed step: \
+         candidate, so the candidate did not cause it. No repair ran and no review or rework budget \
+         was spent; {publication}.\n\n- Run: `{run_id}`\n- Failed step: \
          `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
          The task is back in the backlog and admission skips it while {base_ref} fails \
          the command. Once it passes on a new base tip, the next delivery resumes this candidate and \
