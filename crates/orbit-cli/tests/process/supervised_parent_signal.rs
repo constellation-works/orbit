@@ -13,6 +13,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -20,14 +21,37 @@ use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
+use tempfile::{Builder, TempDir};
 
 /// Upper bound between SIGTERM and process exit. The child's own termination
 /// grace period is 5s (`TERMINATION_GRACE_PERIOD`); this is only a CI jitter
 /// ceiling, well below systemd's typical 90s `TimeoutStopUSec`.
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(10);
-const STARTUP_DEADLINE: Duration = Duration::from_secs(15);
-const MARKER_DEADLINE: Duration = Duration::from_secs(8);
+// Startup can be slow under the box lane's concurrent suite (ORB-14396).
+// Only readiness uses this ceiling; signal handling retains its 10s bound.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(60);
+
+struct ChildGuard(Child);
+
+impl Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        stop_child(&mut self.0);
+    }
+}
 
 struct Fixture {
     _temp: TempDir,
@@ -37,7 +61,11 @@ struct Fixture {
 
 impl Fixture {
     fn init() -> Self {
-        let temp = tempdir().expect("tempdir");
+        // Exercise the positional marker argument with a non-shell-safe path.
+        let temp = Builder::new()
+            .prefix("signal fixture ")
+            .tempdir()
+            .expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
         std::fs::create_dir_all(&home).expect("create home");
@@ -92,51 +120,48 @@ fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
     let fixture = Fixture::init();
     let addr = free_loopback_addr();
     let mut server = spawn_mcp_listen(&fixture, addr);
-    wait_for_listening(addr);
+    wait_for_listening(&mut server, addr);
 
     let stream = TcpStream::connect(addr).expect("connect to mcp listen");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(STARTUP_DEADLINE))
         .expect("read timeout");
     let mut reader = stream.try_clone().expect("clone socket");
     let mut writer = stream;
     mcp_initialize(&mut writer, &mut reader, &fixture.work);
 
     let marker = fixture.work.join("listen.ready");
-    let call = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {
-            "name": "proc.spawn",
-            "arguments": {
-                "program": "/bin/sh",
-                "args": ["-c", format!("touch {} && sleep 30", marker.display())],
-                "timeout_ms": 60_000
-            }
-        }
+    send_rpc(
+        &mut writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }),
+    );
+    let listed = read_rpc_line(&mut reader).expect("tools/list response");
+    let tools = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list failed: {listed}"));
+    let proc_tool = tools.iter().find_map(|tool| {
+        tool["name"]
+            .as_str()
+            .filter(|name| matches!(*name, "proc.spawn" | "proc_spawn"))
     });
-    send_rpc(&mut writer, &call);
-    let advertised = json!({
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "name": "proc_spawn",
-            "arguments": {
-                "program": "/bin/sh",
-                "args": ["-c", format!("touch {} && sleep 30", marker.display())],
-                "timeout_ms": 60_000
-            }
-        }
-    });
-    send_rpc(&mut writer, &advertised);
-
-    let listen_has_child = wait_for_marker_optional(&marker, MARKER_DEADLINE);
-    // `proc.spawn` is a CLI/activity tool, not MCP-advertised. When the
-    // listen process cannot host the child, drive the same
-    // SignalHandlerGuard contract through `orbit tool run proc.spawn`.
-    let mut cli_child = if listen_has_child {
+    // Choose the actual advertised surface, rather than waiting for a marker
+    // from two unadvertised calls. The CLI route exercises the same
+    // SignalHandlerGuard when proc.spawn is only a CLI/activity tool.
+    let mut cli_child = if let Some(name) = proc_tool {
+        send_rpc(
+            &mut writer,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": proc_spawn_input(&marker) }
+            }),
+        );
+        wait_for_marker(&mut server, &marker);
         None
     } else {
         drop(writer);
@@ -145,7 +170,17 @@ fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
     };
 
     let before = Instant::now();
-    if listen_has_child {
+    if let Some(child) = cli_child.as_mut() {
+        send_signal(child, libc::SIGTERM);
+        let status = wait_with_deadline(child, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
+            panic!("orbit tool run proc.spawn did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM")
+        });
+        assert_signaled_or_nonzero(&status, libc::SIGTERM);
+        send_signal(&server, libc::SIGTERM);
+        let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE)
+            .expect("orbit mcp listen must also exit after SIGTERM");
+        assert_signaled_or_nonzero(&status, libc::SIGTERM);
+    } else {
         send_signal(&server, libc::SIGTERM);
         let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
             panic!(
@@ -154,15 +189,6 @@ fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
             )
         });
         assert_signaled_or_nonzero(&status, libc::SIGTERM);
-    } else {
-        let child = cli_child.as_mut().expect("cli proc.spawn child");
-        send_signal(child, libc::SIGTERM);
-        let status = wait_with_deadline(child, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
-            panic!("orbit tool run proc.spawn did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM")
-        });
-        assert_signaled_or_nonzero(&status, libc::SIGTERM);
-        send_signal(&server, libc::SIGTERM);
-        let _ = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE);
     }
     assert!(
         before.elapsed() < SHUTDOWN_DEADLINE,
@@ -176,7 +202,6 @@ fn cli_ctrl_c_during_proc_spawn_reports_interrupt() {
     let fixture = Fixture::init();
     let marker = fixture.work.join("cli.ready");
     let mut child = spawn_cli_proc_spawn(&fixture, &marker);
-    wait_for_marker(&marker);
 
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
@@ -213,30 +238,41 @@ fn orbit_command(work: &Path, home: &Path) -> Command {
     command
 }
 
-fn spawn_mcp_listen(fixture: &Fixture, addr: SocketAddr) -> Child {
-    orbit_command(&fixture.work, &fixture.home)
-        .args(["mcp", "listen", &addr.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn orbit mcp listen")
+fn spawn_mcp_listen(fixture: &Fixture, addr: SocketAddr) -> ChildGuard {
+    ChildGuard(
+        orbit_command(&fixture.work, &fixture.home)
+            .args(["mcp", "listen", &addr.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn orbit mcp listen"),
+    )
 }
 
-fn spawn_cli_proc_spawn(fixture: &Fixture, marker: &Path) -> Child {
-    let input = json!({
+fn proc_spawn_input(marker: &Path) -> Value {
+    // The marker belongs to the fixture, not a global /tmp name. A shell
+    // builtin writes it without PATH lookup, and a positional argument keeps
+    // spaces or shell metacharacters in TMPDIR from changing the command.
+    json!({
         "program": "/bin/sh",
-        "args": ["-c", format!("touch {} && sleep 30", marker.display())],
+        "args": ["-c", "printf '%s\\n' ready > \"$1\" && sleep 30", "orbit-signal-fixture", marker],
         "timeout_ms": 60_000
-    });
-    let child = orbit_command(&fixture.work, &fixture.home)
-        .args(["tool", "run", "proc.spawn", "--input", &input.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn orbit tool run proc.spawn");
-    wait_for_marker(marker);
+    })
+}
+
+fn spawn_cli_proc_spawn(fixture: &Fixture, marker: &Path) -> ChildGuard {
+    let input = proc_spawn_input(marker);
+    let mut child = ChildGuard(
+        orbit_command(&fixture.work, &fixture.home)
+            .args(["tool", "run", "proc.spawn", "--input", &input.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn orbit tool run proc.spawn"),
+    );
+    wait_for_marker(&mut child, marker);
     child
 }
 
@@ -247,14 +283,14 @@ fn free_loopback_addr() -> SocketAddr {
         .expect("probe address")
 }
 
-fn wait_for_listening(addr: SocketAddr) {
+fn wait_for_listening(child: &mut Child, addr: SocketAddr) {
     let deadline = Instant::now() + STARTUP_DEADLINE;
     loop {
         if TcpStream::connect(addr).is_ok() {
             return;
         }
-        if Instant::now() >= deadline {
-            panic!("orbit mcp listen did not bind {addr} within {STARTUP_DEADLINE:?}");
+        if child.try_wait().expect("poll mcp listen").is_some() || Instant::now() >= deadline {
+            fail_startup(child, &format!("orbit mcp listen did not bind {addr}"));
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -300,21 +336,45 @@ fn read_rpc_line(reader: &mut TcpStream) -> Option<Value> {
     serde_json::from_str(line.trim()).ok()
 }
 
-fn wait_for_marker(path: &Path) {
-    if !wait_for_marker_optional(path, MARKER_DEADLINE) {
-        panic!("child did not become ready: {}", path.display());
-    }
-}
-
-fn wait_for_marker_optional(path: &Path, deadline: Duration) -> bool {
-    let end = Instant::now() + deadline;
-    while Instant::now() < end {
+fn wait_for_marker(child: &mut Child, path: &Path) {
+    let end = Instant::now() + STARTUP_DEADLINE;
+    loop {
+        if child.try_wait().expect("poll supervisor").is_some() || Instant::now() >= end {
+            fail_startup(
+                child,
+                &format!("child did not become ready: {}", path.display()),
+            );
+        }
         if path.exists() {
-            return true;
+            return;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    path.exists()
+}
+
+fn stop_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        // Safety: this is the test's owned child. SIGTERM lets the supervisor
+        // clean up its child group even when a readiness assertion panics.
+        let _ = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = wait_with_deadline(child, SHUTDOWN_DEADLINE);
+    }
+}
+
+fn fail_startup(child: &mut Child, message: &str) -> ! {
+    stop_child(child);
+    let status = child.try_wait().expect("reaped supervisor status");
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    panic!(
+        "{message} within {STARTUP_DEADLINE:?}; status={status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
 }
 
 fn send_signal(child: &Child, signal: i32) {
