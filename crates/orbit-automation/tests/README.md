@@ -31,13 +31,16 @@ at the production CLI boundary, using the checked-in
 No production API visibility or crate dependency is changed for testing.
 
 `review_validation.rs` drives the public review-coverage API with the
-validation records a reviewer files. A superseded attempt that no later required
-pass replaced must fail closed at both consumers. `validation_evidence` gives
+validation records a reviewer files. A superseded attempt with no same-identity
+required pass anywhere in the report must fail closed at both consumers. `validation_evidence` gives
 the gate's escalation reason, and `certificate_acceptable`/`exclusion` refuse
 to spend a certificate whose `validation_complete` flag those records do not
 support. The table covers missing, ambiguous (one-sided or cross-namespace
 identity), invalid (blank or mismatched identity) and non-passing replacements.
-Same-command reruns and shared check identities serve as the accepting controls.
+Same-command reruns and shared check identities serve as the accepting controls
+in both report orders, including replacements establishing captured host checks.
+Different identities remain distinct even when a passing check claims broader
+coverage and runs the same command.
 It also covers an unrelated workspace failure filed as a scope-checked
 `diagnostic`, a failed required check relabeled as a control or diagnostic, a
 required check an earlier report revision recorded and the final records drop

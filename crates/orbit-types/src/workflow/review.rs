@@ -289,11 +289,10 @@ pub enum ValidationRole {
     /// An action outside the authorized scope, deliberately not performed.
     /// It supplies no coverage and imposes no requirement.
     Excluded,
-    /// A superseded attempt kept for history: a diagnostic run that a later
-    /// required check on the final candidate replaced. Replacement is the
-    /// later record that names the same check, not any later required pass.
-    /// It never erases the observation and never substitutes for that later
-    /// check.
+    /// A superseded attempt kept for history: a diagnostic run that a required
+    /// passing check on the final candidate replaced. Replacement requires
+    /// the same effective identity, regardless of report order. It never
+    /// erases the observation or substitutes for the required check.
     Superseded,
     /// A nonrequired observation of the final candidate kept as observed,
     /// such as a workspace-wide suite whose failures lie outside the task's
@@ -359,8 +358,8 @@ pub struct ReviewValidation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     /// Identity of the logical check this record belongs to. A superseded
-    /// attempt is replaced only by a later required passing record with the
-    /// same effective identity. A non-empty, trimmed value takes precedence
+    /// attempt is replaced only by a required passing record anywhere in the
+    /// report with the same effective identity. A non-empty, trimmed value takes precedence
     /// over the command; otherwise the normalized command is the identity
     /// (whitespace collapsed and leading environment assignments removed).
     /// An explicit identity can match another record's normalized command,

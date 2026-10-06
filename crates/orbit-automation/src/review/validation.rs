@@ -43,7 +43,7 @@ pub enum ValidationDefect {
         role: ValidationRole,
         outcome: ValidationOutcome,
     },
-    /// A superseded attempt that no later required check replaced, so the
+    /// A superseded attempt that no same-identity required pass replaced, so the
     /// diagnostic never reached a final-candidate outcome.
     SupersededWithoutReplacement { command: String },
     /// A classification other than `required` with nothing explaining it.
@@ -121,7 +121,7 @@ impl ValidationDefect {
                 outcome.as_str()
             ),
             ValidationDefect::SupersededWithoutReplacement { command } => format!(
-                "validation_incomplete: superseded attempt `{command}` is followed by no related \
+                "validation_incomplete: superseded attempt `{command}` has no same-identity \
                  required check that passed on the final candidate"
             ),
             ValidationDefect::ClassificationUnexplained { command, role } => format!(
@@ -207,8 +207,8 @@ impl Default for ValidationContext<'_> {
 /// declared negative control must have failed, name its kind and sources in
 /// the candidate's scope, and, when it runs on the candidate, not share its
 /// check with a required pass; an excluded action must have stayed
-/// unperformed; a superseded attempt must be followed by the required check
-/// that replaced it — the same effective identity: a non-empty `check`,
+/// unperformed; a superseded attempt must have a required pass anywhere in
+/// the report that replaced it — the same effective identity: a non-empty `check`,
 /// otherwise the command with whitespace and leading `NAME=value`
 /// assignments normalized; a diagnostic must be an
 /// observation that ran, and a failed one must name sources all outside the
@@ -225,7 +225,7 @@ pub fn validation_evidence(
 ) -> Result<(), ValidationDefect> {
     let mut required_passed = false;
 
-    for (index, record) in records.iter().enumerate() {
+    for record in records {
         if record.role != ValidationRole::Required && !explained(record) {
             return Err(ValidationDefect::ClassificationUnexplained {
                 command: record.command.clone(),
@@ -251,9 +251,7 @@ pub fn validation_evidence(
             {
                 return Err(contradiction(record));
             }
-            ValidationRole::Superseded
-                if !replaced_by_required_check(record, &records[index + 1..]) =>
-            {
+            ValidationRole::Superseded if !passes_as_required(record, records) => {
                 return Err(ValidationDefect::SupersededWithoutReplacement {
                     command: record.command.clone(),
                 });
@@ -281,13 +279,11 @@ pub fn validation_evidence(
         return Err(ValidationDefect::HostContractMissing);
     };
     for command in host_required {
-        let established = records.iter().enumerate().any(|(index, record)| {
+        let established = records.iter().any(|record| {
             same_host_command(record, command)
                 && match record.role {
                     ValidationRole::Required => record.outcome == ValidationOutcome::Passed,
-                    ValidationRole::Superseded => {
-                        replaced_by_required_check(record, &records[index + 1..])
-                    }
+                    ValidationRole::Superseded => passes_as_required(record, records),
                     ValidationRole::ExpectedFailure
                     | ValidationRole::Excluded
                     | ValidationRole::Diagnostic => false,
@@ -482,6 +478,11 @@ fn in_scope(source: &str, scope: &[String]) -> bool {
 }
 
 /// Whether a required record of the same check passed.
+///
+/// Required passes describe the final candidate, so their position in the
+/// report does not affect replacement. Effective identities remain strict:
+/// a non-empty `check`, otherwise the normalized command. Different identities
+/// never match, even when their commands match or one check claims broader coverage.
 fn passes_as_required(record: &ReviewValidation, records: &[ReviewValidation]) -> bool {
     records.iter().any(|other| {
         other.role == ValidationRole::Required
@@ -503,23 +504,6 @@ fn explained(record: &ReviewValidation) -> bool {
         .note
         .as_deref()
         .is_some_and(|note| !note.trim().is_empty())
-}
-
-/// Whether a later record is the required check the superseded attempt was
-/// replaced by. Order carries the meaning: a supersession must be resolved
-/// after it, never by a check recorded before it. The later record must be
-/// the same check: its effective identity is a non-empty `check`, otherwise
-/// its command (whitespace-normalized, with leading POSIX environment
-/// assignments removed). An explicit identity can match another record's
-/// normalized command, including when a wrapper changed the command text.
-/// Different effective identities never match, even with identical commands.
-/// Any later required pass is not enough.
-fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewValidation]) -> bool {
-    later.iter().any(|record| {
-        record.role == ValidationRole::Required
-            && record.outcome == ValidationOutcome::Passed
-            && same_check(superseded, record)
-    })
 }
 
 fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
