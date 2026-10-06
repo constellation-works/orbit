@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Overview"
 owner: grok
 last_updated: 2026-08-09
-last_validated: 2026-09-13
+last_validated: 2026-10-06
 status: Draft
 feature: agent-families
 doc_role: overview
@@ -25,8 +25,8 @@ Family defaults were originally also used to pick activity role models, but that
 
 - **Agent Family:** A stable identifier such as `claude`, `codex`, `gemini`, or `grok` used for routing, attribution, and legacy model inference.
 - **Model Inference:** `agent_from_model()` and `provider_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families and providers. `infer_agent_family_from_model()` remains for legacy artifact recovery.
-- **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; every activity dispatch resolves to it.
-- **Default Crew:** `[workflow].default_crew` names the workspace fallback when a task does not specify `crew`.
+- **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; agent dispatch resolves an explicit override, then `task.crew`, then the layered default.
+- **Default Crew:** `[workflow].default_crew` supplies the workspace default tier when no explicit override or task crew is set. The resolved default can fall through to environment and system configuration.
 - **Executor:** A YAML definition in `crates/orbit-core/assets/executors/<name>.yaml` describing how to invoke an agent CLI. The file is named for the execution lane (`antigravity.yaml` for `agy`), which may differ from the model family (`gemini`).
 - **Sandbox Surface:** Provider-specific state directories and lockfile rules required for safe `macos-sandbox-exec` execution.
 
