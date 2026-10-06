@@ -261,9 +261,10 @@ Unmerged `orbit/<task>` branch failures are recorded as idempotent evidence arti
 on the owning task, with no remediation task or pilot candidate. Missing task owners
 remain retryable, and other non-landing failures are explicitly excluded.
 The existing freshness selection still precedes routing; it also sets aside runs on
-branches whose pull request closed at the branch's current head and jobs a workflow
-concurrency group cancelled, and a run-scoped retryable error repeated on three
-consecutive sweeps is reported as persistent instead of failing every sweep. The pipeline
+branches whose pull request closed at the branch's current head with no open pull request,
+jobs a workflow concurrency group cancelled, and a run-scoped retryable error repeated on
+three distinct consecutive workflow sweeps is reported as persistent instead of failing every
+sweep. A retry of the same workflow run counts once. The pipeline
 dedupes against still-open owners by failure key, and pilots each candidate through the
 existing task-pilot job. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits

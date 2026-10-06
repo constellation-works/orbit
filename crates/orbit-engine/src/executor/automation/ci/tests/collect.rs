@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::super::collect::collect;
+use super::super::collect::{collect, collect_for_sweep};
 use super::super::history::RetryableHistory;
 use super::support::{FakeQueries, HEAD, input, run};
 
@@ -237,8 +237,9 @@ fn a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note() {
     let queries = concurrency_cancelled_pr_runs();
     let mut history = RetryableHistory::default();
 
-    for sweep in 1..=2 {
-        let evidence = collect(&queries, &input(), &mut history).expect("collect");
+    for (sweep, sweep_id) in [(1, "scheduled-1"), (2, "scheduled-2")] {
+        let evidence =
+            collect_for_sweep(&queries, &input(), &mut history, sweep_id).expect("collect");
         assert_eq!(
             evidence["outcome_hint"],
             json!("retryable_error"),
@@ -247,7 +248,8 @@ fn a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note() {
         assert_eq!(evidence["persistent_retryable_errors"], json!([]));
     }
 
-    let evidence = collect(&queries, &input(), &mut history).expect("collect");
+    let evidence =
+        collect_for_sweep(&queries, &input(), &mut history, "scheduled-3").expect("collect");
     assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
     assert_eq!(evidence["retryable_errors"], json!([]));
     assert!(sorted_run_ids(&evidence, "current_failures").is_empty());
@@ -271,4 +273,62 @@ fn a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note() {
         sorted_run_ids(&evidence, "persistently_incomplete"),
         [WINDOWS_RUN, MACOS_RUN]
     );
+}
+
+#[test]
+fn repeated_collection_for_one_sweep_does_not_advance_persistence() {
+    let queries = concurrency_cancelled_pr_runs();
+    let mut history = RetryableHistory::default();
+
+    for retry in 1..=3 {
+        let evidence =
+            collect_for_sweep(&queries, &input(), &mut history, "scheduled-1").expect("collect");
+        assert_eq!(
+            evidence["outcome_hint"],
+            json!("retryable_error"),
+            "collection retry {retry} belongs to the same sweep"
+        );
+        assert_eq!(evidence["persistent_retryable_errors"], json!([]));
+    }
+
+    let evidence =
+        collect_for_sweep(&queries, &input(), &mut history, "scheduled-2").expect("collect");
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+    assert_eq!(evidence["persistent_retryable_errors"], json!([]));
+}
+
+#[test]
+fn unavailable_collection_breaks_a_consecutive_error_streak() {
+    let error = json!({
+        "run_id": 42,
+        "job_id": 24,
+        "operation": "job_log_truncated",
+        "retryable": true,
+    });
+    let mut history = RetryableHistory::default();
+    assert!(
+        history
+            .observe(vec![error.clone()], "scheduled-1")
+            .persistent
+            .is_empty()
+    );
+    assert!(
+        history
+            .observe(vec![error.clone()], "scheduled-2")
+            .persistent
+            .is_empty()
+    );
+
+    let evidence = collect_for_sweep(
+        &FakeQueries::unauthenticated(),
+        &input(),
+        &mut history,
+        "scheduled-3",
+    )
+    .expect("collect unavailable capability");
+    assert_eq!(evidence["collected"], json!(false));
+
+    let after_gap = history.observe(vec![error], "scheduled-4");
+    assert_eq!(after_gap.retryable.len(), 1);
+    assert!(after_gap.persistent.is_empty());
 }

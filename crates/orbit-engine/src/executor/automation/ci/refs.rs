@@ -182,11 +182,15 @@ pub(super) struct CandidateProbeResults {
 /// that fails or is skipped due to probe budget keeps its branch deferred rather
 /// than assuming it is merged or current.
 ///
-/// A branch that survives on origin is closed when one listing of recently
-/// closed pull requests holds a pull request for it whose head is still the
-/// branch's head. A closed pull request at an older head does not count: the
-/// branch has moved on, and a newer pull request may carry it. Without that
-/// listing a branch falls back to the origin answer alone.
+/// A branch that survives on origin is closed when a bounded closed-PR listing
+/// holds a pull request for it whose head is still the branch's head. When the
+/// global listing reaches its cap, unmatched selected candidates get a
+/// branch-specific lookup. A branch with a matching closed pull request is
+/// checked for an open pull request on that branch before being retired, so a
+/// newer open pull request is not hidden by an older closed one. A closed pull
+/// request at an older head does not count: the branch has moved on, and a
+/// newer pull request may carry it. Failed lookups leave the candidate
+/// deferred with a note.
 pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
     queries: &Q,
     branch_heads: &RemoteBranchHeads,
@@ -222,25 +226,26 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
         ));
     }
 
-    let closed_pull_requests = if selected.is_empty() {
-        Vec::new()
+    let (closed_pull_requests, lookup_unmatched_branches) = if selected.is_empty() {
+        (Vec::new(), false)
     } else {
         match queries.closed_pull_requests(MAX_CLOSED_PULL_REQUESTS) {
             Ok(pull_requests) => {
-                if pull_requests.len() as u64 == MAX_CLOSED_PULL_REQUESTS {
+                let at_cap = pull_requests.len() as u64 == MAX_CLOSED_PULL_REQUESTS;
+                if at_cap {
                     notes.push(format!(
                         "closed pull requests were listed at the cap ({MAX_CLOSED_PULL_REQUESTS}); \
-                         a branch whose pull request closed earlier is judged by origin alone"
+                         unmatched candidate branches will be queried by head"
                     ));
                 }
-                pull_requests
+                (pull_requests, at_cap)
             }
             Err(error) => {
                 notes.push(format!(
-                    "closed pull requests could not be listed ({error}); candidate branches are \
-                     judged by origin alone"
+                    "closed pull requests could not be listed ({error}); candidate branches will \
+                     be queried by head before they are classified"
                 ));
-                Vec::new()
+                (Vec::new(), true)
             }
         }
     };
@@ -271,14 +276,91 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
                 retired.insert((*branch).to_string());
             }
             Ok(Some(head)) => {
-                if let Some(pull_request) = closed_pull_requests.iter().find(|pull_request| {
-                    pull_request.get("head_branch").and_then(Value::as_str) == Some(*branch)
-                        && pull_request
-                            .get("reported_head_sha")
-                            .and_then(Value::as_str)
-                            == Some(head.as_str())
-                }) {
-                    closed.insert((*branch).to_string(), pull_request.clone());
+                let pull_request = closed_pull_request_at_head(&closed_pull_requests, branch, &head)
+                    .cloned()
+                    .or_else(|| {
+                        if !lookup_unmatched_branches {
+                            return None;
+                        }
+                        match queries.closed_pull_requests_for_branch(branch) {
+                            Ok(pull_requests) => {
+                                let match_at_head =
+                                    closed_pull_request_at_head(&pull_requests, branch, &head)
+                                    .cloned();
+                                if match_at_head.is_none()
+                                    && pull_requests.len() as u64 == MAX_CLOSED_PULL_REQUESTS
+                                {
+                                    let message = format!(
+                                        "closed pull requests for candidate branch '{branch}' were \
+                                         listed at the cap ({MAX_CLOSED_PULL_REQUESTS}) without \
+                                         matching the current origin head; its failure remains deferred"
+                                    );
+                                    notes.push(message.clone());
+                                    unverified.insert(
+                                        (*branch).to_string(),
+                                        (
+                                            "closed_pull_request_head_page_truncated".to_string(),
+                                            message,
+                                        ),
+                                    );
+                                }
+                                match_at_head
+                            }
+                            Err(error) => {
+                                let message = format!(
+                                    "closed pull requests for candidate branch '{branch}' could not \
+                                     be listed ({error}); its failure remains deferred until verified"
+                                );
+                                notes.push(message.clone());
+                                unverified.insert(
+                                    (*branch).to_string(),
+                                    ("closed_pull_request_head".to_string(), message),
+                                );
+                                None
+                            }
+                        }
+                    });
+                if let Some(pull_request) = pull_request {
+                    match queries.open_pull_requests_for_branch(branch) {
+                        Ok(open_pull_requests)
+                            if open_pull_requests.iter().any(|open_pull_request| {
+                                open_pull_request.get("head_branch").and_then(Value::as_str)
+                                    == Some(*branch)
+                            }) =>
+                        {
+                            notes.push(format!(
+                                "branch '{branch}' has an open pull request despite an older \
+                                 closed pull request at the same head; its failure remains current"
+                            ));
+                        }
+                        Ok(open_pull_requests)
+                            if open_pull_requests.len() as u64 == MAX_CLOSED_PULL_REQUESTS =>
+                        {
+                            let message = format!(
+                                "open pull requests for candidate branch '{branch}' were listed at \
+                                 the cap ({MAX_CLOSED_PULL_REQUESTS}); its failure remains deferred"
+                            );
+                            notes.push(message.clone());
+                            unverified.insert(
+                                (*branch).to_string(),
+                                ("open_pull_request_head_page_truncated".to_string(), message),
+                            );
+                        }
+                        Ok(_) => {
+                            closed.insert((*branch).to_string(), pull_request);
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "open pull requests for candidate branch '{branch}' could not be \
+                                 listed ({error}); its failure remains deferred"
+                            );
+                            notes.push(message.clone());
+                            unverified.insert(
+                                (*branch).to_string(),
+                                ("open_pull_request_head".to_string(), message),
+                            );
+                        }
+                    }
                 }
             }
             Err(error) => {
@@ -305,6 +387,20 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
         closed,
         unverified,
     }
+}
+
+fn closed_pull_request_at_head<'a>(
+    pull_requests: &'a [Value],
+    branch: &str,
+    head: &str,
+) -> Option<&'a Value> {
+    pull_requests.iter().find(|pull_request| {
+        pull_request.get("head_branch").and_then(Value::as_str) == Some(branch)
+            && pull_request
+                .get("reported_head_sha")
+                .and_then(Value::as_str)
+                == Some(head)
+    })
 }
 
 /// Which candidate branches this sweep probes against origin.

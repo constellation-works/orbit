@@ -51,8 +51,11 @@
 # - Bounded investigation makes progress across sweeps rather than re-spending
 #   its budget on the same refs: red runs on branches origin no longer has are
 #   reported as `ref_no_longer_exists`, and those whose pull request closed at
-#   the branch's current head as `pull_request_closed`, instead of current, and
-#   the last investigation slot rotates through whatever the cap left over.
+#   the branch's current head with no open pull request as
+#   `pull_request_closed`, instead of current, and the last investigation slot
+#   rotates through whatever the cap left over.
+#   If the global closed-PR page is unavailable, selected candidates are
+#   checked by head; a failed or truncated check stays deferred.
 # - A job a workflow concurrency group cancelled (its check-run annotation says
 #   so) is inconclusive from its view and annotations; its incomplete log is
 #   never read, so it cannot fail the sweep.

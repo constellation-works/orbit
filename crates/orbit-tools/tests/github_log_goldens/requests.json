@@ -346,6 +346,53 @@
     "raw": null
   },
   {
+    "name": "closed_pr_head_request_filters_a_specific_branch",
+    "op": "closed_pr_head",
+    "input": {
+      "repo": "acme/orbit",
+      "head": "old-closed-branch",
+      "limit": 100
+    },
+    "raw": {
+      "number": 1001,
+      "title": "Closed branch repair",
+      "state": "CLOSED",
+      "isDraft": false,
+      "headRefName": "old-closed-branch",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "baseRefName": "main",
+      "url": "https://github.com/acme/orbit/pull/1001",
+      "updatedAt": "2026-09-01T10:00:00Z"
+    }
+  },
+  {
+    "name": "closed_pr_head_request_rejects_flag_injection",
+    "op": "closed_pr_head",
+    "input": {
+      "head": "--help"
+    },
+    "raw": null
+  },
+  {
+    "name": "open_pr_head_request_filters_a_specific_branch",
+    "op": "open_pr_head",
+    "input": {
+      "head": "old-closed-branch",
+      "limit": 100
+    },
+    "raw": {
+      "number": 1002,
+      "title": "Reopened branch repair",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "old-closed-branch",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "baseRefName": "main",
+      "url": "https://github.com/acme/orbit/pull/1002",
+      "updatedAt": "2026-09-02T10:00:00Z"
+    }
+  },
+  {
     "name": "run_jobs_request_reads_each_failed_jobs_runner_labels",
     "op": "run_jobs",
     "input": {

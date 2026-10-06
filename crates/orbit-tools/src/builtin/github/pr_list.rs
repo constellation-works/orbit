@@ -24,6 +24,38 @@ pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     Ok(super::gh_exec_request(args, None, TIMEOUT_DEFAULT_MS))
 }
 
+/// `gh pr list` for closed pull requests whose head branch has this name.
+///
+/// Engine-private CI discovery uses this when its bounded repository-wide
+/// closed-PR page is full, so a candidate branch omitted by the page can still
+/// be matched without treating the list's sort order as close time.
+pub fn build_closed_head_list_request(input: &Value) -> Result<ExecRequest, OrbitError> {
+    build_head_list_request(input, "closed")
+}
+
+/// `gh pr list` for open pull requests whose head branch has this name.
+pub fn build_open_head_list_request(input: &Value) -> Result<ExecRequest, OrbitError> {
+    build_head_list_request(input, "open")
+}
+
+fn build_head_list_request(input: &Value, state: &str) -> Result<ExecRequest, OrbitError> {
+    super::require_str(input, "head")?;
+    let mut args = vec![
+        "pr".to_string(),
+        "list".to_string(),
+        "--state".to_string(),
+        state.to_string(),
+    ];
+    super::push_optional_flag(&mut args, input, "head", "--head")?;
+    super::push_repo_flag(&mut args, input)?;
+    args.push("--limit".to_string());
+    args.push(super::bounded_limit(input, "limit", DEFAULT_LIMIT, MAX_LIMIT)?.to_string());
+    args.push("--json".to_string());
+    args.push(PR_LIST_FIELDS.to_string());
+
+    Ok(super::gh_exec_request(args, None, TIMEOUT_DEFAULT_MS))
+}
+
 /// Reshape one `gh pr list` entry, keeping the pull request's current head SHA
 /// under a name that cannot be confused with a run's tested commit.
 pub fn project_pull_request(pr: &Value) -> Value {

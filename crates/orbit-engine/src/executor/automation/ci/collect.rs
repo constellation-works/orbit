@@ -149,10 +149,20 @@ fn default_investigation_cursor() -> u64 {
 /// Collect one CI evidence snapshot. `history` carries how many consecutive
 /// collections each run-scoped retryable error has been seen in, and is
 /// updated with this collection's errors.
+#[cfg(test)]
 pub(super) fn collect<Q: CiQueries + ?Sized>(
     queries: &Q,
     input: &Value,
     history: &mut RetryableHistory,
+) -> Result<Value, OrbitError> {
+    collect_for_sweep(queries, input, history, "direct-collection")
+}
+
+pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    input: &Value,
+    history: &mut RetryableHistory,
+    sweep_id: &str,
 ) -> Result<Value, OrbitError> {
     let bounds = bounds_from_input(input)?;
     let auth = queries.auth_status();
@@ -160,6 +170,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         // Stop here on purpose. Every later field would be an empty list that
         // reads exactly like "nothing is failing", and that conclusion
         // requires queries this host could not run.
+        history.observe(Vec::new(), sweep_id);
         return Ok(json!({
             "schema_version": CI_EVIDENCE_SCHEMA_VERSION,
             "collected": false,
@@ -372,7 +383,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
     current = supersede_older_when_cancelled_run_is_actionable(remaining, &mut stale);
-    let observed = history.observe(retryable_errors);
+    let observed = history.observe(retryable_errors, sweep_id);
     let retryable_errors = observed.retryable;
     let persistent_errors = observed.persistent;
     let (mut current, persistently_incomplete) =

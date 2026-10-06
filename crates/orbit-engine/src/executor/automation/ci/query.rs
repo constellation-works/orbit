@@ -160,8 +160,12 @@ pub(super) trait CiQueries {
     /// GitHub itself reports it, never inferred from a naming convention.
     fn repo_view(&self) -> Result<Value, OrbitError>;
     fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
-    /// The most recently closed pull requests, merged ones included.
+    /// A bounded page of closed pull requests, merged ones included.
     fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
+    /// Closed pull requests with this head branch, merged ones included.
+    fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError>;
+    /// Open pull requests with this head branch.
+    fn open_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError>;
     /// Recent runs across the whole repository, without a branch filter.
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError>;
@@ -213,6 +217,35 @@ impl HostCiQueries {
         let request = github_cli::pr_list_request(&json!({"state": state, "limit": limit}))?;
         let stdout = self.run_gh(request, "gh pr list")?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
+        Ok(parsed
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(github_cli::project_pull_request)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn pull_requests_for_branch(
+        &self,
+        branch: &str,
+        state: &str,
+    ) -> Result<Vec<Value>, OrbitError> {
+        let input = json!({"head": branch, "limit": 100});
+        let request = match state {
+            "closed" => github_cli::closed_pr_head_request(&input)?,
+            "open" => github_cli::open_pr_head_request(&input)?,
+            _ => {
+                return Err(OrbitError::InvalidInput(
+                    "unsupported pull request state for head query".to_string(),
+                ));
+            }
+        };
+        let label = format!("gh pr list {state} head");
+        let stdout = self.run_gh(request, &label)?;
+        let parsed = github_cli::parse_gh_json(&stdout, &label)?;
         Ok(parsed
             .as_array()
             .map(|entries| {
@@ -302,6 +335,14 @@ impl CiQueries for HostCiQueries {
 
     fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         self.pull_requests("closed", limit)
+    }
+
+    fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests_for_branch(branch, "closed")
+    }
+
+    fn open_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests_for_branch(branch, "open")
     }
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {

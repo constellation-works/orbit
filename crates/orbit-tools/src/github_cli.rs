@@ -33,7 +33,9 @@ pub use crate::builtin::github::logs::{
     SOURCE_RUN_LOG, read_run_log,
 };
 pub use crate::builtin::github::pr_list::{
-    build_exec_request as pr_list_request, project_pull_request,
+    build_closed_head_list_request as closed_pr_head_request,
+    build_exec_request as pr_list_request, build_open_head_list_request as open_pr_head_request,
+    project_pull_request,
 };
 pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,

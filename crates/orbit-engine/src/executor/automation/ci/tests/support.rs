@@ -15,6 +15,7 @@ use super::super::query::{AuthStatus, CiQueries, LogScope, RemoteBranchHeads, Ru
 #[derive(Default)]
 pub(super) struct FakeQueries {
     repo: Value,
+    auth_usable: bool,
     branch_heads: BTreeMap<String, String>,
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
@@ -23,6 +24,10 @@ pub(super) struct FakeQueries {
     failed_jobs: BTreeMap<String, Value>,
     open_pull_requests: Vec<Value>,
     closed_pull_requests: Vec<Value>,
+    closed_pull_requests_error: Option<String>,
+    open_pull_requests_by_branch: BTreeMap<String, Vec<Value>>,
+    closed_pull_requests_by_branch: BTreeMap<String, Vec<Value>>,
+    closed_pull_request_branch_errors: BTreeMap<String, String>,
     /// Concurrency-cancellation annotation per job id.
     concurrency_cancellations: BTreeMap<u64, String>,
     /// Failed-step logs per job id; an unscripted job's log is empty.
@@ -31,6 +36,8 @@ pub(super) struct FakeQueries {
     pub(super) log_reads: Mutex<Vec<u64>>,
     /// Every limit passed to `open_pull_requests` and `repository_runs`.
     pub(super) pull_request_limits: Mutex<Vec<u64>>,
+    pub(super) open_pull_request_branch_queries: Mutex<Vec<String>>,
+    pub(super) closed_pull_request_branch_queries: Mutex<Vec<String>>,
     pub(super) run_limits: Mutex<Vec<u64>>,
 }
 
@@ -42,6 +49,19 @@ impl FakeQueries {
                 "full_name": "acme/orbit",
                 "default_branch": "main",
             }),
+            auth_usable: true,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn unauthenticated() -> Self {
+        Self {
+            repo: json!({
+                "name": "orbit",
+                "full_name": "acme/orbit",
+                "default_branch": "main",
+            }),
+            auth_usable: false,
             ..Self::default()
         }
     }
@@ -91,6 +111,59 @@ impl FakeQueries {
         self
     }
 
+    pub(super) fn with_closed_pull_request_for_branch(
+        mut self,
+        branch: &str,
+        number: u64,
+        sha: &str,
+    ) -> Self {
+        self.closed_pull_requests_by_branch
+            .entry(branch.to_string())
+            .or_default()
+            .push(json!({
+                "number": number,
+                "state": "CLOSED",
+                "head_branch": branch,
+                "reported_head_sha": sha,
+                "url": format!("https://github.com/acme/orbit/pull/{number}"),
+            }));
+        self
+    }
+
+    pub(super) fn with_closed_pull_requests_error(mut self, error: &str) -> Self {
+        self.closed_pull_requests_error = Some(error.to_string());
+        self
+    }
+
+    pub(super) fn with_closed_pull_request_branch_error(
+        mut self,
+        branch: &str,
+        error: &str,
+    ) -> Self {
+        self.closed_pull_request_branch_errors
+            .insert(branch.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_open_pull_request_for_branch(
+        mut self,
+        branch: &str,
+        number: u64,
+        sha: &str,
+    ) -> Self {
+        self.open_pull_requests_by_branch
+            .entry(branch.to_string())
+            .or_default()
+            .push(json!({
+                "number": number,
+                "state": "OPEN",
+                "head_branch": branch,
+                "reported_head_sha": sha,
+                "url": format!("https://github.com/acme/orbit/pull/{number}"),
+            }));
+        self
+    }
+
     /// A failed-step log whose source GitHub did not deliver in full.
     pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
         let mut log = super::super::query::bounded_run_log(text, 16_384);
@@ -104,8 +177,12 @@ impl CiQueries for FakeQueries {
     fn auth_status(&self) -> AuthStatus {
         AuthStatus {
             available: true,
-            authenticated: true,
-            detail: "GitHub CLI is authenticated on this host".to_string(),
+            authenticated: self.auth_usable,
+            detail: if self.auth_usable {
+                "GitHub CLI is authenticated on this host".to_string()
+            } else {
+                "GitHub CLI credentials are unavailable on this host".to_string()
+            },
         }
     }
 
@@ -122,7 +199,37 @@ impl CiQueries for FakeQueries {
     }
 
     fn closed_pull_requests(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+        if let Some(error) = &self.closed_pull_requests_error {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self.closed_pull_requests.clone())
+    }
+
+    fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.closed_pull_request_branch_queries
+            .lock()
+            .expect("closed pull request branch queries lock")
+            .push(branch.to_string());
+        if let Some(error) = self.closed_pull_request_branch_errors.get(branch) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
+        Ok(self
+            .closed_pull_requests_by_branch
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn open_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.open_pull_request_branch_queries
+            .lock()
+            .expect("open pull request branch queries lock")
+            .push(branch.to_string());
+        Ok(self
+            .open_pull_requests_by_branch
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
     }
 
     fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {

@@ -10,7 +10,7 @@
 //! origin read) never degrades: losing that read means the sweep did not look.
 //!
 //! The counts live in one small file under the workspace data root. Each
-//! collection is one sighting; an error absent from a collection starts over.
+//! distinct sweep is one sighting; an error absent from a sweep starts over.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -24,7 +24,13 @@ pub(super) const PERSISTENT_AFTER_SWEEPS: u64 = 3;
 /// Consecutive-sighting counts keyed by `run_id/job_id/operation`.
 #[derive(Debug, Default)]
 pub(super) struct RetryableHistory {
-    counts: BTreeMap<String, u64>,
+    counts: BTreeMap<String, SweepCount>,
+}
+
+#[derive(Debug, Clone)]
+struct SweepCount {
+    consecutive_sweeps: u64,
+    last_sweep_id: String,
 }
 
 /// One collection's errors after [`RetryableHistory::observe`].
@@ -34,10 +40,10 @@ pub(super) struct Observed {
 }
 
 impl RetryableHistory {
-    /// Record this collection's errors, replacing the previous sightings.
-    /// Errors seen on [`PERSISTENT_AFTER_SWEEPS`] consecutive collections are
-    /// split out as persistent.
-    pub(super) fn observe(&mut self, errors: Vec<Value>) -> Observed {
+    /// Record this sweep's errors, replacing the previous sightings.
+    /// Repeated activity calls for one job run count once; only errors seen in
+    /// distinct consecutive sweeps reach [`PERSISTENT_AFTER_SWEEPS`].
+    pub(super) fn observe(&mut self, errors: Vec<Value>, sweep_id: &str) -> Observed {
         let previous = std::mem::take(&mut self.counts);
         let mut seen = BTreeSet::new();
         let mut observed = Observed {
@@ -49,9 +55,20 @@ impl RetryableHistory {
                 observed.retryable.push(error);
                 continue;
             };
-            let sweeps = previous.get(&key).copied().unwrap_or(0) + 1;
+            let prior = previous.get(&key);
+            let sweeps = match prior {
+                Some(count) if count.last_sweep_id == sweep_id => count.consecutive_sweeps,
+                Some(count) => count.consecutive_sweeps + 1,
+                None => 1,
+            };
             if seen.insert(key.clone()) {
-                self.counts.insert(key, sweeps);
+                self.counts.insert(
+                    key,
+                    SweepCount {
+                        consecutive_sweeps: sweeps,
+                        last_sweep_id: sweep_id.to_string(),
+                    },
+                );
             }
             if sweeps < PERSISTENT_AFTER_SWEEPS {
                 observed.retryable.push(error);
@@ -72,7 +89,15 @@ impl RetryableHistory {
             .map(|counts| {
                 counts
                     .iter()
-                    .filter_map(|(key, count)| Some((key.clone(), count.as_u64()?)))
+                    .filter_map(|(key, count)| {
+                        Some((
+                            key.clone(),
+                            SweepCount {
+                                consecutive_sweeps: count.get("consecutive_sweeps")?.as_u64()?,
+                                last_sweep_id: count.get("last_sweep_id")?.as_str()?.to_string(),
+                            },
+                        ))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -80,7 +105,20 @@ impl RetryableHistory {
     }
 
     fn to_json(&self) -> Value {
-        json!({"schema_version": 1, "counts": self.counts})
+        let counts = self
+            .counts
+            .iter()
+            .map(|(key, count)| {
+                (
+                    key.clone(),
+                    json!({
+                        "consecutive_sweeps": count.consecutive_sweeps,
+                        "last_sweep_id": count.last_sweep_id,
+                    }),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        json!({"schema_version": 2, "counts": counts})
     }
 }
 
