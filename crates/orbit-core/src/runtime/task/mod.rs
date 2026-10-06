@@ -13,6 +13,7 @@ mod reservation_cleanup;
 mod tests;
 
 pub use block_on_run_failure::InfraBlockedTask;
+pub(crate) use block_on_run_failure::resumed_task_run_id;
 pub use reservation_cleanup::StaleTaskReservation;
 
 /// History event a final-recovery requeue records; cleanup preserves that

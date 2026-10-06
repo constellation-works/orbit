@@ -7,6 +7,11 @@
 //! instead return the task to backlog with its cancellation reason.
 //! A backlog task whose latest status decision is this run's final-recovery
 //! requeue is preserved: recovery already authorized another attempt.
+//! Resumes keep the checkpoint batch's `job_run_id` for delivery, but their
+//! readmission history records the resumed run and that batch binding. Cleanup
+//! uses the latest matching readmission as the coupled owner instead, including
+//! when the resumed worker never starts. Review and withdrawal protections
+//! still apply, and an older run cannot overwrite a newer resume's decision.
 //!
 //! [ORB-14258] A run that failed because a required command fails on its
 //! base exactly as on the candidate (`[baseline_red]`) holds its tasks in the
@@ -49,6 +54,7 @@
 //! cleared ones and `orbit task recheck-blocked --confirm` can return them to
 //! backlog. Every other block keeps the human decision described above.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -128,6 +134,29 @@ fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
             | TaskStatus::Proposed
             | TaskStatus::Someday
     )
+}
+
+/// The latest resume's cleanup owner, only while its recorded batch binding
+/// still matches the task. A later restamp invalidates the old coupling.
+pub(crate) fn resumed_task_run_id<'a>(
+    history: &'a [TaskHistoryEntry],
+    owner_run_id: &str,
+) -> Option<&'a str> {
+    let entry = history.iter().rev().find(|entry| {
+        entry.by == "system"
+            && matches!(
+                entry.event.as_str(),
+                "resume_readmitted" | "resume_review_restored"
+            )
+    })?;
+    let note = entry.note.as_deref()?;
+    let (note, owner) = note.rsplit_once("; owner_run_id=")?;
+    if owner != owner_run_id {
+        return None;
+    }
+    note.strip_prefix("resume lineage reconciliation: run '")?
+        .split_once("' resumes '")
+        .map(|(run, _)| run)
 }
 
 /// Extract `(error_code, error_message)` for the failure note from the run's
@@ -285,9 +314,24 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let tasks = self.list_run_tasks(run_id)?;
+        let mut tasks: BTreeMap<_, _> = self
+            .list_run_tasks(run_id)?
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect();
+        if run.retry_source_run_id.is_some() {
+            // A resume can readmit tasks without an input task list, and can
+            // retain a descendant's binding when no checkpoint is reused.
+            // Enumerate blockable statuses, then require this run's exact
+            // durable coupling under the lock; lineage alone is not ownership.
+            for status in [TaskStatus::InProgress, TaskStatus::Backlog] {
+                for task in self.list_tasks_filtered(Some(status), None, None, None, None, None)? {
+                    tasks.entry(task.id.clone()).or_insert(task);
+                }
+            }
+        }
         let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
-        for task in tasks {
+        for task in tasks.into_values() {
             // Recovery and cleanup serialize the decision with the status
             // write. Re-read the binding too: another run may have admitted
             // this task since list_run_tasks took its snapshot.
@@ -296,9 +340,22 @@ impl OrbitRuntime {
                 .tasks()
                 .with_task_write_lock(&task.id, &mut || {
                     let current = self.get_task(&task.id)?;
-                    if current.job_run_id.as_deref() != Some(run_id)
-                        || !task_is_blockable_on_run_failure(current.status)
-                    {
+                    if !task_is_blockable_on_run_failure(current.status) {
+                        return Ok(());
+                    }
+                    // Run ids are machine-local, just as in list_run_tasks.
+                    if current.job_run_machine.as_ref().is_some_and(|bound| {
+                        run.executed_on
+                            .as_ref()
+                            .is_none_or(|local| local.machine_id != bound.machine_id)
+                    }) {
+                        return Ok(());
+                    }
+                    let history = self.get_task_history(&task.id)?;
+                    let coupled_run = current.job_run_id.as_deref().map(|owner| {
+                        resumed_task_run_id(&history, owner).unwrap_or(owner)
+                    });
+                    if coupled_run != Some(run_id) {
                         return Ok(());
                     }
                     // The task event, written with the requeue or the
@@ -306,8 +363,7 @@ impl OrbitRuntime {
                     // recording its run-state outcome failed. An older
                     // decision or another run's grants no exemption.
                     if current.status == TaskStatus::Backlog
-                        && self
-                            .get_task_history(&task.id)?
+                        && history
                             .iter()
                             .rev()
                             .find(|entry| {
@@ -328,15 +384,14 @@ impl OrbitRuntime {
                     }
                     // A replayed finalization finds this run's provider hold.
                     if current.status == TaskStatus::Backlog
-                        && held_by_run(&self.get_task_history(&task.id)?, run_id)
+                        && held_by_run(&history, run_id)
                     {
                         return Ok(());
                     }
                     // A review timeout has already requeued a continuation;
                     // an external-evidence hold has a named resumption condition.
                     // Do not turn either decision into an operator-only block.
-                    if self
-                        .get_task_history(&task.id)?
+                    if history
                         .iter()
                         .rev()
                         .find(|entry| {
