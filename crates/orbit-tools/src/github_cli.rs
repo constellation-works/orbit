@@ -38,6 +38,9 @@ pub use crate::builtin::github::pr_list::{
 pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,
 };
+pub use crate::builtin::github::run::annotations::{
+    build_exec_request as job_annotations_request, concurrency_cancellation,
+};
 pub use crate::builtin::github::run::jobs::{
     build_exec_request as run_jobs_request, project_job_labels,
 };

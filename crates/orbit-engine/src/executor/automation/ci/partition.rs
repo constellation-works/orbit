@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::refs::{RefKind, ScannedRef};
+use super::refs::{CandidateProbeResults, RefKind, ScannedRef};
 use super::unsuccessful_conclusion;
 
 /// Where each run lands once it has been classified.
@@ -34,14 +34,19 @@ pub(super) struct RunPartition {
 /// non-unsuccessful run of the same workflow on the same ref. Non-landing
 /// failures may also be suppressed by a landing-branch success of that
 /// workflow, so an abandoned Dependabot run does not revive after the
-/// integration head has gone green.
+/// integration head has gone green. Red runs on a branch origin no longer has,
+/// or whose pull request was closed at the branch's current head, are stale.
 pub(super) fn partition_runs(
     refs: &[ScannedRef],
     runs: &[Value],
-    retired: &std::collections::BTreeSet<String>,
-    unverified: &std::collections::BTreeMap<String, (String, String)>,
+    probes: &CandidateProbeResults,
     out: &mut RunPartition,
 ) {
+    let CandidateProbeResults {
+        retired,
+        closed,
+        unverified,
+    } = probes;
     let landing_branches = landing_branch_names(refs);
     let mut workflows = std::collections::BTreeMap::<String, Vec<&Value>>::new();
     for run in runs {
@@ -101,6 +106,8 @@ pub(super) fn partition_runs(
                     out.in_flight.push(run_summary(ref_for_run(refs, run), run));
                     if !seen_in_flight
                         && !unverified.contains_key(run_branch(run))
+                        && !retired.contains(run_branch(run))
+                        && !closed.contains_key(run_branch(run))
                         && suppressor.is_none_or(|success| run_order(run) > run_order(success))
                     {
                         out.mixed_candidates
@@ -114,6 +121,11 @@ pub(super) fn partition_runs(
                 }
                 if retired.contains(run_branch(run)) {
                     out.stale.push(retired_ref_entry(refs, run));
+                    continue;
+                }
+                if let Some(pull_request) = closed.get(run_branch(run)) {
+                    out.stale
+                        .push(closed_pull_request_entry(refs, run, pull_request));
                     continue;
                 }
                 if let Some(success) =
@@ -212,21 +224,34 @@ pub(super) fn run_is_cancelled(run: &Value) -> bool {
 }
 
 /// A cancelled job with no failed step is not a repair target: GitHub often
-/// reports `steps: []` and 404s the job log. Cancellation is still not a pass.
-pub(super) fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+/// reports `steps: []` and 404s the job log. Neither is a job a workflow
+/// concurrency group cancelled for a newer run: its interrupted step reads as
+/// failed and its log is often incomplete, but nothing in it failed. Either
+/// way cancellation is still not a pass.
+pub(super) fn job_is_inconclusive_cancellation(job: &Value) -> bool {
     job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
-        && job
+        && (job
             .get("failed_steps")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
+            || job_concurrency_cancellation(job).is_some())
 }
+
+/// The concurrency-cancellation annotation collection attached to this job.
+pub(super) fn job_concurrency_cancellation(job: &Value) -> Option<&str> {
+    job.get(CONCURRENCY_CANCELLATION_FIELD)
+        .and_then(Value::as_str)
+}
+
+/// Where collection records a job's concurrency-cancellation annotation.
+pub(super) const CONCURRENCY_CANCELLATION_FIELD: &str = "concurrency_cancellation";
 
 pub(super) fn is_inconclusive_cancellation(failure: &Value) -> bool {
     if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {
         return true;
     }
     match failure.get("failed_jobs").and_then(Value::as_array) {
-        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_inconclusive_cancellation),
         Some(_) | None => {
             // An unexpanded cancelled run might still hide failed steps.
             run_is_cancelled(failure)
@@ -249,7 +274,7 @@ fn has_observed_failed_step(failure: &Value) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|jobs| {
             jobs.iter()
-                .any(|job| !job_is_cancelled_without_failed_steps(job))
+                .any(|job| !job_is_inconclusive_cancellation(job))
         })
 }
 
@@ -270,6 +295,31 @@ fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
          deleted, so this run describes code that is either already landed — where the landing \
          branch's own runs are the current evidence — or abandoned",
         run_branch(run)
+    ));
+    entry
+}
+
+/// A red run on a branch whose pull request was closed or merged while the
+/// branch still points at that pull request's head. Nobody is going to land
+/// this code from this branch, so the failure has no ref left to repair.
+fn closed_pull_request_entry(refs: &[ScannedRef], run: &Value, pull_request: &Value) -> Value {
+    let mut entry = run_summary(ref_for_run(refs, run), run);
+    entry["reason"] = json!("pull_request_closed");
+    entry["pr_number"] = pull_request.get("number").cloned().unwrap_or(Value::Null);
+    entry["pr_url"] = pull_request.get("url").cloned().unwrap_or(Value::Null);
+    entry["pr_state"] = pull_request.get("state").cloned().unwrap_or(Value::Null);
+    entry["evidence"] = json!(format!(
+        "pull request #{} for branch '{}' is {} and the branch head is still the pull \
+         request's head, so this run describes code that is not going to land from this branch",
+        pull_request
+            .get("number")
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_string(), |number| number.to_string()),
+        run_branch(run),
+        pull_request
+            .get("state")
+            .and_then(Value::as_str)
+            .map_or_else(|| "closed".to_string(), str::to_lowercase),
     ));
     entry
 }

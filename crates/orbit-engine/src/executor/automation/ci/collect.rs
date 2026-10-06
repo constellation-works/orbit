@@ -24,7 +24,10 @@ use orbit_common::security::redaction::redact_all;
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
-use super::investigate::{cancelled_without_failed_steps, investigate};
+use super::history::RetryableHistory;
+use super::investigate::{
+    inconclusive_cancellation_findings, investigate, mark_concurrency_cancellations,
+};
 use super::partition::{
     RunPartition, is_actionable_current_failure, is_inconclusive_cancellation, is_landing_failure,
     partition_runs, run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
@@ -67,6 +70,10 @@ const MAX_MAX_JOB_LOG_READS: u64 = 25;
 const DEFAULT_MAX_RETIRED_REF_PROBES: u64 = 20;
 const MAX_RETIRED_REF_PROBES: u64 = 100;
 const MAX_RETRYABLE_ERROR_CHARS: usize = 500;
+/// Cap on job annotation reads that ask whether a cancelled job with a failed
+/// step was cancelled by a workflow concurrency group. A job past the cap is
+/// investigated as before.
+const MAX_CANCELLATION_ANNOTATION_READS: usize = 12;
 
 pub(super) struct Bounds {
     max_runs: u64,
@@ -139,10 +146,13 @@ fn default_investigation_cursor() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64 / 3_600
 }
 
-/// Collect one CI evidence snapshot.
+/// Collect one CI evidence snapshot. `history` carries how many consecutive
+/// collections each run-scoped retryable error has been seen in, and is
+/// updated with this collection's errors.
 pub(super) fn collect<Q: CiQueries + ?Sized>(
     queries: &Q,
     input: &Value,
+    history: &mut RetryableHistory,
 ) -> Result<Value, OrbitError> {
     let bounds = bounds_from_input(input)?;
     let auth = queries.auth_status();
@@ -221,15 +231,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             bounds.max_runs, bounds.max_runs
         ));
     }
-    let probes = probe_branches(&branch_heads, &refs, &runs, &bounds, &mut notes);
+    let probes = probe_branches(queries, &branch_heads, &refs, &runs, &bounds, &mut notes);
     let mut partition = RunPartition::default();
-    partition_runs(
-        &refs,
-        &runs,
-        &probes.retired,
-        &probes.unverified,
-        &mut partition,
-    );
+    partition_runs(&refs, &runs, &probes, &mut partition);
     let RunPartition {
         latest,
         mut current,
@@ -253,15 +257,20 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
 
-    // A cancelled run is screened by its view alone before any investigation
-    // slot is spent. Without a failed step it is superseded when a newer run of
-    // its workflow/ref exists (concurrency cancelled it for that run) and
-    // inconclusive otherwise; either way it has nothing to repair, so it must
-    // not crowd a real failure out of the budget. A cancellation with a failed
-    // step stays a candidate and keeps its view for investigation.
+    // A cancelled run is screened by its view and job annotations before any
+    // investigation slot or log read is spent. When every job is cancelled
+    // without a failed step, or was cancelled by a workflow concurrency group
+    // (whose interrupted step reads as failed), the run is superseded when a
+    // newer run of its workflow/ref exists and inconclusive otherwise; either
+    // way it has nothing to repair, so it must not crowd a real failure out of
+    // the budget or fail the sweep over a log it never needed. A cancellation
+    // with any other failed step stays a candidate and keeps its view for
+    // investigation.
     let mut inspect = Vec::new();
     let mut inconclusive = Vec::new();
     let mut superseded_cancellations = 0usize;
+    let mut annotation_reads = 0usize;
+    let mut annotation_reads_skipped = 0usize;
     let mut screened_views = std::collections::BTreeMap::new();
     let mut seen_run_ids = std::collections::BTreeSet::new();
     for failure in current.iter().chain(mixed_candidates.iter()) {
@@ -274,8 +283,15 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         if run_is_completed(failure) && run_is_cancelled(failure) {
             // A failed screen leaves the run to ordinary investigation, which
             // queries and reports the view itself.
-            if let Ok(view) = queries.run_view(&run_id.to_string()) {
-                match cancelled_without_failed_steps(failure, &view) {
+            if let Ok(mut view) = queries.run_view(&run_id.to_string()) {
+                mark_concurrency_cancellations(
+                    queries,
+                    &mut view,
+                    &mut annotation_reads,
+                    MAX_CANCELLATION_ANNOTATION_READS,
+                    &mut annotation_reads_skipped,
+                );
+                match inconclusive_cancellation_findings(failure, &view) {
                     Some(findings) => {
                         match cancelled_successors.get(&run_id) {
                             Some(newer) => {
@@ -356,6 +372,11 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
     current = supersede_older_when_cancelled_run_is_actionable(remaining, &mut stale);
+    let observed = history.observe(retryable_errors);
+    let retryable_errors = observed.retryable;
+    let persistent_errors = observed.persistent;
+    let (mut current, persistently_incomplete) =
+        split_persistently_incomplete(current, &persistent_errors, &retryable_errors);
     sort_current_failures(&mut current);
     sort_current_failures(&mut inconclusive);
     let discovered = current.len();
@@ -392,8 +413,27 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     let inconclusive_count = inconclusive.len();
     if inconclusive_count > 0 {
         notes.push(format!(
-            "{inconclusive_count} cancelled job(s) had no failed steps and were classified \
-             inconclusive; cancellation is not a pass, but there is no failed step to repair"
+            "{inconclusive_count} cancelled job(s) had no failed steps or were cancelled by a \
+             workflow concurrency group, and were classified inconclusive; cancellation is not \
+             a pass, but there is no failed step to repair"
+        ));
+    }
+    if annotation_reads_skipped > 0 {
+        notes.push(format!(
+            "{annotation_reads_skipped} cancelled job(s) with a failed step were not checked for \
+             a concurrency cancellation (cap {MAX_CANCELLATION_ANNOTATION_READS}) and were \
+             investigated as failures"
+        ));
+    }
+    if !persistent_errors.is_empty() {
+        notes.push(format!(
+            "{} retryable error(s) repeated on {} or more consecutive sweeps for the same run, \
+             job and operation; they are reported in persistent_retryable_errors and no longer \
+             fail the sweep, and {} incomplete finding(s) they held are listed in \
+             persistently_incomplete",
+            persistent_errors.len(),
+            super::history::PERSISTENT_AFTER_SWEEPS,
+            persistently_incomplete.len(),
         ));
     }
     if superseded_cancellations > 0 {
@@ -427,6 +467,8 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         "deferred": deferred,
         "inconclusive": inconclusive,
         "retryable_errors": retryable_errors,
+        "persistent_retryable_errors": persistent_errors,
+        "persistently_incomplete": persistently_incomplete,
         "summary": {
             "latest_runs_discovered": latest_ids.len(),
             "latest_run_ids": latest_ids,
@@ -444,6 +486,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "superseded_cancellations": superseded_cancellations,
             "inconclusive_job_ids": inconclusive_job_ids,
             "retryable_errors": retryable_error_count,
+            "persistent_retryable_errors": persistent_errors.len(),
+            "persistently_incomplete_run_ids": persistently_incomplete.iter()
+                .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
         },
         "truncation": json!({
             "refs_scanned": refs.len(),
@@ -464,6 +509,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "checkout_log_reads": checkout_log_reads,
             "max_checkout_log_reads": bounds.max_checkout_log_reads,
             "retired_refs": probes.retired.iter().collect::<Vec<_>>(),
+            "closed_pull_request_refs": probes.closed.keys().collect::<Vec<_>>(),
+            "cancellation_annotation_reads": annotation_reads,
+            "max_cancellation_annotation_reads": MAX_CANCELLATION_ANNOTATION_READS,
             "unverified_refs": unverified_refs,
             "max_retired_ref_probes": bounds.max_retired_ref_probes,
             "investigation_cursor": bounds.investigation_cursor,
@@ -471,6 +519,31 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }),
         "collected_at": chrono::Utc::now().to_rfc3339(),
     }))
+}
+
+/// Move each incomplete finding whose evidence gap has become persistent out
+/// of the failure list. A finding that still has a retryable error of its own
+/// stays, so filing keeps deferring it until that error degrades as well.
+fn split_persistently_incomplete(
+    findings: Vec<Value>,
+    persistent: &[Value],
+    retryable: &[Value],
+) -> (Vec<Value>, Vec<Value>) {
+    if persistent.is_empty() {
+        return (findings, Vec::new());
+    }
+    let covers = |error: &Value, finding: &Value| {
+        error.get("run_id").filter(|value| !value.is_null()) == finding.get("run_id")
+            && error
+                .get("job_id")
+                .filter(|value| !value.is_null())
+                .is_none_or(|job_id| finding.get("job_id") == Some(job_id))
+    };
+    findings.into_iter().partition(|finding| {
+        finding.get("investigated").and_then(Value::as_bool) == Some(true)
+            || !persistent.iter().any(|error| covers(error, finding))
+            || retryable.iter().any(|error| covers(error, finding))
+    })
 }
 
 /// Which candidates this sweep spends its investigation budget on.

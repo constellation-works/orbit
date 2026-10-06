@@ -160,6 +160,8 @@ pub(super) trait CiQueries {
     /// GitHub itself reports it, never inferred from a naming convention.
     fn repo_view(&self) -> Result<Value, OrbitError>;
     fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
+    /// The most recently closed pull requests, merged ones included.
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     /// Recent runs across the whole repository, without a branch filter.
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError>;
@@ -175,6 +177,9 @@ pub(super) trait CiQueries {
         max_bytes: usize,
         cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError>;
+    /// The annotation GitHub left on one job when a workflow concurrency
+    /// group cancelled it, if any.
+    fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError>;
     /// Read all current heads from `origin` once for this sweep.
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
 }
@@ -204,6 +209,21 @@ impl HostCiQueries {
 }
 
 impl HostCiQueries {
+    fn pull_requests(&self, state: &str, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        let request = github_cli::pr_list_request(&json!({"state": state, "limit": limit}))?;
+        let stdout = self.run_gh(request, "gh pr list")?;
+        let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
+        Ok(parsed
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(github_cli::project_pull_request)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Attach each failed job's runner labels from the jobs API, the evidence
     /// a filed repair's `os:` tag comes from. Best effort: the labels only
     /// route the repair, so a failed read is recorded on the view and the
@@ -277,18 +297,11 @@ impl CiQueries for HostCiQueries {
     }
 
     fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
-        let request = github_cli::pr_list_request(&json!({"state": "open", "limit": limit}))?;
-        let stdout = self.run_gh(request, "gh pr list")?;
-        let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
-        Ok(parsed
-            .as_array()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(github_cli::project_pull_request)
-                    .collect()
-            })
-            .unwrap_or_default())
+        self.pull_requests("open", limit)
+    }
+
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests("closed", limit)
     }
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
@@ -356,6 +369,13 @@ impl CiQueries for HostCiQueries {
             checkout_evidence_source_truncated: read.log.checkout_evidence.source_truncated,
             checkout_evidence_display_truncated: read.log.checkout_evidence.display_truncated,
         })
+    }
+
+    fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {
+        let request = github_cli::job_annotations_request(&json!({"job": job_id.to_string()}))?;
+        let stdout = self.run_gh(request, "gh api check-run annotations")?;
+        let listing = github_cli::parse_gh_json(&stdout, "gh api check-run annotations")?;
+        Ok(github_cli::concurrency_cancellation(&listing).map(|message| redact_all(&message)))
     }
 
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {

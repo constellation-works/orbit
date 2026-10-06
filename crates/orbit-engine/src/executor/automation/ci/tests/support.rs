@@ -21,6 +21,14 @@ pub(super) struct FakeQueries {
     runs: Mutex<Vec<Vec<Value>>>,
     /// `failed_jobs` per run id; an unscripted run has none.
     failed_jobs: BTreeMap<String, Value>,
+    open_pull_requests: Vec<Value>,
+    closed_pull_requests: Vec<Value>,
+    /// Concurrency-cancellation annotation per job id.
+    concurrency_cancellations: BTreeMap<u64, String>,
+    /// Failed-step logs per job id; an unscripted job's log is empty.
+    logs: BTreeMap<u64, RunLog>,
+    /// Every job whose log was read.
+    pub(super) log_reads: Mutex<Vec<u64>>,
     /// Every limit passed to `open_pull_requests` and `repository_runs`.
     pub(super) pull_request_limits: Mutex<Vec<u64>>,
     pub(super) run_limits: Mutex<Vec<u64>>,
@@ -53,6 +61,43 @@ impl FakeQueries {
         self.failed_jobs.insert(run_id.to_string(), failed_jobs);
         self
     }
+
+    /// A pull request as `gh pr list` projects it.
+    pub(super) fn with_pull_request(
+        mut self,
+        state: &str,
+        number: u64,
+        branch: &str,
+        sha: &str,
+    ) -> Self {
+        let pull_request = json!({
+            "number": number,
+            "state": state,
+            "head_branch": branch,
+            "reported_head_sha": sha,
+            "url": format!("https://github.com/acme/orbit/pull/{number}"),
+        });
+        if state == "OPEN" {
+            self.open_pull_requests.push(pull_request);
+        } else {
+            self.closed_pull_requests.push(pull_request);
+        }
+        self
+    }
+
+    pub(super) fn with_concurrency_cancellation(mut self, job_id: u64, annotation: &str) -> Self {
+        self.concurrency_cancellations
+            .insert(job_id, annotation.to_string());
+        self
+    }
+
+    /// A failed-step log whose source GitHub did not deliver in full.
+    pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
+        let mut log = super::super::query::bounded_run_log(text, 16_384);
+        log.source_complete = false;
+        self.logs.insert(job_id, log);
+        self
+    }
 }
 
 impl CiQueries for FakeQueries {
@@ -73,7 +118,15 @@ impl CiQueries for FakeQueries {
             .lock()
             .expect("pull request limits lock")
             .push(limit);
-        Ok(Vec::new())
+        Ok(self.open_pull_requests.clone())
+    }
+
+    fn closed_pull_requests(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+        Ok(self.closed_pull_requests.clone())
+    }
+
+    fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {
+        Ok(self.concurrency_cancellations.get(&job_id).cloned())
     }
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
@@ -94,12 +147,17 @@ impl CiQueries for FakeQueries {
     fn run_logs(
         &self,
         _run_id: &str,
-        _job_id: u64,
+        job_id: u64,
         _scope: LogScope,
         max_bytes: usize,
         _cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
-        Ok(super::super::query::bounded_run_log("", max_bytes))
+        self.log_reads.lock().expect("log reads lock").push(job_id);
+        Ok(self
+            .logs
+            .get(&job_id)
+            .cloned()
+            .unwrap_or_else(|| super::super::query::bounded_run_log("", max_bytes)))
     }
 
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {

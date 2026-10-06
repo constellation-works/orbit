@@ -388,6 +388,50 @@
     "raw": null
   },
   {
+    "name": "job_annotations_request_names_a_concurrency_cancellation",
+    "op": "job_annotations",
+    "input": {
+      "job": "37485029423"
+    },
+    "raw": [
+      {
+        "path": ".github",
+        "annotation_level": "failure",
+        "title": "",
+        "message": "The operation was canceled."
+      },
+      {
+        "path": ".github",
+        "annotation_level": "failure",
+        "title": "",
+        "message": "Canceling since a higher priority waiting request for macOS Platform-pr-3435 exists"
+      }
+    ]
+  },
+  {
+    "name": "job_annotations_without_a_concurrency_cancellation_project_none",
+    "op": "job_annotations",
+    "input": {
+      "job": "912",
+      "repo": "acme/orbit"
+    },
+    "raw": [
+      {
+        "path": ".github",
+        "annotation_level": "failure",
+        "message": "The job running on runner GitHub Actions 7 has exceeded the maximum execution time of 60 minutes."
+      }
+    ]
+  },
+  {
+    "name": "job_annotations_request_rejects_a_non_numeric_job",
+    "op": "job_annotations",
+    "input": {
+      "job": "912/../../secrets"
+    },
+    "raw": null
+  },
+  {
     "name": "repo_view_passes_the_repository_as_a_positional_argument",
     "op": "repo_view",
     "input": {

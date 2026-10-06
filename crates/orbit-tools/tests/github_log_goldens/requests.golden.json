@@ -530,6 +530,33 @@
   "run_jobs_request_rejects_a_non_numeric_run": {
     "error": "invalid input: invalid `run`: \"123/../../secrets\"; must be a numeric GitHub identifier"
   },
+  "job_annotations_request_names_a_concurrency_cancellation": {
+    "argv": [
+      "api",
+      "--method",
+      "GET",
+      "repos/{owner}/{repo}/check-runs/37485029423/annotations",
+      "-F",
+      "per_page=50"
+    ],
+    "cwd": null,
+    "projected": "Canceling since a higher priority waiting request for macOS Platform-pr-3435 exists"
+  },
+  "job_annotations_without_a_concurrency_cancellation_project_none": {
+    "argv": [
+      "api",
+      "--method",
+      "GET",
+      "repos/acme/orbit/check-runs/912/annotations",
+      "-F",
+      "per_page=50"
+    ],
+    "cwd": null,
+    "projected": null
+  },
+  "job_annotations_request_rejects_a_non_numeric_job": {
+    "error": "invalid input: invalid `job`: \"912/../../secrets\"; must be a numeric GitHub identifier"
+  },
   "repo_view_passes_the_repository_as_a_positional_argument": {
     "argv": [
       "repo",

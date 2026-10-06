@@ -383,6 +383,13 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         .filter(|run| run.get("investigated").and_then(Value::as_bool) == Some(true))
         .filter_map(|run| run.get("run_id").cloned())
         .collect::<Vec<_>>();
+    // Errors collection already demoted after repeating across sweeps: they
+    // never block filing, but the sweep's audit still names them.
+    let persistent_errors = evidence
+        .get("persistent_retryable_errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     json!({
         "latest_runs_discovered": latest_run_ids.len(),
         "latest_run_ids": latest_run_ids,
@@ -399,6 +406,8 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "retryable_errors": 0,
         "already_repaired_count": 0,
         "already_repaired_run_ids": [],
+        "persistent_retryable_errors": persistent_errors.len(),
+        "persistent_retryable_error_details": persistent_errors,
     })
 }
 

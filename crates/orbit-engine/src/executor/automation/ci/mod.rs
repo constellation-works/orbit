@@ -19,8 +19,11 @@
 //! not look), [`OUTCOME_NO_CURRENT_FAILURE`] (we looked and nothing is
 //! failing), [`OUTCOME_CURRENT_FAILURES`] (we looked and something is), and
 //! [`OUTCOME_RETRYABLE_ERROR`] (a bounded discovery or investigation failed).
+//! A run-scoped retryable error that repeats across consecutive sweeps is
+//! reported as persistent rather than failing every sweep; see [`history`].
 
 mod collect;
+mod history;
 mod investigate;
 mod partition;
 mod query;
@@ -102,7 +105,19 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let queries = query::HostCiQueries::new(&query_root(host, input)?);
-    let evidence = collect::collect(&queries, input)?;
+    let history_path = history::history_path(host.data_root());
+    let mut history = history_path
+        .as_deref()
+        .map(history::load)
+        .unwrap_or_default();
+    let evidence = collect::collect(&queries, input, &mut history)?;
+    if let Some(path) = history_path
+        && let Err(error) = history::save(&path, &history)
+    {
+        // Losing the counts only delays degradation; it must not fail a
+        // sweep whose evidence is otherwise complete.
+        tracing::warn!(path = %path.display(), %error, "could not save CI sweep retryable history");
+    }
     Ok(serde_json::json!({
         "phase": "collect_ci_evidence",
         "ci_evidence": evidence,
