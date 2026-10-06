@@ -108,6 +108,14 @@ an empty date remains optional.
    git push origin vX.Y.Z
    ```
 
+   The metadata step accepts only `vMAJOR.MINOR.PATCH`, optionally followed
+   by a prerelease suffix such as `-rc.1`; it rejects other tags before
+   writing release outputs. Homebrew formula inputs pass through environment
+   variables and are validated before becoming Ruby literals. The tap checkout
+   disables credential persistence, and only the push command receives the
+   token's authorization header. `make ci-fast` checks this job for expressions
+   inside shell scripts and runs offline release-workflow regression fixtures.
+
 8. **Watch [`.github/workflows/release.yml`](../../.github/workflows/release.yml).**
    Its jobs:
 
