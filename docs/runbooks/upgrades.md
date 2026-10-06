@@ -145,11 +145,12 @@ read-compatible or breaking migration beyond them) does not fail at once:
    - the dashboard drains its connections and exits;
    - a pipeline worker completes its current top-level step, checkpoints it, records
      its run **`interrupted`** with error code `upgrade_quiesce` — not failed — and
-     exits. `orbit job resume <run_id>` continues it from that checkpoint once the
-     upgrade is done. A claimed leaf on a follower is the exception: generic resume
-     refuses it, so recover its claim on the owner and let a drain re-admit it. A
-     drain coordinator yields between admission passes and admits no new leaves
-     meanwhile; its already running leaves yield at their own step boundaries.
+     exits. Once the generation settles, the clock tick sweep resumes it
+     automatically at most once from that checkpoint (`orbit job resume <run_id>`
+     remains available for manual continuation). A claimed leaf on a follower is the
+     exception: generic resume refuses it, so recover its claim on the owner and let a
+     drain re-admit it. A drain coordinator yields between admission passes and admits
+     no new leaves meanwhile; its already running leaves yield at their own step boundaries.
 4. Once every participant is gone the switch takes the authority, records its own
    identity, and runs.
 

@@ -119,12 +119,7 @@ impl OrbitRuntime {
     /// generation. A failure to record is logged and otherwise ignored:
     /// reconciliation records a run whose owner is gone as interrupted all the
     /// same.
-    pub(crate) fn record_upgrade_interruption(
-        &self,
-        run_id: &str,
-        pid: u32,
-        role: ParticipantRole,
-    ) {
+    pub fn record_upgrade_interruption(&self, run_id: &str, pid: u32, role: ParticipantRole) {
         let message = self.upgrade_interruption_message(run_id, pid, role);
         tracing::warn!(target: "orbit.generation", run_id, "{message}");
         if let Err(error) = self.interrupt_worker_run(run_id, &message) {

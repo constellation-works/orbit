@@ -33,3 +33,4 @@ mod plugin_inspection;
 mod task_delivery;
 mod task_pilot;
 mod task_pr_closure;
+mod upgrade_resume;

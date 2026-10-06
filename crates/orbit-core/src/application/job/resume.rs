@@ -664,4 +664,126 @@ impl OrbitRuntime {
             }),
         }
     }
+
+    /// [ORB-14273] Auto-resume runs interrupted by an upgrade admission or generation switch, once.
+    ///
+    /// Finds interrupted runs that carry the `upgrade_quiesce` error code, verifies they
+    /// have no existing retry descendant (ensuring once-only resumption), filters out claimed
+    /// execution and active workers, and submits a detached resume run.
+    pub fn auto_resume_upgrade_interrupted_runs(&self) -> Result<Vec<String>, OrbitError> {
+        self.auto_resume_upgrade_interrupted_runs_with(&mut |source_run_id| {
+            self.submit_resume_run(source_run_id, Some("clock"), None)
+                .map(|invoke| invoke.run_id)
+        })
+    }
+
+    pub(crate) fn auto_resume_upgrade_interrupted_runs_with(
+        &self,
+        submit: &mut dyn FnMut(&str) -> Result<String, OrbitError>,
+    ) -> Result<Vec<String>, OrbitError> {
+        if self.is_write_free() {
+            return Ok(Vec::new());
+        }
+        let query = JobRunQuery {
+            state: Some(JobRunState::Interrupted),
+            include_steps: true,
+            ..JobRunQuery::default()
+        };
+        let interrupted = self.stores().jobs().list_job_runs_filtered(&query)?;
+        let mut resumed = Vec::new();
+
+        for run in interrupted {
+            let is_upgrade_interrupted = run.steps.iter().any(|step| {
+                step.error_code.as_deref()
+                    == Some(crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE)
+                    || step.error_message.as_deref().is_some_and(|msg| {
+                        msg.contains("upgrade_quiesce") || msg.contains("upgrade admission refused")
+                    })
+            });
+            if !is_upgrade_interrupted {
+                continue;
+            }
+
+            // Once-only guard: verify the run has no retry descendant.
+            let direct_retries = self.stores().jobs().job_run_retries(&run.run_id, 1)?;
+            if !direct_retries.is_empty() {
+                continue;
+            }
+
+            // Exclude claimed follower leaves (generic resume is refused and
+            // claim recovery on the owner handles them).
+            if self
+                .stores()
+                .jobs()
+                .local_pull_for_run(&run.run_id)?
+                .is_some()
+            {
+                tracing::debug!(
+                    target: "orbit.core.sweep",
+                    run_id = %run.run_id,
+                    "skipping claimed follower leaf; owner claim recovery handles it",
+                );
+                continue;
+            }
+            let is_claimed_execution = self.resolve_execution_claims().is_ok_and(|claims| {
+                claims.iter().any(|claim| {
+                    claim
+                        .bound_run
+                        .as_ref()
+                        .is_some_and(|bound| bound.run_id == run.run_id)
+                })
+            });
+            if is_claimed_execution {
+                tracing::debug!(
+                    target: "orbit.core.sweep",
+                    run_id = %run.run_id,
+                    "skipping claimed execution; owner claim recovery handles it",
+                );
+                continue;
+            }
+
+            // A worker confirmed alive must not be resumed concurrently.
+            if run_owner_liveness(&run) == RunOwnerLiveness::Alive {
+                tracing::debug!(
+                    target: "orbit.core.sweep",
+                    run_id = %run.run_id,
+                    "skipping upgrade-interrupted run whose worker process is still alive",
+                );
+                continue;
+            }
+
+            // Check that the run is resumable before attempting submission.
+            if let Err(error) = self.plan_job_run_resume(&run.run_id) {
+                tracing::debug!(
+                    target: "orbit.core.sweep",
+                    run_id = %run.run_id,
+                    error = %error,
+                    "upgrade-interrupted run is not resumable",
+                );
+                continue;
+            }
+
+            match submit(&run.run_id) {
+                Ok(resumed_run_id) => {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        resumed_run_id = %resumed_run_id,
+                        "clock tick resumed upgrade-interrupted run",
+                    );
+                    resumed.push(resumed_run_id);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        error = %error,
+                        "failed to resume upgrade-interrupted run",
+                    );
+                }
+            }
+        }
+
+        Ok(resumed)
+    }
 }
