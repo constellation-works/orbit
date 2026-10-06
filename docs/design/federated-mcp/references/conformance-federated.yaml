@@ -1,8 +1,8 @@
 schema_version: 2
 contract: orbit-mcp-federated
 feature_status: Draft
-last_updated: 2026-08-29
-last_validated: 2026-08-29
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 
 source_of_truth:
   design: docs/design/federated-mcp/2_design.md
@@ -76,9 +76,11 @@ honest_limitations:
   implicit_failover: none
 
 validation:
-  config_and_selector: crates/orbit-mcp/src/federated/tests/config.rs
-  aggregate_list: crates/orbit-mcp/src/federated/tests/host.rs
-  local_membership: crates/orbit-mcp/src/federated/tests/local.rs
+  config_and_selector:
+    - crates/orbit-mcp/src/federated/tests/route.rs
+    - crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
+  aggregate_list: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
+  local_membership: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
   fail_closed_routes: crates/orbit-mcp/src/federated/tests/route.rs
   federated_serve: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
   capability_classes: crates/orbit-mcp/src/federated/tests/capability.rs

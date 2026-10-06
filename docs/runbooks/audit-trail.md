@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-09-16
+last_validated: 2026-10-06
 ---
 
 # Inspect the Audit Trail
@@ -62,8 +62,10 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the
 canonical run correlation. `origin_session_id` groups MCP calls while `mcp_call_id` identifies
-one call. Standalone MCP rows have role `unverified`, local transport, and exactly the `agent`
-capability. Trusted managed-envelope identity may replace `unverified`; client JSON may not.
+one call. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
+default, the session has only the `agent` capability; a server started with `--operator` also
+grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
+not.
 
 ## Find recent failures and causes
 
