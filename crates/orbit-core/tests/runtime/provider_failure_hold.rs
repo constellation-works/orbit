@@ -9,23 +9,36 @@
 //! choose from: a task is admitted under `allowed_crews` exactly when a crew
 //! it may be drawn onto is in the list, and a `crew_not_allowed` exclusion
 //! names those crews.
+//!
+//! Only the end-to-end refusal fixture requires a Unix shell; the hold and
+//! admission tests compile on every platform.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use chrono::{Duration, Utc};
+#[cfg(unix)]
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::WORKFLOW_RUN_FAILED_EVENT;
+#[cfg(unix)]
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+#[cfg(unix)]
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, ResolvedCliExecutor,
-    RuntimeHost, TaskAutomationUpdate, V2AuditWriter, WORKFLOW_RUN_FAILED_EVENT,
-    execute_job_with_resume,
+    RuntimeHost, V2AuditWriter, execute_job_with_resume,
 };
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_tools::ToolContext;
+#[cfg(unix)]
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, OnDenial, Provider,
 };
@@ -397,6 +410,7 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
 /// engine types the failure and skips final recovery, Core holds the task
 /// with every Codex crew excluded, and the next admission draws the Claude
 /// crew.
+#[cfg(unix)]
 #[test]
 fn a_content_filter_refusal_moves_the_next_admission_to_another_provider() {
     if !isolated(
@@ -461,6 +475,7 @@ fn a_content_filter_refusal_moves_the_next_admission_to_another_provider() {
     );
 }
 
+#[cfg(unix)]
 fn content_filter_frames() -> String {
     format!(
         r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"rg sandbox","aggregated_output":"","exit_code":0,"status":"completed"}}}}
@@ -470,10 +485,12 @@ fn content_filter_frames() -> String {
 }
 
 /// A fake `codex` that prints `stdout` and exits 1.
+#[cfg(unix)]
 struct FakeCodex {
     path: PathBuf,
 }
 
+#[cfg(unix)]
 impl FakeCodex {
     fn new(dir: &Path, stdout: &str) -> Self {
         let path = dir.join("codex");
@@ -489,12 +506,14 @@ impl FakeCodex {
 
 /// Scripts the deterministic steps and the provider launcher; everything
 /// else is the engine's default host behaviour.
+#[cfg(unix)]
 struct Pipeline<'a> {
     fixture: &'a Fixture,
     codex: PathBuf,
     final_recovery_admissions: Mutex<usize>,
 }
 
+#[cfg(unix)]
 impl RuntimeHost for Pipeline<'_> {
     fn run_deterministic(
         &self,
@@ -540,6 +559,7 @@ impl RuntimeHost for Pipeline<'_> {
     }
 }
 
+#[cfg(unix)]
 fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({
         "schemaVersion": 2,
@@ -552,6 +572,7 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 
 /// `setup → implement_one` on Codex, with step and final recovery and a
 /// failure handoff, so a skipped recovery is the executor's own decision.
+#[cfg(unix)]
 fn implementation_job() -> JobV2 {
     let spec = AgentLoopSpec {
         tool_disallow_list: None,
