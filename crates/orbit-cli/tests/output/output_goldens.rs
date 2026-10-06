@@ -1030,8 +1030,16 @@ fn tool_run_honors_format_ndjson_and_dry_run_json() {
         "tool run --dry-run --format json",
     );
     assert_eq!(dry["tool_name"], "orbit.task.show");
-    assert!(dry["policy_allowed"].is_boolean());
+    assert_eq!(dry["policy_allowed"], true);
+    assert!(dry["policy_denial_reason"].is_null());
     assert!(dry["missing_params"].is_array());
+    assert_golden(
+        "tool_dry_run.json",
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&dry).expect("dry-run JSON")
+        ),
+    );
     let dry_human = fixture.run(&["tool", "run", "orbit.task.show", "--dry-run"], &[]);
     let dry_text = String::from_utf8_lossy(&dry_human.stdout);
     assert!(dry_text.contains("Tool:"), "{dry_text}");

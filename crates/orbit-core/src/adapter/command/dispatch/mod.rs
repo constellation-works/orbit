@@ -7,6 +7,7 @@ mod brokered;
 mod callback;
 #[cfg(unix)]
 mod claimed_review;
+mod dry_run;
 mod execute;
 
 pub use audit::{
@@ -20,6 +21,7 @@ pub(crate) use callback::override_activity_tools_for_test;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(unix)]
 pub use claimed_review::{ClaimedReviewRoute, bridge_claimed_review_artifact};
+pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{
     ToolDispatchOutcome, ToolEntryPoint, execute_global_in_process_tool_dispatch,

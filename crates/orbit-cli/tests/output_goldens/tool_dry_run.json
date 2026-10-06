@@ -1,0 +1,8 @@
+{
+  "tool_name": "orbit.task.show",
+  "policy_allowed": true,
+  "policy_denial_reason": null,
+  "missing_params": [
+    "id"
+  ]
+}
