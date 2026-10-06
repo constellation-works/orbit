@@ -130,6 +130,15 @@ impl Workspace {
         git_in(&self.repo, args, None)
     }
 
+    /// Track `path` at `contents` in a new commit on `main`.
+    fn commit_file(&self, path: &str, contents: &str, message: &str) {
+        let full = self.repo.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(&full, contents).unwrap();
+        self.git(&["add", "--", path]);
+        self.git(&["commit", "-m", message]);
+    }
+
     /// Every attempt and batch pin: owned, legacy and delivery.
     fn pins(&self) -> Vec<String> {
         self.git(&[
@@ -463,6 +472,42 @@ fn pilot_routine() -> RoutineDefinition {
     .unwrap()
 }
 
+/// Freshness that makes repository instructions the only material field.
+fn instructions_routine() -> RoutineDefinition {
+    serde_json::from_value(json!({
+        "schemaVersion": 1, "name": "fixture-pilot", "enabled": true,
+        "target": "job:task_pilot_pipeline",
+        "trigger": {"state": {
+            "kind": "preparation_eligible", "owner_machine": "fixture-machine", "branch": "main",
+            "debounce_minutes": 2, "max_wait_minutes": 10, "max_items": 50,
+            "retries": 1, "deadline_minutes": 90,
+            "freshness": {"material_fields": ["instructions"]},
+        }},
+    }))
+    .unwrap()
+}
+
+fn pending_fingerprint(
+    workspace: &Workspace,
+    routine: &RoutineDefinition,
+    task_id: &str,
+    at: chrono::DateTime<Utc>,
+) -> String {
+    // Dry-run still observes the current fingerprint. A due member must not
+    // have to admit `task_pilot_pipeline` for this check.
+    let evaluated = evaluate_routine(&workspace.runtime, routine, true, at).unwrap();
+    evaluated
+        .state
+        .expect("evaluation records member state")
+        .members
+        .expect("a state routine has members")
+        .pending
+        .get(task_id)
+        .unwrap_or_else(|| panic!("{task_id} should stay pending"))
+        .fingerprint
+        .clone()
+}
+
 #[test]
 fn preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends() {
     if !super::dispatch_admission::isolated(
@@ -673,10 +718,10 @@ fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
     assert!(workspace.pins().is_empty(), "terminal failure released it");
 }
 
-/// Record the `material_v1` fingerprint Core recomputes for `task` at
-/// `attempt`'s source as the attempt's applied result: no task dependencies,
-/// the resolved crew assignment, and the pinned tree's empty
-/// repository-instruction list.
+/// Record a `material_v1` assessment of `task` at `attempt`'s source: no task
+/// dependencies, the resolved crew assignment, and an empty instruction list.
+/// That list matches a pinned tree with no `AGENTS.md` or `CLAUDE.md`. A tree
+/// that has them no longer matches, so the assessment is piloted again.
 fn applied_legacy(workspace: &Workspace, task: &Task, attempt: &MemberAttempt) -> String {
     let assignment = workspace
         .runtime
@@ -820,6 +865,161 @@ fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
     assert_eq!(cleanup.retained_legacy, 1);
     assert!(cleanup.released.is_empty());
     assert_eq!(workspace.pins(), [legacy]);
+}
+
+/// Tracked root and nested `AGENTS.md` and `CLAUDE.md` bytes are part of the
+/// preparation fingerprint when `instructions` is material. A near-name, an
+/// ordinary file, and an untracked instruction file are not.
+#[test]
+fn instruction_edits_change_the_preparation_fingerprint() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::instruction_edits_change_the_preparation_fingerprint",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.task("instruction material");
+    let routine = instructions_routine();
+    let now = Utc::now();
+    let empty = pending_fingerprint(&workspace, &routine, &task.id, now);
+
+    workspace.commit_file(
+        " instructions/AGENTS.md",
+        "spaced directory rules\n",
+        "spaced directory instructions",
+    );
+    workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
+    workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
+    workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
+    workspace.commit_file("docs/guide.md", "ordinary\n", "ordinary doc");
+    workspace.commit_file("docs/AGENTS.md.bak", "not an instruction\n", "near name");
+    let listed = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(1));
+    assert_ne!(
+        listed, empty,
+        "tracked instruction files, including a leading-space path, enter the snapshot"
+    );
+
+    workspace.commit_file("AGENTS.md", "root rules revised\n", "edit root");
+    let root_edited =
+        pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(2));
+    assert_ne!(
+        root_edited, listed,
+        "a root AGENTS.md edit changes the fingerprint"
+    );
+
+    workspace.commit_file(
+        "a/AGENTS.md",
+        "nested agents revised\n",
+        "edit nested agents",
+    );
+    let nested_agents =
+        pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(3));
+    assert_ne!(
+        nested_agents, root_edited,
+        "a nested AGENTS.md edit changes the fingerprint"
+    );
+
+    workspace.commit_file(
+        "a/b/CLAUDE.md",
+        "nested claude revised\n",
+        "edit nested claude",
+    );
+    let nested_claude =
+        pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(4));
+    assert_ne!(
+        nested_claude, nested_agents,
+        "a nested CLAUDE.md edit changes the fingerprint"
+    );
+
+    workspace.commit_file(
+        "AGENTS.md",
+        "    root rules revised\n",
+        "indent root instructions",
+    );
+    let indented_root =
+        pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(5));
+    assert_ne!(
+        indented_root, nested_claude,
+        "leading instruction whitespace is part of the pinned content"
+    );
+
+    workspace.commit_file("docs/guide.md", "ordinary revised\n", "edit ordinary");
+    workspace.commit_file(
+        "docs/AGENTS.md.bak",
+        "still not an instruction\n",
+        "edit near name",
+    );
+    let unchanged = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(6));
+    assert_eq!(
+        unchanged, indented_root,
+        "only AGENTS.md and CLAUDE.md basenames are instruction material"
+    );
+
+    let untracked = workspace.repo.join("scratch/CLAUDE.md");
+    std::fs::create_dir_all(untracked.parent().unwrap()).unwrap();
+    std::fs::write(&untracked, "untracked rules\n").unwrap();
+    let still = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(7));
+    assert_eq!(
+        still, unchanged,
+        "an untracked instruction file is not in the pinned snapshot"
+    );
+}
+
+/// A `material_v1` assessment stored against an empty instruction snapshot
+/// does not carry forward once the pinned revision's tracked instruction
+/// files are part of that hash. The member is piloted again once.
+#[test]
+fn legacy_assessment_repilots_when_pinned_instructions_were_omitted() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::legacy_assessment_repilots_when_pinned_instructions_were_omitted",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
+    workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
+    workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
+    let task = workspace.task("legacy empty snapshot");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+    let stale = applied_legacy(&workspace, &task, &attempt);
+
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert_eq!(
+        members.assessed[&task.id].resulting_fingerprint, stale,
+        "settlement records the empty-snapshot assessment"
+    );
+    assert!(
+        workspace.pins().is_empty(),
+        "that hash does not match the pinned instructions, so the pin is not kept"
+    );
+
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert!(
+        members.pending.contains_key(&task.id),
+        "the member is piloted again once"
+    );
+    assert_ne!(
+        members.pending[&task.id].fingerprint, stale,
+        "the new fingerprint is not the empty-snapshot legacy hash"
+    );
 }
 
 /// `orbit doctor --fix-automation-pins` reclaims leaked owned pins past the

@@ -56,6 +56,21 @@ impl<'a> Source<'a> {
         input: Option<&[u8]>,
         budget: Duration,
     ) -> Result<String, AutomationError> {
+        self.command_with_output(program, args, env, input, budget, true)
+    }
+
+    /// `command_with`, optionally preserving stdout exactly. Trimming is right
+    /// for a single revision or ref, and wrong for a NUL-delimited path list
+    /// or instruction bytes whose leading or trailing whitespace is content.
+    fn command_with_output(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        input: Option<&[u8]>,
+        budget: Duration,
+        trim_output: bool,
+    ) -> Result<String, AutomationError> {
         // Test seam for ORB-14356: the next `diff-tree` fails as a deadline
         // once, so a swallowed canonical signature is distinguishable from a
         // propagated one. Production builds do not include the seam.
@@ -165,11 +180,21 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred("source_budget".into()));
         }
 
-        Ok(result.trim().into())
+        Ok(if trim_output {
+            result.trim().into()
+        } else {
+            result
+        })
     }
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
         self.command("git", args)
+    }
+
+    /// [`Self::git`] without trimming stdout. Use when leading or trailing
+    /// bytes are data: a NUL-delimited path list, or instruction file content.
+    pub(crate) fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError> {
+        self.command_with_output("git", args, &[], None, COMMAND_BUDGET, false)
     }
 
     /// [`Self::git`] with `input` on standard input, under the same budget.
