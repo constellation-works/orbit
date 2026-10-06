@@ -61,7 +61,10 @@ has to be right at creation. Task-pilot preparation reads each criterion
 against the registered tool surface, the canonical MCP tool list, the
 implementation activity's allowlist, and the governed-operation registry, and
 reports one `validation_tool_warnings` finding per contradiction before the
-task is admitted. A finding never rejects a task; it names the repair.
+task is admitted. Preparation stays advisory. Transport, allowlist, credential,
+and utility findings do not withhold an already-approved backlog task. A current
+operator-reserved validation requirement holds local workflow admission and
+owner pull claims until an operator handles it.
 
 - **Transport.** An MCP session reaches only MCP-advertised tools. `proc.spawn`
   is registered CLI-only, so a criterion that requires it over MCP can never
@@ -93,6 +96,30 @@ task is admitted. A finding never rejects a task; it names the repair.
 A criterion that *expects* a refusal is a correct negative test, and a tool
 name inside a quoted example is a copied observation, not a requirement.
 Neither is reported, and neither grants anything.
+
+The pilot commits a typed `operator_validation_hold` in its assessment audit and
+an `operator_validation_held` history event, naming each one-based criterion and
+canonical tool. This hold also applies when a human approved the task before the
+pilot ran. It is scoped to the assessed task material: a changed criterion makes
+the old assessment stale, while priority changes and discussion leave it current.
+An operator can re-scope the criterion or add a human task comment with one of
+these first lines and non-empty evidence on subsequent lines:
+
+- `task-pilot-admission: evaluated` — describe the completed evaluation and
+  reference its attached artifact or other durable evidence.
+- `task-pilot-admission: clear` — explain why the requirement is satisfied.
+- `task-pilot-admission: approve-anyway` — record the deliberate override and why
+  the managed task can proceed.
+
+These human updates record `operator_validation_resolved`. Attaching an artifact
+alone or copying the header into an agent comment does not resolve the hold.
+A new pilot assessment supersedes an earlier decision. No resolution grants a
+tool or changes governed-operation authority.
+
+Older pilot receipts without the typed material snapshot are interpreted only
+while no document edit follows the assessment. Their governed-operation warnings
+are checked against the current registry and positive criterion mentions; all
+other warning kinds stay advisory.
 
 
 ## Duplicate recovery

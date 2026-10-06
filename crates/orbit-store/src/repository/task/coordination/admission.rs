@@ -188,6 +188,10 @@ impl TaskCommitBoundary {
     /// yet, so status and reservations alone would hand it out a second time
     /// [ORB-13918].
     ///
+    /// `validation_hold` reads assessment-scoped holds under the owner admission
+    /// lock, before queue depth or claim selection. A pilot apply cannot race
+    /// this check and leave a newly held task claimed from an older snapshot.
+    ///
     /// `held` maps each `backlog` task the owner is withholding for a red
     /// base to why [ORB-14258]. Its last delivery failed a required command
     /// the base fails the same way; it is deferred until the held command
@@ -202,6 +206,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
+        validation_hold: &dyn Fn(&orbit_types::task::Task) -> Result<Option<String>, OrbitError>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
         self.with_admission(|| {
@@ -212,10 +217,12 @@ impl TaskCommitBoundary {
                 orbit_dir,
                 admission_holds,
                 held,
+                validation_hold,
             )
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn admit_locked(
         &self,
         identity: &AdmissionIdentity,
@@ -224,6 +231,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
+        validation_hold: &dyn Fn(&orbit_types::task::Task) -> Result<Option<String>, OrbitError>,
     ) -> Result<AdmissionLookup, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
@@ -243,6 +251,15 @@ impl TaskCommitBoundary {
             .into_iter()
             .map(|bundle| translator.task_from_bundle(bundle))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut admission_holds = admission_holds.clone();
+        for task in tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Backlog)
+        {
+            if let Some(reason) = validation_hold(task)? {
+                admission_holds.insert(task.id.clone(), reason);
+            }
+        }
         tasks.sort_by(automatic_dispatch_cmp);
         let mut statuses: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
         for dependency in tasks

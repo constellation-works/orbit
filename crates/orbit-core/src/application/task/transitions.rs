@@ -551,6 +551,15 @@ impl OrbitRuntime {
         workflow: &str,
     ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
+        if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress)
+            && let Some(super::PilotAdmissionHold::OperatorValidation(hold)) =
+                self.pilot_admission_hold(id)?
+        {
+            if task.status == TaskStatus::Backlog {
+                self.record_operator_validation_hold(id, &hold)?;
+            }
+            return Err(OrbitError::InvalidInput(hold.detail()));
+        }
         if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);
         }
@@ -592,6 +601,16 @@ impl OrbitRuntime {
         } else {
             workflow
         };
+        let mut admitted = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            admitted = Some(self.admit_task_for_workflow_locked(id, workflow)?);
+            Ok(())
+        })?;
+        admitted
+            .ok_or_else(|| OrbitError::Execution("workflow admission lock body did not run".into()))
+    }
+
+    fn admit_task_for_workflow_locked(&self, id: &str, workflow: &str) -> Result<Task, OrbitError> {
         let task = self.ensure_task_can_enter_workflow_as_system(id, workflow)?;
 
         if task.status == TaskStatus::InProgress {

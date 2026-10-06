@@ -23,6 +23,14 @@ spec:
     `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`.
     A later assessment supersedes that operator decision; ordinary edits and
     agent comments do not release the hold.
+    A current operator-reserved validation requirement withholds admission as
+    `operator_validation_handoff`, naming its criterion and tool. The pilot
+    persists an `operator_validation_held` history event and typed audit.
+    Re-scoping assessed material makes the assessment stale. An operator can
+    also record `task-pilot-admission: evaluated`, `clear`, or `approve-anyway`
+    on the first line of a comment, followed by evaluation evidence or an
+    override reason. This records `operator_validation_resolved`; agent
+    comments cannot resolve it. Transport and allowlist findings remain advisory.
     Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
@@ -138,6 +146,7 @@ spec:
                 - unprepared
                 - pilot_duplicate
                 - pilot_already_landed
+                - operator_validation_handoff
             detail:
               type: string
             conflicts:

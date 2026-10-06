@@ -392,6 +392,13 @@ impl crate::OrbitRuntime {
             &self.data_root(),
             &admission_holds,
             &self.baseline_held_tasks()?,
+            &|task| match self.pilot_admission_hold(&task.id)? {
+                Some(crate::application::task::PilotAdmissionHold::OperatorValidation(hold)) => {
+                    self.record_operator_validation_hold(&task.id, &hold)?;
+                    Ok(Some(hold.detail()))
+                }
+                _ => Ok(None),
+            },
         )
     }
 

@@ -154,6 +154,14 @@ pub(super) fn apply_task(
             if let Some(marker) = &task.history_marker {
                 history_summary.push_str(marker);
             }
+            let requirements = super::validation_tools::ImplementationLane::resolve(runtime)
+                .operator_requirements(&current, &snapshot.validation_tool_warnings);
+            let mut assessed = current.clone();
+            assessed.context_files = task.after.clone();
+            assessed.complexity = Some(task.complexity);
+            let operator_hold = (!requirements.is_empty()).then(|| {
+                crate::application::task::OperatorValidationHold::new(&assessed, requirements)
+            });
             let mutation_params = AtomicTaskMutationParams {
                 actor: "task-pilot".to_string(),
                 operation_id: task.operation_id.clone(),
@@ -167,8 +175,14 @@ pub(super) fn apply_task(
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
                 history_summary,
+                append_history: operator_hold
+                    .as_ref()
+                    .map(|hold| hold.history(&task.operation_id))
+                    .into_iter()
+                    .collect(),
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
+                    "operator_validation_hold": operator_hold,
                     "context_files_before": snapshot.context_files,
                     "complexity_before": snapshot.complexity,
                     "complexity_after": task.complexity,

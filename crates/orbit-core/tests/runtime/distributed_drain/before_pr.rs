@@ -165,6 +165,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             &repo.join(".orbit"),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &|_| Ok(None),
         )
         .expect("admit")
     else {
