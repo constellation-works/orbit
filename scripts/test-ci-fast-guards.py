@@ -494,6 +494,29 @@ class WorkflowYamlGuardrailTests(unittest.TestCase):
         self.assertIn("empty.yml: a workflow must be a mapping with a `jobs` mapping",
                       result.stderr)
 
+    def test_homebrew_run_expressions_fail_but_env_values_pass(self):
+        import yaml
+
+        expression = "${{ needs.publish-release.outputs.version }}"
+        workflow = dict(jobs={"bump-homebrew-tap": dict(steps=[
+            dict(env=dict(VERSION=expression), run='git commit -m "orbit v$VERSION"'),
+        ])})
+        path = self.workflows / "release.yml"
+        path.write_text(yaml.safe_dump(workflow))
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for run in (f'VERSION="{expression}"', f'git commit -m "orbit v{expression}"',
+                    f'echo safe\n# comment\necho "{expression}"'):
+            with self.subTest(run=run):
+                workflow["jobs"]["bump-homebrew-tap"]["steps"][0]["run"] = run
+                path.write_text(yaml.safe_dump(workflow))
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1,
+                                 "Homebrew scripts must reject expression substitution before "
+                                 "Bash parses tag-derived metadata")
+                self.assertIn("bump-homebrew-tap step 1", result.stderr)
+
 
 class CargoDenyGuardrailTests(unittest.TestCase):
     def setUp(self):

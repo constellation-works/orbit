@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse every GitHub Actions workflow so a YAML error fails the Linux gate.
+"""Parse GitHub Actions workflows and guard the Homebrew shell boundary.
 
 GitHub creates no jobs for a workflow it cannot parse. A path-filtered leg
 such as the macOS sandbox job then disappears from the PR checks instead of
@@ -47,6 +47,17 @@ def main() -> int:
             continue
         if not isinstance(document, dict) or not isinstance(document.get("jobs"), dict):
             errors.append(f"{relative}: a workflow must be a mapping with a `jobs` mapping")
+            continue
+        # Tag-derived metadata must enter Bash as environment data. GitHub
+        # expressions in script source are substituted before Bash parses it.
+        tap = document["jobs"].get("bump-homebrew-tap", {})
+        for index, step in enumerate(tap.get("steps", []), start=1):
+            run = step.get("run", "")
+            if isinstance(run, str) and "${{" in run:
+                errors.append(
+                    f"{relative}: bump-homebrew-tap step {index}: GitHub expressions "
+                    "in run scripts allow shell injection; pass values through env instead"
+                )
 
     for error in errors:
         print(f"check-workflow-yaml: {error}", file=sys.stderr)

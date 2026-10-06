@@ -235,6 +235,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "tag must be a vMAJOR.MINOR.PATCH release tag with an optional prerelease suffix" >&2
+            exit 1
+          fi
           VERSION="${GITHUB_REF_NAME#v}"
           DARWIN_ARM_ASSET="orbit-aarch64-apple-darwin.tar.gz"
           DARWIN_INTEL_ASSET="orbit-x86_64-apple-darwin.tar.gz"
@@ -305,16 +309,27 @@ jobs:
         with:
           repository: constellation-works/homebrew-tap
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          persist-credentials: false
           path: tap
 
       - name: Update formula
         shell: bash
+        env:
+          VERSION: ${{ needs.publish-release.outputs.version }}
+          ARM_ASSET: ${{ needs.publish-release.outputs.darwin_arm_asset }}
+          ARM_SHA: ${{ needs.publish-release.outputs.darwin_arm_sha }}
+          INTEL_ASSET: ${{ needs.publish-release.outputs.darwin_intel_asset }}
+          INTEL_SHA: ${{ needs.publish-release.outputs.darwin_intel_sha }}
         run: |
-          VERSION="${{ needs.publish-release.outputs.version }}"
-          ARM_ASSET="${{ needs.publish-release.outputs.darwin_arm_asset }}"
-          ARM_SHA="${{ needs.publish-release.outputs.darwin_arm_sha }}"
-          INTEL_ASSET="${{ needs.publish-release.outputs.darwin_intel_asset }}"
-          INTEL_SHA="${{ needs.publish-release.outputs.darwin_intel_sha }}"
+          set -euo pipefail
+          # These values become Ruby literals as well as shell data.
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          for asset in "$ARM_ASSET" "$INTEL_ASSET"; do
+            [[ "$asset" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]
+          done
+          for sha in "$ARM_SHA" "$INTEL_SHA"; do
+            [[ "$sha" =~ ^[0-9a-fA-F]{64}$ ]]
+          done
           BASE_URL="https://github.com/constellation-works/orbit/releases/download/v${VERSION}"
           FORMULA="tap/Formula/orbit.rb"
 
@@ -353,7 +368,11 @@ jobs:
 
       - name: Commit and push tap update
         shell: bash
+        env:
+          VERSION: ${{ needs.publish-release.outputs.version }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -365,8 +384,12 @@ jobs:
             exit 0
           fi
 
-          git commit -m "orbit v${{ needs.publish-release.outputs.version }}"
-          git push
+          git commit -m "orbit v${VERSION}"
+          # Authenticate this command only; leave no credential in tap/.git.
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_GITHUB_TOKEN" | base64 | tr -d '\n')" \
+            git push
 
   smoke-install-macos:
     name: Smoke test installer on macOS arm64
