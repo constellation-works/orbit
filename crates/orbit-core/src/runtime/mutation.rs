@@ -14,8 +14,18 @@ impl OrbitRuntime {
     where
         F: FnOnce() -> Result<(T, OrbitEvent), OrbitError>,
     {
+        self.with_optional_mutation_event(|| f().map(|(result, event)| (result, Some(event))))
+    }
+
+    /// Publish a mutation event only when the operation changed state.
+    pub(crate) fn with_optional_mutation_event<F, T>(&self, f: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<(T, Option<OrbitEvent>), OrbitError>,
+    {
         let (result, event) = f()?;
-        self.event_log.append(event);
+        if let Some(event) = event {
+            self.event_log.append(event);
+        }
         Ok(result)
     }
 }

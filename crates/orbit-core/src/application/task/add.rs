@@ -196,7 +196,7 @@ impl OrbitRuntime {
             )));
         }
 
-        let task = self.with_mutation(|| {
+        let task = self.with_optional_mutation_event(|| {
             let (task, replayed) = self.stores().task_records().create_guarded(
                 StoreTaskCreateParams {
                     actor: create_label.clone(),
@@ -255,12 +255,10 @@ impl OrbitRuntime {
                     })?,
                 _ => task,
             };
-            Ok((
-                task.clone(),
-                OrbitEvent::TaskAdded {
-                    id: task.id.clone(),
-                },
-            ))
+            let event = (!replayed).then(|| OrbitEvent::TaskAdded {
+                id: task.id.clone(),
+            });
+            Ok((task, event))
         })?;
 
         Ok(task)

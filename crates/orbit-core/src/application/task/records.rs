@@ -56,13 +56,13 @@ impl TaskRecordService<'_> {
         &self,
         params: TaskCreateParams,
         key: Option<&str>,
-    ) -> Result<Task, OrbitError> {
-        let task = match key {
+    ) -> Result<(Task, bool), OrbitError> {
+        let (task, replayed) = match key {
             Some(key) => self.store.create_task_idempotent(params, key)?,
-            None => return self.create(params),
+            None => return self.create(params).map(|task| (task, false)),
         };
         self.index_task(&task);
-        Ok(task)
+        Ok((task, replayed))
     }
 
     pub(crate) fn create_guarded(
@@ -76,7 +76,7 @@ impl TaskRecordService<'_> {
             self.index_task(&result.0);
             Ok(result)
         } else {
-            self.create_with_key(params, key).map(|task| (task, false))
+            self.create_with_key(params, key)
         }
     }
 

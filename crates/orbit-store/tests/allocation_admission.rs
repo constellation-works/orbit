@@ -906,6 +906,80 @@ fn retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not() {
 // Coordinated admission and handoff
 // ---------------------------------------------------------------------------
 
+#[test]
+fn reserved_key_publishes_a_new_bundle_before_replaying() {
+    if !isolated("reserved_key_publishes_a_new_bundle_before_replaying") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    for (key, digest) in [("automation", None), ("desktop", Some("payload-digest"))] {
+        let params = TaskCreateParams {
+            actor: "system".to_string(),
+            parent_id: None,
+            title: "Recover an interrupted keyed creation".to_string(),
+            description: String::new(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            repo_root: None,
+            created_by: Some("system".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Proposed,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
+            context_creation: Vec::new(),
+        };
+        let id = owner.registry.allocate_task_id(PARTITION_ID).unwrap();
+        let input_digest = digest.map(str::to_string).unwrap_or_else(|| {
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&params).unwrap()))
+        });
+        // Crash injection: durable key admission succeeded, but bundle
+        // publication never ran. Reservation alone is not a creation replay.
+        rusqlite::Connection::open(task_registry_path(root.path()))
+            .unwrap()
+            .execute(
+                "INSERT INTO task_action_keys VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![PARTITION_ID, key, id, input_digest],
+            )
+            .unwrap();
+        assert!(owner.backends.task.task.get_task(&id).unwrap().is_none());
+        let create = || match digest {
+            Some(digest) => {
+                owner
+                    .backends
+                    .task
+                    .task
+                    .create_desktop_task(params.clone(), key, digest)
+            }
+            None => owner
+                .backends
+                .task
+                .task
+                .create_task_idempotent(params.clone(), key),
+        };
+        let (created, replayed) = create().expect("recover reserved key");
+        assert_eq!(created.id, id, "recovery uses the reserved task identity");
+        assert!(!replayed, "first bundle publication is a new creation");
+        let (existing, replayed) = create().expect("replay published bundle");
+        assert!(replayed, "a published bundle is a replay");
+        assert_eq!(existing, created);
+    }
+    assert_eq!(owner.backends.task.task.list_tasks().unwrap().len(), 2);
+}
+
 /// One owner composition over a root directory. Opening a second one on the
 /// same root is what a second process (or a restart) does.
 struct Coordinated {

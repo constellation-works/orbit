@@ -116,11 +116,13 @@ pub trait TaskStoreBackend: Send + Sync {
     -> Result<Option<super::TaskRow>, OrbitError>;
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError>;
     /// Durable key admission for automation, sharing ordinary bundle creation.
+    /// Returns `(task, replayed)`: true only when a readable bundle already
+    /// existed. A reserved key whose bundle is first published returns false.
     fn create_task_idempotent(
         &self,
         _params: TaskCreateParams,
         _key: &str,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         Err(OrbitError::Store(
             "idempotent task creation unavailable".into(),
         ))

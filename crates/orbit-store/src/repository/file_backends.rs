@@ -86,7 +86,7 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
         params: TaskCreateParams,
         key: &str,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         self.create_task_with_key(params, Some(key))
     }
 
