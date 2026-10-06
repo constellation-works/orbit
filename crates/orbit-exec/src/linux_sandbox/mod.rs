@@ -12,6 +12,7 @@
 
 mod argv;
 mod credentials;
+mod git;
 mod mask;
 mod mounts;
 mod probe;
@@ -63,6 +64,7 @@ pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, Orbi
 use crate::credential_paths::CredentialReadDeny;
 use argv::base_namespace_args;
 use credentials::{append_credential_masks, host_credential_denies, host_mounts};
+use git::append_git_metadata_mounts;
 #[cfg(test)]
 use mask::host_alias;
 use mask::{MountEntry, append_mask_mounts};

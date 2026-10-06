@@ -363,6 +363,14 @@ runtime convenience grants. It discovers the registered and active checkout's
 rebase state and host recovery payloads at
 `<git-common-dir>/orbit/worktree-recovery/<run-id>/attempt-<n>/`. Git inspection stays
 readable; source files remain writable according to the activity profile.
+The private `/tmp` mount hides host scratch, including metadata for a primary
+repository located there. For linked checkouts the compiler resolves the
+checkout's `.git` file and the gitdir's optional `commondir` pointer, including
+relative paths, and restores just the metadata directories beneath `/tmp` with
+read-only binds before policy mounts and credential masks. Separate gitdir and
+common-directory roots are both retained; the primary checkout's files and
+unrelated host scratch stay hidden unless explicitly granted by the profile.
+Pointers that would restore host `/tmp` itself are refused.
 Metadata paths containing symlinks, symlink entries inside metadata, and
 special files or hard-linked metadata files fail closed before launch: a read-only mount cannot
 protect a writable alias of the same inode. This deliberately does not support

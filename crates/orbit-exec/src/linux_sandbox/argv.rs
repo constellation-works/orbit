@@ -86,6 +86,12 @@ pub(super) fn compile_plan_with_credentials(
         "--tmpfs".to_string(),
         "/tmp".to_string(),
     ]);
+    let cwd = cwd
+        .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
+        .transpose()?;
+    if let Some(cwd) = &cwd {
+        append_git_metadata_mounts(&mut out, cwd)?;
+    }
     let writable_roots = positive_mount_roots(profile, &expanded)?;
     let mut anchors = BTreeSet::new();
     let mut scratch_anchors = BTreeSet::new();
@@ -182,9 +188,6 @@ pub(super) fn compile_plan_with_credentials(
         }
     }
 
-    let cwd = cwd
-        .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
-        .transpose()?;
     if let Some(cwd) = &cwd
         && managed_worktree
         && cwd_is_writable_root(cwd, &writable_roots)
