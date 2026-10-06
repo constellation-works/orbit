@@ -21,7 +21,8 @@ task ids, and shows every pass still commits and admits the next wave. It also
 shows each failed member keeps only its own record of the attempt, that the
 store refuses missing, outside, mismatched-attempt, sibling, forged-fingerprint
 and whole-batch records (and one for a member the receipt certified), and that
-a checkpoint whose records carry their whole batch resumes and is compacted.
+a checkpoint whose records carry their whole batch and omit the later defaulted
+`excluded` field resumes, commits a generation bump and is compacted.
 
 Materialization is owned by Core. Its migration coverage joins the existing
 [`workspace_sync`](../../orbit-cli/tests/workspace/workspace_sync.rs) module of the CLI `workspace` integration binary

@@ -340,20 +340,23 @@ fn checkpoint_with_whole_batch_failed_records_resumes_and_compacts() {
     let compact = state(store.as_ref());
 
     // Persist the checkpoint a release before compact records wrote: every
-    // failed member holding a copy of its whole exhausted batch.
+    // failed member holding a copy of its whole exhausted batch, without the
+    // defaulted excluded field added by a later release.
     let mut legacy = compact.clone();
     let mut batch = active.clone();
     batch.exhausted = true;
     for failed in legacy.members.as_mut().unwrap().failed.values_mut() {
         *failed = batch.clone();
     }
+    let mut legacy_json = serde_json::to_value(&legacy).unwrap();
+    legacy_json.as_object_mut().unwrap().remove("excluded");
     base.connection()
         .lock()
         .unwrap()
         .execute(
             "UPDATE automation_consumers SET state_json=?1 WHERE consumer=?2",
             [
-                serde_json::to_string(&legacy).unwrap(),
+                serde_json::to_string_pretty(&legacy_json).unwrap(),
                 CONSUMER.to_string(),
             ],
         )

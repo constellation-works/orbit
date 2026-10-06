@@ -1,6 +1,7 @@
 //! Audited configuration, action, and history recovery for a delivery consumer.
 //! The checkpoint and its immutable record commit together.
 
+use super::checkpoint;
 use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
@@ -23,6 +24,10 @@ pub(super) fn commit(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+
         let changed = conn
             .execute(
                 "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
@@ -31,7 +36,7 @@ pub(super) fn commit(
                     encode(next)?,
                     previous.consumer,
                     previous.generation,
-                    encode(previous)?
+                    previous_json
                 ],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -56,7 +61,7 @@ pub(super) fn commit(
 }
 
 /// Drop the consumer row and record what the reset forgot. The generation and
-/// the exact prior state fence the delete, so a consumer another pass already
+/// the decoded prior state fence the delete, so a consumer another pass already
 /// moved is never reset against stale facts.
 pub(super) fn reset(
     store: &Store,
@@ -71,10 +76,14 @@ pub(super) fn reset(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+
         let changed = conn
             .execute(
                 "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
-                params![previous.consumer, previous.generation, encode(previous)?],
+                params![previous.consumer, previous.generation, previous_json],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
@@ -156,7 +165,11 @@ pub(super) fn stall(
     }
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        tx.connection()
+        let conn = tx.connection();
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+        conn
             .execute(
                 "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
                 params![
@@ -164,7 +177,7 @@ pub(super) fn stall(
                     encode(next)?,
                     previous.consumer,
                     previous.generation,
-                    encode(previous)?
+                    previous_json
                 ],
             )
             .map(|changed| changed == 1)
