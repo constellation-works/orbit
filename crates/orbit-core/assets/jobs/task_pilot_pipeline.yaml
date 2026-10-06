@@ -15,7 +15,14 @@
 # Any successful partition reaches apply even if another agent failed.
 # Apply rejects untrusted partition envelopes, then isolates stale or malformed
 # assessments by task and applies every independently valid sibling. The guard
-# fails the total run while any task remains unresolved. Bare relative file and
+# fails the total run while any task remains unresolved. Targets admitted to
+# execution, claimed by a follower, or retired during preparation settle as
+# superseded without pilot writes. Durable material edits by an operator or
+# another writer likewise refuse the stale write and settle as superseded.
+# An agent snapshot mismatch without a durable edit still fails validation.
+# Active successful preparation checkpoints withhold their tasks from local
+# delivery selection and owner pull admission until the pilot run terminates.
+# Bare relative file and
 # directory targets are normalized only from the pinned source tree. Selector
 # existence is validated against the prepared source revision, not a later
 # checkout; only a selector the task's durable creation grant names (recorded

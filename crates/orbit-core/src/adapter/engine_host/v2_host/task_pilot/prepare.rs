@@ -209,6 +209,12 @@ pub(in super::super) fn prepare(
     // and the selection is already bounded by `max_tasks` at this point.
     let lane = ImplementationLane::resolve(runtime);
     for (task_id, snapshot) in task_ids.iter().zip(task_snapshots.iter_mut()) {
+        snapshot["history_len"] = json!(
+            runtime
+                .get_task_history(task_id)
+                .map_err(|error| action_failed(action, error.to_string()))?
+                .len()
+        );
         let task = runtime
             .get_task(task_id)
             .map_err(|error| action_failed(action, error.to_string()))?;

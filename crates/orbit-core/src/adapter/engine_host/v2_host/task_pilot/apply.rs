@@ -18,7 +18,7 @@ use super::attachment_budget::{
 use super::drain_promotion::{self, Approval, DrainAuthority};
 use super::persist::{
     ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
-    task_operation_id, task_outcome,
+    superseded_task, task_operation_id, task_outcome,
 };
 use super::source::SourceSnapshot;
 use super::{
@@ -41,6 +41,9 @@ pub(super) struct PreparedTaskSnapshot {
     /// payload prepared before components were recorded; malformed input fails
     /// the apply instead of dropping the names.
     pub(super) material_components: Option<BTreeMap<String, String>>,
+    /// History boundary used to prove a durable edit superseded preparation.
+    /// Older payloads retain their existing drift refusal without that evidence.
+    pub(super) history_len: Option<usize>,
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
     validation_tool_warnings: Vec<String>,
@@ -234,6 +237,12 @@ pub(in super::super) fn apply(
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     material_components: material_components(entry, action)?,
+                    history_len: serde_json::from_value(
+                        entry.get("history_len").cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| {
+                        action_failed(action, format!("invalid history_len: {error}"))
+                    })?,
                     context_creation_identity: context_creation_identity(entry, action)?,
                 },
             ))
@@ -457,6 +466,21 @@ pub(in super::super) fn apply(
                 continue;
             };
             let snapshot = &prepared_before[task_id];
+            match superseded_task(runtime, task_id, snapshot, &policy) {
+                Ok(Some(outcome)) => {
+                    outcomes.push(outcome);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
+            }
             let reported_before =
                 match required_string_array(assessment, "context_files_before", action) {
                     Ok(before) => before,
@@ -725,6 +749,7 @@ pub(in super::super) fn apply(
                 Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
                     outcomes.push(stale_task(task_id, reason, &detail));
                 }
+                Ok(ApplyTaskOutcome::Superseded(outcome)) => outcomes.push(outcome),
                 Err(error) => outcomes.push(task_outcome(
                     task_id,
                     "apply_failed",
@@ -738,12 +763,16 @@ pub(in super::super) fn apply(
             .filter(|outcome| {
                 !matches!(
                     outcome["outcome"].as_str(),
-                    Some("applied" | "already_applied")
+                    Some("applied" | "already_applied" | "superseded")
                 )
             })
             .count();
         let outcome = if unresolved == 0 {
-            "applied"
+            if outcomes.iter().any(|task| task["outcome"] == "superseded") {
+                "superseded"
+            } else {
+                "applied"
+            }
         } else if applied_task_ids.is_empty()
             && outcomes.iter().all(|outcome| outcome["outcome"] == "stale")
         {
@@ -756,7 +785,7 @@ pub(in super::super) fn apply(
         let error = outcomes.iter().find_map(|task| {
             (!matches!(
                 task["outcome"].as_str(),
-                Some("applied" | "already_applied")
+                Some("applied" | "already_applied" | "superseded")
             ))
             .then(|| {
                 task.get("error")
@@ -825,15 +854,24 @@ pub(in super::super) fn apply(
             .filter_map(|decision| decision["applied_task_ids"].as_array())
             .map(Vec::len)
             .sum::<usize>();
-    let unresolved_tasks = carried_task_outcomes.len() as u64
+    let unresolved_tasks = carried_task_outcomes
+        .iter()
+        .filter(|task| task["outcome"] != "superseded")
+        .count() as u64
         + partition_decisions
             .iter()
             .filter_map(|decision| decision.get("unresolved_count").and_then(Value::as_u64))
             .sum::<u64>();
     let succeeded = failed_partitions.is_empty()
         && skipped_stale_partitions.is_empty()
-        && carried_task_outcomes.is_empty();
+        && carried_task_outcomes
+            .iter()
+            .all(|task| task["outcome"] == "superseded");
     let status = if succeeded { "succeeded" } else { "failed" };
+    let superseded_count = task_outcomes
+        .iter()
+        .filter(|task| task["outcome"] == "superseded")
+        .count();
     let error = (!succeeded).then(|| {
         let first_unresolved = partition_decisions
             .iter()
@@ -843,7 +881,7 @@ pub(in super::super) fn apply(
                     .as_array()?
                     .iter()
                     .find(|task| {
-                        !matches!(task["outcome"].as_str(), Some("applied" | "already_applied"))
+                        !matches!(task["outcome"].as_str(), Some("applied" | "already_applied" | "superseded"))
                     })?;
                 let classification = task
                     .get("reason")
@@ -860,7 +898,7 @@ pub(in super::super) fn apply(
                 ))
             })
             .or_else(|| {
-                carried_task_outcomes.first().map(|task| {
+                carried_task_outcomes.iter().find(|task| task["outcome"] != "superseded").map(|task| {
                     format!(
                         "carried task {}: {}",
                         task["task_id"].as_str().unwrap_or("<unknown>"),
@@ -961,6 +999,8 @@ pub(in super::super) fn apply(
     Ok(json!({
         "member_evidence": member_evidence,
         "status": status,
+        "outcome": if succeeded && superseded_count > 0 { "superseded" } else { status },
+        "superseded_count": superseded_count,
         "error": error,
         "mode": mode,
         "workspace_path": workspace_root,

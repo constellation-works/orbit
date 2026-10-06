@@ -99,6 +99,14 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   (`application/task/context_repair.rs`, via `orbit task lint --restore-pruned`) or reported for
   operator repair, never guessed.
 
+**Preparation holds.** A successful prepare checkpoint of a pending, running, or
+retrying task-pilot run withholds every task it prepared from local auto and ship
+selection, readiness, and owner pull admission. Pull records the hold in
+`deferred_conflicts` and excludes it from queue depth. A terminal pilot run releases
+the hold, including after owner reconciliation. The checkpoint is an advisory
+selection hold, so an admission racing its publication still settles the pilot's
+old assessment as `superseded` without an ordinary write to the claimed task.
+
 **Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
 [ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
 4), and the owner skips a ready candidate whose `os:` tags (`os:linux`, `os:macos`,

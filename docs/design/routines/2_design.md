@@ -261,7 +261,14 @@ dedupes against still-open owners by failure key, and pilots each candidate thro
 existing task-pilot job. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits
 valid tasks independently, then sends only invalid assessments through one targeted repair
-attempt at the original pinned revision; stale tasks require fresh preparation. A following
+attempt at the original pinned revision; material edits require fresh preparation.
+Tasks admitted to a workflow, held by a follower execution claim, or made terminal while
+the pilot runs settle as `superseded` without pilot writes. A durable task edit by a human
+or another writer also refuses the stale write and settles as `superseded`, including
+context edits and an implementer's new plan. A false agent snapshot without a durable
+edit, dependency meaning drift, and invalid assessment envelopes remain failures.
+Superseded outcomes survive a sibling's targeted repair and count as resolved, so the
+pilot succeeds and the sweep's child success guard accepts it. A following
 `pipeline_success_guard` fails the parent while any task remains unresolved. The guard is
 skipped only for a filer-reported zero-candidate
 result, so empty clean/deduped sweeps remain no-ops without hiding failed work.
