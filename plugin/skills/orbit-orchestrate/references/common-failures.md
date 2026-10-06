@@ -19,7 +19,8 @@ Confirm:
 ```bash
 orbit task locks list --json
 orbit tool run orbit.task.show --full --input '{"id":"<blocking_task_id>","model":"<agent-family>"}'
-rg -n '<reservation_id>|task.locks.reserve.denied|<blocked_task_id>' .orbit/state/audit/v2_loop
+orbit audit list --tool orbit.task.locks.reserve --kind task_reservation --status denied --json \
+  | rg '<reservation_id>|task.locks.reserve.denied|<blocked_task_id>'
 ```
 
 If the public lock output omits needed details, inspect the global Orbit audit DB only as evidence:
@@ -48,7 +49,7 @@ Solution:
 Symptoms:
 
 - A workflow fails in a deterministic step with a template error such as `missing input value for <field>`.
-- Explicit CLI inputs are present in the run bundle but ignored by the activity.
+- Explicit CLI inputs are present in the run record (`orbit run show`) but ignored by the activity.
 - The expected released behavior is absent from the effective global or workspace job definition.
 
 Confirm:
@@ -56,7 +57,7 @@ Confirm:
 ```bash
 orbit run show <run_id> --json
 orbit job show <job> --json
-rg -n '<missing_field>|<activity_name>|<job_name>' .orbit/state/audit/v2_loop/<run_id>.jsonl
+orbit run events <run_id> --json | rg '<missing_field>|<activity_name>|<job_name>'
 diff -u .orbit/resources/jobs/job_<job>.yaml ~/.orbit/resources/jobs/job_<job>.yaml
 find .orbit/resources/jobs ~/.orbit/resources/jobs -name '*<job>*' -print
 ```
@@ -106,8 +107,8 @@ Confirm:
 
 ```bash
 orbit run logs <run_id> --json
-rg -n 'Operation not permitted|sandbox' \
-  .orbit/state/audit/v2_loop/<run_id>.jsonl .orbit/state/audit/blobs
+orbit run events <run_id> --json | rg 'Operation not permitted|sandbox'
+rg -n 'Operation not permitted|sandbox' .orbit/state/audit/blobs
 ```
 
 Solution:
@@ -127,7 +128,8 @@ Confirm:
 
 ```bash
 orbit run show <run_id> --json
-rg -n 'step_failure_recovery|semantic.db|orbit.db' .orbit/state/audit/v2_loop/<run_id>.jsonl
+orbit run events <run_id> --type step.recovery_attempted --json
+orbit run events <run_id> --json | rg 'step_failure_recovery|semantic.db|orbit.db'
 ```
 
 Solution:
