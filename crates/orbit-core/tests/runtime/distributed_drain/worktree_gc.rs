@@ -7,7 +7,7 @@ use super::*;
 /// checkout ignores. Returns the worktree and the build output's size.
 fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     let repo = &pair.follower_repo;
-    if !repo.join(".git").exists() {
+    if git(repo, &["rev-parse", "--is-inside-work-tree"]).trim() != "true" {
         git(repo, &["init", "-q", "-b", "main"]);
         std::fs::write(repo.join(".gitignore"), "/target/\n/.orbit/\n").unwrap();
         git(repo, &["add", ".gitignore"]);
