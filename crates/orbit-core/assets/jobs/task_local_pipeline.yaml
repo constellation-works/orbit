@@ -112,6 +112,10 @@ spec:
     # command fails here, so step recovery can repair the candidate
     # (committing the fix) and the post-recovery attempt reruns the whole
     # suite. An empty list is a no-op.
+    # ORB-14258: a failure the base shares fails as a typed `baseline_red`
+    # with no recovery; run finalization holds the tasks in the backlog until
+    # `base_ref` moves to a commit where the command passes, instead of
+    # blocking them.
     - id: validate
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
@@ -121,6 +125,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        base_ref: "{{ steps.worktree.output.base_ref }}"
 
     - id: merge
       recovery_activity: step_failure_recovery

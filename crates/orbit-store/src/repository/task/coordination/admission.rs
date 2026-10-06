@@ -183,10 +183,16 @@ impl TaskCommitBoundary {
     ///
     /// `admission_holds` maps each task held by a live owner-local delivery or
     /// successful pilot preparation to its trusted diagnostic. It is deferred
-    /// even while it is still
-    /// `backlog`: a local drain's gate waiting for context locks has neither
-    /// moved the task nor reserved its footprint yet, so status and
-    /// reservations alone would hand it out a second time [ORB-13918].
+    /// even while it is still `backlog`: a local drain's gate waiting for
+    /// context locks has neither moved the task nor reserved its footprint
+    /// yet, so status and reservations alone would hand it out a second time
+    /// [ORB-13918].
+    ///
+    /// `held` maps each `backlog` task the owner is withholding for a red
+    /// base to why [ORB-14258]. Its last delivery failed a required command
+    /// the base fails the same way; it is deferred until the held command
+    /// passes on a new base tip, as it would be on the owner's own drain.
+    #[allow(clippy::too_many_arguments)]
     pub fn admit_task(
         &self,
         identity: &AdmissionIdentity,
@@ -195,10 +201,18 @@ impl TaskCommitBoundary {
         repo_root: &Path,
         orbit_dir: &Path,
         admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
         self.with_admission(|| {
-            self.admit_locked(identity, request, repo_root, orbit_dir, admission_holds)
+            self.admit_locked(
+                identity,
+                request,
+                repo_root,
+                orbit_dir,
+                admission_holds,
+                held,
+            )
         })
     }
 
@@ -209,6 +223,7 @@ impl TaskCommitBoundary {
         repo_root: &Path,
         orbit_dir: &Path,
         admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
     ) -> Result<AdmissionLookup, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
@@ -285,6 +300,7 @@ impl TaskCommitBoundary {
                 .filter(|task| {
                     task.status == TaskStatus::Backlog
                         && !admission_holds.contains_key(&task.id)
+                        && !held.contains_key(&task.id)
                         && task
                             .dependencies()
                             .iter()
@@ -312,6 +328,13 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: reason.clone(),
+                });
+                continue;
+            }
+            if let Some(why) = held.get(&task.id) {
+                receipt.deferred_conflicts.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: format!("held for a red base: {why}"),
                 });
                 continue;
             }

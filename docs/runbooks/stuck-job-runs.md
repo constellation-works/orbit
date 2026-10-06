@@ -334,6 +334,24 @@ definition snapshot needs its job in the catalog (`orbit job list --all`). Refer
 activities still resolve through the current activity catalog.
 A run with no successful checkpoints degrades to a full replay.
 
+## A task held for a red base
+
+Sometimes a run fails `validate` with `[baseline_red]`. That means a required
+command also fails on the base, exactly as it fails on the candidate. Do not
+resume or replay that run, and do not unblock the task. No `[BLOCKED]` PR was
+opened. The task is in `backlog` under a `baseline_red_hold` history event, and
+its candidate is kept. `orbit run readiness --json` reports the task with
+`reason: "baseline_red_hold"`. Its `detail` names the red base commit.
+
+Fix the base instead: land a repair of the failing command on the integration
+branch. The hold lifts once the base ref points at another commit, unless this
+host has already seen that commit fail the same command. The next run then
+resumes the kept candidate. A claimed leaf on a follower releases its claim the
+same way, and the owner withholds the task from pulls until its own base moves.
+Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
+`validation/<run>/<n>.baseline.json`. See
+[CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).
+
 ## Replay from the beginning
 
 When checkpoint outputs are invalid or the run must start from step zero:

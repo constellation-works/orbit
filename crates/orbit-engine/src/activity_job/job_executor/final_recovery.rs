@@ -104,6 +104,14 @@ pub(super) fn attempt_final_recovery(
             "required validation lacked a tool in its environment; the candidate was not judged",
         );
     }
+    // [ORB-14258] Nor fix a required command the base fails the same way; the
+    // failure handoff holds the task until the base moves.
+    if orbit_types::workflow::is_baseline_red_failure(None, Some(error_message)) {
+        return skip(
+            "required validation fails on the base exactly as on the candidate; the candidate \
+             did not cause it",
+        );
+    }
     // [ORB-14149] Nor does any decision give the provider's model capacity;
     // the candidate stays in the worktree for a resume.
     if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {

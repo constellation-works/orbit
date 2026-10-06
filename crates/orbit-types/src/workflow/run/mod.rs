@@ -1,7 +1,12 @@
+mod baseline;
 mod delivery;
 mod id;
 mod state;
 
+pub use baseline::{
+    BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,
+    is_baseline_red_failure,
+};
 pub use delivery::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
     LandingMethod, LandingObservation, LandingObservationStatus, RUN_DELIVERY_EVIDENCE_SOURCE,

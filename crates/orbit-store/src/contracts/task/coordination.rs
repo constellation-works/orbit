@@ -582,6 +582,12 @@ pub struct ClaimEvidence {
     /// Set on a release whose leaf could not use its provider [ORB-13941].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_unavailable: Option<ProviderUnavailable>,
+    /// [ORB-14258] Set on a release whose leaf's required command fails on
+    /// its base exactly as on the candidate. The owner records the hold with
+    /// the release, so its admission withholds the task until the base moves.
+    /// An owner that predates the field releases the task unheld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_red: Option<orbit_types::workflow::BaselineRedHold>,
     /// [ORB-13907] On a failure settlement only: the leaf's final-recovery
     /// decision, which the owner applies to its task once the claim has
     /// failed. An owner that predates the field ignores it and only blocks.

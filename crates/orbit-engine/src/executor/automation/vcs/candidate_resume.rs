@@ -18,8 +18,9 @@
 //! - it conflicts, validation fails, or the before-PR review refused it:
 //!   `resumed_repaired`, and the implementer starts from the applied
 //!   candidate with that output;
-//! - validation could not run for lack of a tool: `resumed_unjudged`, and no
-//!   implementation step runs; the delivery's own validation decides;
+//! - validation could not run for lack of a tool, or fails exactly as it does
+//!   on the base [ORB-14258]: `resumed_unjudged`, and no implementation step
+//!   runs; the delivery's own validation decides;
 //! - there is no usable candidate (none preserved, an operator discarded it,
 //!   the spec changed, a bundle, the commit is gone): `fresh`, with the
 //!   reason.
@@ -38,8 +39,8 @@ use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
 };
 
+use super::baseline::{compare_with_base, run_validation_command};
 use super::git::{git_command_success, git_output, git_run, git_success};
-use super::required_command::run_required_command;
 
 /// Task history event recording what a run did with a preserved candidate.
 const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
@@ -51,6 +52,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
     "awaiting_review_evidence",
     "incomplete_review_timeout",
     "blocked_validation_environment",
+    "held_baseline_red",
 ];
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.
@@ -329,7 +331,7 @@ fn resume<H: RuntimeHost + ?Sized>(
         })));
     }
     for command in host.required_validation_commands() {
-        let run = run_required_command(host, workspace_path, &command)?;
+        let run = run_validation_command(host, workspace_path, &command)?;
         if run.passed {
             continue;
         }
@@ -337,6 +339,15 @@ fn resume<H: RuntimeHost + ?Sized>(
             return Ok(Outcome::Unjudged(format!(
                 "required validation '{}' could not run: a tool is missing from the validation \
                  environment",
+                run.command
+            )));
+        }
+        // [ORB-14258] A base that fails the same way leaves nothing for the
+        // implementer to repair; the delivery's own validation holds the
+        // task again, from the shared base result.
+        if compare_with_base(host, workspace_path, base_sha, &command).reproduces(&run) {
+            return Ok(Outcome::Unjudged(format!(
+                "required validation '{}' fails on base {base_sha} exactly as on the candidate",
                 run.command
             )));
         }

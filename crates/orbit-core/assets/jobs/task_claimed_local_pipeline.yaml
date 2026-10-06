@@ -20,7 +20,9 @@
 #   The drain's settlement then records the failure against the claim and
 #   releases only this claim's reservation.
 # - `claim_validate` fails the run when a required command does not pass on the
-#   exact candidate, so no handoff is ever recorded for unvalidated work.
+#   exact candidate, so no handoff is ever recorded for unvalidated work. A
+#   failure the base shares (`baseline_red`) releases the claim with a hold
+#   instead, so the owner keeps the task in its backlog until the base moves.
 #
 schemaVersion: 2
 kind: Job

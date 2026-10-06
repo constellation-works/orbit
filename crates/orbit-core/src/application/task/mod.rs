@@ -1,6 +1,7 @@
 //! Task commands and coordinated record writes.
 
 mod add;
+mod baseline_hold;
 mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;

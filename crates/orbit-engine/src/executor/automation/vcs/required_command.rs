@@ -57,6 +57,11 @@ pub(super) struct RequiredCommandRun {
     pub(super) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
     pub(super) missing_tool: Option<MissingTool>,
+    /// Reruns after a network-inconclusive failure [ORB-14258].
+    pub(super) network_retries: u32,
+    /// The line showing the failure was the network's, when it still was
+    /// after every rerun.
+    pub(super) network_evidence: Option<String>,
 }
 
 /// Evidence that a failed command lacked a tool, not a passing candidate.
@@ -186,6 +191,8 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         output,
         environment,
         missing_tool,
+        network_retries: 0,
+        network_evidence: None,
     })
 }
 

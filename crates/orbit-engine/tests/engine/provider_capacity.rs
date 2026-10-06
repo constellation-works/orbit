@@ -25,7 +25,10 @@ use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, OnDenial,
     Provider, V2AuditEvent, V2AuditEventKind,
 };
-use orbit_types::workflow::{is_provider_capacity_exhausted, is_provider_unavailable};
+use orbit_types::workflow::{
+    BaselineRedHold, is_baseline_red_failure, is_provider_capacity_exhausted,
+    is_provider_unavailable,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -153,6 +156,18 @@ impl RuntimeHost for CapacityHost {
             .lock()
             .unwrap()
             .push((action.to_string(), input.clone()));
+        if action == "test_stub_red_base_validate" {
+            let hold = BaselineRedHold {
+                base_ref: "origin/main".to_string(),
+                base_sha: "b".repeat(40),
+                command: "make ci-lint".to_string(),
+                run_id: String::new(),
+            };
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: hold.text("required validation 'make ci-lint' fails on the base too"),
+            });
+        }
         if action == "test_stub_candidate_validate" {
             return Err(DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
@@ -557,5 +572,69 @@ fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_a
         )),
         1,
         "validation runs once before and once after recovery"
+    );
+}
+
+/// [ORB-14258] A required validation failure the base shares is not the
+/// candidate's: no step or final recovery is dispatched, so the provider is
+/// not invoked again, and the failure handoff receives the typed failure.
+#[test]
+fn a_red_base_validation_failure_dispatches_no_recovery() {
+    let worktree = tempfile::tempdir().unwrap();
+    let answer = format!(
+        r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
+        serde_json::to_string(SUCCESS_ENVELOPE).unwrap()
+    );
+    let fake = FakeProvider::new("codex", &answer, "", 0, "");
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": { "name": "red_base_fixture" },
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "steps": [
+                { "id": "setup", "spec": { "type": "deterministic", "action": "setup", "config": {} } },
+                { "id": "implement_one", "spec": ActivityV2Spec::AgentLoop(agent_spec(Provider::Codex)) },
+                { "id": "validate", "spec": { "type": "deterministic", "action": "test_stub_red_base_validate", "config": {} } },
+            ],
+        },
+    });
+    let mut job = load_job_asset(&asset.to_string()).unwrap().spec;
+    job.steps[2].recovery_activity = Some("step_fix".to_string());
+    job.steps[2].resolved_recovery_activity = Some(deterministic_activity("step_fix"));
+    job.failure_activity = Some("handoff".to_string());
+    job.resolved_failure_activity = Some(deterministic_activity("handoff"));
+    job.final_recovery_activity = Some("decide".to_string());
+    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+
+    let run = run_job(&job, &host, "red-base-run");
+
+    let message = failure_message(&run.outcome);
+    assert!(is_baseline_red_failure(None, Some(&message)), "{message}");
+    assert_eq!(
+        fake.invocations(),
+        1,
+        "only the implementation step ran the provider"
+    );
+    assert_eq!(
+        host.calls("test_stub_red_base_validate").len(),
+        1,
+        "no post-recovery attempt"
+    );
+    assert!(host.calls("step_fix").is_empty(), "no step recovery runs");
+    assert_eq!(*host.final_recovery_admissions.lock().unwrap(), 0);
+    assert!(host.calls("decide").is_empty(), "no final recovery runs");
+    let handoff = host.calls("handoff");
+    assert_eq!(handoff.len(), 1);
+    assert_eq!(handoff[0]["failed_step_id"], "validate");
+    assert_eq!(handoff[0]["error_code"], "baseline_red", "{handoff:?}");
+    assert!(
+        handoff[0]["error_message"]
+            .as_str()
+            .and_then(BaselineRedHold::from_text)
+            .is_some(),
+        "the handoff can read the hold: {handoff:?}"
     );
 }

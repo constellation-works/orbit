@@ -173,6 +173,13 @@ spec:
        command at the base commit or with your diff reverted). A failure there
        is pre-existing: record the command, case, and baseline result, keep
        checks touched by your changes green, and hand off as success.
+       Orbit's own required validation makes the same comparison after you
+       hand off. It reruns a network-inconclusive failure (curl status 000,
+       DNS, TLS timeout), and it reruns a failing required command on the
+       base. When the base fails the same way, the task is held, not blocked,
+       until the base passes. So never weaken, skip or work around a required
+       command to get past a red base, and never set `blocked` for one; a
+       failure the base does not share is yours to fix.
     8. For a real blocker (missing dependency, contradictory requirements, or
        unresolvable conflict), use `orbit.task.update` to set `blocked` with a
        reason. A criterion contradicting AGENTS.md or equivalent is not a

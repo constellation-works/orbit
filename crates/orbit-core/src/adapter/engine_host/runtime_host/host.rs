@@ -266,7 +266,7 @@ impl RuntimeHost for OrbitRuntime {
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: Some(update.status), expected_status: Some(update.expected_status),
                     status_note: update.note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, final_recovery: None},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None},
                     ..Default::default()
                 }
             }), Default::default())?;
@@ -470,7 +470,7 @@ impl RuntimeHost for OrbitRuntime {
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: update.status, plan: update.plan, context_files: update.context_files,
                     external_refs: update.external_refs, status_note: update.status_note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, final_recovery: None},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None},
                     ..Default::default()
                 }
             }), Default::default())?;

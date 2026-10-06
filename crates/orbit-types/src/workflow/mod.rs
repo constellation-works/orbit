@@ -94,7 +94,8 @@ pub use routine::{
     RoutineRetries, RoutineTarget, RoutineTrigger,
 };
 pub use run::{
-    ActivityCrewDraw, ActivityCrewPoolMember, CommitObservation, CommitObservationStatus,
+    ActivityCrewDraw, ActivityCrewPoolMember, BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT,
+    BASELINE_RED_MARKER, BaselineRedHold, CommitObservation, CommitObservationStatus,
     CrewExclusion, CrewExclusionSource, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
     DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest,
     DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
@@ -103,7 +104,7 @@ pub use run::{
     PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
     PullSinglePass, RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure,
     ResourceThrottle, RunDeliveryObservation, RunDeliveryStatus, RunIdRole,
-    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
     is_provider_capacity_exhausted, is_provider_unavailable, is_validation_environment_failure,
     run_id_candidate, run_id_minute_stem, run_id_role,
 };

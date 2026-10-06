@@ -6,10 +6,17 @@
 # landing consumer does that behind explicit completion authority.
 #
 # It shares the claimed local leaf's omissions (no reservation steps, no
-# rediscovery, no `task_complete`) and adds one ordering rule of its own:
-# required validation runs *after* the pull request exists, because the typed
-# handoff pins the delivery identity and every captured log must name the exact
-# candidate and delivery the owner will act on.
+# rediscovery, no `task_complete`) and adds one ordering rule of its own
+# (ORB-14258): required validation runs *before* the candidate is pushed, so a
+# candidate that fails it never gets a pull request. Every captured log the
+# owner accepts must still name the exact candidate and delivery it will act
+# on, so once `pr_open` has published that candidate, `pin_validation` re-runs
+# `claim_validate` without commands: it re-observes the candidate with its pull
+# request, refuses one that is not the commit and base the commands passed on,
+# and attaches the logs. A failure the base shares (`baseline_red`) releases
+# the claim with a hold instead of failing it; the candidate stays in this
+# host's worktree and the owner keeps the task in its backlog until the base
+# moves.
 #
 # ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base
@@ -184,6 +191,16 @@ spec:
         base_sync: "{{ input.base_sync }}"
         admission: "{{ steps.review_gate_admit.output }}"
 
+    # Required validation on the final, reviewed head, before anything is
+    # published (ORB-14258). No pull request exists yet, so the step runs the
+    # commands and returns their results without attaching logs.
+    - id: validate
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sync: "{{ input.base_sync }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+
     - id: push
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -221,13 +238,16 @@ spec:
         # Same attempt-scoped delivery gate as `commit`.
         implementation: "{{ steps.implement_one.output }}"
 
-    - id: validate
+    # The leaf's published pull request pins the validation that already
+    # passed on this exact commit and base; no command runs again.
+    - id: pin_validation
       target: activity:claim_validate
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
         pull_request: "{{ steps.pr_open.output.pr_number }}"
+        prevalidated: "{{ steps.validate.output }}"
 
     - id: handoff
       target: activity:claim_handoff
@@ -236,8 +256,8 @@ spec:
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
         pull_request: "{{ steps.pr_open.output.pr_number }}"
-        candidate: "{{ steps.validate.output.candidate }}"
-        validation: "{{ steps.validate.output.validation }}"
+        candidate: "{{ steps.pin_validation.output.candidate }}"
+        validation: "{{ steps.pin_validation.output.validation }}"
         # The settled before-PR verdict, or null when the claim captured no
         # review: the owner judges it against the claim's review contract.
         review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"

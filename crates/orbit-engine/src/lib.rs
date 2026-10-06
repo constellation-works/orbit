@@ -53,13 +53,13 @@ pub use context::{
     ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION,
     StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
     StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
-    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
-    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
-    run_worktree_has_build_output, validate_claim_new_paths,
+    BaselineHoldStatus, WorktreeGcOptions, WorktreeGcResult, baseline_hold_status,
+    collect_worktrees, fetch_remote_base, run_worktree_has_build_output, validate_claim_new_paths,
 };

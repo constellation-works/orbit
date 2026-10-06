@@ -305,9 +305,12 @@ spec:
        the repair on the checked-out task branch as a new commit, leaving the
        worktree clean: the retry validates the exact committed HEAD and
        refuses uncommitted changes. Never edit, skip, or weaken the required
-       command, and never rewrite the branch's existing commits. A failure
-       outside the candidate's changes (a red base) is a blocker to report
-       with the `not_recovered` decision: re-running it cannot pass.
+       command, and never rewrite the branch's existing commits. Before you
+       are dispatched, Orbit reruns the failing command on the base. A failure
+       the base shares is held as `baseline_red` and never reaches you, so the
+       error says whether the base passed. A failure outside the candidate's
+       changes that still reaches you is a blocker to report with the
+       `not_recovered` decision: re-running it cannot pass.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You

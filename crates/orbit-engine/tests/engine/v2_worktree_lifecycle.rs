@@ -957,7 +957,9 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            let command = "echo 'feature.txt is wrong' >&2; exit 3";
+            // The base has no feature.txt, so the base passes and the
+            // failure is the candidate's.
+            let command = "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }";
             preserved.host.set_required_commands(&[command]);
             let setup = preserved.next_setup();
 
@@ -981,6 +983,36 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
                 "the implementer starts from the candidate"
             );
             assert_resume_recorded(&preserved, "resumed_repaired");
+        },
+    );
+}
+
+/// A candidate whose required command fails on the base exactly as on the
+/// candidate is not handed to the implementer: no repair of the candidate
+/// can make it pass, so the run resumes it unjudged and the suite decides.
+#[test]
+fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer() {
+    isolated(
+        "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved
+                .host
+                .set_required_commands(&["echo 'lint is red' >&2; exit 3"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_unjudged", "{resumed}");
+            assert_eq!(resumed["implement"], false, "{resumed}");
+            assert!(resumed["repair"].is_null(), "{resumed}");
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                "feature\n",
+                "the candidate is preserved"
+            );
+            assert_resume_recorded(&preserved, "resumed_unjudged");
         },
     );
 }
