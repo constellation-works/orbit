@@ -1703,6 +1703,8 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             "First task",
             "--complexity",
             "low",
+            "--context",
+            "file:README.md",
             "--crew",
             "sol",
             "--status",

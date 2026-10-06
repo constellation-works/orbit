@@ -796,6 +796,8 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         "Held before a local delivery.",
         "--type",
         "chore",
+        "--context",
+        "dir:.",
         "--complexity",
         "low",
         "--acceptance-criteria",
