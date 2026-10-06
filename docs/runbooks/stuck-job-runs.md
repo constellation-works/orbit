@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-09-12
+last_validated: 2026-10-05
 ---
 
 # Recover Stuck Job Runs
