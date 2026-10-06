@@ -235,20 +235,24 @@ impl OrbitRuntime {
                 )));
             }
         }
-        self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
-        self.record_event(OrbitEvent::JobRunStarted {
-            job_id: run.job_id.clone(),
-            run_id: run.run_id.clone(),
-            attempt: run.attempt,
-        })?;
+        // Once Start succeeds, setup errors belong to this run and must reach
+        // the same terminal lifecycle as execution errors in detached workers.
+        let outcome = (|| {
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            self.record_event(OrbitEvent::JobRunStarted {
+                job_id: run.job_id.clone(),
+                run_id: run.run_id.clone(),
+                attempt: run.attempt,
+            })?;
 
-        let outcome = self.run_job_v2_from_yaml_with_run_context(
-            yaml_path,
-            input.clone(),
-            Some(run.run_id.clone()),
-            retry_source_run_id,
-            resume.and_then(|plan| plan.resume_state.as_ref()),
-        );
+            self.run_job_v2_from_yaml_with_run_context(
+                yaml_path,
+                input.clone(),
+                Some(run.run_id.clone()),
+                retry_source_run_id,
+                resume.and_then(|plan| plan.resume_state.as_ref()),
+            )
+        })();
         let finished_at = chrono::Utc::now();
 
         self.finalize_v2_pipeline_run(
@@ -472,11 +476,25 @@ impl OrbitRuntime {
                 JobRunState::Held
             }
             Ok(result) if result.success => {
-                self.persist_v2_run_state(run, input, result, JobRunState::Success, options)?;
+                // Summary persistence follows completed execution. Its failure
+                // must not replace success or escape before the terminal write.
+                log_best_effort(
+                    "persist successful run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Success, options),
+                );
                 if options.record_synthetic_success_step {
-                    self.record_synthetic_v2_success_step(run, started_at, finished_at, result)?;
+                    log_best_effort(
+                        "record success step",
+                        &run.run_id,
+                        self.record_synthetic_v2_success_step(run, started_at, finished_at, result),
+                    );
                 } else {
-                    self.persist_detached_worker_steps(run, started_at, finished_at, result)?;
+                    log_best_effort(
+                        "persist worker step summary",
+                        &run.run_id,
+                        self.persist_detached_worker_steps(run, started_at, finished_at, result),
+                    );
                 }
                 JobRunState::Success
             }

@@ -88,6 +88,12 @@ no run is left behind in a startable state — the persisted run is terminalized
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
 `interrupted` means the worker died.
 
+Setup errors after a run starts, including a replay input naming a crew that no longer
+exists, finalize the run as `failed` with the setup diagnostic. Once execution succeeds,
+failures saving the final pipeline snapshot or step summary are logged as best-effort
+bookkeeping and the run still reaches `success`; its summary may be incomplete. The
+terminal-state write remains required.
+
 ## Understand orphan reconciliation
 
 Newly submitted runs record their owner `pid` plus a pid-start-time token. Pipeline workers

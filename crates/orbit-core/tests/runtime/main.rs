@@ -28,6 +28,7 @@ mod host_os_routing;
 mod host_resources;
 mod implement_blocker;
 mod invocation_metrics;
+mod job_finalization;
 mod local_route_before_pr;
 mod plugin_inspection;
 mod provider_failure_hold;
