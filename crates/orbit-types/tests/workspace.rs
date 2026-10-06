@@ -76,6 +76,39 @@ fn malformed_scp_credentials_are_redacted_even_when_parsing_fails() {
 }
 
 #[test]
+fn ambiguous_scp_credentials_are_fully_redacted() {
+    let remote = "deploy:p@ss:word@github.com:example/tasks.git";
+
+    assert_eq!(redact_git_remote(remote), "***");
+    for result in [
+        validate_publication_remote(remote),
+        validate_source_repository_fingerprint(remote),
+    ] {
+        let diagnostic = result.expect_err("embedded scp credentials").to_string();
+        assert!(diagnostic.contains("'***'"), "{diagnostic}");
+        assert!(!diagnostic.contains("deploy"), "{diagnostic}");
+        assert!(!diagnostic.contains("ss"), "{diagnostic}");
+        assert!(!diagnostic.contains("word"), "{diagnostic}");
+    }
+}
+
+#[test]
+fn scp_credential_redaction_preserves_bracketed_ipv6_colons() {
+    let remote = "deploy:secret@[::1]:example/tasks.git";
+    let redacted = "***@[::1]:example/tasks.git";
+
+    assert_eq!(redact_git_remote(remote), redacted);
+    for result in [
+        validate_publication_remote(remote),
+        validate_source_repository_fingerprint(remote),
+    ] {
+        let diagnostic = result.expect_err("embedded scp credentials").to_string();
+        assert!(diagnostic.contains(redacted), "{diagnostic}");
+        assert!(!diagnostic.contains("secret"), "{diagnostic}");
+    }
+}
+
+#[test]
 fn ordinary_scp_remotes_keep_usernames_and_repository_path_punctuation() {
     for (remote, identity) in [
         (

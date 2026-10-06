@@ -384,10 +384,26 @@ fn redact_scp_userinfo(remote: &str) -> Option<String> {
         return None;
     }
     // Passwords may contain at-signs even when parsing rejects the remote.
-    // Mask through the last one before the host/path separator, preserving
-    // at-signs and colons in the repository path.
-    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-    Some(format!("***@{host}:{path}"))
+    // Mask through the last one in the host while keeping the original suffix
+    // intact. Rebuilding around the first colon would alter bracketed IPv6
+    // addresses such as `[::1]`.
+    if let Some((_, host)) = host.rsplit_once('@') {
+        return Some(format!("***@{host}:{path}"));
+    }
+    // A colon after the first at-sign makes a later at-sign ambiguous: it may
+    // still be part of the password. Hide the whole remote rather than risk
+    // exposing password text or guessing where the repository path begins.
+    let first_colon = host_path.find(':')?;
+    if let Some(later_at) = host_path[first_colon + 1..].find('@') {
+        let later_at = first_colon + 1 + later_at;
+        if host_path
+            .find('/')
+            .is_none_or(|path_start| later_at < path_start)
+        {
+            return Some("***".to_string());
+        }
+    }
+    Some(format!("***@{host_path}"))
 }
 
 fn invalid_git_url(remote: &str) -> WorkspaceError {
