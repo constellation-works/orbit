@@ -5,12 +5,13 @@ use crate::fs::path_safety::normalize_path;
 impl TaskV2Store {
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task_with_key(params, None)
+            .map(|(task, _)| task)
     }
     pub(crate) fn create_task_with_key(
         &self,
         params: TaskCreateParams,
         key: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         self.in_boundary(|| self.create_task_locked(params, key, None))
     }
 
@@ -37,7 +38,6 @@ impl TaskV2Store {
                 return Ok((task, true));
             }
             self.create_task_locked(params, Some(key), Some(digest))
-                .map(|task| (task, false))
         })
     }
 
@@ -46,7 +46,7 @@ impl TaskV2Store {
         params: TaskCreateParams,
         key: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task title must not be empty".to_string(),
@@ -169,13 +169,13 @@ impl TaskV2Store {
         };
 
         if key.is_some() {
-            let bundle = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
+            let (bundle, replayed) = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
             self.replace_index_best_effort(&bundle.envelope, "idempotent task creation");
-            return self.task_from_bundle(bundle);
+            return self.task_from_bundle(bundle).map(|task| (task, replayed));
         }
         self.bundle_store.create_bundle(&bundle)?;
         self.replace_index_best_effort(&bundle.envelope, "task creation");
-        self.task_from_bundle(bundle)
+        self.task_from_bundle(bundle).map(|task| (task, false))
     }
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.

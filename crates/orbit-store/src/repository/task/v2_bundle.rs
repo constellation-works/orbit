@@ -92,10 +92,12 @@ impl TaskBundleStoreV2 {
     /// The caller has durably reserved this ID for one action and input digest.
     /// Re-enter after a crash under the canonical bundle lock. A readable bundle
     /// wins; unreadable bytes are retained for explicit recovery.
+    /// The replay flag is decided under the lock, so concurrent creators
+    /// cannot both report publishing the same bundle.
     pub(crate) fn create_or_recover_action_bundle(
         &self,
         proposed: &TaskBundleV2,
-    ) -> Result<TaskBundleV2, OrbitError> {
+    ) -> Result<(TaskBundleV2, bool), OrbitError> {
         let id = &proposed.envelope.id;
         let path = self.bundle_path(id)?;
         with_exclusive_file_lock(&bundle_lock_target(&path), "task action admission", || {
@@ -103,7 +105,7 @@ impl TaskBundleStoreV2 {
             if let Ok(existing) = read_bundle_consistently(&path) {
                 self.registry
                     .register_task_bundle(id, &self.workspace_id, &path)?;
-                return Ok(existing);
+                return Ok((existing, true));
             }
             if path.exists() {
                 return Err(OrbitError::Store(
@@ -112,7 +114,7 @@ impl TaskBundleStoreV2 {
                 ));
             }
             self.create_bundle_locked(id, &path, proposed)?;
-            Ok(proposed.clone())
+            Ok((proposed.clone(), false))
         })
     }
 

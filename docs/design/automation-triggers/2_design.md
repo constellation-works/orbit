@@ -194,6 +194,13 @@ and consumed as `excluded` state and batch `exclusions`; see
 
 ## 4. Observation, dispatch, and successful coverage
 
+Keyed task mint retries return the existing task without appending creation
+crew provenance or emitting another `TaskAdded` session event. They preserve
+the task's current crew and revision, including operator changes after minting.
+A durable key reservation whose bundle has not yet been published still counts
+as a new creation when recovery publishes it; replay is determined under the
+bundle lock.
+
 Three separate checkpoints are essential:
 
 - **Observed (`O`)**: source continuation plus evidence durably classified or
