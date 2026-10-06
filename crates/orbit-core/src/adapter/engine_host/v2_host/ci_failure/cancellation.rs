@@ -1,4 +1,5 @@
-//! Cancelled CI jobs that never reached a failed step: inconclusive, not filed.
+//! Cancelled CI jobs that never reached a failed step, or that a workflow
+//! concurrency group cancelled: inconclusive, not filed.
 
 use std::collections::BTreeSet;
 
@@ -6,12 +7,18 @@ use serde_json::{Value, json};
 
 use super::evidence::run_id_key;
 
-fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+/// Mirrors collection's classification: `concurrency_cancellation` is the
+/// annotation collection attaches to a job its concurrency group cancelled.
+fn job_is_inconclusive_cancellation(job: &Value) -> bool {
     job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
-        && job
+        && (job
             .get("failed_steps")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
+            || job
+                .get("concurrency_cancellation")
+                .and_then(Value::as_str)
+                .is_some())
 }
 
 fn is_inconclusive_cancellation(failure: &Value) -> bool {
@@ -19,7 +26,7 @@ fn is_inconclusive_cancellation(failure: &Value) -> bool {
         return true;
     }
     match failure.get("failed_jobs").and_then(Value::as_array) {
-        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_inconclusive_cancellation),
         Some(_) | None => {
             failure.get("conclusion").and_then(Value::as_str) == Some("cancelled")
                 && failure.get("investigated").and_then(Value::as_bool) == Some(true)

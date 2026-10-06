@@ -177,6 +177,18 @@ fn request_fixture_goldens() {
                 gh::run_jobs_request(input),
                 json!(gh::project_job_labels(raw)),
             ),
+            "job_annotations" => (
+                gh::job_annotations_request(input),
+                json!(gh::concurrency_cancellation(raw)),
+            ),
+            "closed_pr_head" => (
+                gh::closed_pr_head_request(input),
+                gh::project_pull_request(raw),
+            ),
+            "open_pr_head" => (
+                gh::open_pr_head_request(input),
+                gh::project_pull_request(raw),
+            ),
             "pr_list" => (gh::pr_list_request(input), gh::project_pull_request(raw)),
             "repo_view" => (gh::repo_view_request(input), gh::project_repo_view(raw)),
             "logs" => (

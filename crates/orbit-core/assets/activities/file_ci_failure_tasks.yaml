@@ -77,7 +77,9 @@ spec:
     read, a registration, dedupe-lookup, or task-creation failure — leaves the
     whole snapshot in doubt and fails the activity with a bounded
     `retryable_error` payload, as does a snapshot in which nothing was complete
-    enough to file. A current failure is never converted to
+    enough to file. Errors collection already reported as persistent
+    (`persistent_retryable_errors`) never block filing; the audit carries
+    their count and details. A current failure is never converted to
     `no_current_failure` merely because its handoff failed. Every
     successful output includes an `audit` object with counts and identities for
     latest runs, current and investigated failures, created tasks, existing

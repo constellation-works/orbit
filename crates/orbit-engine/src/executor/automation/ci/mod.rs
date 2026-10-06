@@ -19,8 +19,11 @@
 //! not look), [`OUTCOME_NO_CURRENT_FAILURE`] (we looked and nothing is
 //! failing), [`OUTCOME_CURRENT_FAILURES`] (we looked and something is), and
 //! [`OUTCOME_RETRYABLE_ERROR`] (a bounded discovery or investigation failed).
+//! A run-scoped retryable error that repeats across consecutive sweeps is
+//! reported as persistent rather than failing every sweep; see [`history`].
 
 mod collect;
+mod history;
 mod investigate;
 mod partition;
 mod query;
@@ -28,6 +31,7 @@ mod refs;
 
 pub(in crate::executor::automation) use query::AuthStatus;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -102,11 +106,57 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let queries = query::HostCiQueries::new(&query_root(host, input)?);
-    let evidence = collect::collect(&queries, input)?;
+    let history_path = history::history_path(host.data_root());
+    let mut history = history_path
+        .as_deref()
+        .map(history::load)
+        .unwrap_or_default();
+    let sweep_id = retryable_history_sweep_id(host, input);
+    let evidence = collect::collect_for_sweep(&queries, input, &mut history, &sweep_id)?;
+    if let Some(path) = history_path
+        && let Err(error) = history::save(&path, &history)
+    {
+        // Losing the counts only delays degradation; it must not fail a
+        // sweep whose evidence is otherwise complete.
+        tracing::warn!(path = %path.display(), %error, "could not save CI sweep retryable history");
+    }
     Ok(serde_json::json!({
         "phase": "collect_ci_evidence",
         "ci_evidence": evidence,
     }))
+}
+
+/// Use the root workflow run as the durable identity for one sweep. Resumed
+/// job runs retain their source run's identity, so retrying one scheduled sweep
+/// cannot count as several consecutive sweeps. Direct activity calls fall back
+/// to the current UTC hour, matching the shipped routine's hourly cadence.
+fn retryable_history_sweep_id<H: RuntimeHost + ?Sized>(host: &H, input: &Value) -> String {
+    const MAX_RETRY_ANCESTORS: usize = 64;
+
+    let fallback = || format!("hour:{}", chrono::Utc::now().format("%Y%m%d%H"));
+    let Some(mut run_id) = input
+        .get("job_run_id")
+        .or_else(|| input.get("run_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return fallback();
+    };
+    let mut visited = BTreeSet::new();
+    for _ in 0..MAX_RETRY_ANCESTORS {
+        if !visited.insert(run_id.clone()) {
+            return fallback();
+        }
+        let Ok(Some(run)) = host.get_job_run(&run_id) else {
+            return fallback();
+        };
+        if let Some(source_run_id) = run.retry_source_run_id {
+            run_id = source_run_id;
+        } else {
+            return format!("run:{}", run.run_id);
+        }
+    }
+    fallback()
 }
 
 #[cfg(test)]

@@ -3,24 +3,74 @@
 use serde_json::{Value, json};
 
 use super::collect::{Bounds, investigation_slots, push_retryable_error};
-use super::partition::{job_is_cancelled_without_failed_steps, run_is_completed};
+use super::partition::{
+    CONCURRENCY_CANCELLATION_FIELD, job_concurrency_cancellation, job_is_inconclusive_cancellation,
+    run_is_completed,
+};
 use super::query::{CiQueries, LogScope};
 
-/// The findings for a cancelled run whose expansion has no failed step to
-/// repair, or `None` when at least one job has one. Lets collection classify
-/// such a run from its view alone, before any investigation budget is spent.
-pub(super) fn cancelled_without_failed_steps(failure: &Value, view: &Value) -> Option<Vec<Value>> {
+/// The findings for a cancelled run whose expansion has nothing to repair —
+/// every job is a cancellation without a failed step or one a concurrency
+/// group made — or `None` when at least one job may have failed. Lets
+/// collection classify such a run from its view alone, before any
+/// investigation budget or log read is spent.
+pub(super) fn inconclusive_cancellation_findings(
+    failure: &Value,
+    view: &Value,
+) -> Option<Vec<Value>> {
     let jobs = sorted_failed_jobs(view);
     if jobs.is_empty() {
         return Some(vec![inconclusive_cancellation_finding(failure, None)]);
     }
-    jobs.iter()
-        .all(job_is_cancelled_without_failed_steps)
-        .then(|| {
-            jobs.iter()
-                .map(|job| inconclusive_cancellation_finding(failure, Some(job)))
-                .collect()
-        })
+    jobs.iter().all(job_is_inconclusive_cancellation).then(|| {
+        jobs.iter()
+            .map(|job| inconclusive_cancellation_finding(failure, Some(job)))
+            .collect()
+    })
+}
+
+/// Record on each cancelled job that still lists a failed step whether a
+/// workflow concurrency group cancelled it, from the job's own annotations.
+///
+/// Concurrency cancels a run for a newer one, so the interrupted step reads as
+/// failed and its log is routinely incomplete; only the annotation says that
+/// nothing failed. Each read is charged to `reads` up to `max_reads`. A failed
+/// or skipped read leaves the job unmarked, so it is investigated exactly as
+/// before rather than assumed harmless.
+pub(super) fn mark_concurrency_cancellations<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    view: &mut Value,
+    reads: &mut usize,
+    max_reads: usize,
+    skipped: &mut usize,
+) {
+    let Some(jobs) = view.get_mut("failed_jobs").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for job in jobs {
+        if job.get("conclusion").and_then(Value::as_str) != Some("cancelled")
+            || job_is_inconclusive_cancellation(job)
+        {
+            continue;
+        }
+        let Some(job_id) = job.get("job_id").and_then(Value::as_u64) else {
+            continue;
+        };
+        if *reads >= max_reads {
+            *skipped += 1;
+            continue;
+        }
+        *reads += 1;
+        match queries.job_concurrency_cancellation(job_id) {
+            Ok(Some(annotation)) => job[CONCURRENCY_CANCELLATION_FIELD] = json!(annotation),
+            Ok(None) => {}
+            Err(error) => {
+                job["cancellation_annotations_error"] = json!(
+                    orbit_common::security::redaction::redact_all(&error.to_string())
+                );
+            }
+        }
+    }
 }
 
 /// Stable numeric identity makes a provider's job ordering irrelevant to
@@ -92,7 +142,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
     let mut findings = Vec::new();
     let mut actionable = Vec::new();
     for job in jobs {
-        if job_is_cancelled_without_failed_steps(&job) {
+        if job_is_inconclusive_cancellation(&job) {
             findings.push(inconclusive_cancellation_finding(failure, Some(&job)));
         } else {
             actionable.push(job);
@@ -172,7 +222,13 @@ fn inconclusive_cancellation_finding(failure: &Value, job: Option<&Value>) -> Va
     }
     finding["investigated"] = json!(true);
     finding["evidence_state"] = json!("inconclusive");
-    finding["inconclusive_reason"] = json!("cancelled_without_failed_steps");
+    finding["inconclusive_reason"] = match job.and_then(job_concurrency_cancellation) {
+        Some(annotation) => {
+            finding["cancellation_annotation"] = json!(annotation);
+            json!("concurrency_cancelled")
+        }
+        None => json!("cancelled_without_failed_steps"),
+    };
     finding
 }
 
