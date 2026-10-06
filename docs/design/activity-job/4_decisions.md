@@ -1342,7 +1342,7 @@ Declare action names and their core-or-engine ownership once in `orbit-types`, g
 ## Job execution crosses one RuntimeHost boundary
 
 **Recorded:** 2026-08-09 07:21:03.861806Z · [ORB-10633]
-**Paths:** `crates/orbit-engine/src/context/hosts.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs`
+**Paths:** `crates/orbit-engine/src/context/hosts/runtime_host.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs`
 
 ### Context
 The job executor depended on a dispatcher host and a separate deterministic/task/environment/run host family, both implemented by OrbitRuntime. Keeping both families with a documented ownership rule was a real alternative, but it would preserve two call graphs and let capabilities drift between them.
