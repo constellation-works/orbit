@@ -41,6 +41,15 @@ spec:
     with the deciding config layer and the remedy in `detail`. A PR-mode
     delivery does not take that hold. The local-route pipeline admission
     still refuses the same combination if a delivery is submitted anyway.
+    A critical or high-priority task excluded only for a context-lock
+    conflict reserves its own surface: a task that the automatic order below
+    ranks behind it and whose surface overlaps it is withheld as
+    `surface_reserved`, with the reserving task as `locking_task_id`, so it
+    cannot take a lock the reserving task needs the moment that lock frees.
+    The reserving task's own `context_lock_conflict` exclusion carries a
+    `detail` saying so. At most two tasks reserve per pass, earliest in that
+    order first; a withheld task never reserves, and a reservation lapses as
+    soon as its task is admitted or leaves `backlog`.
     Automatic mode includes an `excluded` array that attributes pre-gate lock
     exclusions; it does not report status-based admission or `max_tasks`
     truncation. Explicit `task_ids` input is treated as an override and skips
@@ -115,12 +124,16 @@ spec:
             reason:
               type: string
               enum:
+                - active_pilot_preparation
+                - baseline_red_hold
                 - context_lock_conflict
                 - crew_not_allowed
                 - delivery_job_unavailable
                 - group_member_conflict
+                - host_os_mismatch
                 - inherited_only_epic_root
                 - local_route_before_pr
+                - surface_reserved
                 - unassessed_complexity
                 - unprepared
                 - pilot_duplicate

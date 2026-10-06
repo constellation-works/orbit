@@ -892,6 +892,7 @@ Acceptance criteria, not reported as passing.
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
+| Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
 | Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |

@@ -17,6 +17,8 @@
 //! Cancelling a live run is driven end to end as well: the launching CLI's
 //! worker observer and the cancelling CLI race on the signalled worker's exit,
 //! and the run must still end `cancelled`.
+//!
+//! A drain pass's surface reservation reaches readiness and `run show`.
 
 use crate::{fixture_crew, git_repo};
 
@@ -1442,4 +1444,141 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
         assert_eq!(fixture.run_state(stopped), "cancelled");
         assert_eq!(fixture.run_state(failed), "running");
     }
+}
+
+/// A surface reservation is visible where an operator looks for a waiting
+/// task [ORB-14310]: `run readiness` and the drain's `run show` both name the
+/// typed `surface_reserved` reason and the reserving task, from a real drain
+/// pass rather than a seeded record.
+#[test]
+fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
+    const CHILD: &str = "ORBIT_TEST_SURFACE_RESERVATION_CHILD";
+    const TEST: &str =
+        "run_observation::a_surface_reservation_reaches_readiness_and_drain_run_show";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(60),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    for file in ["held.rs", "shared.rs"] {
+        fs::write(fixture.work.join(file), "fixture\n").unwrap();
+    }
+    let add = |title: &str, status, priority, files: &[&str]| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: format!("Fixture task: {title}"),
+                acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+                plan: "Fixture plan.".to_string(),
+                context_files: files.iter().map(|file| format!("file:{file}")).collect(),
+                priority,
+                complexity: TaskComplexity::Medium,
+                task_type: Some(TaskType::Feature),
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    };
+    add(
+        "holder",
+        TaskStatus::InProgress,
+        TaskPriority::Medium,
+        &["held.rs"],
+    );
+    let critical = add(
+        "critical",
+        TaskStatus::Backlog,
+        TaskPriority::Critical,
+        &["held.rs", "shared.rs"],
+    );
+    let withheld = add(
+        "withheld",
+        TaskStatus::Backlog,
+        TaskPriority::Low,
+        &["shared.rs"],
+    );
+
+    let drain = "jrun-cli-surface-reservation";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![drain, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    runtime
+        .write_run_state(
+            drain,
+            &orbit_types::workflow::PipelineState::new(
+                drain.into(),
+                "workspace_auto_pipeline".into(),
+                serde_json::json!({}),
+            ),
+        )
+        .unwrap();
+    let wave = orbit_engine::RuntimeHost::run_deterministic(
+        &runtime,
+        "classify_workspace_auto_tasks",
+        &serde_json::json!({}),
+        &serde_json::json!({"run_id": drain, "max_active_leaf_runs": 2}),
+        orbit_tools::ToolContext::default(),
+    )
+    .unwrap();
+    assert_eq!(wave["loose_task_ids"], serde_json::json!([]), "{wave:#}");
+
+    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["task_id"] == withheld.as_str())
+        .expect("withheld task in readiness");
+    assert_eq!(entry["reason"], "surface_reserved", "{readiness:#}");
+    assert_eq!(entry["blocking_task_ids"], serde_json::json!([critical]));
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains(&format!(
+            "{withheld}: waiting (surface_reserved) blocked-by={critical}"
+        )),
+        "{text}"
+    );
+
+    let shown = fixture
+        .orbit()
+        .args(["run", "show", drain, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(shown.status.success());
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains(&format!(
+            "Task {withheld}: surface_reserved blocked-by={critical}"
+        )),
+        "{shown}"
+    );
 }
