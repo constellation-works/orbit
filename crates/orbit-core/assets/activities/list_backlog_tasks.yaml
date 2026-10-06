@@ -15,6 +15,14 @@ spec:
     Tasks with empty `context_files` are withheld as `unprepared` on automatic
     and explicit selection unless tagged exactly `no-diff-expected`. The
     `detail` directs task-pilot or an operator to prepare their context scope.
+    The latest applied task-pilot assessment's `duplicate_of` or
+    `already_landed` finding withholds automatic and explicit selection as
+    `pilot_duplicate` or `pilot_already_landed`, even when assessment did not
+    request lifecycle promotion. A newer clear assessment releases the hold,
+    as does a human task comment whose first line is
+    `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`.
+    A later assessment supersedes that operator decision; ordinary edits and
+    agent comments do not release the hold.
     Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
@@ -115,6 +123,8 @@ spec:
                 - local_route_before_pr
                 - unassessed_complexity
                 - unprepared
+                - pilot_duplicate
+                - pilot_already_landed
             detail:
               type: string
             conflicts:

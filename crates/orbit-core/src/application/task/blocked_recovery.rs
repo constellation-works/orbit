@@ -41,7 +41,6 @@ use orbit_common::OrbitError;
 use orbit_common::fs::git::run_git;
 use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::identity::{MACHINE_ID_PREFIX, agent_from_model, all_agent_families};
 use orbit_types::task::{ArtifactManifestFileV2, Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
@@ -50,7 +49,7 @@ use super::final_recovery::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
     FinalRecoveryTaskRevision,
 };
-use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD, RetryKey,
@@ -288,18 +287,6 @@ pub fn episode_disposition(
         return EpisodeDisposition::TooOld;
     }
     EpisodeDisposition::Eligible
-}
-
-/// Whether `label` is one of Orbit's own writers: the system, a machine (claim
-/// settlement), the task pilot, or an agent. Any other label — `human:<user>`,
-/// `operator`, an `ORBIT_ACTOR` or dashboard author — counts as a human.
-fn is_automation_actor(label: &str) -> bool {
-    let label = label.trim();
-    label == SYSTEM_ACTOR_LABEL
-        || label == "task-pilot"
-        || label.starts_with(MACHINE_ID_PREFIX)
-        || all_agent_families().contains(&label)
-        || agent_from_model(label).is_some()
 }
 
 /// The run input the backstop dispatches with; also how a recovery run finds
