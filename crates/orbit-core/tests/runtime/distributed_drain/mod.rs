@@ -58,6 +58,7 @@ mod admission;
 mod allow_crew;
 mod before_pr;
 mod cancel;
+mod candidate_carry;
 mod claimed_review;
 mod desktop_completion;
 mod failure_class;
@@ -160,6 +161,8 @@ impl Drop for ChildGuard {
 /// dropped after the owner committed it.
 struct Wire {
     owner: OrbitRuntime,
+    /// The machine whose trusted SSH session every call arrives under.
+    caller: String,
     calls: Mutex<Vec<(String, Value)>>,
     lose: Mutex<Vec<&'static str>>,
     /// The selector of every task read, in order.
@@ -303,7 +306,7 @@ impl DrainOwnerTransport for Wire {
             return Ok(json!({"phase": "handed_off"}));
         }
         let session = ToolSessionContext {
-            caller_machine_id: Some(FOLLOWER.to_string()),
+            caller_machine_id: Some(self.caller.clone()),
             process_machine_id: Some(OWNER.to_string()),
             transport: Some(McpTransport::SshMcp),
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
@@ -374,7 +377,7 @@ impl OwnerCoordinator for NoWorkerRoute {
 }
 
 struct Pair {
-    _root: TempDir,
+    _root: Arc<TempDir>,
     wire: Arc<Wire>,
     owner_repo: PathBuf,
     follower: OrbitRuntime,
@@ -473,9 +476,34 @@ impl Pair {
             .enumerate()
             .map(|(n, crew)| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), *crew))
             .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
+    }
+
+    /// A second follower host of this pair's owner: its own runtime,
+    /// repository and object store, reaching the owner as `machine`
+    /// [ORB-14338].
+    fn another_host(&self, machine: &str) -> Self {
+        Self::follower_of(
+            self._root.clone(),
+            self.wire.owner.clone(),
+            self.owner_repo.clone(),
+            self.tasks.clone(),
+            machine,
+        )
+    }
+
+    /// A replica follower `machine` routed to `owner`.
+    fn follower_of(
+        root: Arc<TempDir>,
+        owner: OrbitRuntime,
+        owner_repo: PathBuf,
+        tasks: Vec<String>,
+        machine: &str,
+    ) -> Self {
         let workspace_id = owner.workspace_id().unwrap();
         let wire = Arc::new(Wire {
             owner,
+            caller: machine.to_string(),
             calls: Mutex::default(),
             lose: Mutex::default(),
             task_reads: Mutex::default(),
@@ -487,7 +515,7 @@ impl Pair {
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
         });
-        let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
+        let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower
             .with_coordination_write_owner(Some(OWNER.into()))
             .with_drain_owner_transport(wire.clone());
@@ -515,7 +543,7 @@ impl Pair {
                 "owner_machine_id": OWNER,
                 "owner_workspace_id": workspace_id,
                 "selector": format!("{OWNER}/{workspace_id}"),
-                "execution_machine_id": FOLLOWER,
+                "execution_machine_id": machine,
             }),
             tasks,
         }

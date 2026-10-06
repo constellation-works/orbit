@@ -65,6 +65,7 @@ macro_rules! deterministic_action_catalog {
             engine {
                 CandidateResume => "candidate_resume",
                 CandidateValidate => "candidate_validate",
+                ClaimCandidateCarry => "claim_candidate_carry",
                 ClaimHandoff => "claim_handoff",
                 ClaimValidate => "claim_validate",
                 CollectCiEvidence => "collect_ci_evidence",

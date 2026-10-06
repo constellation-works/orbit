@@ -620,7 +620,7 @@ pub struct ClaimFailure {
     /// The crew the leaf ran as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// The candidate the leaf published before it ended, so a later claim
+    /// The candidate the leaf committed before it ended, so a later claim
     /// can start from it rather than from the base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<ClaimCandidateRef>,
@@ -628,7 +628,8 @@ pub struct ClaimFailure {
 
 /// The committed candidate a claimed leaf ended with: the branch it pushed,
 /// or, before its push, the local branch it prepared — so a base conflict at
-/// synchronization keeps it too.
+/// synchronization keeps it too — or, for a claimed-local leaf, its committed
+/// worktree branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimCandidateRef {
     pub branch: String,
@@ -643,10 +644,57 @@ pub struct ClaimCandidateRef {
     /// picks its repair trigger from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_step_id: Option<String>,
-    /// Whether the branch reached `origin`. A local-only candidate resumes
-    /// only on the host that made it; elsewhere the next leaf starts fresh.
+    /// Whether the branch reached `origin`. A candidate that did not, and
+    /// has no [`Self::durable_ref`], resumes only on the host that made it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub published: bool,
+    /// [ORB-14338] The ref on `origin` the leaf pushed its unpublished
+    /// candidate to before it ended (`refs/orbit/candidates/<task>/<run>`),
+    /// so a claim on any host can fetch it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable_ref: Option<String>,
+    /// [ORB-14338] Why the leaf could not push its unpublished candidate to a
+    /// durable ref; the candidate stays on the host that made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_failure: Option<String>,
+}
+
+impl ClaimCandidateRef {
+    /// Whether a host other than the one that made it can fetch the
+    /// candidate from `origin`: its branch was pushed, or the leaf carried it
+    /// to a durable ref [ORB-14338].
+    #[must_use]
+    pub fn durable(&self) -> bool {
+        self.published || self.durable_ref.is_some()
+    }
+}
+
+/// Why the owner handed a claim no kept candidate, so its leaf implements the
+/// task afresh [ORB-14338]. The owner records it in the task's history as a
+/// `candidate_resume` event rather than falling back silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateFreshReason {
+    /// The candidate was never pushed and could not be made durable, and
+    /// the claim runs on a host other than the one that made it.
+    NotDurable,
+    /// The task's description, acceptance criteria or selectors changed
+    /// since the candidate was kept.
+    SpecChanged,
+    /// An operator discarded the candidate since it was kept.
+    Discarded,
+}
+
+impl CandidateFreshReason {
+    /// The reason's wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotDurable => "not_durable",
+            Self::SpecChanged => "spec_changed",
+            Self::Discarded => "discarded",
+        }
+    }
 }
 
 /// A candidate the owner kept from a claim's failure or release, with the

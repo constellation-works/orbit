@@ -6,6 +6,10 @@ use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process
 use serde_json::{Value, json};
 
 pub(crate) const PUSH: &str = "push";
+/// [ORB-14338] Push one commit to a run-owned `refs/orbit/candidates/` ref.
+pub(crate) const CANDIDATE_REF_PUSH: &str = "push.candidate_ref";
+/// The namespace a carried candidate ref lives under on `origin`.
+pub(crate) const CANDIDATE_REF_PREFIX: &str = "refs/orbit/candidates/";
 pub(crate) const PR_LIST: &str = "pr.list";
 pub(crate) const PR_CREATE: &str = "pr.create";
 pub(crate) const PR_VIEW: &str = "pr.view";
@@ -39,6 +43,7 @@ pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
 pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
     match operation {
         PUSH => push(input),
+        CANDIDATE_REF_PUSH => push_candidate_ref(input),
         PR_LIST => pr_list(input),
         PR_CREATE => pr_create(input),
         PR_VIEW => pr_view(input),
@@ -86,6 +91,61 @@ fn push(input: &Value) -> Result<Value, OrbitError> {
         "stdout": result.stdout,
         "stderr": result.stderr,
     }))
+}
+
+/// Push `head_sha` to `target_ref` on `origin`, replacing whatever the ref
+/// held: the ref is owned by the one run named in it.
+fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
+    let repo_root = required_string(input, "repo_root")?;
+    let head_sha = required_string(input, "head_sha")?;
+    let target_ref = required_string(input, "target_ref")?;
+    if !valid_expected_remote_sha(Some(head_sha)) {
+        return Err(OrbitError::InvalidInput(
+            "private automation VCS candidate push requires an exact 40- or 64-character head_sha"
+                .to_string(),
+        ));
+    }
+    if !valid_candidate_ref(target_ref) {
+        return Err(OrbitError::InvalidInput(format!(
+            "private automation VCS candidate push target must be a plain ref under \
+             '{CANDIDATE_REF_PREFIX}'"
+        )));
+    }
+    let result = execute(
+        "git",
+        vec![
+            "push".to_string(),
+            "--".to_string(),
+            "origin".to_string(),
+            format!("+{head_sha}:{target_ref}"),
+        ],
+        Some(Path::new(repo_root)),
+        LONG_TIMEOUT_MS,
+        "candidate ref push",
+    )?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }))
+}
+
+/// Whether `value` is a ref under [`CANDIDATE_REF_PREFIX`] made of plain
+/// path segments, so it can be neither an option nor a refspec.
+pub(crate) fn valid_candidate_ref(value: &str) -> bool {
+    value
+        .strip_prefix(CANDIDATE_REF_PREFIX)
+        .is_some_and(|rest| {
+            !rest.is_empty()
+                && rest.split('/').all(|segment| {
+                    !segment.is_empty()
+                        && !segment.starts_with('.')
+                        && !segment.ends_with(".lock")
+                        && segment.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                        })
+                        && !segment.contains("..")
+                })
+        })
 }
 
 fn pr_list(input: &Value) -> Result<Value, OrbitError> {

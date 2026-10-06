@@ -3,6 +3,7 @@
 //! the settle-only passes any follower process runs [ORB-13663].
 
 pub(crate) mod adapters;
+mod candidate;
 pub(crate) mod drain;
 pub(crate) mod refill;
 pub(crate) mod settle;

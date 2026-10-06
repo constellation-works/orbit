@@ -112,7 +112,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 /// that reached no publication target at all. Failing here keeps a failed push
 /// distinguishable from a successful one even if something outside the pipeline
 /// wrote that remote into the repository's configuration [ORB-12103].
-fn ensure_origin_publishes_elsewhere(
+pub(super) fn ensure_origin_publishes_elsewhere(
     workspace_path: &Path,
     branch: &str,
 ) -> Result<(), OrbitError> {

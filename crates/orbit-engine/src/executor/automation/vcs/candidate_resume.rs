@@ -28,19 +28,22 @@
 //! Whenever a candidate was found, the outcome, source run and SHA are also
 //! written to the task's history.
 //!
-//! A claimed leaf (`claimed: true`) resumes the candidate its owner kept from
-//! the task's last claim [ORB-14257] instead, handed in as `candidate`: the
-//! owner already retired a discarded one or one whose spec changed, and the
-//! task's history is the owner's, so neither is consulted here. The claimed
-//! implementer always runs, because the handoff carries its summary: a clean
-//! apply is `resumed_repaired` with trigger `continuation` (or `review` when
-//! the before-PR review refused it), and
-//! the leaf's own validation judges the result.
+//! A claimed leaf (`claimed: true`), PR or owner-local, resumes the candidate
+//! its owner kept from the task's last claim [ORB-14257] [ORB-14338] instead,
+//! handed in as `candidate`: the owner already retired a discarded one, one
+//! whose spec changed and one this host cannot fetch, recording why in the
+//! task's history, which is the owner's, so none of that is consulted here.
+//! A candidate absent from this object store is fetched from `origin` — from
+//! the durable ref its leaf carried it to (`durable_ref`), else its branch.
+//! The claimed implementer always runs, because the handoff carries its
+//! summary: a clean apply is `resumed_repaired` with trigger `continuation`
+//! (or `review` when the before-PR review refused it), and the leaf's own
+//! validation judges the result.
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task};
+use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT, Task};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -50,9 +53,8 @@ use crate::executor::automation::input::{
 
 use super::baseline::{compare_with_base, run_validation_command};
 use super::git::{git_command_success, git_output, git_run, git_success};
+use super::operations::valid_candidate_ref;
 
-/// Task history event recording what a run did with a preserved candidate.
-const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 /// `pr_failure_handoff` decisions that leave a candidate on a branch.
 const PRESERVING_DECISIONS: &[&str] = &[
     "blocked_failure_pr",
@@ -118,6 +120,9 @@ struct Candidate {
     run_id: String,
     branch: String,
     head_sha: String,
+    /// [ORB-14338] The ref on `origin` a claimed leaf carried the candidate
+    /// to, fetched in place of its branch.
+    durable_ref: Option<String>,
     failed_step_id: String,
     needs_review_repair: bool,
 }
@@ -216,6 +221,8 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
             .unwrap_or_else(|| "an earlier claim".to_string()),
         branch,
         head_sha,
+        durable_ref: input_string_field(preserved, "durable_ref")
+            .filter(|reference| valid_candidate_ref(reference)),
         needs_review_repair: failed_step_id == REVIEW_VERDICT_STEP,
         failed_step_id,
     };
@@ -270,6 +277,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         run_id: prior_run_id.clone(),
         branch,
         head_sha: head_sha.clone(),
+        durable_ref: None,
         failed_step_id: checkpoint.failed_step_id,
         needs_review_repair: evidence["decision"] == "blocked_review_gate",
     };
@@ -310,9 +318,13 @@ fn resume<H: RuntimeHost + ?Sized>(
     claimed: bool,
 ) -> Result<Outcome, OrbitError> {
     if !candidate_available(workspace_path, candidate)? {
+        let source = match &candidate.durable_ref {
+            Some(reference) => format!("durable ref '{reference}'"),
+            None => format!("branch '{}'", candidate.branch),
+        };
         return Ok(Outcome::Fresh(format!(
-            "candidate {} (branch '{}') is not available in this repository",
-            candidate.head_sha, candidate.branch
+            "candidate {} ({source}) is not available in this repository",
+            candidate.head_sha
         )));
     }
     let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
@@ -452,15 +464,19 @@ fn implementation_completed(failed_step_id: &str) -> bool {
     COMPLETED_IMPLEMENTATION_STEPS.contains(&failed_step_id)
 }
 
-/// Whether the candidate commit is in the object store, fetching its branch
-/// from `origin` once when it is not (worktree GC may have pruned the local
-/// branch after the handoff pushed it).
+/// Whether the candidate commit is in the object store, fetching it from
+/// `origin` once when it is not: from the durable ref a claimed leaf carried
+/// it to on another host [ORB-14338], else its branch (worktree GC may have
+/// pruned the local branch after the handoff pushed it).
 fn candidate_available(workspace_path: &Path, candidate: &Candidate) -> Result<bool, OrbitError> {
     let object = format!("{}^{{commit}}", candidate.head_sha);
     if git_command_success(workspace_path, &["cat-file", "-e", &object])? {
         return Ok(true);
     }
-    let refspec = format!("refs/heads/{}", candidate.branch);
+    let refspec = candidate
+        .durable_ref
+        .clone()
+        .unwrap_or_else(|| format!("refs/heads/{}", candidate.branch));
     let _ = git_run(workspace_path, &["fetch", "--no-tags", "origin", &refspec])?;
     git_command_success(workspace_path, &["cat-file", "-e", &object])
 }

@@ -22,9 +22,12 @@
 # ORB-14257: a leaf that ends after committing names its candidate in its
 # failure settlement, and the owner keeps it. The task's next claim carries it
 # as `resume_candidate`; the `resume_candidate` step applies it onto the new
-# base so the implementer continues it rather than starting over. A candidate
-# this host cannot fetch (never pushed, made on another follower) implements
-# fresh until ORB-14338 makes it durable across hosts.
+# base so the implementer continues it rather than starting over.
+# ORB-14338: when a step fails before `push`, the `failure_activity`
+# (`claim_candidate_carry`) pushes the committed candidate to
+# `refs/orbit/candidates/<task>/<run>` on `origin`, so a claim on any host can
+# fetch it. One it could not carry resumes only on this host; the owner gives
+# a claim elsewhere none and records why in the task's history.
 #
 # ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base
@@ -60,6 +63,9 @@ spec:
   # owner, carried by the claim's failure settlement — never written here.
   # An empty crew pool skips it.
   final_recovery_activity: final_recovery
+  # [ORB-14338] Carry a committed, unpublished candidate to a durable ref on
+  # `origin` for the task's next claim, on whatever host it runs.
+  failure_activity: claim_candidate_carry
   default_input:
     task_ids: []
     base_branch: main

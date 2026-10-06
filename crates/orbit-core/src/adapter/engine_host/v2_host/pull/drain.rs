@@ -5,9 +5,9 @@ use std::cell::RefCell;
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
-    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimCandidateRef, ClaimEvidence,
-    ClaimFailure, ClaimFinalRecovery, ClaimMutation, JobRunStoreBackend, LocalPullAdmission,
-    LocalPullMutation, LocalPullPhase, ProviderUnavailable, PullDestination, SettlementRefusal,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimFailure,
+    ClaimFinalRecovery, ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
+    LocalPullPhase, ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FinalRecoveryDecision, JobRunState,
@@ -16,6 +16,9 @@ use orbit_types::workflow::{
     is_baseline_red_failure,
 };
 
+use super::candidate::{
+    SYNC_BASE_STEP, candidate_note, first_incomplete_step, preserved_candidate,
+};
 use crate::application::distributed::{
     is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
 };
@@ -1051,7 +1054,7 @@ fn leaf_failure(
                 })
             })
     };
-    let stopped_at = state.and_then(first_incomplete_step);
+    let stopped_at = state.and_then(|state| first_incomplete_step(run, state));
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
             .and_then(|step| step.error_message.clone())
@@ -1107,78 +1110,6 @@ const FAILURE_MARKERS: [&str; 6] = [
     BASELINE_RED_MARKER,
     TRANSIENT_FAILURE_MARKER,
 ];
-
-/// The claimed PR leaf's base synchronization step.
-const SYNC_BASE_STEP: &str = "sync_base";
-
-/// The claimed leaves' steps in order, from the commit on: a step a leaf's
-/// pipeline state holds no output for did not complete. `review` is absent
-/// because it is skipped when no before-PR review applies.
-const CLAIMED_DELIVERY_STEPS: [&str; 9] = [
-    "commit",
-    "prepare_branch",
-    SYNC_BASE_STEP,
-    "review_gate_admit",
-    "review_gate_settle",
-    "validate",
-    "push",
-    "pr_open",
-    "pin_validation",
-];
-
-/// The first delivery step the leaf did not complete, from its pipeline
-/// state; `None` when it stopped before its commit or after them all.
-fn first_incomplete_step(state: &PipelineState) -> Option<&'static str> {
-    let done = |step: &str| {
-        state
-            .pipeline
-            .get(step)
-            .is_some_and(|output| !output.is_null())
-    };
-    if !done("commit") {
-        return None;
-    }
-    CLAIMED_DELIVERY_STEPS.into_iter().find(|step| !done(step))
-}
-
-/// The committed candidate the leaf ended with, from its pipeline state
-/// [ORB-14257]: the branch it pushed, with the pull request it opened for
-/// it; before its push, the branch it synchronized onto the base, or —
-/// when synchronization itself stopped it — the branch it prepared. `None`
-/// before its commit.
-fn preserved_candidate(
-    run: &orbit_types::workflow::JobRun,
-    state: &PipelineState,
-) -> Option<ClaimCandidateRef> {
-    let text = |step: &str, field: &str| {
-        state
-            .pipeline
-            .get(step)
-            .and_then(|output| output.get(field))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
-    let both =
-        |step: &str, branch: &str, head: &str| Some((text(step, branch)?, text(step, head)?));
-    let (published, (branch, head_sha)) = match both("push", "branch", "local_sha") {
-        Some(pushed) => (true, pushed),
-        None => (
-            false,
-            both(SYNC_BASE_STEP, "head", "head_sha")
-                .or_else(|| both("prepare_branch", "head", "head_sha"))?,
-        ),
-    };
-    Some(ClaimCandidateRef {
-        branch,
-        head_sha,
-        pull_request: text("pr_open", "pr_number"),
-        source_run_id: Some(run.run_id.clone()),
-        failed_step_id: first_incomplete_step(state).map(str::to_string),
-        published,
-    })
-}
 
 /// The baseline hold a terminal leaf failed on: a failed step, or the
 /// terminalizing caller's own diagnostic, carrying the typed
@@ -1277,27 +1208,6 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
     }
     why.push_str(&candidate_note(failure));
     why
-}
-
-/// Where the failure's candidate is kept for the next claim, if it has one.
-fn candidate_note(failure: &ClaimFailure) -> String {
-    let Some(candidate) = &failure.candidate else {
-        return String::new();
-    };
-    let mut note = format!(
-        "; its candidate is preserved as `{}` at {}{}, and the task's next claim resumes it",
-        candidate.branch,
-        candidate.head_sha,
-        if candidate.published {
-            ""
-        } else {
-            " on this host"
-        }
-    );
-    if let Some(pull_request) = &candidate.pull_request {
-        note.push_str(&format!(" (pull request #{pull_request})"));
-    }
-    note
 }
 
 /// Hand an unfinished claim back to the owner: the task returns to the

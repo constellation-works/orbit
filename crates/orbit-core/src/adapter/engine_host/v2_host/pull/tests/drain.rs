@@ -32,6 +32,11 @@ struct Peer {
     unreachable: Cell<bool>,
     /// Let this many requests through, then answer the rest as unreachable.
     fail_requests_after: Cell<Option<usize>>,
+    /// The candidate the owner kept from the task's last claim, offered with
+    /// every claim.
+    resume_candidate: RefCell<Option<ClaimCandidateRef>>,
+    /// Every settlement delivered, in order.
+    settled: RefCell<Vec<ClaimMutation>>,
 }
 impl Peer {
     /// Count a call and answer it as the transport would when the owner is
@@ -98,7 +103,7 @@ impl PullPeer for Peer {
                     complexity: None,
                     crew: None,
                     context_files: vec!["file:src.rs".into()],
-                    resume_candidate: None,
+                    resume_candidate: self.resume_candidate.borrow().clone(),
                 }),
                 invalid_candidates: vec![],
                 deferred_conflicts: vec![],
@@ -161,6 +166,9 @@ impl PullPeer for Peer {
             });
         }
         self.settlements.set(self.settlements.get() + 1);
+        self.settled
+            .borrow_mut()
+            .extend(admission.settlement.clone());
         Ok(())
     }
     fn lookup(
@@ -328,6 +336,113 @@ fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
     let pass = drain.refill_pass(&destination, &|| Ok(Some(template.clone())), &failing, 3);
     assert!(pass.error.is_some(), "an unreadable stop ends the pass");
     assert_eq!(peer.requests.get(), 1);
+}
+
+/// [ORB-14338] A claimed owner-local leaf is handed the candidate its claim
+/// carries, and when it fails after its commit, its settlement keeps the
+/// committed worktree branch at the commit checkpoint for the next claim.
+#[test]
+fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let kept = ClaimCandidateRef {
+        branch: "orbit/task-earlier".into(),
+        head_sha: "a".repeat(40),
+        pull_request: None,
+        source_run_id: Some("jrun-earlier".into()),
+        failed_step_id: Some("validate".into()),
+        published: false,
+        durable_ref: None,
+        carry_failure: None,
+    };
+    let peer = Peer {
+        resume_candidate: RefCell::new(Some(kept.clone())),
+        ..Peer::default()
+    };
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+        refused_delivery: RefusedDelivery::WhenDue,
+    };
+    drain.refill(&destination, &template, 1).expect("admit");
+    let [leaf] = jobs
+        .list_job_runs("task_claimed_local_pipeline")
+        .expect("leaves")
+        .try_into()
+        .expect("one claimed-local leaf");
+    let input = leaf.input.clone().expect("leaf input");
+    assert_eq!(
+        serde_json::from_value::<ClaimCandidateRef>(input["resume_candidate"].clone())
+            .expect("the leaf input carries the candidate"),
+        kept
+    );
+
+    let committed = "b".repeat(40);
+    let mut state = jobs
+        .read_run_state(&leaf.run_id)
+        .expect("state")
+        .unwrap_or_else(|| {
+            PipelineState::new(leaf.run_id.clone(), leaf.job_id.clone(), input.clone())
+        });
+    state.pipeline["worktree"] = serde_json::json!({"head_ref": "orbit/task-local"});
+    state.pipeline["commit"] = serde_json::json!({"commit_sha": committed});
+    jobs.write_run_state(&leaf.run_id, &state).expect("state");
+    let now = Utc::now();
+    jobs.mark_job_run_running(&leaf.run_id, now, std::process::id())
+        .expect("leaf running");
+    jobs.complete_job_run_step(
+        &leaf.run_id,
+        &JobRunStepParams {
+            step_index: 3,
+            target_type: orbit_types::workflow::JobTargetType::Activity,
+            target_id: "validate".into(),
+            started_at: now,
+            finished_at: now,
+            duration_ms: None,
+            exit_code: Some(1),
+            agent_response_json: None,
+            state: orbit_types::workflow::JobRunState::Failed,
+            error_code: None,
+            error_message: Some(
+                "[validation_environment] required validation could not run: cargo is missing"
+                    .into(),
+            ),
+        },
+    )
+    .expect("failed step");
+    jobs.finalize_job_run(
+        &leaf.run_id,
+        orbit_types::workflow::JobRunState::Failed,
+        now,
+        None,
+    )
+    .expect("leaf failed");
+    drain.reconcile_pending(&destination).expect("settle");
+
+    let settled = peer.settled.borrow();
+    let [ClaimMutation::Release(evidence)] = settled.as_slice() else {
+        panic!("one release: {settled:?}");
+    };
+    let candidate = evidence
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.candidate.as_ref())
+        .expect("the release keeps the committed candidate");
+    assert_eq!(candidate.branch, "orbit/task-local");
+    assert_eq!(candidate.head_sha, committed);
+    assert_eq!(candidate.failed_step_id.as_deref(), Some("validate"));
+    assert_eq!(
+        candidate.source_run_id.as_deref(),
+        Some(leaf.run_id.as_str())
+    );
 }
 
 pub(super) fn isolated_pull_test(name: &str) -> bool {

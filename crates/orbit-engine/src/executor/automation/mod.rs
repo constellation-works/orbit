@@ -72,6 +72,7 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::TaskComplete => task_update::task_complete(host, input),
 
         // ---- generic built-in actions ----
+        EngineDeterministicAction::ClaimCandidateCarry => vcs::claim_candidate_carry(host, input),
         EngineDeterministicAction::ClaimHandoff => vcs::claim_handoff(host, input),
         EngineDeterministicAction::ClaimValidate => vcs::claim_validate(host, input),
         EngineDeterministicAction::CandidateResume => vcs::candidate_resume(host, input),
