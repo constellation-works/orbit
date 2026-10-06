@@ -39,7 +39,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 ## Local Rust CodeQL checks
 
-For Rust changes in this repository, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`. Its extraction checks are required evidence; a query result from incomplete semantic extraction cannot confirm a repair.
+For Rust changes in this repository, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`. Its extraction checks are required evidence; a query result from incomplete semantic extraction cannot confirm a repair. Only a Linux host can extract every module: elsewhere the script exits 3 without running, and the check is owed by a Linux run recorded as `codeql` external evidence (runbook, Non-Linux hosts).
 
 ## Orbit Workflow
 

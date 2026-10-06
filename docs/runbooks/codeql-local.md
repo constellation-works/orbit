@@ -3,7 +3,7 @@ type: runbook
 summary: Confirm Rust Code scanning repairs locally with isolated toolchain preparation and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-05
+last_validated: 2026-10-06
 ---
 
 # Confirm a Rust Code scanning repair locally
@@ -23,6 +23,9 @@ The default extractor toolchain is **Rust 1.97.0 plus rust-src**, confirmed for
 CodeQL **2.27.1**. This is separate from the repository's build toolchain. For
 another bundle, inspect its extractor's requested version and pass
 `--toolchain <version>`; do not substitute the host's installed stable version.
+
+Run it on Linux, the platform of the hosted CodeQL job. Other hosts cannot
+produce a complete run; see [Non-Linux hosts](#non-linux-hosts).
 
 ## Procedure
 
@@ -117,7 +120,33 @@ pulled into another module with `include!` is not a module of its own, so the
 extractor skips its semantic analysis and the run refuses; declare it with
 `mod` instead of excluding it. A failed query's partial SARIF is also unusable.
 
-The behavior tests use stubbed CodeQL and rustup without downloads. The
+## Non-Linux hosts
+
+Production modules gated on `#[cfg(target_os = "linux")]`, such as the Linux
+sandbox, Landlock and runtime modules, are outside the active cfg on any other
+host. A macOS extractor therefore always skips their semantic analysis, and a
+run there could never pass the extraction checks above. On a host whose
+`uname -s` is not `Linux`, the script exits 3 before preparing anything: no
+toolchain, database or query. On Linux every production module is active, so
+a skipped one is always the refusal above (exit 1), never a platform exclusion.
+
+Exit 3 is neither a failed check nor confirmation; the check is owed by a Linux
+run of the same command. Record the exact command as a `required` validation
+with outcome `not_run`, noting the exit-3 platform refusal. An implementer
+reports it as not run for that reason. A reviewer whose remaining work is only
+this check returns `incomplete` with an `external_evidence` entry of kind
+`codeql`, name `Linux CodeQL (rust)`, that exact command, and the result
+artifact `evidence/codeql-rust-linux.json`. Settlement then holds the review
+for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). A Linux
+host fulfils the hold by running that command at the held candidate commit,
+inspecting `results.sarif` as above, and attaching the result and its log
+artifact; fresh review then verifies them. The hosted `CodeQL / Analyze (rust)`
+job runs only for pull requests and pushes to `main` and `agent-main`, so it
+cannot supply evidence for a candidate before its PR opens.
+
+## Behavior tests
+
+The behavior tests use stubbed CodeQL, rustup and host platform without downloads. The
 stubbed CodeQL enumerates a fixture checkout's sources with the effective
 configuration, including build, scratch, and toolchain residue, and an earlier
 run under another scratch:

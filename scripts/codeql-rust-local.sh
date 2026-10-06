@@ -7,6 +7,7 @@ usage() {
 Usage: scripts/codeql-rust-local.sh [--ram MB] [--toolchain VERSION] QUERY_OR_SUITE
 
 Run against this checkout using codeql and rustup already on PATH.
+Linux hosts only: elsewhere it exits 3 before preparing anything.
 Default: --ram 16384 --toolchain 1.97.0 (CodeQL 2.27.1 extractor).
 QUERY_OR_SUITE is a CodeQL pack selector, .ql file, or .qls suite.
 All preparation, caches, logs, database and SARIF stay in a new directory
@@ -42,6 +43,17 @@ done
 [[ -n "$query" ]] || { usage >&2; exit 2; }
 [[ "$ram" =~ ^[1-9][0-9]*$ ]] || fail "--ram must be a positive number of MiB"
 [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[[:alnum:]-]+)?$ ]] || fail "--toolchain must name a pinned Rust version"
+
+# Production modules gated on target_os = "linux" are outside the active cfg on
+# any other host, so its extractor always skips their semantic analysis and no
+# run there can be complete. Refuse with a distinct status before preparing
+# anything; the check is owed by a Linux run of the same command.
+host_os="$(uname -s)" || fail "cannot determine the host platform"
+if [[ "$host_os" != Linux ]]; then
+  echo "codeql-rust-local: host platform $host_os cannot extract the Linux-only Rust modules with semantic analysis, so a local run here is never complete; nothing was prepared or queried. Record this exact command as a required not_run check and name a Linux run of it as kind codeql external evidence (docs/runbooks/codeql-local.md, Non-Linux hosts)" >&2
+  exit 3
+fi
+
 command -v codeql >/dev/null || fail "codeql is required on PATH (use an existing CodeQL bundle)"
 command -v rustup >/dev/null || fail "rustup is required on PATH to prepare Rust $toolchain"
 
