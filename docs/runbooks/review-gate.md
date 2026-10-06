@@ -2,7 +2,7 @@
 type: runbook
 summary: Inspect before-PR review verdicts, findings, and evidence holds, then decide how to resume a task.
 tags: [operations, review-gate, delivery]
-paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
+paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194"]
 last_validated: 2026-10-06

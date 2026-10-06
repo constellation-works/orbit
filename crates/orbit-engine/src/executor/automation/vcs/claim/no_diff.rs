@@ -1,6 +1,23 @@
 //! Clean-base delivery for claimed leaves. The report is the existing verifier's
 //! checkpoint, not an agent's skip flag; the owner rechecks it on its own base.
-use super::*;
+use std::path::Path;
+
+use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
+use orbit_types::workflow::handoff::{
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, TaskHandoff,
+};
+use serde_json::{Value, json};
+
+use crate::context::{ClaimExecutionContext, RuntimeHost};
+
+use super::super::baseline::run_validation_command;
+use super::super::git::{BaseSyncMode, resolve_worktree_start_point};
+use super::super::review_gate::revision;
+use super::delivery::repository;
+use super::input::refused;
+use super::observe::{observe_with, require_clean_candidate};
+use super::validation::{attach_handoff_logs, claim_failure, passed_output};
 use crate::executor::automation::vcs::commit::{
     verified_clean_tree_checkpoint, verify_clean_tree_handoff,
     verify_clean_tree_handoff_at_revision,

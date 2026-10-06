@@ -796,7 +796,7 @@ ORB-10557's env gate is left in place: it is a cheap first line of defense for t
 ## Classify independent-review startup separately from reviewer rejection
 
 **Recorded:** 2026-08-08 20:34:04.798005Z · [ORB-10606]
-**Paths:** `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`, `crates/orbit-core/src/runtime/v2_host/pipeline_actions.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure.rs`
+**Paths:** `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`, `crates/orbit-core/src/runtime/v2_host/pipeline_actions.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs`
 
 ### Context
 A parent shipment previously treated every failed review child identically, so a pre-review infrastructure failure triggered the same blocked/manual-reconciliation handoff as a reviewer rejection. The alternatives were to keep generic child-status gating, weaken the worktree guard, or make the review boundary classify whether a durable reviewer checkpoint exists.
