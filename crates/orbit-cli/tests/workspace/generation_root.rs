@@ -239,7 +239,9 @@ fn preflight_with_root_reports_both_authorities_when_home_orbit_is_writable() {
     let work = temp.path().join("work");
     let scratch = temp.path().join("scratch");
     fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&work).expect("create work");
+    crate::git_repo::init(&work);
+    // Stop walk-up without adding an initialized cwd workspace authority.
+    fs::create_dir_all(work.join(".orbit")).expect("uninitialized lookup boundary");
     let home_orbit = home.join(".orbit");
     fs::create_dir_all(&home_orbit).expect("create home orbit");
 
@@ -385,7 +387,7 @@ impl PreflightTrees {
         let work = temp.path().join("work");
         let scratch = temp.path().join("scratch");
         fs::create_dir_all(&home).expect("create home");
-        fs::create_dir_all(&work).expect("create work");
+        crate::git_repo::init(&work);
         fs::create_dir_all(&scratch).expect("create scratch");
         let home_orbit = home.join(".orbit");
         fs::create_dir_all(&home_orbit).expect("create home orbit");
