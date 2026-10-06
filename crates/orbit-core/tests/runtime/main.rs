@@ -26,6 +26,7 @@ mod step_recovery;
 
 mod host_os_routing;
 mod host_resources;
+mod implement_blocker;
 mod invocation_metrics;
 mod local_route_before_pr;
 mod plugin_inspection;

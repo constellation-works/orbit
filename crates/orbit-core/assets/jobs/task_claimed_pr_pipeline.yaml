@@ -16,7 +16,8 @@
 # and attaches the logs. A failure the base shares (`baseline_red`) releases
 # the claim with a hold instead of failing it; the candidate stays in this
 # host's worktree and the owner keeps the task in its backlog until the base
-# moves.
+# moves. A typed implementer blocker (`task_blocked_by_agent`) stops the leaf
+# before the next step and before final recovery.
 #
 # ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base

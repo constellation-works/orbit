@@ -159,6 +159,20 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pipeline.worktree.workspace_path",
     )?;
 
+    // [ORB-14269] The implementer declared a blocker before commit. The
+    // worktree may be dirty. Leave it: do not abort a rebase, commit, push,
+    // or open a `[BLOCKED]` PR. Checked before those mutations.
+    if orbit_types::workflow::is_task_blocked_by_agent(Some(error_code), Some(error_message)) {
+        return preserve_agent_blocked_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
+    }
+
     let mut conflicting_paths = unmerged_paths(&workspace_path)?;
     // [ORB-13455] Task and run ownership do not prove this run started the
     // Git rebase. Only the rebase `sync_base` started from the prepared
@@ -343,6 +357,83 @@ fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
     task_id: &str,
 ) -> Result<String, OrbitError> {
     Ok(host.get_task(task_id)?.spec_digest())
+}
+
+/// Keep a worktree whose implementer declared a blocker [ORB-14269].
+///
+/// Unlike a validation-environment failure, the tree may still be dirty:
+/// nothing is committed, pushed, or published. The task is blocked under
+/// [`TASK_BLOCKED_BY_AGENT_EVENT`](orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT)
+/// with the kind in the note. Resume does not undo that block.
+fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let kind = orbit_types::workflow::task_blocked_by_agent_kind(error_message)
+        .unwrap_or("unspecified")
+        .to_string();
+    let diagnostic = error_message.trim();
+    let cut = orbit_common::text::floor_char_boundary(
+        diagnostic,
+        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
+    );
+    let note = format!(
+        "{} kind={kind} implementer declared a blocker: run={run_id}, \
+         failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; no PR was opened",
+        orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER
+    );
+    let body = format!(
+        "## Implementer blocker\n\nThe implementer stopped with kind `{kind}` and asked the run \
+         not to continue. No repair ran, no review budget was spent, nothing was committed or \
+         pushed, and no PR was opened. The worktree still holds the candidate as the implementer \
+         left it, including uncommitted files.\n\n- Run: `{run_id}`\n- Failed step: \
+         `{failed_step_id}`\n- Kind: `{kind}`\n- Branch: `{branch}`\n- Head: `{head_sha}`\n\n\
+         Move the task back to `in-progress` once the blocker is gone, then resume the run if the \
+         candidate should continue.\n\n## Failure\n\n```text\n{}{}\n```",
+        &diagnostic[..cut],
+        if cut < diagnostic.len() {
+            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
+        } else {
+            String::new()
+        }
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT.to_string()),
+            status_note: Some(note.clone()),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!("{note}\n\n{body}"),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "blocked_by_agent",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "blocker_kind": kind,
+        "candidate_preserved": true,
+        "pr_created": false,
+        "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    }))
 }
 
 /// Keep a candidate whose required validation could not run because a tool

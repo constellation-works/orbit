@@ -91,6 +91,12 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_baseline_red_failure(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-14269] Nor can it clear a blocker the implementer already declared.
+    // Another agent would only spend the recovery budget the stop was meant
+    // to avoid.
+    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
         return failure.into_result();
     };
@@ -641,6 +647,11 @@ pub(super) fn attempt_failure_activity(
         }
         error if orbit_types::workflow::is_baseline_red_failure(None, Some(&error.to_string())) => {
             orbit_types::workflow::BASELINE_RED_ERROR_CODE
+        }
+        error
+            if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&error.to_string())) =>
+        {
+            orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE
         }
         _ => "pipeline_step_failed",
     };

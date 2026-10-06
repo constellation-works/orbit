@@ -15,9 +15,13 @@
 #   task. Nothing goes back to the implementer and there is no second review.
 # - When the run itself terminalizes before PR completion, its recoverable
 #   candidate is published and the task is blocked for reconciliation. A
-#   required command its base fails the same way (`baseline_red`) is the
+#   required command its base fails the same way (`baseline_red`) is one
 #   exception: the candidate is kept unpublished and the task is held in the
-#   backlog until the required command passes on a new base tip. Once a
+#   backlog until the required command passes on a new base tip. An
+#   implementer-declared blocker (`task_blocked_by_agent`) is the other: the
+#   worktree is left as the implementer left it, nothing is committed or
+#   pushed, no `[BLOCKED]` PR is opened, and the task is blocked under that
+#   event with the blocker kind. Resume does not move that task back. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
 #

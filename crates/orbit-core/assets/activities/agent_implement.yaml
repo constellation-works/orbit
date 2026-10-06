@@ -52,6 +52,15 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # A real blocker (item 8). The step boundary records it and stops the run.
+      blocker:
+        type: object
+        required: [kind, evidence]
+        properties:
+          kind:
+            type: string
+          evidence:
+            type: string
   instruction: |
     Complete the Orbit task with validated outputs, following acceptance
     criteria and workspace instructions. Propose only when requested.
@@ -80,7 +89,9 @@ spec:
       - `context_files_added`: selectors from item 4 (reported, not applied;
         the owner widens the claim's footprint over every path the candidate
         adds when it accepts the handoff).
-      - `comment`: any task comment, blocker (item 8) or leftovers (item 11).
+      - `comment`: any task comment or leftovers (item 11). A real blocker
+        (item 8) is `result.blocker` `{kind, evidence}`, not a status write
+        and not only this comment.
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
 
@@ -178,11 +189,15 @@ spec:
        DNS, TLS timeout), and it reruns a failing required command on the
        base. When the base fails the same way, the task is held, not blocked,
        until the base passes. So never weaken, skip or work around a required
-       command to get past a red base, and never set `blocked` for one; a
-       failure the base does not share is yours to fix.
+       command to get past a red base, and never set `blocked` or return a
+       blocker for one; a failure the base does not share is yours to fix.
     8. For a real blocker (missing dependency, contradictory requirements, or
-       unresolvable conflict), use `orbit.task.update` to set `blocked` with a
-       reason. A criterion contradicting AGENTS.md or equivalent is not a
+       unresolvable conflict), return `result.blocker` as `{kind, evidence}`.
+       `kind` is a short token: an ASCII letter, then ASCII letters, digits,
+       `_`, `.`, `:`, or `-`, at most 64 bytes. `evidence` is the reason.
+       The step boundary records the kind, stops the run, and keeps the
+       candidate. Do not call `orbit.task.update` to set `blocked`; that write
+       is refused. A criterion contradicting AGENTS.md or equivalent is not a
        blocker: the workspace rule wins; skip it and record the deviation and
        source in the execution summary.
     9. File `orbit.friction.add` with evidence only for a contradicted
