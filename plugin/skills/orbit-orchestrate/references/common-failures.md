@@ -19,8 +19,8 @@ Confirm:
 ```bash
 orbit task locks list --json
 orbit tool run orbit.task.show --full --input '{"id":"<blocking_task_id>","model":"<agent-family>"}'
-orbit run events <run_id> --type task.locks.reserve.denied --json
-orbit run events <run_id> --json | rg '<reservation_id>|task.locks.reserve.denied|<blocked_task_id>'
+orbit audit list --tool orbit.task.locks.reserve --kind task_reservation --status denied --json \
+  | rg '<reservation_id>|task.locks.reserve.denied|<blocked_task_id>'
 ```
 
 If the public lock output omits needed details, inspect the global Orbit audit DB only as evidence:
