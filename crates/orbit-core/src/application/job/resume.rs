@@ -670,7 +670,7 @@ impl OrbitRuntime {
     /// Finds interrupted runs that carry the `upgrade_quiesce` error code, verifies they
     /// have no existing retry descendant (ensuring once-only resumption), filters out claimed
     /// execution and active workers, and submits a detached resume run.
-    pub fn auto_resume_upgrade_interrupted_runs(&self) -> Result<Vec<String>, OrbitError> {
+    pub(crate) fn auto_resume_upgrade_interrupted_runs(&self) -> Result<Vec<String>, OrbitError> {
         self.auto_resume_upgrade_interrupted_runs_with(&mut |source_run_id| {
             self.submit_resume_run(source_run_id, Some("clock"), None)
                 .map(|invoke| invoke.run_id)

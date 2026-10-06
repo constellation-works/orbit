@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -60,6 +61,57 @@ struct TestContext {
     jobs: Arc<dyn JobRunStoreBackend>,
 }
 
+fn run_isolated_test(test_name: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_UPGRADE_RESUME_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(test_name) {
+        return false;
+    }
+
+    let home = TempDir::new().unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test_name)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .unwrap();
+    orbit_common::test_env::assert_child_test_passed(
+        test_name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    true
+}
+
+fn record_upgrade_interruption(jobs: &dyn JobRunStoreBackend, run_id: &str) {
+    let now = Utc::now();
+    jobs.complete_job_run_step(
+        run_id,
+        &JobRunStepParams {
+            step_index: 1,
+            target_type: JobTargetType::Activity,
+            target_id: "upgrade-quiesce".to_string(),
+            started_at: now,
+            finished_at: now,
+            duration_ms: Some(1),
+            exit_code: None,
+            agent_response_json: None,
+            state: JobRunState::Interrupted,
+            error_code: Some("upgrade_quiesce".to_string()),
+            error_message: Some("interrupted at an upgrade generation boundary".to_string()),
+        },
+    )
+    .unwrap();
+    jobs.finalize_job_run(run_id, JobRunState::Interrupted, now, None)
+        .unwrap();
+}
+
 fn setup_context() -> TestContext {
     let root = TempDir::new().unwrap();
     let global = root.path().join("home/.orbit");
@@ -95,6 +147,11 @@ spec:
 
 #[test]
 fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
+    let test_name =
+        "upgrade_resume::clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles";
+    if run_isolated_test(test_name) {
+        return;
+    }
     let ctx = setup_context();
 
     // 1. Create an upgrade-interrupted run.
@@ -108,8 +165,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             None,
         )
         .unwrap();
-    ctx.runtime
-        .record_upgrade_interruption(&run_upgrade.run_id, 1001, ParticipantRole::Drain);
+    record_upgrade_interruption(ctx.jobs.as_ref(), &run_upgrade.run_id);
     let run_upgrade_stored = ctx.jobs.get_job_run(&run_upgrade.run_id).unwrap().unwrap();
     assert_eq!(run_upgrade_stored.state, JobRunState::Interrupted);
     assert!(
@@ -154,8 +210,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         .jobs
         .insert_job_run("test_pipeline", 1, Utc::now(), Some(json!({})), None)
         .unwrap();
-    ctx.runtime
-        .record_upgrade_interruption(&run_claimed.run_id, 1002, ParticipantRole::Drain);
+    record_upgrade_interruption(ctx.jobs.as_ref(), &run_claimed.run_id);
     // Mark as local pull admission in sqlite so `local_pull_for_run` returns Some.
     ctx.jobs.local_pull_admissions().unwrap();
     let admission = LocalPullAdmission {
@@ -362,8 +417,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         .jobs
         .insert_job_run("test_pipeline", 1, Utc::now(), Some(json!({})), None)
         .unwrap();
-    ctx.runtime
-        .record_upgrade_interruption(&run_dry.run_id, 1003, ParticipantRole::Drain);
+    record_upgrade_interruption(ctx.jobs.as_ref(), &run_dry.run_id);
 
     let dry_sweep = run_sweep_at_with_providers(
         &ctx.global,
