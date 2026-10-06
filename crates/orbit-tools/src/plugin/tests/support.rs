@@ -179,9 +179,12 @@ impl PluginSecretSource for CasSource {
     }
 }
 
-/// Run `f` with every `tracing` event at `INFO` and above written to a
-/// buffer, and return that text beside `f`'s result: the log surface a
-/// secret value must never reach.
+/// Run `f` synchronously with this thread's `tracing` events at `INFO` and
+/// above written directly to a buffer, and return the completed text beside
+/// `f`'s result: the log surface a secret value must never reach.
+///
+/// Callers must isolate the test process when other tests can reach the same
+/// callsites: scoped subscribers still share tracing's global interest cache.
 pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
     use std::io::{self, Write};
     use tracing_subscriber::filter::LevelFilter;
