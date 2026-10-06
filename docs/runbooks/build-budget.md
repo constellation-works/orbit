@@ -16,9 +16,11 @@ private Cargo target directory.
 ## Supported entry points
 
 The repository's heavy Make targets enter the budget automatically: `build`, `release`,
-`run`, `check`, `test`, `clippy`, `ci`, `ci-lint`, `goldens`, `install`, and `watch`. `make ci` holds
+`run`, `check`, `test`, `clippy`, `ci`, `ci-test-affected`, `ci-lint`, `goldens`, `install`, and `watch`. `make ci` holds
 one slot around the complete CI script; its nested Cargo commands inherit that admission
 instead of reacquiring a slot. `dev` is covered through its `build` prerequisite.
+`make ci-test-affected` selects packages without a slot, then admits each runtime
+test and doctest command. A docs-only diff does not acquire a build slot.
 
 `make run` admits compilation of the CLI binary, then launches the resolved executable
 without holding a slot and without invoking `cargo run`. `make watch` does not occupy a

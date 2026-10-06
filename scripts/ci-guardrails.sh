@@ -22,6 +22,8 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
+# --fast runs formatting and script guardrails, never the Rust test suite.
+# `make ci-test-affected` supplies the separate pre-handoff test gate.
 cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
@@ -61,6 +63,7 @@ fi
 "$repo_root/scripts/test-release-workflow.py"
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/test-ci-test-affected.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
 "$repo_root/scripts/test-codeql-rust-local.py"
 "$repo_root/scripts/check-codeql-extension-schema.py"
