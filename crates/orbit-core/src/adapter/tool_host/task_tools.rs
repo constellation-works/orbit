@@ -636,6 +636,16 @@ fn task_update_params_from_input(
         // Discarding a preserved candidate is an operator decision taken
         // from the CLI (`orbit task update --discard-candidate`).
         discard_candidate: false,
+        allow_drop_system_tags: optional_bool_alias(
+            input,
+            &[
+                "allow_drop_system_tags",
+                "allowDropSystemTags",
+                "allow_drop_system_tag",
+                "allow_dropping_system_tags",
+            ],
+        )?
+        .unwrap_or(false),
     })
 }
 

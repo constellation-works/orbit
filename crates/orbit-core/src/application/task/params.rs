@@ -185,6 +185,8 @@ pub struct TaskUpdateParams {
     /// next run implements fresh instead of resuming it [ORB-13985].
     /// Recorded as a task history event; refused while a run owns the task.
     pub discard_candidate: bool,
+    /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
+    pub allow_drop_system_tags: bool,
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {

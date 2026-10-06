@@ -2,8 +2,8 @@ use orbit_common::OrbitError;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_system_identity_tag,
+    is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
 
@@ -562,6 +562,18 @@ impl OrbitRuntime {
         if let Some(tags) = params.tags.take() {
             let tags = normalize_task_tags(tags);
             validate_os_tags(&tags)?;
+            if !params.allow_drop_system_tags {
+                for existing in &task.tags {
+                    if is_system_identity_tag(existing) {
+                        let normalized_existing = existing.trim().to_ascii_lowercase();
+                        if !tags.iter().any(|t| t == &normalized_existing) {
+                            return Err(OrbitError::SystemIdentityTagDropped {
+                                tag: existing.clone(),
+                            });
+                        }
+                    }
+                }
+            }
             params.tags = Some(tags);
         }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools

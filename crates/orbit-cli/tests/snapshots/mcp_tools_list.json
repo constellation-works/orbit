@@ -1475,6 +1475,10 @@
           ],
           "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected"
         },
+        "allow_drop_system_tags": {
+          "type": "boolean",
+          "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop."
+        },
         "plan": {
           "type": "string",
           "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required."

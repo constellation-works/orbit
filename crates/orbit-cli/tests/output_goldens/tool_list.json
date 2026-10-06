@@ -1498,6 +1498,12 @@
         "required": false
       },
       {
+        "name": "allow_drop_system_tags",
+        "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "name": "plan",
         "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
         "param_type": "string",

@@ -287,6 +287,9 @@ pub(super) struct UpdateTaskBody {
     /// about to create. See [`CreateTaskBody::allow_missing_context`].
     #[serde(default)]
     allow_missing_context: bool,
+    /// Permit replacing tags with a list that drops a system identity tag (`ci-failure:*`).
+    #[serde(default)]
+    allow_drop_system_tags: bool,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     crew: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
@@ -690,6 +693,7 @@ pub(super) async fn update_task_action(
         upsert_artifacts: Vec::new(),
         trusted_artifact_origin: None,
         discard_candidate: false,
+        allow_drop_system_tags: body.allow_drop_system_tags,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {

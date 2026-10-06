@@ -51,6 +51,12 @@ impl Tool for OrbitTaskUpdateTool {
                 required: false,
             },
             ToolParam {
+                name: "allow_drop_system_tags".to_string(),
+                description: "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop.".to_string(),
+                param_type: "boolean".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "plan".to_string(),
                 description: "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.".to_string(),
                 param_type: "string".to_string(),
