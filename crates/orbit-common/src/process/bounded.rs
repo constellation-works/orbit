@@ -7,7 +7,9 @@
 //! is `None` there — and only the direct child is killed.
 //!
 //! Both pipes are drained while the child runs, so a verbose child never stalls
-//! on a full pipe. [`run_bounded_capped`] keeps only a prefix of each stream.
+//! on a full pipe. Each turn is bounded, so a pipe that stays readable cannot
+//! postpone the deadline or the other stream. [`run_bounded_capped`] keeps only
+//! a prefix of each stream.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -24,6 +26,14 @@ const TERM_GRACE: Duration = Duration::from_millis(200);
 /// the caller's deadline. Dropping the read end then unblocks a writer the
 /// group signal did not reach.
 const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
+/// One pipe may keep the supervisor only this long, and for only this many
+/// bytes, before the deadline and the other stream are checked again. A
+/// producer that refills the pipe faster than `read` reaches `WouldBlock`
+/// would otherwise sit in the drain forever.
+#[cfg(unix)]
+const DRAIN_TURN: Duration = Duration::from_millis(20);
+#[cfg(unix)]
+const DRAIN_TURN_BYTES: usize = 64 * 1024;
 
 /// Stdout, stderr, and exit status of a child that finished before the deadline.
 #[derive(Debug)]
@@ -99,8 +109,8 @@ fn supervise(
     let mut out = BoundedOutputCapture::new(output_limit);
     let mut err = BoundedOutputCapture::new(output_limit);
     loop {
-        let out_eof = drain_pipe(stdout.as_mut(), &mut out)?;
-        let err_eof = drain_pipe(stderr.as_mut(), &mut err)?;
+        let out_turn = drain_pipe(stdout.as_mut(), &mut out)?;
+        let err_turn = drain_pipe(stderr.as_mut(), &mut err)?;
         if let Some(status) = child
             .try_wait()
             .map_err(|error| OrbitError::Execution(error.to_string()))?
@@ -110,8 +120,8 @@ fn supervise(
             signal_owned_group(leader, kill_signal());
             let drain_end =
                 Instant::now() + DRAIN_AFTER_EXIT.min(deadline.saturating_sub(started.elapsed()));
-            drain_until(stdout.as_mut(), &mut out, out_eof, drain_end)?;
-            drain_until(stderr.as_mut(), &mut err, err_eof, drain_end)?;
+            drain_until(stdout.as_mut(), &mut out, out_turn.eof, drain_end)?;
+            drain_until(stderr.as_mut(), &mut err, err_turn.eof, drain_end)?;
             return Ok(CapturedOutput {
                 status,
                 stdout: out.into_bytes(),
@@ -124,7 +134,12 @@ fn supervise(
             terminate(&mut child, leader)?;
             return Err(process_timeout(deadline));
         }
-        thread::sleep(POLL_INTERVAL);
+        // A turn that stopped on a budget still has a live producer. Keep
+        // draining so that producer does not block on a full pipe; an idle
+        // pair of pipes waits out the poll instead of spinning.
+        if !out_turn.pending && !err_turn.pending {
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 }
 
@@ -211,20 +226,36 @@ fn process_timeout(deadline: Duration) -> OrbitError {
     }
 }
 
+/// Outcome of one bounded read from a nonblocking pipe.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct PipeRead {
+    /// The pipe reached EOF.
+    eof: bool,
+    /// The turn stopped at its byte or time budget while the producer may
+    /// still be writing. `false` means EOF or `WouldBlock`: the pipe is idle.
+    pending: bool,
+}
+
 #[cfg(unix)]
 fn drain_pipe(
     pipe: Option<&mut impl Read>,
     buf: &mut BoundedOutputCapture,
-) -> Result<bool, OrbitError> {
+) -> Result<PipeRead, OrbitError> {
     match pipe {
         Some(pipe) => {
             read_available(pipe, buf).map_err(|error| OrbitError::Execution(error.to_string()))
         }
-        None => Ok(true),
+        None => Ok(PipeRead {
+            eof: true,
+            pending: false,
+        }),
     }
 }
 
-/// Read until EOF or `deadline`; at least one read happens before giving up.
+/// Read until EOF or `deadline`. Each turn is bounded, so a producer that
+/// keeps the pipe readable cannot postpone `deadline`. At least one read
+/// happens before giving up.
 #[cfg(unix)]
 fn drain_until(
     pipe: Option<&mut impl Read>,
@@ -236,28 +267,64 @@ fn drain_until(
         return Ok(());
     };
     while !eof {
-        eof =
+        let turn =
             read_available(pipe, buf).map_err(|error| OrbitError::Execution(error.to_string()))?;
+        eof = turn.eof;
         if eof || Instant::now() >= deadline {
             break;
         }
-        thread::sleep(POLL_INTERVAL);
+        if !turn.pending {
+            thread::sleep(POLL_INTERVAL);
+        }
     }
     Ok(())
 }
 
-/// Read whatever is currently buffered. `Ok(true)` means the pipe reached EOF.
+/// Read what is buffered, for at most one turn.
+///
+/// `WouldBlock` and EOF finish the turn with `pending: false`. A producer
+/// that never blocks ends the turn at [`DRAIN_TURN_BYTES`] or [`DRAIN_TURN`],
+/// whichever comes first, with `pending: true`.
 #[cfg(unix)]
-fn read_available(pipe: &mut impl Read, buf: &mut BoundedOutputCapture) -> io::Result<bool> {
+fn read_available(pipe: &mut impl Read, buf: &mut BoundedOutputCapture) -> io::Result<PipeRead> {
+    let turn_end = Instant::now() + DRAIN_TURN;
     let mut tmp = [0u8; 8192];
+    let mut taken = 0usize;
     loop {
         match pipe.read(&mut tmp) {
-            Ok(0) => return Ok(true),
+            Ok(0) => {
+                return Ok(PipeRead {
+                    eof: true,
+                    pending: false,
+                });
+            }
             Ok(n) => {
                 buf.push(&tmp[..n]);
+                taken = taken.saturating_add(n);
+                if taken >= DRAIN_TURN_BYTES || Instant::now() >= turn_end {
+                    return Ok(PipeRead {
+                        eof: false,
+                        pending: true,
+                    });
+                }
             }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                // Signals can interrupt every nonblocking read. Check the
+                // turn clock here too, or a signal storm could bypass the
+                // byte-budget check indefinitely.
+                if Instant::now() >= turn_end {
+                    return Ok(PipeRead {
+                        eof: false,
+                        pending: true,
+                    });
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(PipeRead {
+                    eof: false,
+                    pending: false,
+                });
+            }
             Err(error) => return Err(error),
         }
     }
