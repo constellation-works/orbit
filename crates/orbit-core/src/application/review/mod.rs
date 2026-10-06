@@ -34,6 +34,7 @@ mod switches;
 
 pub(crate) use admission::{
     install_review_admission, local_route_before_pr_conflict, run_review_admission,
+    upgrade_resume_admission_mismatch,
 };
 pub(crate) use coverage::exclusions;
 pub(crate) use gate::{

@@ -5,6 +5,9 @@
 //! after the executable generation settles, the clock resumes each
 //! upgrade-interrupted run at most once. Runs interrupted for other
 //! reasons, claimed follower leaves, and live workers are untouched.
+//! [ORB-14320] Only the current upgrade's interruptions are resumed: an
+//! earlier upgrade's, an elapsed or stopped drain, and a superseded routine
+//! run are skipped, and every decision is audited once.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -12,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use fs2::FileExt;
 use orbit_common::fs::generation::{
     CompatibilityIdentity, LedgerCompatibility, ParticipantRole, PendingSwitch, pending_switch,
@@ -23,11 +26,15 @@ use orbit_core::application::routines::{
 };
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_store::contracts::{
-    AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
+    AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AuditEventFilter,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission,
     LocalPullPhase, PullDestination,
 };
-use orbit_types::workflow::{JobRunState, JobTargetType};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::{
+    ChildDispatch, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
+    REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewTiming,
+};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
@@ -57,6 +64,7 @@ impl RoutineWorkspaceProvider for SingleWorkspace {
 struct TestContext {
     _root: TempDir,
     global: PathBuf,
+    workspace: PathBuf,
     runtime: OrbitRuntime,
     jobs: Arc<dyn JobRunStoreBackend>,
 }
@@ -90,7 +98,10 @@ fn run_isolated_test(test_name: &str) -> bool {
 }
 
 fn record_upgrade_interruption(jobs: &dyn JobRunStoreBackend, run_id: &str) {
-    let now = Utc::now();
+    record_upgrade_interruption_at(jobs, run_id, Utc::now());
+}
+
+fn record_upgrade_interruption_at(jobs: &dyn JobRunStoreBackend, run_id: &str, now: DateTime<Utc>) {
     jobs.complete_job_run_step(
         run_id,
         &JobRunStepParams {
@@ -131,7 +142,8 @@ spec:
 ";
     std::fs::write(jobs_dir.join("test_pipeline.yaml"), job_yaml).unwrap();
 
-    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let workspace = repo.join(".orbit");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let jobs = orbit_store::compose::workspace_job_run_store(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
@@ -140,6 +152,7 @@ spec:
     TestContext {
         _root: root,
         global,
+        workspace,
         runtime,
         jobs,
     }
@@ -437,4 +450,270 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             .is_empty(),
         "dry-run sweep must not resume runs"
     );
+}
+
+const UPGRADE_RESUME_AUDIT: &str = "pipeline.run.upgrade_resume";
+
+/// Insert a run of `job_id`, seed its run state, and record it interrupted by
+/// an upgrade at `interrupted_at`.
+fn upgrade_interrupted_run(
+    ctx: &TestContext,
+    job_id: &str,
+    interrupted_at: DateTime<Utc>,
+    seed: impl FnOnce(&mut PipelineState),
+) -> String {
+    let input = if ["workspace_auto_pipeline", "workspace_pull_pipeline"].contains(&job_id) {
+        json!({"review": review_admission(&ctx.runtime)})
+    } else {
+        json!({})
+    };
+    let run = ctx
+        .jobs
+        .insert_job_run(job_id, 1, Utc::now(), Some(input.clone()), None)
+        .unwrap();
+    let mut state = PipelineState::new(run.run_id.clone(), job_id.to_string(), input);
+    seed(&mut state);
+    ctx.jobs.write_run_state(&run.run_id, &state).unwrap();
+    record_upgrade_interruption_at(ctx.jobs.as_ref(), &run.run_id, interrupted_at);
+    // Keep creation order strict for the supersession check.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    run.run_id
+}
+
+fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
+    let policy = runtime.operation_policy();
+    ReviewAdmission {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        policy_version: policy.version,
+        timing: if policy.review_before_pr.value {
+            ReviewTiming::BeforePr
+        } else {
+            ReviewTiming::None
+        },
+        timing_source: policy.review_before_pr.source.label().into(),
+        crew: policy.review_crew.value.clone(),
+        crew_source: policy.review_crew.source.label().into(),
+        budget: policy.review_budget(),
+        required_validation_commands: Some(
+            runtime.workflow_required_validation_commands().to_vec(),
+        ),
+        captured_at: Utc::now(),
+    }
+}
+
+/// Every successful auto-resume decision recorded for `run_id`.
+fn decisions(ctx: &TestContext, run_id: &str) -> Vec<serde_json::Value> {
+    ctx.runtime
+        .list_audit_events_filtered(&AuditEventFilter {
+            tool_name: Some(UPGRADE_RESUME_AUDIT.to_string()),
+            status: Some(AuditEventStatus::Success),
+            job_run_id: Some(run_id.to_string()),
+            limit: 10,
+            ..AuditEventFilter::default()
+        })
+        .unwrap()
+        .iter()
+        .map(|event| serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap())
+        .collect()
+}
+
+fn assert_skipped(ctx: &TestContext, run_id: &str, reason: &str) {
+    assert!(
+        ctx.jobs.job_run_retries(run_id, 1).unwrap().is_empty(),
+        "run skipped for {reason} must not be resumed"
+    );
+    let decisions = decisions(ctx, run_id);
+    assert_eq!(decisions.len(), 1, "one audited decision: {decisions:?}");
+    assert_eq!(decisions[0]["decision"], "skipped", "{decisions:?}");
+    assert_eq!(decisions[0]["reason"], reason, "{decisions:?}");
+}
+
+#[test]
+fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_decision() {
+    let test_name = "upgrade_resume::clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_decision";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker; a resumed run's
+    // substitute exits at once, so submission itself succeeds.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let mut ctx = setup_context();
+    let now = Utc::now();
+    let weeks_ago = now - Duration::days(17);
+    let deadline = |at: DateTime<Utc>| at.to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    // A delivery run captured while before-PR review was off must not resume
+    // after the workspace turns it on: successful checkpoints would otherwise
+    // carry the old admission past today's review gate.
+    let review_changed = upgrade_interrupted_run(&ctx, "workspace_auto_pipeline", now, |state| {
+        state.record_pipeline_output(
+            "open_window",
+            json!({"deadline": deadline(now + Duration::hours(1))}),
+        );
+    });
+    std::fs::write(
+        ctx.workspace.join("config.toml"),
+        "[review]\nbefore_pr = true\n",
+    )
+    .unwrap();
+    ctx.runtime = OrbitRuntime::from_roots(&ctx.global, &ctx.workspace).unwrap();
+    assert!(ctx.runtime.operation_policy().review_before_pr.value);
+
+    // An earlier upgrade's interruption, and the current upgrade's.
+    let historical = upgrade_interrupted_run(&ctx, "test_pipeline", weeks_ago, |_| {});
+    let current = upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {});
+
+    // Drains the current upgrade interrupted: one whose window has elapsed,
+    // one an operator stopped while its window was still open, and a ship
+    // wrapper that never stamped a window of its own.
+    let expired_drain = upgrade_interrupted_run(&ctx, "workspace_auto_pipeline", now, |state| {
+        state.record_pipeline_output(
+            "open_window",
+            json!({"deadline": deadline(now - Duration::minutes(5))}),
+        );
+    });
+    let stopped_drain = upgrade_interrupted_run(&ctx, "workspace_pull_pipeline", now, |state| {
+        state.record_pipeline_output(
+            "open_window",
+            json!({"deadline": deadline(now + Duration::hours(1))}),
+        );
+        state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
+    });
+    let windowless_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |_| {});
+
+    // A ship wrapper delegates its window and stop control to its auto drain
+    // child. The wrapper itself has no stop flag, so inspect the child state.
+    let child_input = json!({"review": review_admission(&ctx.runtime)});
+    let stopped_ship_child = ctx
+        .jobs
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(child_input.clone()),
+            None,
+        )
+        .unwrap();
+    let mut child_state = PipelineState::new(
+        stopped_ship_child.run_id.clone(),
+        "workspace_auto_pipeline".into(),
+        child_input,
+    );
+    child_state.record_pipeline_output(
+        "open_window",
+        json!({"deadline": deadline(now + Duration::hours(1))}),
+    );
+    child_state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
+    ctx.jobs
+        .write_run_state(&stopped_ship_child.run_id, &child_state)
+        .unwrap();
+    let stopped_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |state| {
+        state.record_child_dispatch(ChildDispatch::submitted(
+            stopped_ship_child.run_id.clone(),
+            "workspace_auto_pipeline".into(),
+            "invoke_and_wait".into(),
+            true,
+            false,
+            now,
+        ));
+    });
+
+    // A routine run that a newer fire of the same routine superseded, and one
+    // whose only newer run belongs to another routine.
+    let routine = |name: &str| {
+        let trigger = JobRunTrigger::routine(name, "slot");
+        move |state: &mut PipelineState| state.trigger = Some(trigger)
+    };
+    let superseded = upgrade_interrupted_run(&ctx, "test_pipeline", now, routine("ci-sweep"));
+    let unsuperseded = upgrade_interrupted_run(&ctx, "test_pipeline", now, routine("pilot"));
+    let newer = ctx
+        .jobs
+        .insert_job_run("test_pipeline", 1, Utc::now(), Some(json!({})), None)
+        .unwrap();
+    let mut newer_state =
+        PipelineState::new(newer.run_id.clone(), "test_pipeline".into(), json!({}));
+    newer_state.trigger = Some(JobRunTrigger::routine("ci-sweep", "next-slot"));
+    ctx.jobs
+        .write_run_state(&newer.run_id, &newer_state)
+        .unwrap();
+    ctx.jobs
+        .finalize_job_run(&newer.run_id, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    let tick = || {
+        let sweep = run_sweep_at_with_providers(
+            &ctx.global,
+            SweepOptions::default(),
+            machine.clone(),
+            &provider,
+        )
+        .expect("sweep runs");
+        assert!(!sweep.lock_busy);
+    };
+    tick();
+
+    for (run_id, label) in [(&current, "current"), (&unsuperseded, "unsuperseded")] {
+        let retries = ctx.jobs.job_run_retries(run_id, 10).unwrap();
+        assert_eq!(
+            retries.len(),
+            1,
+            "the current upgrade's {label} run resumes once"
+        );
+        let decisions = decisions(&ctx, run_id);
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        assert_eq!(decisions[0]["decision"], "resumed", "{decisions:?}");
+        assert_eq!(decisions[0]["resumed_run_id"], retries[0].run_id.as_str());
+    }
+    assert_skipped(&ctx, &historical, "interrupted_before_current_upgrade");
+    assert_skipped(&ctx, &review_changed, "review_admission_changed");
+    assert_skipped(&ctx, &expired_drain, "drain_window_elapsed");
+    assert_skipped(&ctx, &stopped_drain, "drain_admissions_stopped");
+    assert_skipped(&ctx, &windowless_ship, "drain_window_elapsed");
+    assert_skipped(&ctx, &stopped_ship, "drain_admissions_stopped");
+    assert_skipped(&ctx, &superseded, "superseded");
+
+    // A skipped drain admitted nothing: no run of a drain job exists beyond
+    // the interrupted ones.
+    for job in [
+        "workspace_auto_pipeline",
+        "workspace_pull_pipeline",
+        "workspace_ship_pipeline",
+    ] {
+        let expected = match job {
+            "workspace_auto_pipeline" => 3, // includes the stopped ship child
+            "workspace_pull_pipeline" => 1,
+            "workspace_ship_pipeline" => 2,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            ctx.jobs.list_job_runs(job).unwrap().len(),
+            expected,
+            "{job}"
+        );
+    }
+
+    // A decided run is not reconsidered: the next tick adds no decision and
+    // no resume.
+    tick();
+    for run_id in [
+        &historical,
+        &review_changed,
+        &expired_drain,
+        &stopped_drain,
+        &windowless_ship,
+        &stopped_ship,
+        &superseded,
+    ] {
+        assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");
+        assert!(ctx.jobs.job_run_retries(run_id, 1).unwrap().is_empty());
+    }
+    for run_id in [&current, &unsuperseded] {
+        assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");
+        assert_eq!(ctx.jobs.job_run_retries(run_id, 10).unwrap().len(), 1);
+    }
 }

@@ -152,6 +152,36 @@ pub(crate) fn run_review_admission(
         .map(Option::flatten)
 }
 
+/// Explain why an automatically resumed delivery run cannot safely keep its
+/// captured review admission. A resume reuses successful checkpoints, so
+/// installing today's admission into its input would not rerun an already
+/// successful review gate. The clock therefore resumes only when the captured
+/// admission still matches today's contract.
+pub(crate) fn upgrade_resume_admission_mismatch(
+    runtime: &OrbitRuntime,
+    run: &orbit_types::workflow::JobRun,
+) -> Option<String> {
+    if !super::REVIEW_ADMITTED_JOBS.contains(&run.job_id.as_str()) {
+        return None;
+    }
+    let Some(input) = run.input.as_ref() else {
+        return Some("run has no captured review admission".to_string());
+    };
+    let previous = match ReviewAdmission::from_run_input(input) {
+        Ok(Some(admission)) => admission,
+        Ok(None) => return Some("run has no captured review admission".to_string()),
+        Err(error) => return Some(error),
+    };
+    let current = snapshot(runtime);
+    let mut comparable_previous = previous;
+    // Capture time is provenance, not part of the admission contract.
+    comparable_previous.captured_at = current.captured_at;
+    (comparable_previous != current).then(|| {
+        "the captured review admission differs from the current review policy; submit a new run to capture it"
+            .to_string()
+    })
+}
+
 fn reserved_review_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{REVIEW_ADMISSION_KEY}` field; the \
