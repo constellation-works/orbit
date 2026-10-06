@@ -20,9 +20,9 @@ sandboxed agent step gets a per-run socket with kernel peer authentication. With
 server UID. The broker executes authenticated requests for exec-backed plugin tools through
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
 It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
-`gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed before-PR
-reviewer's manifest read and report write to the claim's remote owner, so SSH runs outside the
-sandbox that masks `~/.ssh` (§3, "Claimed-review artifacts").
+`gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed worker's
+owner calls, including a before-PR reviewer's manifest read and report write, to the claim's
+remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
@@ -154,28 +154,40 @@ credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was reje
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
 
-**Claimed-review artifacts.** The only other built-ins the broker carries are a claimed
-before-PR reviewer's `orbit.task.artifact.get` of `review-manifest.json` and
-`orbit.task.artifact.put` of `review-report.json`. A claimed leaf's task lives on its owner,
-another machine reached over SSH, and every agent sandbox masks `~/.ssh` (policy-sandbox
-[2_design.md](../policy-sandbox/2_design.md) §7.1), so the reviewer's own SSH route can only fail
-host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested `orbit` of a worker whose
-claim names a remote owner sends exactly these two calls to the broker. The broker carries
-them only for the reviewer activity (`agent_review_repair`) of the run bound to the claim, and
-only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer is
-running in this run before its deadline. It takes the task, claim, owner and attempt from
-those records, never from the request. A read must be the pinned manifest and the manifest the
-owner returns must be the running attempt's; a write must be a report that parses against the
-review contract and names that attempt. The nested `orbit` reads the report source inside the
-sandbox under `artifact.put`'s own confinement and no-follow open, and sends only its bytes;
-the broker never opens a path the agent names. The owner fences both calls on the claim. It
-answers the read and takes the write only while the claim could still take this worker's update:
-the claim must be running or handed off, bound to this leaf, and still the task's current claim.
-A released, failed, revoked or superseded claim is refused as `stale_claim`, and so is a claim
-bound to another run. An elapsed reservation alone ends nothing: the claim stays active until
-the owner recovers it. The refusal changes nothing on the owner, and it applies even while the
-follower's ledger still shows the reviewer running. No other coordination tool is forwarded,
-and a worker whose owner is local, or that runs unsandboxed, keeps its existing route.
+**Claimed-owner calls.** The only other built-ins the broker carries are a claimed worker's
+owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.task.add`,
+`orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
+task lives on its owner, another machine reached over SSH, and every agent sandbox masks
+`~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
+SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
+`orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
+The broker carries them only for the run bound to the claim, whose task is the claimed task,
+and takes the task, claim and owner from those records, never from the request. Each call is
+scoped to the claim: a read or an artifact names the claimed task; a new task must relate to
+the claimed task, and only as `spawned_from`; a friction may name only
+the claimed task as the one it was found during. A request field the call does not need, or an
+internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies, so a
+claimed implementer, which is never granted `orbit.task.show` (distributed-drain
+[2_design.md](../distributed-drain/2_design.md) §3), cannot read through the broker either.
+
+A `review-*` artifact is the review gate's and keeps its stricter scope. The broker carries it
+only for the reviewer activity (`agent_review_repair`), and only while the review ledger shows
+one open attempt, admitted by that leaf, whose reviewer is running in this run before its
+deadline. A read must be the pinned manifest and the manifest the owner returns must be the
+running attempt's; a write must be a report that parses against the review contract and names
+that attempt. No other `review-*` path crosses, so the broker never writes a certificate.
+
+The nested `orbit` reads an artifact source inside the sandbox under `artifact.put`'s own
+confinement and no-follow open, and sends only its bytes; the broker never opens a path the
+agent names. The owner fences every call on the claim. It answers a read and takes a write only
+while the claim could still take this worker's update: the claim must be running or handed off,
+bound to this leaf, and still the task's current claim. A released, failed, revoked or
+superseded claim is refused as `stale_claim`, and so is a claim bound to another run. An elapsed
+reservation alone ends nothing: the claim stays active until the owner recovers it. The refusal
+changes nothing on the owner, and it applies even while the follower's ledger still shows the
+reviewer running. No other coordination tool is forwarded. Inside a masked sandbox, one is
+refused as `claimed_owner_bridge_refused` before anything tries SSH. A worker whose owner is
+local, or that runs unsandboxed, keeps its existing route.
 
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`
@@ -379,17 +391,19 @@ service side regardless.
   identity despite spoofed environment variables, then verifies teardown. It reports a
   skip where Bubblewrap cannot create a namespace. The existing engine sandbox harness
   separately covers provider exit, timeout and broker-start failure.
-- A claimed reviewer's artifact call
-  (`crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs`) passes the same `cwd`,
+- A claimed worker's owner call
+  (`crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs`) passes the same `cwd`,
   allowlist or deny-policy and agent-facing checks, then derives its scope from the runtime's
-  worker binding, the run record and the review ledger, refuses any request field beyond `id`,
-  `path`, `model` and (for a write) `content_base64`, and routes through the runtime's owner
-  coordinator, the route the step runner itself uses for the claim. Refusals carry
+  worker binding and the run record, refuses any request field the call does not take, and
+  routes through the runtime's owner coordinator, the route the step runner itself uses for the
+  claim. Refusals carry `claimed_owner_bridge_refused`. A `review-*` artifact call goes on to
+  `dispatch/claimed_review.rs`, which adds the review ledger's attempt; its refusals carry
   `claimed_review_bridge_refused` and, for an attempt that is no longer running or a manifest
   for another attempt, `review_attempt_stale` or `review_manifest_stale`. The nested `orbit`
-  sends the report as base64 so a full 1 MiB artifact fits the request frame. The broker writes
+  sends an artifact as base64 so a full 1 MiB artifact fits the request frame. The broker writes
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
-  follower as caller over `ssh-mcp`.
+  follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
+  only while its claim is active and only `spawned_from` the claimed task.
 - `crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs` drives a reviewer inside the
   real agent sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) through both the CLI and
   MCP against a real owner home reached by an `ssh` stand-in that needs `~/.ssh/known_hosts`,
@@ -397,8 +411,9 @@ service side regardless.
   sandbox, that the manifest and report cross with exact bytes, that a lost answer is retried,
   and that stale, forged, cross-task and out-of-workspace requests, another activity and a
   stopped broker are refused. It skips where the platform sandbox cannot start.
-  `dispatch/tests/claimed_review.rs` covers the broker's scope and refusals over the real
-  socket on any Unix host.
+  `dispatch/tests/claimed_review.rs` and `dispatch/tests/claimed_owner.rs` cover the broker's
+  scope and refusals, for the review artifacts and every other owner call, over the real socket
+  on any Unix host, and that a masked sandbox never falls back to SSH.
 - `crates/orbit-cli/tests/tool/github_broker_sandbox.rs` compiles the agent sandbox the way a
   launch does (credential and plugin masks, the host's execution-env policy) around a
   stand-in `gh` that needs the host's config. A direct `gh` fails inside it, `orbit tool run
@@ -529,8 +544,9 @@ anything:
   the mask hides the backend's state, and the secret store reads as empty. The five
   `github.*` reads are refused the same way, as `capability_denied` naming the masked
   `~/.config/gh` and the missing broker, instead of running `gh` into its login prompt. A
-  claimed reviewer's artifact call with a remote owner is refused as `capability_denied`
-  naming the masked `~/.ssh` and the missing broker, instead of attempting SSH.
+  claimed worker's owner call with a remote owner fails as `owner_route_unavailable` naming
+  the missing broker, and any other owner coordination call is refused as
+  `claimed_owner_bridge_refused`, instead of attempting SSH.
 - The secret store never treats a sentinel directory or a permission error as "no secrets
   set". Today `PluginSecretStore::read` maps only `NotFound` to an empty file. The masked
   directory must refuse, not read as an empty directory, because an empty `context.secrets`
@@ -578,7 +594,8 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed reviewer's artifact call cannot reach the broker | `plugin_broker_unavailable`, naming this run's coordinator as stopped; the reviewer must not route around the sandbox. |
+| A claimed worker's owner call names another task, relation or field | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner. |
+| A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
 A call the broker accepts but cannot run is answered with the codes in §4.4 ("As
@@ -626,5 +643,6 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-13236], [ORB-13237], [ORB-13238], [ORB-13239] — the implementation slices in §8.
 - [ORB-14017] — the host-credentialed `github.*` reads (§3).
 - [ORB-14194] — the claimed-review artifact route (§3).
+- [ORB-14260] — the claimed-owner calls and `owner_route_unavailable` (§3, §6.3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

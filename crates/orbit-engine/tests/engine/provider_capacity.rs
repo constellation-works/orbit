@@ -7,6 +7,10 @@
 //! final recovery, so the same model is invoked once and the worktree keeps
 //! the candidate for the failure handoff; every other failure still reaches
 //! recovery and its post-recovery attempt.
+//!
+//! [ORB-14260] A claimed worker whose owner calls could not reach its run's
+//! coordinator declares `owner_route_unavailable`; repair cannot open the
+//! route either, so that run takes the same skip.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -25,7 +29,9 @@ use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, OnDenial,
     Provider, V2AuditEvent, V2AuditEventKind,
 };
-use orbit_types::workflow::{is_provider_capacity_exhausted, is_provider_unavailable};
+use orbit_types::workflow::{
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_unavailable,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -448,6 +454,51 @@ fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
         "partial",
         "the worktree still holds the partial candidate"
     );
+}
+
+/// A declared `owner_route_unavailable` envelope is typed for the pull drain
+/// and skips both recoveries; the same envelope with any other code reaches
+/// step recovery (the last case of the test below).
+#[test]
+fn a_declared_owner_route_failure_skips_recovery() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new(
+        "claude",
+        r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"owner_route_unavailable","message":"the coordinator could not be reached"}}"#,
+        "",
+        0,
+        "",
+    );
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let run = run_job(
+        &implementation_job(agent_spec(Provider::Claude)),
+        &host,
+        "owner-route-run",
+    );
+
+    let message = failure_message(&run.outcome);
+    assert!(
+        is_owner_route_unavailable(None, Some(&message)),
+        "the run keeps the typed marker for pull-drain settlement: {message}"
+    );
+    assert!(!is_provider_unavailable(None, Some(&message)), "{message}");
+    assert_eq!(fake.invocations(), 1, "the step is not rerun");
+    assert!(host.calls("step_fix").is_empty(), "no step recovery runs");
+    assert_eq!(
+        *host.final_recovery_admissions.lock().unwrap(),
+        0,
+        "final recovery is not admitted"
+    );
+    assert!(host.calls("decide").is_empty());
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::FinalRecoveryAttempted { outcome, .. } if outcome == "skipped"
+        )),
+        1,
+        "the skip is audited"
+    );
+    assert_eq!(host.calls("handoff").len(), 1);
 }
 
 /// Every failure that is not provider capacity still gets step recovery and

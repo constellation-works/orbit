@@ -11,7 +11,7 @@ use orbit_store::contracts::{
 };
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_CAPACITY_MARKER,
-    PROVIDER_UNAVAILABLE_MARKER, is_provider_unavailable,
+    PROVIDER_UNAVAILABLE_MARKER, is_owner_route_unavailable, is_provider_unavailable,
 };
 
 use crate::application::distributed::{
@@ -901,8 +901,10 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// its claim is released back to the owner's backlog; a launched one whose
 /// provider could not be used on this host — it could not authenticate, or
 /// its selected model was at capacity [ORB-14149] — is released too, typed so
-/// the drain excludes its crew for the window [ORB-13941]; any other launched
-/// leaf ended without the typed handoff success records, and fails.
+/// the drain excludes its crew for the window [ORB-13941]; one whose claimed
+/// worker could not reach the owner through its run's coordinator is released
+/// and excludes its crew the same way [ORB-14260]; any other launched leaf
+/// ended without the typed handoff success records, and fails.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
@@ -944,6 +946,29 @@ pub(crate) fn leaf_failure_settlement(
         evidence.provider_unavailable = Some(unavailable);
         return ClaimMutation::Release(evidence);
     }
+    // [ORB-14260] The route a crew's provider launch failed to carry into
+    // its sandbox stays missing for that crew on this host, so the window
+    // excludes it as it does an unusable provider rather than pulling the
+    // task straight back into the same failure.
+    if owner_route_unavailable(run, diagnostic) {
+        let crew = leaf_crew(record, run);
+        let named = crew.as_deref().unwrap_or("its crew");
+        let mut evidence = release_evidence(
+            record,
+            &format!(
+                "leaf {} could not reach the owner through its run's coordinator from inside the \
+                 agent sandbox; the work was not judged, and this drain runs no more `{named}` \
+                 tasks in its window",
+                run.run_id
+            ),
+        );
+        evidence.provider_unavailable = Some(ProviderUnavailable {
+            crew,
+            reason: "its claimed worker could not reach the owner through the run's coordinator"
+                .to_string(),
+        });
+        return ClaimMutation::Release(evidence);
+    }
     let mut summary = terminal_failure_summary_with(run, diagnostic);
     let final_recovery = final_recovery.and_then(|checkpoint| {
         let decision = checkpoint.decision.clone()?;
@@ -966,14 +991,26 @@ pub(crate) fn leaf_failure_settlement(
     })
 }
 
+/// [ORB-14260] Whether the leaf ended because a claimed worker's owner call
+/// could not reach its run's coordinator: a failed step, or the terminalizing
+/// caller's own diagnostic, carrying the typed owner-route marker.
+fn owner_route_unavailable(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> bool {
+    run.steps.iter().any(|step| {
+        is_owner_route_unavailable(step.error_code.as_deref(), step.error_message.as_deref())
+    }) || diagnostic
+        .is_some_and(|(code, message)| is_owner_route_unavailable(Some(code), Some(message)))
+}
+
 /// Largest provider diagnostic a provider-unavailable release carries.
 const MAX_PROVIDER_REASON_BYTES: usize = 1024;
 
 /// The provider failure a terminal leaf ended on, when its provider could not
 /// be used on this host: a failed step, or the terminalizing caller's own
 /// diagnostic, carrying the typed provider-unavailable marker the CLI runner
-/// stamps. The crew is the one the leaf resolved at start, else the owner
-/// task's own.
+/// stamps. The crew is the [leaf's](leaf_crew).
 fn provider_unavailable(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
@@ -997,8 +1034,15 @@ fn provider_unavailable(
         .replace(PROVIDER_CAPACITY_MARKER, "");
     let message = message.trim();
     let cut = floor_char_boundary(message, MAX_PROVIDER_REASON_BYTES);
-    let crew = run
-        .resolved_crew
+    Some(ProviderUnavailable {
+        crew: leaf_crew(record, run),
+        reason: message[..cut].to_string(),
+    })
+}
+
+/// The crew a leaf resolved at start, else the owner task's own.
+fn leaf_crew(record: &LocalPullAdmission, run: &orbit_types::workflow::JobRun) -> Option<String> {
+    run.resolved_crew
         .clone()
         .filter(|crew| !crew.trim().is_empty())
         .or_else(|| {
@@ -1007,11 +1051,7 @@ fn provider_unavailable(
                 .as_ref()
                 .and_then(|receipt| receipt.task.as_ref())
                 .and_then(|task| task.crew.clone())
-        });
-    Some(ProviderUnavailable {
-        crew,
-        reason: message[..cut].to_string(),
-    })
+        })
 }
 
 /// Hand an unfinished claim back to the owner: the task returns to the

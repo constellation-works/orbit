@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247, ORB-14260]
 ---
 
 # Distributed Drain — Design
@@ -252,7 +252,10 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 
 This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
 leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
-given no owner transport. Before this, every such agent finished its change, failed to save its
+given no owner transport of its own: the few claim-scoped owner calls it may make (the claimed
+task's record and artifacts, a follow-up task `spawned_from` it, a friction) cross the run's
+plugin broker outside the sandbox ([ORB-14260]; plugins
+[2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3, "Claimed-owner calls"). Before this, every such agent finished its change, failed to save its
 summary through `orbit.task.update`, and reported the step failed (`task_store_unreachable`),
 which blocked the task with finished work uncommitted.
 
@@ -463,6 +466,12 @@ owns delivery:
   for the window. Neither step recovery nor its post-recovery attempt reruns the same model, and
   final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
   provider evidence.
+  A claimed worker whose owner call could not cross the run's broker (missing or gone) gets the
+  typed `owner_route_unavailable` and ends its step on that `error.code` [ORB-14260]. The runner
+  stamps `[owner_route_unavailable]`, step and final recovery are skipped (nothing inside the
+  sandbox can open the route), and the leaf settles as a `Release` with the crew excluded for the
+  window, as for an unusable provider. The code grants nothing an agent could abuse: declaring it
+  only withholds repair and returns the task to the owner's backlog.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -872,6 +881,7 @@ Acceptance criteria, not reported as passing.
 | Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
+| Claimed agent's owner call from inside the sandbox | Only the claim-scoped owner calls cross the run's broker; another call, task or relation is refused before the owner; a missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |

@@ -89,6 +89,28 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
         || message.is_some_and(|message| message.contains(VALIDATION_ENVIRONMENT_MARKER))
 }
 
+/// Token a claimed worker's failure carries when its coordination call could
+/// not reach the owner through its run's coordinator — the step runner's
+/// broker was not passed to it, or had stopped — as opposed to the agent
+/// failing the work [ORB-14260].
+///
+/// The nested `orbit` raises it inside the agent sandbox, which masks the SSH
+/// credentials any other owner route would need. No repair agent can open
+/// that route from the same sandbox, so step and final recovery skip it, and a
+/// pull drain releases the claim back to the owner's backlog instead of
+/// failing the task.
+pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
+
+/// The bracketed marker form of [`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`].
+pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
+
+/// Whether a step failure says a claimed worker could not reach its owner.
+#[must_use]
+pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(OWNER_ROUTE_UNAVAILABLE_MARKER))
+}
+
 /// Why a follower cannot run a crew for the rest of its pull drain window.
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,

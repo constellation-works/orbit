@@ -1,7 +1,7 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
-//! host's `gh` credentials, or a claimed reviewer's manifest read or report
-//! write that needs the claim's owner route — through the audited dispatch,
+//! host's `gh` credentials, or one of a claimed worker's owner calls that need
+//! the claim's owner route — through the audited dispatch,
 //! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
@@ -18,7 +18,7 @@ use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerRun;
 use orbit_tools::{ActivityBinding, ToolContext};
 use orbit_types::policy::Role;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
@@ -29,7 +29,6 @@ use crate::runtime::plugin::broker::{
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
-use super::claimed_review::is_claimed_review_artifact;
 use super::execute::{BrokeredAudit, ToolEntryPoint};
 
 /// Executes a broker's requests for the one run it serves.
@@ -192,10 +191,10 @@ impl BrokerDispatch for RunDispatch {
                 audit,
                 |input| {
                     checked?;
-                    // The claimed reviewer's manifest read and report write
-                    // reach the owner over the claim's route, which the
-                    // sandbox cannot open; the broker carries exactly those.
-                    if is_claimed_review_artifact(&tool) {
+                    // A claimed worker's owner calls reach the owner over
+                    // the claim's route, which the sandbox cannot open; the
+                    // broker carries exactly the closed allowlist of them.
+                    if is_claimed_owner_tool(&tool) {
                         self.runtime.ensure_tool_agent_facing(&tool)?;
                         self.refuse_outside_activity_policy(&tool)?;
                         if let Some(policy) = &run.tool_deny_policy
@@ -203,7 +202,7 @@ impl BrokerDispatch for RunDispatch {
                         {
                             return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
                         }
-                        return super::claimed_review::execute_brokered(
+                        return super::claimed_owner::execute_brokered(
                             &self.runtime,
                             run,
                             &tool,
@@ -220,8 +219,7 @@ impl BrokerDispatch for RunDispatch {
                     {
                         return Err(OrbitError::PolicyDenied(format!(
                             "the plugin broker runs plugin tools, the read-only github.* tools \
-                             and a claimed reviewer's artifact calls only; '{tool}' is none of \
-                             these"
+                             and a claimed worker's owner calls only; '{tool}' is none of these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;

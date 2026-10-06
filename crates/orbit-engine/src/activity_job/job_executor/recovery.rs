@@ -86,6 +86,12 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-14260] Nor can it reach a claimed task's owner when the step's
+    // own coordinator could not: its sandbox masks the same credentials.
+    // Preserve the marker for claimed-leaf settlement.
+    if orbit_types::workflow::is_owner_route_unavailable(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
         return failure.into_result();
     };

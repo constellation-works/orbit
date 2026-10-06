@@ -3,13 +3,14 @@ type: runbook
 summary: Verify and recover a distributed-drain follower's before-PR reviewer, whose manifest read and report write reach the owner through the run's coordinator instead of SSH inside the sandbox.
 tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
   - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
-  - "crates/orbit-cli/src/command/mcp/claimed_review.rs"
+  - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14194, ORB-14221, ORB-14171]
+related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171]
 last_validated: 2026-10-05
 ---
 
@@ -25,14 +26,17 @@ manifest and attach its report, or to recover a review that reported
 A claimed leaf's task lives on its owner. The follower's reviewer runs inside
 the agent sandbox, which masks `~/.ssh`, so it cannot reach the owner
 itself. Its nested `orbit`, from `orbit tool run` or `orbit mcp serve`, hands
-exactly two calls to the run's coordinator: the plugin broker that the step
-runner starts outside the sandbox (`ORBIT_PLUGIN_BROKER`).
+a claimed worker's owner calls to the run's coordinator: the plugin broker
+that the step runner starts outside the sandbox (`ORBIT_PLUGIN_BROKER`). The
+[distributed drain runbook](./distributed-drain.md) lists them. Two of them
+are the review gate's:
 
 - `orbit.task.artifact.get` of `review-manifest.json`
 - `orbit.task.artifact.put` of `review-report.json`
 
 The coordinator takes the task, claim, owner and attempt from its own records,
-never from the request. It carries a call only when all of these hold:
+never from the request. It carries a call on a `review-*` artifact only when
+all of these hold:
 
 - the run is the claim's bound leaf;
 - the step is the reviewer activity (`agent_review_repair`);
@@ -56,12 +60,12 @@ the claim remains active, a replayed report follows `artifact.put`'s normal
 semantics: the same bytes replace the same artifact. The owner checks claim
 authority before reconciling that replay, so a receipt from an earlier upload
 cannot make a stale call appear successful.
-The coordinator never writes a review certificate. Every other tool and path
-is refused.
+The coordinator never writes a review certificate, and no other `review-*`
+path crosses it.
 
 The design is in the
 [agent-call broker design](../design/plugins/2_agent_call_broker.md) §3
-("Claimed-review artifacts").
+("Claimed-owner calls").
 
 ## 2. Refusals and recovery
 
@@ -77,9 +81,10 @@ attaching a report by hand, or disabling before-PR review.
 | `stale_claim` | The owner no longer holds the claim as active: it was released, failed, revoked by recovery, or superseded by a later pull, or it is bound to another run | Preserve the refusal, the claim's owner state (`ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'` on the owner) and the follower's ledger. Do not replay the call. The claim's lifecycle already ended, so the review cannot finish in this run. Let the run settle. Then follow the [distributed drain runbook](./distributed-drain.md) for that claim state. |
 | `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
 | `claimed_review_bridge_refused` | Another activity, task, path, request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
-| `plugin_broker_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | Treat the outcome as unknown. Preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
+| `claimed_owner_bridge_refused` | A request field the coordinator does not carry, another task, or, inside the sandbox, an owner call outside the claimed worker's list | As for `claimed_review_bridge_refused`. |
+| `owner_route_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | The reviewer ends its step on this code, and the run skips recovery and releases the claim. Treat the outcome as unknown: preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
 | `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
-| `capability_denied`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before normal recovery; a version string alone is not proof. |
+| `owner_route_unavailable`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | The run releases the claim as above. Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before the task is pulled again; a version string alone is not proof. |
 | An `orbit.task.artifact.put` source-path or size refusal | The report source is outside the workspace `.orbit/tmp`, is a link out of it, or is over 1 MiB | Fixed in the reviewer, not the host; the refusal happens before anything reaches the coordinator |
 
 An owner that cannot be reached over SSH fails the call outside the sandbox
@@ -232,8 +237,10 @@ probe, pull and bind; the reviewer inside the real agent sandbox, calling
 NATIVE=claimed_review_bridge_sandbox::claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer
 cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --list
 cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --nocapture
-# Any Unix host: the broker's scope, refusals, lost answer and stopped broker.
+# Any Unix host: the broker's scope, refusals, lost answer and stopped broker,
+# for the review artifacts and for every other claimed-owner call.
 cargo test -p orbit-core --lib dispatch::tests::claimed_review
+cargo test -p orbit-core --lib dispatch::tests::claimed_owner
 ```
 
 The sandbox test prints `skipped claimed-review bridge sandbox integration:`

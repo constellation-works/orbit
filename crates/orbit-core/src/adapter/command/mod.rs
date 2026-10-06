@@ -30,7 +30,7 @@ pub use dispatch::{
     trusted_mcp_audit_context,
 };
 #[cfg(unix)]
-pub use dispatch::{ClaimedReviewRoute, bridge_claimed_review_artifact};
+pub use dispatch::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use plugin::{
     MAX_PLUGIN_SECRET_BYTES, PluginAddOptions, PluginAddResult, PluginCliGroup, PluginCliVerb,
     PluginDoctorResult, PluginEnableOptions, PluginEnableResult, PluginLinkSummary,

@@ -1,10 +1,13 @@
 //! Tool dispatch: audit correlation, agent-identity resolution, the trusted
-//! MCP envelope boundary, and the calls a run's plugin broker executes.
+//! MCP envelope boundary, and the calls a run's plugin broker executes,
+//! including a claimed worker's owner coordination.
 
 mod audit;
 #[cfg(unix)]
 mod brokered;
 mod callback;
+#[cfg(unix)]
+mod claimed_owner;
 #[cfg(unix)]
 mod claimed_review;
 mod dry_run;
@@ -20,7 +23,7 @@ pub(crate) use callback::legacy_callback_identity_enabled;
 pub(crate) use callback::override_activity_tools_for_test;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(unix)]
-pub use claimed_review::{ClaimedReviewRoute, bridge_claimed_review_artifact};
+pub use claimed_owner::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{

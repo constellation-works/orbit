@@ -592,12 +592,16 @@ fn sandbox_fixture() {
     mcp_refused(&mcp["stale_report"], "claimed_review_bridge_refused");
     mcp_refused(&mcp["symlink"], "");
     mcp_refused(&mcp["oversize"], "");
-    mcp_refused(&mcp["unrelated"], "");
+    mcp_refused(&mcp["unlisted"], "");
     mcp_refused(&mcp["other_owner"], "");
-    assert_ne!(
-        running["unrelated"]["code"], 0,
-        "no other tool is forwarded; its own route still needs SSH: {running}"
+    // The claimed task's record is an owner call the broker carries too; a
+    // coordination tool outside that list is refused, never tried over SSH.
+    assert_eq!(running["task_show"]["code"], 0, "{running}");
+    assert!(
+        mcp["task_show"].get("error").is_none(),
+        "the MCP read crosses the broker too: {running}"
     );
+    assert_ne!(running["unlisted"]["code"], 0, "{running}");
     for (forged, response) in running["forged"].as_object().unwrap() {
         assert_eq!(
             response["ok"], false,
@@ -1245,8 +1249,8 @@ if mode == 'running':
     open(mcp_done, 'w').close()
     wait(mcp_checked)
     source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
-    names = ['wrong_path', 'cross_task', 'stale_report', 'symlink', 'oversize', 'unrelated',
-             'other_owner']
+    names = ['wrong_path', 'cross_task', 'stale_report', 'symlink', 'oversize', 'task_show',
+             'unlisted', 'other_owner']
     report['mcp_refusals'] = dict(zip(names, mcp([
         ('orbit_task_artifact_get', {'id': task, 'path': REPORT}),
         ('orbit_task_artifact_get', {'id': 'TSO-999', 'path': MANIFEST}),
@@ -1254,6 +1258,7 @@ if mode == 'running':
         ('orbit_task_artifact_put', source('link')),
         ('orbit_task_artifact_put', source('oversize')),
         ('orbit_task_show', {'id': task}),
+        ('orbit_task_update', {'id': task, 'status': 'done'}),
         ('orbit_task_artifact_get', dict(get, workspace='another-owner/ws_other')),
     ])))
     # From a subdirectory, naming the owner's selector explicitly.
@@ -1272,7 +1277,8 @@ if mode == 'running':
     for name in ('stale', 'link', 'oversize'):
         key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
         report[key] = tool('orbit.task.artifact.put', dict(put, source_path=os.path.join(scratch, name + '.json')))
-    report['unrelated'] = tool('orbit.task.show', {'id': task})
+    report['task_show'] = tool('orbit.task.show', {'id': task})
+    report['unlisted'] = tool('orbit.task.update', {'id': task, 'status': 'done'})
     content = __import__('base64').b64encode(open(os.path.join(scratch, 'report.json'), 'rb').read()).decode()
     report['forged'] = {
         'claim_override': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,

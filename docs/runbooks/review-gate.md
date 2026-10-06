@@ -93,19 +93,22 @@ Identify the failed step from `orbit run show`, then act:
   call was refused** (distributed drain follower): the reviewer's
   `orbit.task.artifact.get`/`put` reaches the owner only through the run's
   coordinator, the step runner outside the sandbox, which carries those two
-  calls and nothing else. The refusal names the cause:
+  calls and a claimed worker's other owner calls, and nothing else. The
+  refusal names the cause:
   `review_attempt_stale` (the reviewer ran past its attempt or the attempt
   was settled), `review_manifest_stale` (the owner holds another attempt's
   manifest), `stale_claim` (the owner released, failed, revoked or superseded
   the claim), `claimed_review_bridge_refused` (another activity, task, path or
-  field), or "could not reach this run's coordinator" (no usable response).
+  field), or `owner_route_unavailable` "could not reach this run's
+  coordinator" (no usable response; the run skips recovery and releases the
+  claim).
   Preserve the exact call and inspect the task, run, claim and review ledger
   before recovery. Do not replay a stale, expired, settled or cancelled
   attempt. A transport loss has an unknown outcome and must use existing
   idempotent/reconciliation behavior; it does not authorize a new claim or
   report. Only after normal terminal settlement, no live owner and cause
-  diagnosis may existing task authorization start a fresh attempt. A
-  `capability_denied` naming a missing `ORBIT_PLUGIN_BROKER` is a launch or
+  diagnosis may existing task authorization start a fresh attempt. An
+  `owner_route_unavailable` naming a missing `ORBIT_PLUGIN_BROKER` is a launch or
   binary capability failure; confirm the installed executable hash and launch
   configuration. Never add SSH credentials to the sandbox or attach a report
   by hand. If report PUT is refused, the gate fails closed on its missing or

@@ -792,8 +792,29 @@ fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_
     );
 }
 
+/// [ORB-14260] A claimed leaf whose worker could not reach its owner through
+/// its run's coordinator is released too: nothing inside the agent sandbox
+/// could open that route, so the task returns to the owner's backlog without
+/// counting as a failure, and the crew whose launch lost the route is
+/// excluded for the window so the task is not pulled straight back into it.
+#[test]
+fn an_owner_route_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
+    if !isolated(
+        module_path!(),
+        "an_owner_route_failure_releases_the_claim_and_excludes_the_crew_for_the_window",
+    ) {
+        return;
+    }
+    a_provider_failure_releases_the_claim(
+        "step `review`: [owner_route_unavailable] cli subprocess reported declared envelope \
+         status=\"failed\" despite exit 0: error.code=owner_route_unavailable; \
+         error.message=the run's coordinator was not passed to this process",
+        "could not reach the owner through the run's coordinator",
+    );
+}
+
 /// The settlement of a claimed `sol` leaf that ended on `diagnostic`, a typed
-/// provider failure whose provider text includes `reason`.
+/// failure of the crew on this host whose reason includes `reason`.
 fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
@@ -831,7 +852,7 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     );
     assert_eq!(claims[0]["claim"]["phase"], "revoked");
     assert!(
-        comments_of(&pair.owner_task(&task)).contains("could not use the provider of crew `sol`"),
+        comments_of(&pair.owner_task(&task)).contains("runs no more `sol` tasks in its window"),
         "{}",
         pair.owner_task(&task)
     );

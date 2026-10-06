@@ -1,6 +1,7 @@
 //! A claimed reviewer's artifact calls between the nested `orbit`'s bridge
 //! and [`RunDispatch`] over the broker's real socket, against an owner route
-//! that records what reaches it and can lose an answer after committing.
+//! that records what reaches it and can lose an answer after committing. The
+//! fixture is shared with the claimed-owner bridge's tests.
 //!
 //! Admitted as a security invariant and a fault injection the boundary test
 //! (`orbit-cli` `claimed_review_bridge_sandbox`) cannot reach on a host
@@ -33,26 +34,26 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::super::brokered::RunDispatch;
-use super::super::claimed_review::{ClaimedReviewRoute, bridge_through};
+use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
 use super::super::execute::ToolEntryPoint;
 use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
 
-const FOLLOWER: &str = "hm_follower";
+pub(super) const FOLLOWER: &str = "hm_follower";
 const OWNER: &str = "hm_owner";
-const TASK: &str = "TSO-1";
+pub(super) const TASK: &str = "TSO-1";
 const LEAF: &str = "jrun-leaf-1";
 const LINEAGE: &str = "lineage-1";
-const GET: &str = "orbit.task.artifact.get";
-const PUT: &str = "orbit.task.artifact.put";
+pub(super) const GET: &str = "orbit.task.artifact.get";
+pub(super) const PUT: &str = "orbit.task.artifact.put";
 
-/// The owner's side of the claim route: answers the manifest read with
-/// `manifest`, records every call, and can drop one put's answer after
-/// accepting it.
+/// The owner's side of the claim route: answers an artifact read with
+/// `manifest`, any other call with what it received, records every call, and
+/// can drop one put's answer after accepting it.
 #[derive(Default)]
-struct Owner {
+pub(super) struct Owner {
     manifest: Mutex<Vec<u8>>,
-    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
+    pub(super) calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
     lose_next_put: AtomicBool,
 }
 
@@ -76,6 +77,9 @@ impl OwnerCoordinator for Owner {
             }
             return Ok(json!({"id": input["id"], "updated": true}));
         }
+        if name != GET {
+            return Ok(json!({"tool": name, "input": input}));
+        }
         let manifest = self.manifest.lock().unwrap().clone();
         Ok(json!({
             "id": input["id"], "path": input["path"], "media_type": "application/json",
@@ -86,7 +90,7 @@ impl OwnerCoordinator for Owner {
 }
 
 impl Owner {
-    fn puts(&self) -> Vec<Value> {
+    pub(super) fn puts(&self) -> Vec<Value> {
         self.calls
             .lock()
             .unwrap()
@@ -97,20 +101,20 @@ impl Owner {
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     _root: TempDir,
-    global_root: PathBuf,
-    worktree: PathBuf,
-    owner: Arc<Owner>,
-    runtime: OrbitRuntime,
+    pub(super) global_root: PathBuf,
+    pub(super) worktree: PathBuf,
+    pub(super) owner: Arc<Owner>,
+    pub(super) runtime: OrbitRuntime,
     attempt_id: String,
-    binding: WorkerInvocation,
+    pub(super) binding: WorkerInvocation,
 }
 
 impl Fixture {
     /// A follower leaf bound to its claim, with the attempt admitted and its
     /// reviewer running in the leaf.
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         // Short, for the broker's socket path.
         let root = tempfile::Builder::new()
             .prefix("ocr")
@@ -217,7 +221,7 @@ impl Fixture {
         bytes
     }
 
-    fn run(&self, activity: &str) -> PluginBrokerRun {
+    pub(super) fn run(&self, activity: &str) -> PluginBrokerRun {
         PluginBrokerRun {
             run_id: format!("{LEAF}-{activity}"),
             job_run_id: Some(LEAF.into()),
@@ -244,7 +248,7 @@ impl Fixture {
         }
     }
 
-    fn serve(&self, activity: &str) -> PluginBroker {
+    pub(super) fn serve(&self, activity: &str) -> PluginBroker {
         let run = self.run(activity);
         let dispatch = Arc::new(RunDispatch::new(self.runtime.clone(), run.clone()));
         let broker = PluginBroker::start(&self.global_root, &run.run_id, dispatch).unwrap();
@@ -255,7 +259,12 @@ impl Fixture {
     }
 
     /// The nested `orbit`'s call, as its CLI makes it.
-    fn call(&self, socket: Option<&Path>, name: &str, input: Value) -> Option<ClaimedReviewRoute> {
+    pub(super) fn call(
+        &self,
+        socket: Option<&Path>,
+        name: &str,
+        input: Value,
+    ) -> Option<ClaimedOwnerRoute> {
         bridge_through(
             socket,
             &self.global_root,
@@ -269,16 +278,19 @@ impl Fixture {
         )
     }
 
-    fn forwarded(&self, broker: &PluginBroker, name: &str, input: Value) -> Result<Value, String> {
+    pub(super) fn forwarded(
+        &self,
+        broker: &PluginBroker,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, String> {
         match self.call(Some(broker.socket_path()), name, input) {
-            Some(ClaimedReviewRoute::Forwarded(result)) => {
-                result.map_err(|error| error.to_string())
-            }
+            Some(ClaimedOwnerRoute::Forwarded(result)) => result.map_err(|error| error.to_string()),
             other => panic!("{name} reaches the broker: {other:?}"),
         }
     }
 
-    fn report(&self, name: &str, attempt: &str) -> (PathBuf, Vec<u8>) {
+    pub(super) fn report(&self, name: &str, attempt: &str) -> (PathBuf, Vec<u8>) {
         let bytes = serde_json::to_vec(&json!({
             "schema_version": 1, "attempt_id": attempt, "verdict": "incomplete",
             "summary": "Fixture review.", "findings": [], "validation": [],
@@ -390,10 +402,9 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
     ];
     for (case, name, input) in cases {
         let refused = fixture.forwarded(&broker, name, input).unwrap_err();
-        assert!(
-            refused.contains("claimed_review_bridge_refused"),
-            "{case}: {refused}"
-        );
+        // The claim's scope refuses another task; the reviewer's attempt
+        // scope refuses the rest.
+        assert!(refused.contains("_bridge_refused"), "{case}: {refused}");
     }
     // What no nested `orbit` sends: fields that would widen the scope, a
     // certificate, and a tool outside the two.
@@ -525,105 +536,4 @@ fn a_reviewer_past_its_deadline_without_finishing_reaches_nothing() {
         fixture.owner.calls.lock().unwrap().is_empty(),
         "an expired reviewer's calls never reach the owner"
     );
-}
-
-#[test]
-fn the_nested_orbit_keeps_other_routes_and_names_a_missing_broker() {
-    let fixture = Fixture::new();
-    let input = json!({"id": TASK, "path": REVIEW_MANIFEST_ARTIFACT});
-
-    // Not a claimed reviewer's artifact call: the existing route.
-    assert!(
-        fixture
-            .call(None, "orbit.task.show", json!({"id": TASK}))
-            .is_none()
-    );
-    let local_owner = WorkerInvocation {
-        owner_machine_id: FOLLOWER.into(),
-        ..fixture.binding.clone()
-    };
-    assert!(
-        bridge_through(
-            None,
-            &fixture.global_root,
-            Some(&local_owner),
-            Some(FOLLOWER),
-            GET,
-            &input,
-            &fixture.worktree,
-            &fixture.worktree,
-            ToolEntryPoint::Cli
-        )
-        .is_none(),
-        "an owner on this machine is reached directly"
-    );
-    assert!(
-        bridge_through(
-            None,
-            &fixture.global_root,
-            None,
-            Some(FOLLOWER),
-            GET,
-            &input,
-            &fixture.worktree,
-            &fixture.worktree,
-            ToolEntryPoint::Cli
-        )
-        .is_none(),
-        "an unbound caller is not a claimed reviewer"
-    );
-    // An unsandboxed worker without a broker reaches its owner itself.
-    assert!(fixture.call(None, GET, input.clone()).is_none());
-
-    // Inside a masked sandbox without a broker, the cause is named. The
-    // Linux sentinel stands in for the masked secret store.
-    let sentinel = crate::runtime::plugin::paths::plugin_secret_store_dir(&fixture.global_root)
-        .join(crate::runtime::plugin::sandbox_mask::PLUGIN_MASK_SENTINEL_FILE);
-    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
-    std::fs::write(&sentinel, b"masked").unwrap();
-    match fixture.call(None, GET, input.clone()) {
-        Some(ClaimedReviewRoute::Refused(error)) => {
-            assert!(
-                error.to_string().contains("ORBIT_PLUGIN_BROKER is not set"),
-                "{error}"
-            )
-        }
-        other => panic!("refused in the sandbox: {other:?}"),
-    }
-
-    // A broker that has shut down is named as the coordinator, not the owner.
-    let broker = fixture.serve("agent_review_repair");
-    let socket = broker.socket_path().to_path_buf();
-    drop(broker);
-    match fixture.call(Some(&socket), GET, input) {
-        Some(ClaimedReviewRoute::Refused(error)) => assert!(
-            error
-                .to_string()
-                .contains("could not reach this run's coordinator"),
-            "{error}"
-        ),
-        other => panic!("an unreachable broker is reported: {other:?}"),
-    }
-
-    // A source the nested process may not read is refused there: a link
-    // out of the workspace, and a file over the artifact limit.
-    let (_, report) = fixture.report("report.json", &fixture.attempt_id);
-    let outside = fixture.global_root.join("outside.json");
-    std::fs::write(&outside, &report).unwrap();
-    let link = fixture.worktree.join(".orbit/tmp/link.json");
-    std::os::unix::fs::symlink(&outside, &link).unwrap();
-    let oversize = fixture.worktree.join(".orbit/tmp/oversize.json");
-    std::fs::write(&oversize, vec![b' '; 1024 * 1024 + 1]).unwrap();
-    let broker = fixture.serve("agent_review_repair");
-    for path in [link, oversize] {
-        match fixture.call(
-            Some(broker.socket_path()),
-            PUT,
-            json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT, "source_path": path}),
-        ) {
-            Some(ClaimedReviewRoute::Refused(_)) => {}
-            other => panic!("{} is refused before the broker: {other:?}", path.display()),
-        }
-    }
-    assert!(fixture.owner.calls.lock().unwrap().is_empty());
 }
