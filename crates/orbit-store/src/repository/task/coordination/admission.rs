@@ -298,6 +298,8 @@ impl TaskCommitBoundary {
             }
         }
         let claims = self.execution_claims()?;
+        let drain_released =
+            self.drain_releases(&identity.location().machine_id, &request.run_context.run_id)?;
         let reservations = self.store.inspect_active_task_reservations(
             &orbit_dir.to_string_lossy(),
             Some(&self.workspace_id),
@@ -406,6 +408,26 @@ impl TaskCommitBoundary {
                 });
                 continue;
             }
+            // Nor one this drain already gave back for its host's failure,
+            // nor any task once a release blamed the host whatever crew runs
+            // there [ORB-14257]; they stay for another host or a later drain.
+            if let Some((why, release)) = drain_released
+                .tasks
+                .get(&task.id)
+                .map(|release| ("this drain released it", release))
+                .or_else(|| {
+                    drain_released
+                        .host
+                        .as_ref()
+                        .map(|release| ("this drain's host is suppressed for its window", release))
+                })
+            {
+                receipt.crew_unavailable.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: format!("{why} ({}): {}", release.class.as_str(), release.reason),
+                });
+                continue;
+            }
             let footprint = match canonical_footprint(&task.context_files, repo_root) {
                 Ok(files) => files,
                 Err(error) => {
@@ -441,6 +463,7 @@ impl TaskCommitBoundary {
                 });
                 continue;
             }
+            let resume_candidate = self.resumable_candidate(task)?;
             let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
@@ -496,6 +519,7 @@ impl TaskCommitBoundary {
                     complexity: task.complexity,
                     crew: task.crew.clone(),
                     context_files: footprint.clone(),
+                    resume_candidate: resume_candidate.clone(),
                 });
                 admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
                 Ok(vec![

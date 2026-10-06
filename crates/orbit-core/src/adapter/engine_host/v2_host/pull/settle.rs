@@ -53,7 +53,7 @@ use std::time::Duration;
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
+    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -111,19 +111,7 @@ impl OrbitRuntime {
             return Ok(Some(record));
         }
         let state = jobs.read_run_state(run_id)?;
-        let final_recovery = state
-            .as_ref()
-            .and_then(|state| state.final_recovery.as_ref());
-        let cancellation_policy = state
-            .as_ref()
-            .and_then(|state| state.task_cancellation_policy.as_ref());
-        let settlement = leaf_failure_settlement(
-            &record,
-            &run,
-            diagnostic,
-            final_recovery,
-            cancellation_policy,
-        );
+        let settlement = leaf_failure_settlement(&record, &run, diagnostic, state.as_ref());
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -234,7 +222,7 @@ impl OrbitRuntime {
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
-            &LocalPullMutation::Settle(Box::new(release_settlement(record, why))),
+            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why))),
         ) {
             Ok(settling) => Ok(settling),
             Err(error) => {
