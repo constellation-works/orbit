@@ -34,6 +34,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/candidate_validate.yaml"),
     ),
     (
+        "claim_candidate_carry",
+        include_str!("../../assets/activities/claim_candidate_carry.yaml"),
+    ),
+    (
         "claim_handoff",
         include_str!("../../assets/activities/claim_handoff.yaml"),
     ),

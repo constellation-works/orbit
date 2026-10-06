@@ -13,6 +13,7 @@ use orbit_types::task::{TaskStatus, automatic_dispatch_cmp};
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
+use super::lifecycle::CandidateOffer;
 use crate::contracts::*;
 use crate::repository::task::v2::TaskV2Store;
 
@@ -463,8 +464,10 @@ impl TaskCommitBoundary {
                 });
                 continue;
             }
-            let resume_candidate = self.resumable_candidate(task)?;
             let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
+            let machine_id = &identity.location().machine_id;
+            let offer = self.candidate_offer(task, machine_id)?;
+            let resume_candidate = offer.as_ref().and_then(CandidateOffer::resume_candidate);
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
@@ -485,11 +488,17 @@ impl TaskCommitBoundary {
                     owner_run_id: None,
                     owner_metadata_json: Some(encode(&serde_json::json!({"claim_id":claim_id}))?),
                 }),
+                // [ORB-14338] A kept candidate this claim cannot resume is
+                // never dropped silently: the task's history says why.
+                append_history: offer
+                    .as_ref()
+                    .and_then(|offer| offer.history(&claim_id, machine_id))
+                    .into_iter()
+                    .collect(),
                 rows: vec![
                     row(RECEIPT_KIND, &key, &())?,
                     row(CLAIM_KIND, &claim_id, &())?,
                 ],
-                ..Default::default()
             };
             let committed = self.commit_locked_with_rows(&params, &mut |reservation| {
                 let reserved = reservation

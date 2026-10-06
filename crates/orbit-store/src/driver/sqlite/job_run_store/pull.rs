@@ -627,8 +627,9 @@ pub(super) fn mutate(
                     object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(db_error)?);
                 }
                 // [ORB-14257] The candidate an earlier claim preserved, for the
-                // PR leaf's `resume_candidate` step to carry onto this base.
-                if let (Some(candidate), Some(object), true) = (&task.resume_candidate, input.as_object_mut(), job != CLAIMED_LOCAL_PIPELINE) {
+                // leaf's `resume_candidate` step to carry onto this base; a
+                // claimed-local leaf continues one too [ORB-14338].
+                if let (Some(candidate), Some(object)) = (&task.resume_candidate, input.as_object_mut()) {
                     object.insert("resume_candidate".into(), serde_json::to_value(candidate).map_err(db_error)?);
                 }
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };

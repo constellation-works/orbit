@@ -491,15 +491,24 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   case the owner does not hand the released task back to that drain, so it is
   not pulled straight back; another drain may still take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
-  claim, when it runs as a claimed PR leaf that can fetch the candidate,
-  continues it rather than starting over, unless the task's spec changed or
-  `orbit task update --discard-candidate` discarded it since. A candidate
-  that was never pushed is only on the follower that made it, and claimed
-  local leaves do not continue candidates: until [ORB-14338] lands, a
-  released task taken by another host or a local leaf is re-implemented,
-  and the named candidate is evidence only. A task released twice within 24
-  hours for a typed failure class is blocked by the next such
-  failure, with one comment listing every reason; unblock it once the cause
+  claim continues it rather than starting over, unless the task's spec
+  changed or `orbit task update --discard-candidate` discarded it since. A
+  claimed PR leaf that fails after its commit and before its push carries
+  the candidate to `refs/orbit/candidates/<task>/<run>` on `origin`, and the
+  release comment names that ref, so a claim on any host can fetch it. When
+  that push fails (no push access, `origin` unreachable), the release says
+  why and the candidate stays only on the follower that made it: a claim on
+  that follower still continues it, and a claim on another host implements
+  fresh. Claimed-local leaves run on the owner and continue its candidates
+  from its own repository. Every fresh start that sets a kept candidate aside
+  is in the owner's task history as a `candidate_resume` event whose note
+  begins `fresh:` and names the reason (`not_durable`, `spec_changed` or
+  `discarded`): `orbit task show <task>` shows it. Carried refs are not
+  deleted automatically; once a task is done, prune them on `origin` with
+  `git push origin --delete refs/orbit/candidates/<task>/<run>`, listing
+  them with `git ls-remote origin 'refs/orbit/candidates/*'`. A task
+  released twice within 24 hours for a typed failure class is blocked by the
+  next such failure, with one comment listing every reason; unblock it once the cause
   is fixed. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
   on the follower). That run page carries a `Claim:` line (`pull_claim` in

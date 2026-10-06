@@ -25,7 +25,7 @@ mod tests;
 pub use baseline::{BaselineHoldStatus, baseline_hold_status};
 pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
-pub(super) use claim::{claim_handoff, claim_validate};
+pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub use commit::validate_claim_new_paths;
 pub(super) use failure::pr_failure_handoff;

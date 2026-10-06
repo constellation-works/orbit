@@ -787,17 +787,22 @@ impl TaskCommitBoundary {
         }))
     }
 
-    /// The candidate the task's latest claim settlement preserved, while it
-    /// still answers to the task: no operator discarded it since, and the
-    /// task's spec is unchanged [ORB-14257]. Admission hands it to the next
-    /// claim's leaf to resume.
-    pub(super) fn resumable_candidate(
+    /// What admission hands a claim of `task` executing on `machine_id` from
+    /// the candidate the task's latest claim settlement preserved
+    /// [ORB-14257]: the candidate itself while it still answers to the task —
+    /// no operator discarded it since, the task's spec is unchanged — and
+    /// that host can fetch it [ORB-14338]. Otherwise the claim implements
+    /// afresh, with the typed reason the task's history records. `None` when
+    /// no claim of the task preserved one.
+    pub(super) fn candidate_offer(
         &self,
         task: &orbit_types::task::Task,
-    ) -> Result<Option<ClaimCandidateRef>, OrbitError> {
+        machine_id: &str,
+    ) -> Result<Option<CandidateOffer>, OrbitError> {
         let mut latest: Option<(
             chrono::DateTime<chrono::FixedOffset>,
             PreservedClaimCandidate,
+            String,
         )> = None;
         for row in self.coordination_rows(STATE)? {
             let state: ClaimInspection = decode(&row.payload_json)?;
@@ -809,15 +814,28 @@ impl TaskCommitBoundary {
             };
             let recorded = chrono::DateTime::parse_from_rfc3339(&preserved.recorded_at)
                 .map_err(|e| OrbitError::Store(e.to_string()))?;
-            if latest.as_ref().is_none_or(|(at, _)| *at < recorded) {
-                latest = Some((recorded, preserved));
+            if latest.as_ref().is_none_or(|(at, _, _)| *at < recorded) {
+                latest = Some((recorded, preserved, state.claim.executed_on.machine_id));
             }
         }
-        let Some((recorded, preserved)) = latest else {
+        let Some((recorded, preserved, source_machine)) = latest else {
             return Ok(None);
         };
+        let candidate = preserved.candidate;
+        let fresh = |reason, detail: String| {
+            Ok(Some(CandidateOffer::Fresh {
+                candidate: candidate.clone(),
+                reason,
+                detail,
+            }))
+        };
         if preserved.task_spec_digest != task.spec_digest() {
-            return Ok(None);
+            return fresh(
+                CandidateFreshReason::SpecChanged,
+                "the task's description, acceptance criteria or selectors changed since it was \
+                 kept"
+                    .into(),
+            );
         }
         let discarded = self
             .bundle_store
@@ -828,7 +846,23 @@ impl TaskCommitBoundary {
                 event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
                     && event.at >= recorded
             });
-        Ok((!discarded).then_some(preserved.candidate))
+        if discarded {
+            return fresh(
+                CandidateFreshReason::Discarded,
+                "an operator discarded it since it was kept".into(),
+            );
+        }
+        if !candidate.durable() && source_machine != machine_id {
+            let why = match &candidate.carry_failure {
+                Some(failure) => format!("pushing it to a durable ref failed ({failure})"),
+                None => "its leaf ended without pushing it to a durable ref".into(),
+            };
+            return fresh(
+                CandidateFreshReason::NotDurable,
+                format!("it exists only on {source_machine}, which committed it: {why}"),
+            );
+        }
+        Ok(Some(CandidateOffer::Resume(candidate)))
     }
 
     fn full_task(&self, task_id: &str) -> Result<orbit_types::task::Task, OrbitError> {
@@ -1120,6 +1154,62 @@ pub(super) struct DrainReleases {
     pub(super) tasks: BTreeMap<String, ClaimReleaseRecord>,
     /// The first release whose class suppresses the whole host.
     pub(super) host: Option<ClaimReleaseRecord>,
+}
+
+/// What admission hands a claim from the task's kept candidate.
+pub(super) enum CandidateOffer {
+    /// The candidate, for the claim's leaf to resume.
+    Resume(ClaimCandidateRef),
+    /// No candidate: the claim's leaf implements afresh, and the task's
+    /// history records why [ORB-14338].
+    Fresh {
+        candidate: ClaimCandidateRef,
+        reason: CandidateFreshReason,
+        detail: String,
+    },
+}
+
+impl CandidateOffer {
+    /// The candidate the claim's leaf resumes, if any.
+    pub(super) fn resume_candidate(&self) -> Option<ClaimCandidateRef> {
+        match self {
+            Self::Resume(candidate) => Some(candidate.clone()),
+            Self::Fresh { .. } => None,
+        }
+    }
+
+    /// The `candidate_resume` history entry a fresh offer records on the
+    /// task, naming the claim, the candidate and the typed reason.
+    pub(super) fn history(
+        &self,
+        claim_id: &str,
+        machine_id: &str,
+    ) -> Option<orbit_types::task::TaskHistoryEntry> {
+        let Self::Fresh {
+            candidate,
+            reason,
+            detail,
+        } = self
+        else {
+            return None;
+        };
+        Some(orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: machine_id.to_string(),
+            event: orbit_types::task::CANDIDATE_RESUME_EVENT.into(),
+            note: Some(format!(
+                "fresh: claim={claim_id}, machine={machine_id}, source_run={}, source_branch={}, \
+                 source_sha={}; reason={}: candidate {} {detail}",
+                candidate.source_run_id.as_deref().unwrap_or("unknown"),
+                candidate.branch,
+                candidate.head_sha,
+                reason.as_str(),
+                candidate.head_sha,
+            )),
+            from_status: None,
+            to_status: None,
+        })
+    }
 }
 
 /// The one comment a task blocked by its release budget carries: every

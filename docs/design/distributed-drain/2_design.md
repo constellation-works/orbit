@@ -504,21 +504,33 @@ owns delivery:
   listing every counted reason; releases before such a block no longer count. A `Release` naming
   a class that blocks is applied as a block. `orbit run show <leaf>` prints the class on its
   `Claim:` line (`pull_claim.failure_class`).
-- *Candidate continuation* ([ORB-14257]). When the leaf had committed a candidate, its failure
-  names it (`failure.candidate`): the branch and head it pushed, with the pull request it opened,
-  or before the push the branch it synchronized or prepared, kept on the follower that made it
-  (`published: false`), with the source run and the step it stopped at. The owner keeps that
-  reference with the task's spec digest, on a `Fail` as on a `Release`. Admission attaches the
-  latest one to the claim (`task.resume_candidate`) unless the task's description, acceptance
-  criteria or selectors changed or an operator discarded the candidate since, and the follower
-  passes it to the claimed PR leaf. Its `resume_candidate` step (`candidate_resume` in claimed
-  mode) squash-applies the candidate onto the new base and hands the implementer a `continuation`
-  repair (`review` when the before-PR review refused it, `conflict` when it no longer applies
-  cleanly); the implementer always runs, and the leaf's own validation judges the result. The
-  reference is informational for any other leaf: a candidate the follower cannot fetch
-  (unpublished, on another host) and every claimed-local leaf implement fresh, so a released task
-  may be re-implemented until [ORB-14338] makes an unpublished candidate fetchable on another host
-  and gives claimed-local leaves the same continuation.
+- *Candidate continuation* ([ORB-14257], [ORB-14338]). When the leaf had committed a candidate,
+  its failure names it (`failure.candidate`) with the source run and the step it stopped at: for
+  a claimed PR leaf, the branch and head it pushed, with the pull request it opened
+  (`published`), or before the push the branch tip its failure hook carried; for a claimed-local
+  leaf, its worktree branch at the commit checkpoint. A claimed PR leaf's job-level
+  `failure_activity`, `claim_candidate_carry`, runs when the leaf fails after its commit and
+  before its own push: it pushes the tip of the branch the leaf synchronized or prepared (review
+  fixes included) to `refs/orbit/candidates/<task>/<run>` on `origin`, and its checkpointed output
+  says where the candidate is. The settlement names that ref (`durable_ref`), or, when the push
+  failed, why (`carry_failure`); either way the candidate also stays on the follower that made it.
+  A claimed-local leaf runs only on the owner, in the owner's repository, so its candidate needs
+  no push. The owner keeps the reference with the task's spec digest and the machine that
+  committed it, on a `Fail` as on a `Release`. Admission attaches the latest one to the claim
+  (`task.resume_candidate`) unless the task's description, acceptance criteria or selectors
+  changed, an operator discarded the candidate since, or the candidate is neither published nor
+  carried and the claim runs on another machine, which could not fetch it. Each of those is
+  recorded in the task's history in the admission transaction, as a `candidate_resume` event
+  whose note starts `fresh:` and names the claim, machine, source candidate and typed reason
+  (`spec_changed`, `discarded`, `not_durable`), so a fresh implementation is never silent. The
+  follower passes the candidate to either claimed leaf. Its `resume_candidate` step
+  (`candidate_resume` in claimed mode) fetches the candidate from `durable_ref`, or else its
+  branch, when the object is not already local, squash-applies it onto the new base and hands the
+  implementer a `continuation` repair (`review` when the before-PR review refused it, `conflict`
+  when it no longer applies cleanly); the implementer always runs, and the leaf's own validation
+  judges the result. A candidate that is not on `origin` or in the executing host's object store
+  is implemented fresh with the reason in the step's output. Carried refs are not deleted by
+  Orbit; the runbook covers pruning them.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -792,6 +804,7 @@ audit label, and absent historical identity reads as *unknown*, never as "the ow
 | Job run | `executed_on` | the runtime that inserts the run | immutable; steps inherit; nullable |
 | Task | `job_run_machine` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; run ids are unique per machine, so run-keyed task lookups match both fields; the legacy `job_run_host` name is still read |
 | Task history | `pulled_by` event | `orbit.task.pull` | request and claim identity |
+| Task history | `candidate_resume` event | owner admission | a kept candidate the claim implements fresh instead: claim, machine, source candidate, typed reason |
 | Task artifact | `origin` | the owner, at put time | from trusted invocation context; remote labels alone leave it unknown |
 
 Until federated run inspection ([3_vision.md](./3_vision.md#1-open-questions)) exists, these
@@ -1004,6 +1017,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13894] — attributed handoff landings to their owner tasks in `deliveries_landed` batches.
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
 - [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; a claimed PR leaf continues a kept candidate it can fetch.
-- [ORB-14338] — (planned) durable cross-host candidate transfer and claimed-local continuation.
+- [ORB-14338] — carried an unpublished claimed candidate to a durable ref on `origin` so any host resumes it, gave claimed-local leaves candidate continuation, and recorded a typed reason in task history when a kept candidate is set aside.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

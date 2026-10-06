@@ -26,10 +26,14 @@ spec:
     tool is `resumed_unjudged`: the run's own validation step decides. Every
     outcome with a candidate is written to the task history as a
     `candidate_resume` event naming the source run and SHA.
-    A claimed PR leaf sets `claimed` and passes `candidate`, the reference
-    the owner kept from the task's last claim; the owner has already
-    retired a discarded one or one whose spec changed, so neither check
-    runs here and nothing is written to the task's history. A clean merge
+    A claimed leaf, PR or owner-local, sets `claimed` and passes
+    `candidate`, the reference the owner kept from the task's last claim;
+    the owner has already retired a discarded one, one whose spec changed
+    and one this host cannot fetch, recording why in the task's history, so
+    none of those checks runs here and nothing is written to the task's
+    history. A candidate missing from this object store is fetched from
+    `origin`: from its `durable_ref` when its leaf carried it to one, else
+    from its branch. A clean merge
     is `resumed_repaired` with trigger `continuation` (`review` when the
     before-PR review refused it): the claimed implementer always runs and
     the leaf's own validation judges the result.
@@ -56,7 +60,8 @@ spec:
         type: [object, "null"]
         description: >
           Claimed mode only: the preserved candidate's `branch` and
-          `head_sha`, with `source_run_id` and `failed_step_id`.
+          `head_sha`, with `source_run_id`, `failed_step_id` and, when its
+          leaf carried it to `origin`, `durable_ref`.
   output_schema_json:
     type: object
     required: [phase, outcome, implement]

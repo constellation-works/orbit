@@ -15,6 +15,11 @@ pub const NO_AUTO_APPROVE_TAG: &str = "no-auto-approve";
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 
+/// Task history event recording what a run, or a claim's admission, did with
+/// the candidate an earlier run or claim of the task preserved [ORB-13985]
+/// [ORB-14338].
+pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
+
 /// Operator-facing projection for a valid task reference whose prefix is not
 /// represented in this machine's coordination registry.
 pub const TASK_REFERENCE_NOT_VERIFIABLE_HERE: &str = "not verifiable here";

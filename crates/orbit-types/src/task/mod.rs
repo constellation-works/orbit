@@ -35,9 +35,9 @@ pub use artifacts::{
     validate_orb_task_id, validate_relative_artifact_path, validate_task_relations_for_source,
 };
 pub use model::{
-    ArtifactPresentation, CANDIDATE_DISCARDED_EVENT, CI_FAILURE_KEY_TAG_PREFIX,
-    DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DependencyDeadEnd, ExecutionLocation,
-    ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
+    ArtifactPresentation, CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT,
+    CI_FAILURE_KEY_TAG_PREFIX, DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DependencyDeadEnd,
+    ExecutionLocation, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
     NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, ResolvedTaskDependency, ResolvedTaskRelation,
     TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskArtifact, TaskComment, TaskComplexity,
     TaskCreateStatus, TaskHistoryEntry, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,

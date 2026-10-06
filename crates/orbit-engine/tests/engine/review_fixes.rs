@@ -295,6 +295,7 @@ const ACTIVITIES: &[&str] = &[
     "final_recovery",
     "claim_validate",
     "claim_handoff",
+    "claim_candidate_carry",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -604,8 +605,10 @@ impl RuntimeHost for ScriptedHost {
                 "tested_head": head,
                 "candidate": { "commit": head },
                 "validation": [],
+                "no_diff_evidence": null,
             }),
             "claim_handoff" => json!({ "decision": "handed_off" }),
+            "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),
