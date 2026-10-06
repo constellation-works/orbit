@@ -380,6 +380,36 @@ fn archiving_closes_the_tasks_orbit_prs_naming_the_state() {
 }
 
 #[test]
+fn archiving_a_done_task_keeps_the_pr_its_approval_left_open() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Approved, then archived before its PR merged");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[13, 11]);
+    fx.move_to_review(&task_id);
+    fx.runtime
+        .approve_task(&task_id, None, None)
+        .expect("approve the review");
+    assert_eq!(fx.forge.closed_numbers(), vec![13]);
+
+    fx.runtime.archive_task(&task_id).expect("archive the task");
+
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Archived
+    );
+    assert_eq!(
+        fx.forge.closed_numbers(),
+        vec![13],
+        "archiving a done task closes nothing further"
+    );
+    assert!(
+        fx.forge.still_open().contains(&11),
+        "the reviewed PR stays open for the operator to merge"
+    );
+}
+
+#[test]
 fn a_new_run_leaves_blocked_prs_open() {
     let fx = Fixture::new();
     let task_id = fx.add_task("Blocked then re-run");
