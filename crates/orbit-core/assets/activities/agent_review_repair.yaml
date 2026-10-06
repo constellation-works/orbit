@@ -148,6 +148,14 @@ spec:
        `not_run`. Never record a skipped or denied command as passed, and never
        drop a record to make the set look clean.
 
+       When you run a host-required command in any wrapped form, set `check`
+       to that host-required command string — the manifest's command, such as
+       `make ci-fast`, not the wrapped text. A leading `NAME=value` assignment
+       (`TMPDIR="$PWD/.orbit/tmp" make ci-fast`) is the same command as the
+       host requirement. Every other wrap (`env`, a shell prefix, a changed
+       argument) is a different command, so `check` is what identifies it as
+       that host-required command.
+
        Classify each record with `role`, which says what it is evidence of.
        Omitting `role` means `required`. Every role other than `required` needs
        a `note` explaining it, or the gate refuses the record:
@@ -172,8 +180,9 @@ spec:
          replaced, such as a run in a misconfigured environment you then
          corrected. Keep it and record the replacing required check after it.
          The replacement must be the same check: the same `command`
-         (whitespace is ignored), or the same non-empty `check` identity when
-         the command or environment was corrected. A record without a `check`
+         (whitespace is ignored, and a leading `NAME=value` environment
+         assignment is ignored), or the same non-empty `check` identity when
+         the command itself was corrected. A record without a `check`
          is matched by its command alone. An unrelated later pass (for example
          a formatting check after a failed test run) does not replace it.
        - `diagnostic`: an observation of the final candidate the task does not

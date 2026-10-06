@@ -44,11 +44,12 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         }
     };
 
-    // Corrected command with no shared identity: missing relationship.
+    // A changed argument, not a leading environment assignment: a leading
+    // `NAME=value` is the same command [ORB-14302].
     let missing_identity = vec![
         superseded(None),
         required(
-            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            "cargo test --package orbit-core --locked",
             ValidationOutcome::Passed,
         ),
     ];
@@ -64,7 +65,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
     let one_sided = vec![
         superseded(Some("orbit-core-tests")),
         required(
-            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            "cargo test --package orbit-core --locked",
             ValidationOutcome::Passed,
         ),
     ];
@@ -116,7 +117,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
         with_check(
             required(
-                "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+                "cargo test --package orbit-core --locked",
                 ValidationOutcome::Failed,
             ),
             "orbit-core-tests",

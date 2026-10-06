@@ -208,8 +208,9 @@ impl Default for ValidationContext<'_> {
 /// the candidate's scope, and, when it runs on the candidate, not share its
 /// check with a required pass; an excluded action must have stayed
 /// unperformed; a superseded attempt must be followed by the required check
-/// that replaced it — the same command, or the same non-empty `check`
-/// identity, whichever the two records share; a diagnostic must be an
+/// that replaced it — the same command (whitespace and leading `NAME=value`
+/// assignments ignored), or the same non-empty `check` identity, whichever
+/// the two records share; a diagnostic must be an
 /// observation that ran, and a failed one must name sources all outside the
 /// scope and not share its check with a required pass. Every classification
 /// other than `required` must explain itself, so an unexplained
@@ -281,7 +282,7 @@ pub fn validation_evidence(
     };
     for command in host_required {
         let established = records.iter().enumerate().any(|(index, record)| {
-            record.command == *command
+            same_host_command(record, command)
                 && match record.role {
                     ValidationRole::Required => record.outcome == ValidationOutcome::Passed,
                     ValidationRole::Superseded => {
@@ -507,10 +508,11 @@ fn explained(record: &ReviewValidation) -> bool {
 /// Whether a later record is the required check the superseded attempt was
 /// replaced by. Order carries the meaning: a supersession must be resolved
 /// after it, never by a check recorded before it. The later record must be
-/// the same check: the same command (whitespace-normalized), or the same
-/// non-empty `check` identity when the command or environment was
-/// corrected. Check identities and commands are compared only with their
-/// own kind, so one cannot impersonate the other, and a `check` one record
+/// the same check: the same command (whitespace-normalized, with leading
+/// POSIX environment assignments removed), or the same non-empty `check`
+/// identity when the command itself was corrected. Check identities and
+/// commands are compared only with their own kind, so one cannot impersonate
+/// the other, and a `check` one record
 /// omits never stops the commands from relating them: an optional field
 /// left out of an honest record must not turn a pass into a refusal. Any
 /// later required pass is not enough.
@@ -543,13 +545,125 @@ fn check_identity(record: &ReviewValidation) -> Option<&str> {
         .filter(|check| !check.is_empty())
 }
 
-/// The command with whitespace runs collapsed, so `make  ci-fast` and
-/// `make ci-fast` are one check.
+/// Whether `record` is the host-required command.
+///
+/// Whitespace and leading POSIX environment assignments do not make a
+/// different check. The command that remains is compared in full. A
+/// reviewer may also set `check` to the host command string when the run
+/// is wrapped in any other way (`env`, a shell prefix); that identity is
+/// the host command, not a match against another record's command text.
+fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool {
+    let same_command = matches!(
+        (
+            normalized_command(record),
+            normalize_command_text(host_command),
+        ),
+        (Some(left), Some(right)) if left == right
+    );
+    let same_identity = check_identity(record).is_some_and(|check| check == host_command.trim());
+    same_command || same_identity
+}
+
+/// The command with whitespace runs collapsed and leading POSIX environment
+/// assignments removed, so `TMPDIR="$PWD/.orbit/tmp" make ci-fast` and
+/// `make  ci-fast` are one check. `make ci-fast-extra` and `FOO=1 make other`
+/// stay different checks.
 fn normalized_command(record: &ReviewValidation) -> Option<String> {
-    let command = record
-        .command
+    normalize_command_text(&record.command)
+}
+
+fn normalize_command_text(command: &str) -> Option<String> {
+    let command = strip_leading_env_assignments(command)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     (!command.is_empty()).then_some(command)
+}
+
+/// Drop leading `NAME=value` words. A quoted value, including one with
+/// spaces, stays part of the assignment word. The command text that remains
+/// is returned unchanged so later whitespace collapsing matches the previous
+/// comparison.
+fn strip_leading_env_assignments(command: &str) -> &str {
+    let mut rest = command;
+    loop {
+        let trimmed = rest.trim_start();
+        if trimmed.is_empty() {
+            return trimmed;
+        }
+        let (word, after) = first_shell_word(trimmed);
+        if word.is_empty() || !is_env_assignment(word) {
+            return trimmed;
+        }
+        rest = after;
+    }
+}
+
+/// The first shell word and the text after it.
+///
+/// Quotes keep their contents, spaces included, in the word. A backslash
+/// escapes the next character outside quotes and inside double quotes. The
+/// raw word is returned, quotes included, because only assignment words are
+/// discarded; the surviving command is collapsed separately.
+fn first_shell_word(command: &str) -> (&str, &str) {
+    let mut quote: Option<char> = None;
+    let mut chars = command.char_indices();
+    while let Some((idx, ch)) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some('"') => {
+                if ch == '\\' {
+                    chars.next();
+                } else if ch == '"' {
+                    quote = None;
+                }
+            }
+            Some(_) => {}
+            None if ch.is_whitespace() => {
+                return (&command[..idx], &command[idx..]);
+            }
+            None => match ch {
+                '\'' => quote = Some('\''),
+                '"' => quote = Some('"'),
+                '\\' => {
+                    chars.next();
+                }
+                _ => {}
+            },
+        }
+    }
+    (command, "")
+}
+
+/// A POSIX assignment word: an unquoted `NAME` immediately followed by `=`.
+///
+/// `NAME` is `[A-Za-z_][A-Za-z0-9_]*`. The value may be quoted. A word whose
+/// name is quoted, or that has no `=`, is a command word.
+fn is_env_assignment(word: &str) -> bool {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !is_posix_name_start(first) {
+        return false;
+    }
+    for ch in chars {
+        if is_posix_name_continue(ch) {
+            continue;
+        }
+        return ch == '=';
+    }
+    false
+}
+
+fn is_posix_name_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_posix_name_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
 }
