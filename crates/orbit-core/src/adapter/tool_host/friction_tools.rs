@@ -85,6 +85,7 @@ pub(super) fn add_params(
             title,
             body,
             tags,
+            status: orbit_types::record::FrictionStatus::Open,
             during_task,
             created_at: Utc::now(),
         },

@@ -42,6 +42,7 @@ fn add_test_friction(runtime: &OrbitRuntime) -> String {
             title: None,
             body: "Approval should close this friction".to_string(),
             tags: vec!["tooling".to_string()],
+            status: orbit_types::record::FrictionStatus::Open,
             during_task: None,
             created_at: Utc.with_ymd_and_hms(2026, 5, 17, 4, 5, 0).unwrap(),
         })

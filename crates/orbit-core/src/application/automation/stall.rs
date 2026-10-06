@@ -25,6 +25,7 @@ use orbit_automation::delivery::adopt::AdoptionReport;
 use orbit_automation::delivery::stall::StallReport;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
+use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::automation::recovery::AutomationStall;
 use std::fmt::Write as _;
 
@@ -71,6 +72,11 @@ pub(super) fn report(
         body(report, &key),
         &wanted,
         report.at,
+        if report.repaired {
+            FrictionStatus::Resolved
+        } else {
+            FrictionStatus::Open
+        },
     )
 }
 
@@ -124,6 +130,7 @@ pub(super) fn report_adoption(
         body,
         &[AUTOMATION_TAG],
         report.at,
+        FrictionStatus::Resolved,
     )
 }
 
@@ -135,6 +142,7 @@ fn file(
     body: String,
     wanted: &[&str],
     at: DateTime<Utc>,
+    status: FrictionStatus,
 ) -> Result<Option<String>, OrbitError> {
     let frictions = crate::runtime::friction::store_for(runtime)?;
 
@@ -162,6 +170,7 @@ fn file(
             title: Some(title),
             body,
             tags: tags(wanted, &frictions.tags()?),
+            status,
             during_task: None,
             created_at: at,
         },
