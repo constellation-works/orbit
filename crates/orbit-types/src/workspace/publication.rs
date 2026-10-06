@@ -379,11 +379,29 @@ fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
 
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
     let (username, host_path) = remote.split_once('@')?;
-    if username.contains('/')
-        || !host_path.contains(':')
-        || (!username.contains(':') && username != "***")
-    {
+    let (host, path) = host_path.split_once(':')?;
+    if username.contains('/') || (!username.contains(':') && username != "***") {
         return None;
+    }
+    // Passwords may contain at-signs even when parsing rejects the remote.
+    // Mask through the last one in the host while keeping the original suffix
+    // intact. Rebuilding around the first colon would alter bracketed IPv6
+    // addresses such as `[::1]`.
+    if let Some((_, host)) = host.rsplit_once('@') {
+        return Some(format!("***@{host}:{path}"));
+    }
+    // A colon after the first at-sign makes a later at-sign ambiguous: it may
+    // still be part of the password. Hide the whole remote rather than risk
+    // exposing password text or guessing where the repository path begins.
+    let first_colon = host_path.find(':')?;
+    if let Some(later_at) = host_path[first_colon + 1..].find('@') {
+        let later_at = first_colon + 1 + later_at;
+        if host_path
+            .find('/')
+            .is_none_or(|path_start| later_at < path_start)
+        {
+            return Some("***".to_string());
+        }
     }
     Some(format!("***@{host_path}"))
 }
