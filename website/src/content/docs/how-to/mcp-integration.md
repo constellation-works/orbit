@@ -98,6 +98,11 @@ setups such as a server-side Orbit reached through an SSH tunnel. It does not
 authenticate clients, so it binds loopback unless you pass
 `--allow-non-loopback`.
 
+The listener allows 64 concurrent sessions. Each accepted connection has five
+seconds to send a complete initialization request and receive its response;
+silent peers and incomplete messages are closed and release their slots.
+Established sessions remain connected while idle, until the client disconnects.
+
 ## Response shapes
 
 `orbit tool list` shows every tool. Each one advertises MCP annotations
