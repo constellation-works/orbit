@@ -45,6 +45,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, RetryKey, input_hash,
 };
@@ -630,24 +631,32 @@ impl OrbitRuntime {
             }),
             ..PipelineSubmission::catalog(job_name, input.clone(), Some(actor))
         });
-        self.record_pipeline_audit(
-            "agent.invoke",
-            result.as_ref().ok().map(|(value, _)| value.run_id.as_str()),
-            Some(actor),
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "run_id": result.as_ref().ok().map(|(value, _)| value.run_id.clone()),
-                "idempotency_key": idempotency_key,
-                "deduplicated": result.as_ref().ok().map(|(_, deduplicated)| *deduplicated),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+        log_best_effort(
+            "record agent invocation audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|(value, _)| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "agent.invoke",
+                result.as_ref().ok().map(|(value, _)| value.run_id.as_str()),
+                Some(actor),
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "run_id": result.as_ref().ok().map(|(value, _)| value.run_id.clone()),
+                    "idempotency_key": idempotency_key,
+                    "deduplicated": result.as_ref().ok().map(|(_, deduplicated)| *deduplicated),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
         result
     }
 }

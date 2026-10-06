@@ -472,7 +472,7 @@ impl OrbitRuntime {
             },
             ..PipelineSubmission::catalog(&job_name, input.clone(), actor)
         });
-        self.record_submission_audit(&job_name, &input, actor, &result)?;
+        self.record_submission_audit(&job_name, &input, actor, &result);
         result
     }
     /// Submit an operator UI's no-input catalog action through the shared dispatcher.
@@ -546,7 +546,7 @@ impl OrbitRuntime {
             }
             .with_trigger(trigger),
         );
-        self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
+        self.record_submission_audit(job_name, &input, Some("automation"), &result);
         result
     }
     pub fn submit_pipeline_run(
@@ -576,23 +576,31 @@ impl OrbitRuntime {
             PipelineSubmission::catalog(job_name, input.clone(), actor).with_trigger(trigger),
         );
 
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().map(|value| value.run_id.as_str()),
-            actor,
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": priority,
-                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+        log_best_effort(
+            "record pipeline submission audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|value| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                actor,
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": priority,
+                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
 
         result
     }
@@ -616,28 +624,36 @@ impl OrbitRuntime {
             Some(admission),
         );
 
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().and_then(ChildSubmission::run_id),
-            actor,
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": priority,
-                "parent_run_id": admission.parent_run_id,
-                "outcome": match &result {
-                    Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
-                    _ => "submitted",
+        log_best_effort(
+            "record child submission audit",
+            result
+                .as_ref()
+                .ok()
+                .and_then(ChildSubmission::run_id)
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().and_then(ChildSubmission::run_id),
+                actor,
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
                 },
-                "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": priority,
+                    "parent_run_id": admission.parent_run_id,
+                    "outcome": match &result {
+                        Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
+                        _ => "submitted",
+                    },
+                    "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
 
         result
     }

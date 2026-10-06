@@ -5,31 +5,40 @@ use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
-    /// does not route through [`Self::submit_pipeline_run`].
+    /// does not route through [`Self::submit_pipeline_run`]. Audit failures
+    /// are logged without replacing the submission outcome.
     pub(super) fn record_submission_audit(
         &self,
         job_name: &str,
         input: &Value,
         actor: Option<&str>,
         result: &Result<PipelineInvokeResult, OrbitError>,
-    ) -> Result<(), OrbitError> {
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().map(|value| value.run_id.as_str()),
-            actor,
-            match result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": Option::<&str>::None,
-                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
-                "input_hash": input_hash(input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )
+    ) {
+        log_best_effort(
+            "record pipeline submission audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|value| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                actor,
+                match result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": Option::<&str>::None,
+                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "input_hash": input_hash(input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
     }
     /// Persist a pipeline run and hand it to a detached worker.
     ///
@@ -284,25 +293,33 @@ impl OrbitRuntime {
         })();
 
         if let Some(plan) = resume {
-            self.record_pipeline_audit(
-                "pipeline.resume",
-                result.as_ref().ok().and_then(ChildSubmission::run_id),
-                actor,
-                match &result {
-                    Ok(_) => AuditEventStatus::Success,
-                    Err(_) => AuditEventStatus::Failure,
-                },
-                json!({
-                    "actor": actor,
-                    "job_name": job_name,
-                    "source_run_id": plan.source.run_id,
-                    "attempt": plan.attempt,
-                    "resumed_from_checkpoints": plan.resume_state.is_some(),
-                    "checkpoint_batch_id": plan.checkpoint_batch_id,
-                    "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
-                }),
-                result.as_ref().err().map(|error| error.to_string()),
-            )?;
+            log_best_effort(
+                "record resume submission audit",
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(ChildSubmission::run_id)
+                    .unwrap_or_default(),
+                self.record_pipeline_audit(
+                    "pipeline.resume",
+                    result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    actor,
+                    match &result {
+                        Ok(_) => AuditEventStatus::Success,
+                        Err(_) => AuditEventStatus::Failure,
+                    },
+                    json!({
+                        "actor": actor,
+                        "job_name": job_name,
+                        "source_run_id": plan.source.run_id,
+                        "attempt": plan.attempt,
+                        "resumed_from_checkpoints": plan.resume_state.is_some(),
+                        "checkpoint_batch_id": plan.checkpoint_batch_id,
+                        "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    }),
+                    result.as_ref().err().map(|error| error.to_string()),
+                ),
+            );
         }
 
         result

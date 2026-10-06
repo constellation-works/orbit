@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-10-04
+last_updated: 2026-10-06
 last_validated: 2026-09-19
 status: Draft
 feature: auditability
@@ -51,6 +51,14 @@ execution and suppresses its duplicate after Core records a tool row; pre-runtim
 failures such as invalid JSON still produce the guard-side row. A successful tool result is
 not returned if audit persistence fails, although the audit seam cannot roll back a
 mutation already committed. When the tool itself fails, that domain error remains primary.
+
+Pipeline submission has a separate best-effort audit row for `pipeline.invoke`,
+`pipeline.resume`, or `agent.invoke`. After admission and worker dispatch, a failed
+audit insert logs a warning with the operation, run id when available, and error,
+while the caller receives the admitted run. When submission fails, its original
+error remains primary. This applies to catalog, direct-file, automation, child,
+resume, and operator agent-invocation submissions; the registered-tool dispatch
+audit contract above remains unchanged.
 
 For MCP, initialize metadata controls only the external workspace address selector. The
 server constructs the rest of `ToolSessionContext`: accepting-process identity,
