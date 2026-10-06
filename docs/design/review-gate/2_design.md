@@ -251,8 +251,9 @@ validation record also carries a `role` saying what it is evidence of, and
 establishes. Settlement and delivery coverage both read that one function, so
 a certificate cannot mean one thing when it is issued and another when it is
 spent. It also requires every command in the immutable owner snapshot to be
-present as `required` and `passed`, or to be a valid superseded record followed
-by a passing check with the same effective identity. A record's effective
+present as `required` and `passed`, or to be a valid superseded record with
+a passing required check of the same effective identity anywhere in the report.
+A record's effective
 identity is its non-empty, trimmed `check`, falling back to its normalized
 command. Explicit identities take precedence even when command text matches.
 This also applies to retained obligations across report revisions: an earlier
@@ -262,7 +263,7 @@ reverse order also matches [ORB-14312]. Command
 identity ignores whitespace and leading `NAME=value` assignments, so a required
 `TMPDIR="$PWD/.orbit/tmp" make ci-fast` pass establishes host-required
 `make ci-fast`. `make ci-fast-extra` and `FOO=1 make other` do not. A
-diagnostic, exclusion, negative control, omission, or later unrelated pass
+diagnostic, exclusion, negative control, omission, or unrelated pass
 cannot satisfy a host-required command. Certificates retain that snapshot;
 legacy certificates without it cannot be spent as coverage.
 
@@ -271,8 +272,15 @@ legacy certificates without it cannot be spent as coverage.
 | `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
-| `superseded` | A diagnostic attempt a later required check replaced | a later record that is `required` and `passed` and has the same effective identity: its non-empty, trimmed `check`, otherwise its `command` with whitespace and leading `NAME=value` assignments normalized. An explicit identity can match another record's normalized command. Different effective identities, or a related check that did not pass, are not a replacement |
+| `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty, trimmed `check`, otherwise its `command` with whitespace and leading `NAME=value` assignments normalized. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
 | `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. It supplies no coverage and creates no requirement |
+
+Required passes describe the final candidate, so replacement does not depend on
+array position [ORB-14322]. Reviewers should still list superseded attempts
+before their replacements so the report reads chronologically. Identity stays
+strict: a broader check such as "runtime tests and formatting" cannot replace
+"runtime tests", even with an identical command. Coverage or command-superset
+claims do not establish a replacement relationship.
 
 A negative control is bound to more than its label [ORB-14192]: an
 `expected_failure` record names its `control` kind — `pre_fix` (the
@@ -332,8 +340,8 @@ evidence about it.
 
 The contract version stays 1: a record carrying no role decides exactly as it
 did before, so older role-less evidence is not reinterpreted. A superseded
-attempt now requires the later required pass that names the same check; a
-certificate that treated an unrelated later pass as a replacement becomes
+attempt requires a required pass that names the same check, in either report
+order; a certificate that treated an unrelated pass as a replacement becomes
 incomplete when coverage re-reads the records. Coverage re-derives the rules
 over the certificate's own `validation_scope` and `retained_obligations`, so
 an `expected_failure` without `control` and in-scope `sources`, or a failed

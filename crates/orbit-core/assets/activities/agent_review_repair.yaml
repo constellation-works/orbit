@@ -187,13 +187,16 @@ spec:
          requirement. Never perform an unauthorized action to clear a record.
        - `superseded`: an earlier diagnostic attempt a later required check
          replaced, such as a run in a misconfigured environment you then
-         corrected. Keep it and record the replacing required check after it.
-         The replacement must be the same check: the same `command`
-         (whitespace is ignored, and a leading `NAME=value` environment
-         assignment is ignored), or the same non-empty `check` identity when
-         the command itself was corrected. A record without a `check`
-         is matched by its command alone. An unrelated later pass (for example
-         a formatting check after a failed test run) does not replace it.
+         corrected. Keep it and list it before the replacing required pass so
+         the report reads chronologically; settlement accepts either array
+         order because required passes describe the final candidate.
+         The replacement must have the same effective identity: a non-empty,
+         trimmed `check`, otherwise the `command` with whitespace and leading
+         `NAME=value` environment assignments normalized. An explicit identity
+         can match another record's normalized command. Different identities
+         never match, even with identical commands or a broader passing check.
+         An unrelated pass (for example a formatting check replacing a failed
+         test run) does not replace it.
        - `diagnostic`: an observation of the final candidate the task does not
          require, such as a workspace-wide suite run beyond the task's checks.
          Record its real outcome (`passed` or `failed`); it supplies no
@@ -205,7 +208,7 @@ spec:
        A record you once filed `required` stays an obligation for this
        attempt: the host keeps every report revision you attach, and a later
        revision must still record the same check as `required` (rerun) or
-       `superseded` (followed by its required replacement), or as `excluded`
+       `superseded` (with its same-identity required replacement), or as `excluded`
        when it never ran. Dropping it or relabeling it `diagnostic` or
        `expected_failure` settles `incomplete`.
 

@@ -3,8 +3,9 @@
 //! The review validation gate through the public review-coverage boundary.
 //!
 //! A reviewer may file a failed attempt as `superseded`. The attempt then
-//! counts only when a later required check that passed replaced it: the same
-//! effective identity: a non-empty `check`, otherwise the normalized command. Both
+//! counts only when a required check that passed replaced it, in either report
+//! order, with the same effective identity: a non-empty `check`, otherwise the
+//! normalized command. Both
 //! consumers of these rules are driven here. [`validation_evidence`] gives the
 //! reason the issuing gate escalates with. [`certificate_acceptable`] and
 //! [`exclusion`] decide whether an issued certificate covers a delivery. A
@@ -56,15 +57,20 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
             records: vec![superseded(ATTEMPT, None), required(CORRECTED, None, true)],
         },
         Case {
-            name: "missing: no later required check at all",
+            name: "missing: no same-identity required pass anywhere",
             records: vec![
                 required("make ci-lint", None, true),
                 superseded(ATTEMPT, None),
+                required("cargo fmt --check", None, true),
             ],
         },
         Case {
-            name: "missing: the only matching pass precedes the attempt",
-            records: vec![required(ATTEMPT, None, true), superseded(ATTEMPT, None)],
+            name: "invalid: a broader check identity with the same command",
+            records: vec![
+                required(ATTEMPT, Some("runtime tests and formatting"), true),
+                superseded(ATTEMPT, Some("runtime tests")),
+                required(ATTEMPT, Some("runtime tests and formatting"), true),
+            ],
         },
         Case {
             name: "ambiguous: an identity on the attempt only",
@@ -171,7 +177,7 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
 /// review as incomplete].
 #[test]
 fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
-    for (name, records) in [
+    for (name, mut records) in [
         (
             "same command rerun",
             vec![superseded(ATTEMPT, None), required(ATTEMPT, None, true)],
@@ -216,16 +222,28 @@ fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
             ],
         ),
     ] {
-        assert_eq!(
-            validation_evidence(&records, &ValidationContext::default()),
-            Ok(()),
-            "{name}"
-        );
-        let certificate = certificate(records);
-        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{name}");
-        let covered = exclusion(&exact_delivery(), &certificate, &facts())
-            .unwrap_or_else(|reason| panic!("{name}: {reason:?}"));
-        assert_eq!(covered.final_candidate_tree, "tree-final", "{name}");
+        // ORB-14322: final-candidate required passes replace the same check
+        // regardless of report order, at issuance and coverage consumption.
+        for order in ["attempt first", "pass first"] {
+            assert_eq!(
+                validation_evidence(&records, &ValidationContext::default()),
+                Ok(()),
+                "{name}, {order}"
+            );
+            let certificate = certificate(records.clone());
+            assert_eq!(
+                certificate_acceptable(&certificate),
+                Ok(()),
+                "{name}, {order}"
+            );
+            let covered = exclusion(&exact_delivery(), &certificate, &facts())
+                .unwrap_or_else(|reason| panic!("{name}, {order}: {reason:?}"));
+            assert_eq!(
+                covered.final_candidate_tree, "tree-final",
+                "{name}, {order}"
+            );
+            records.reverse();
+        }
     }
 }
 
@@ -1207,7 +1225,7 @@ fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
         obligations: &[],
         required_validation_commands: Some(&required_commands),
     };
-    let records = vec![
+    let mut records = vec![
         record(
             command,
             Some("host-ci"),
@@ -1217,7 +1235,15 @@ fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
         ),
         required("make ci-fast --locked", Some("host-ci"), true),
     ];
-    assert_eq!(validation_evidence(&records, &context), Ok(()));
+    // Only the superseded record names the host command; the replacing pass
+    // establishes it through their shared identity, in either report order.
+    for order in ["attempt first", "pass first"] {
+        assert_eq!(validation_evidence(&records, &context), Ok(()), "{order}");
+        let mut certificate = certificate_with(records.clone(), &task_scope, Vec::new());
+        certificate.required_validation_commands = Some(required_commands.clone());
+        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{order}");
+        records.reverse();
+    }
 }
 
 #[test]
