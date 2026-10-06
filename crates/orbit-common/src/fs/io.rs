@@ -470,11 +470,9 @@ pub enum LockFileNaming {
     /// lock protocol.
     DotPrefixedSibling,
     /// `{file_name}.lock` — the target's exact file name with `.lock`
-    /// appended, no extra leading dot. Required when another process already
-    /// defines the lock file it expects beside a target Orbit does not
-    /// exclusively own (for example Claude Code locking `~/.claude.json.lock`
-    /// beside its own `~/.claude.json`); acquiring anything else lets the two
-    /// writers race past each other.
+    /// appended, no extra leading dot. Only interoperates with peers using
+    /// advisory file locks at that path. Peers using mkdir/mtime locks (such
+    /// as Claude Code) need [`super::directory_lock::with_directory_lock`].
     AppendedSuffix,
 }
 
