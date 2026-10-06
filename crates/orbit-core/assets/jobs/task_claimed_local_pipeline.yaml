@@ -86,6 +86,7 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -102,6 +103,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        already_landed_checkpoint: "{{ steps.commit.output }}"
 
     - id: handoff
       target: activity:claim_handoff
@@ -109,6 +112,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        no_diff_evidence: "{{ steps.validate.output.no_diff_evidence }}"
         candidate: "{{ steps.validate.output.candidate }}"
         validation: "{{ steps.validate.output.validation }}"
         # A claim binds exactly one task, so the loop ran once and this is

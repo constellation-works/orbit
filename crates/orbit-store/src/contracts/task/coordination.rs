@@ -247,8 +247,9 @@ impl AdmissionShipContract {
 /// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
 /// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
 /// [ORB-13908]; revision 8 captures the owner's required validation
-/// commands in the before-PR review contract [ORB-14192].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 8;
+/// commands in the before-PR review contract [ORB-14192]; revision 9 adds
+/// NoDiff claim delivery and owner-verified clean-base completion [ORB-14259].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 9;
 
 /// The pull wire shape, derived from the same request and nested types that
 /// admission deserializes. No field list or manually bumped revision can drift
@@ -727,6 +728,8 @@ pub(crate) struct ClaimCommitEffects {
 /// Not deserializable: adapters must obtain these independently of handoff JSON.
 /// For already-landed delivery, the adapter must run the existing typed evidence,
 /// scope, ancestry, delivery-marker and clean-tree checks before constructing this.
+/// For NoDiff it must re-run the clean-tree checkpoint verifier against the
+/// owner's current base and pinned report, without trusting an executor branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandoffObservation {
     /// Owner-observed eligible additions outside the original footprint.

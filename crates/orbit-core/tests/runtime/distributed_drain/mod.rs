@@ -61,6 +61,7 @@ mod cancel;
 mod claimed_review;
 mod desktop_completion;
 mod landing_attribution;
+mod no_diff;
 mod pilot;
 mod recovery;
 mod settlement;
@@ -293,6 +294,7 @@ impl DrainOwnerTransport for Wire {
         // records the acceptance when the test asks for it.
         if name == "orbit.drain.claim.settle"
             && let Some(handoff) = input["settlement"].get("AcceptHandoff")
+            && handoff["candidate"]["delivery"]["kind"] != "no_diff"
         {
             if *self.accept_handoffs.lock().unwrap() {
                 self.accept(serde_json::from_value(handoff.clone()).unwrap())?;

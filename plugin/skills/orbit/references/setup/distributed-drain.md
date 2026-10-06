@@ -55,7 +55,7 @@ orbit config get operation.review_crew   # the owner's before-PR reviewer crew
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `8`, and equivalent crew and toolchain resolution. Review policy
+protocol schema `9`, and equivalent crew and toolchain resolution. Review policy
 is the owner's: admission captures the owner's `review.before_pr` and, when it
 is on, its `operation.review_crew`, review budget, and
 `workflow.required_validation_commands` into the claim. With it
@@ -130,7 +130,14 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 8).
+exact paths. Both peers require the same protocol revision (currently 9).
+Tagged `no-diff-expected` tasks remain on the owner with a receipt reason.
+An ordinary claim that proves its implementation changes nothing may instead
+hand off `NoDiff`. In claimed mode the implementer writes the verifier report
+and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
+references; commit imports and verifies them through the claim. The owner
+rechecks the report against its live base before authorized completion without
+a PR. A changed base or evidence requires fresh validation.
 
 
 ## Start a follower's drain
@@ -219,7 +226,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 8,
+  "caller_schema": 9,
   "caller_before_pr": false
 }'
 ```

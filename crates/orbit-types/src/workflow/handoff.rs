@@ -20,6 +20,11 @@ pub enum HandoffDelivery {
         number: u64,
     },
     LocalCandidate,
+    /// A clean base with a digest-pinned clean-tree verifier checkpoint.
+    /// Covers both a no-op implementation and work already satisfied on base.
+    NoDiff {
+        evidence: HandoffArtifactRef,
+    },
     AlreadyLanded {
         covering_commit: String,
         evidence: HandoffArtifactRef,
