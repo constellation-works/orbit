@@ -64,6 +64,11 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
 
+        #[cfg(test)]
+        if source_deadline_forced(self) {
+            return Err(AutomationError::Deferred("source_deadline".into()));
+        }
+
         if self.started.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
@@ -245,6 +250,8 @@ impl<'a> Source<'a> {
             self.revision(&format!("refs/heads/{branch}"))?
         };
         let repository = self.repository()?;
+        #[cfg(test)]
+        expire_source_after_head(self);
         Ok((repository, head))
     }
 
@@ -614,7 +621,7 @@ impl<'a> Source<'a> {
         &self,
         branch: &str,
         state: &AutomationState,
-        lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
+        lookup: &dyn Fn(&Source<'_>, &str, &str) -> Result<String, AutomationError>,
         accepted_receipts: usize,
     ) -> Result<(SourcePage, HistoryReplayRecord), AutomationError> {
         let (repository, head) = self.head(branch)?;
@@ -818,11 +825,14 @@ impl<'a> Source<'a> {
             .last()
             .map(|mapping| mapping.canonical.clone())
             .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_MAPPING_AMBIGUOUS.into()))?;
-        let mut page = source
+        // Provider observation can fetch `origin` again. Give that pass its
+        // own deadline so it cannot consume the signature proof's budget.
+        let page_source = Self::new(self.root);
+        let mut page = page_source
             .observe_with_lookup_limit(
                 branch,
                 &probe,
-                lookup,
+                &|repository, sha| lookup(&page_source, repository, sha),
                 200,
                 Some(replay_through.clone()),
                 true,
@@ -867,10 +877,10 @@ impl<'a> Source<'a> {
         self.replay_history_with_lookup(
             branch,
             state,
-            &|repository, sha| {
+            &|source, repository, sha| {
                 let request =
                     orbit_tools::github_cli::commit_pull_requests_request(repository, sha)?;
-                self.command(
+                source.command(
                     "gh",
                     &request.args.iter().map(String::as_str).collect::<Vec<_>>(),
                 )
@@ -1282,6 +1292,38 @@ fn canonical_signature_deadline_armed(args: &[&str]) -> bool {
         return false;
     }
     CANONICAL_SIGNATURE_DEADLINE.with(|armed| armed.replace(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPIRE_AFTER_NEXT_HEAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static EXPIRED_SOURCE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_expire_source_after_next_head() {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| armed.set(true));
+    EXPIRED_SOURCE.with(|source| source.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn clear_expired_source() {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| armed.set(false));
+    EXPIRED_SOURCE.with(|source| source.set(0));
+}
+
+#[cfg(test)]
+fn expire_source_after_head(source: &Source<'_>) {
+    EXPIRE_AFTER_NEXT_HEAD.with(|armed| {
+        if armed.replace(false) {
+            EXPIRED_SOURCE.with(|expired| expired.set(source as *const Source<'_> as usize));
+        }
+    });
+}
+
+#[cfg(test)]
+fn source_deadline_forced(source: &Source<'_>) -> bool {
+    EXPIRED_SOURCE.with(|expired| expired.get() == source as *const Source<'_> as usize)
 }
 
 fn fetch_failure(detail: &str) -> AutomationError {

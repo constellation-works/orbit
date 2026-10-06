@@ -4,6 +4,7 @@
 //! range the traversal check admits, and swallowing a deadline on the
 //! canonical pass turns that failure into an ambiguous mapping.
 
+use std::cell::Cell;
 use std::path::Path;
 use std::process::Command;
 
@@ -13,7 +14,8 @@ use orbit_types::workflow::automation::AutomationState;
 use orbit_types::workflow::automation::recovery::{HistoryReplayRecord, refusal};
 
 use super::super::source::{
-    Source, arm_canonical_signature_deadline, clear_canonical_signature_deadline,
+    Source, arm_canonical_signature_deadline, arm_expire_source_after_next_head,
+    clear_canonical_signature_deadline, clear_expired_source,
 };
 
 struct ClearDeadlineFault;
@@ -21,6 +23,7 @@ struct ClearDeadlineFault;
 impl Drop for ClearDeadlineFault {
     fn drop(&mut self) {
         clear_canonical_signature_deadline();
+        clear_expired_source();
     }
 }
 
@@ -137,6 +140,104 @@ fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState)
     (source, state)
 }
 
+fn diverged_with_inserted_canonical_commit() -> Diverged {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = root.path();
+    git(repo, &["init"]);
+    std::fs::create_dir(repo.join(".orbit")).expect("orbit dir");
+    std::fs::write(repo.join(".orbit/n"), "0\n").expect("base file");
+    git(repo, &["add", ".orbit"]);
+    let base_tree = git(repo, &["write-tree"]);
+    let base = git(repo, &["commit-tree", &base_tree, "-m", "base"]);
+
+    let empty = git(
+        repo,
+        &[
+            "commit-tree",
+            &base_tree,
+            "-p",
+            &base,
+            "-m",
+            "empty insertion",
+        ],
+    );
+
+    std::fs::write(repo.join("outside.txt"), "inserted\n").expect("inserted file");
+    git(repo, &["add", "outside.txt"]);
+    let outside_tree = git(repo, &["write-tree"]);
+    let old_outside = git(
+        repo,
+        &[
+            "commit-tree",
+            &outside_tree,
+            "-p",
+            &base,
+            "-m",
+            "old outside",
+        ],
+    );
+    let canonical_outside = git(
+        repo,
+        &[
+            "commit-tree",
+            &outside_tree,
+            "-p",
+            &empty,
+            "-m",
+            "canonical outside",
+        ],
+    );
+
+    std::fs::write(repo.join(".orbit/n"), "1\n").expect("replay file");
+    git(repo, &["add", ".orbit"]);
+    let replay_tree = git(repo, &["write-tree"]);
+    let old_final = git(
+        repo,
+        &[
+            "commit-tree",
+            &replay_tree,
+            "-p",
+            &old_outside,
+            "-m",
+            "old final",
+        ],
+    );
+    let canonical_final = git(
+        repo,
+        &[
+            "commit-tree",
+            &replay_tree,
+            "-p",
+            &canonical_outside,
+            "-m",
+            "canonical final",
+        ],
+    );
+    git(repo, &["update-ref", "refs/heads/main", &canonical_final]);
+    git(repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+    let remote = root.path().join("remote.git");
+    std::fs::create_dir(&remote).expect("remote dir");
+    let output = Command::new("git")
+        .args(["init", "--bare"])
+        .current_dir(&remote)
+        .output()
+        .expect("init bare remote");
+    assert!(output.status.success(), "git init --bare failed");
+    let remote_text = remote.to_str().expect("remote path is utf-8");
+    let provider_url = "https://github.com/example/repo.git";
+    let rewrite = format!("url.{remote_text}.insteadOf");
+    git(repo, &["config", &rewrite, provider_url]);
+    git(repo, &["remote", "add", "origin", provider_url]);
+    git(repo, &["push", "origin", "refs/heads/main"]);
+
+    Diverged {
+        root,
+        old: vec![old_outside, old_final],
+        new: vec![empty, canonical_outside, canonical_final],
+    }
+}
+
 /// The pre-batch signature: one `rev-parse` of `.orbit` and one `diff-tree`.
 fn direct_signature(repo: &Path, commit: &str) -> String {
     let orbit_tree = git(
@@ -169,7 +270,12 @@ fn replay(
     state: &AutomationState,
 ) -> Result<HistoryReplayRecord, AutomationError> {
     source
-        .replay_history_with_lookup("main", state, &|_, _| unreachable!("no provider lookup"), 0)
+        .replay_history_with_lookup(
+            "main",
+            state,
+            &|_, _, _| unreachable!("no provider lookup"),
+            0,
+        )
         .map(|(_page, record)| record)
 }
 
@@ -233,4 +339,59 @@ fn canonical_signature_deadline_propagates() {
             "ORB-14356: expected source_deadline, not a skipped proof that fails later, got {other:?}"
         ),
     }
+}
+
+#[test]
+fn replay_provider_lookups_use_a_fresh_source_after_the_initial_head() {
+    let _guard = ClearDeadlineFault;
+    clear_expired_source();
+    let history = diverged_with_inserted_canonical_commit();
+    assert_eq!(
+        direct_signature(history.root.path(), &history.old[0]),
+        direct_signature(history.root.path(), &history.new[1]),
+        "the old and canonical outside-file commits have the same patch"
+    );
+    assert_eq!(
+        direct_signature(history.root.path(), &history.old[1]),
+        direct_signature(history.root.path(), &history.new[2]),
+        "the old and canonical automation commits have the same patch"
+    );
+    let (source, state) = state_for(history.root.path(), history.old.last().expect("old tip"));
+    let lookups = Cell::new(0);
+    arm_expire_source_after_next_head();
+
+    let (page, record) = source
+        .replay_history_with_lookup(
+            "main",
+            &state,
+            &|lookup_source, _repository, _sha| {
+                lookups.set(lookups.get() + 1);
+                let origin = lookup_source.git(&["config", "--get", "remote.origin.url"])?;
+                assert_eq!(origin, "https://github.com/example/repo.git");
+                Ok("[]".into())
+            },
+            0,
+        )
+        .expect("replay's provider observation has a fresh command budget");
+
+    assert_eq!(
+        record.mappings.len(),
+        2,
+        "both orphans map past the insertion"
+    );
+    assert_eq!(
+        page.commits, history.new,
+        "the insertion is observed before the mapping"
+    );
+    assert_eq!(
+        lookups.get(),
+        3,
+        "all observed commits get provider lookups"
+    );
+    assert!(
+        page.unresolved
+            .values()
+            .all(|reason| reason != "evidence_unavailable"),
+        "a stale pre-fetch source must not silently turn provider lookups into missing evidence"
+    );
 }
