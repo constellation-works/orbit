@@ -106,7 +106,7 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
         max_events: ROLLUP_SCAN_LIMIT,
         ..Default::default()
     }) {
-        Ok(report) => Some(rollup_by_actor(&report)),
+        Ok(report) => Some((rollup_by_actor(&report), report.truncated)),
         Err(e) => {
             tracing::error!(
                 error = %e,
@@ -117,6 +117,10 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
             None
         }
     };
+
+    let failure_incidents_truncated = failure_rollup.as_ref().map(|(_, truncated)| *truncated);
+    value["failure_incidents_truncated"] = json!(failure_incidents_truncated);
+    value["failure_incidents_scan_limit"] = json!(ROLLUP_SCAN_LIMIT);
 
     if let Some(coverage) = value.get_mut("coverage").and_then(|v| v.as_object_mut()) {
         coverage.insert(
@@ -137,11 +141,17 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
         );
         coverage.insert(
             "failure_incidents".to_string(),
-            coverage_note(
-                failure_rollup.is_some(),
-                "Failure incidents are measured for the requested window; zero means no observed failure incidents.",
-                "Audit failure-incident query failed for the requested window; failure_incidents, unexpected_failure_incidents, and failure_incident_events are omitted (null) rather than shown as zero.",
-            ),
+            match failure_incidents_truncated {
+                Some(true) => json!({
+                    "availability": "partial",
+                    "detail": format!("Failure-incident counts are capped: only the newest {ROLLUP_SCAN_LIMIT} non-success audit rows in the requested window were scanned; older failures may be omitted, and zero means none in the scanned rows."),
+                }),
+                truncated => coverage_note(
+                    truncated.is_some(),
+                    "Failure incidents are measured for the requested window; zero means no observed failure incidents.",
+                    "Audit failure-incident query failed for the requested window; failure_incidents, unexpected_failure_incidents, and failure_incident_events are omitted (null) rather than shown as zero.",
+                ),
+            },
         );
     }
 
@@ -150,7 +160,7 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
             agents,
             metrics_extras.as_ref(),
             denial_map.as_ref(),
-            failure_rollup.as_ref(),
+            failure_rollup.as_ref().map(|(rollup, _)| rollup),
         );
     }
 }
@@ -172,7 +182,8 @@ fn coverage_note(available: bool, observed_detail: &str, unavailable_detail: &st
 /// with context by the caller): every field that source would have populated
 /// is set to `null`, never `0`, so a read failure can never be read as a
 /// measured zero. `Some(map)` — even an empty one — means the source
-/// succeeded, so an agent missing from it is a true, observed zero.
+/// succeeded, so an agent missing from it has no incidents in the scanned
+/// population. The caller reports partial coverage when that scan is capped.
 fn apply_side_source_extras(
     agents: &mut serde_json::Map<String, Value>,
     metrics_extras: Option<&BTreeMap<String, MetricsExtras>>,

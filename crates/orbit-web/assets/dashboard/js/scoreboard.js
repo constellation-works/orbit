@@ -286,6 +286,8 @@ function renderScoreboard(summary) {
   const matrix = buildLeaderboardMatrix(canonicalRows, allScoreboardSections(), {
     showSectionDividers: true,
     coverage: summary?.coverage,
+    failureIncidentsTruncated: summary?.failure_incidents_truncated === true,
+    failureIncidentsScanLimit: summary?.failure_incidents_scan_limit,
   });
   syncNodes(body, [el("div", { class: "scoreboard-sections" }, [matrix])]);
 
@@ -617,23 +619,32 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
       .filter((candidate) => candidate.key !== "agent")
       .filter((candidate) => metricHasActivity(rows, candidate, opts.coverage));
     if (showSectionDividers) {
-      const badge = metrics.length === 0
+      const partialFailures = section.title === "Operations"
+        && opts.coverage?.failure_incidents?.availability === "partial";
+      const badge = partialFailures
+        ? opts.coverage.failure_incidents.detail
+        : metrics.length === 0
         ? emptySectionBadge(section.title, opts.coverage)
         : section.badge;
       tbody.appendChild(sectionDividerRow(section.title, badge, columnCount));
     }
     for (const col of metrics) {
+      const capped = col.coverageKey === "failure_incidents"
+        && (opts.failureIncidentsTruncated || opts.coverage?.failure_incidents?.availability === "partial");
+      const title = capped
+        ? `${col.title}; capped counts from the newest ${(Number(opts.failureIncidentsScanLimit) || 0).toLocaleString()} non-success audit rows; older failures may be omitted`
+        : col.title || col.label;
       const rowMax = rowMaxValue(rows, col);
       const tr = el("tr", { class: "metric" });
       tr.dataset.key = `scoreboard-${section.title}-${col.key}`;
       const metricLabel = el("td", {
         class: "m-label",
-        title: col.title || col.label,
+        title,
       }, [
-        document.createTextNode(col.label),
+        document.createTextNode(`${col.label}${capped ? " (capped)" : ""}`),
         ...(col.help ? [el("span", { class: "help", text: col.help })] : []),
       ]);
-      metricLabel.setAttribute("aria-label", col.title || col.label);
+      metricLabel.setAttribute("aria-label", title);
       tr.appendChild(metricLabel);
       for (const [name, agent] of rows) {
         const value = scoreboardColumnValue(agent, col);
@@ -644,7 +655,7 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
         td.dataset.agent = name;
         td.dataset.metric = col.key;
         td.classList.add("clickable");
-        td.title = `${col.title || col.label}: click to filter audit`;
+        td.title = `${title}: click to filter audit`;
         td.addEventListener("click", () => navigateToDrilldown({
           role: name,
           metric: col.key,
@@ -662,10 +673,9 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
 }
 
 function metricHasActivity(rows, col, coverage) {
-  // ORB-11207: an unavailable source is not the same as an observed zero —
-  // keep the row visible so the operator sees the missing-coverage marker
-  // instead of the row silently disappearing from the table.
-  if (col.coverageKey && coverage?.[col.coverageKey]?.availability === "unavailable") {
+  // Keep incomplete coverage visible even with no counts: an unavailable
+  // source or a zero in a capped sample cannot prove a window-wide zero.
+  if (col.coverageKey && ["unavailable", "partial"].includes(coverage?.[col.coverageKey]?.availability)) {
     return true;
   }
   return rows.some(([, agent]) => scoreboardCellActivity(agent, col) > 0);

@@ -497,15 +497,24 @@ function renderAuditSummary(data, ctx) {
     affected_runs: Number(categories[key] && categories[key].affected_runs) || 0,
   }));
   if (categoryRows.some((row) => row.incidents || row.raw_events)) {
-    addCard("failure-categories", createCard(
-      `Failure categories · window ${data.window || "24h"}`,
+    const capped = data.failure_incidents_truncated === true;
+    const scanLimit = Number(data.failure_incidents_scan_limit) || 0;
+    const card = createCard(
+      `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
         { key: "label", label: "classification" },
         { key: "incidents", label: "incidents", num: true },
         { key: "raw_events", label: "raw events", num: true },
         { key: "affected_runs", label: "affected runs", num: true },
       ]),
-    ), [categoryRows, data.window || "24h"]);
+    );
+    if (capped) {
+      card.appendChild(el("div", {
+        class: "metric-trend",
+        text: `Partial coverage: counts include only the newest ${scanLimit.toLocaleString()} non-success audit rows in this window. Older failures and affected runs may be omitted.`,
+      }));
+    }
+    addCard("failure-categories", card, [categoryRows, data.window || "24h", capped, scanLimit]);
   }
 
   const lifecycleFailures = Number(data.lifecycle_diagnostic_events) || 0;
