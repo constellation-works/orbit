@@ -1124,20 +1124,27 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         );
         // Gate settlement does not create synthetic history stubs. Existing
         // human creation history must survive without new human entries; a
-        // repair outside the selectors adds only the system's widening
-        // provenance.
+        // repair outside the selectors records the semantic scope update and
+        // the widening provenance, both attributed to the system.
         let history = runtime.get_task_history(&task.id).unwrap();
         assert_eq!(history[..history_before.len()], history_before[..]);
         let added = &history[history_before.len()..];
         if repaired {
-            let [widened] = added else {
-                panic!("expected one widening entry, got {added:?}");
+            let [updated, widened] = added else {
+                panic!("expected a scope update and its widening entry, got {added:?}");
             };
+            assert_eq!(updated.event, "updated");
+            assert_eq!(
+                updated.by, "system",
+                "ORB-14296: the semantic scope update must not borrow the operator's identity"
+            );
             assert_eq!(widened.by, "system");
             assert_eq!(widened.event, CONTEXT_FILES_WIDENED_EVENT);
             let widening =
                 ContextFilesWidening::from_note(widened.note.as_deref().unwrap()).unwrap();
+            assert_eq!(widening.run_id, run.run_id);
             assert_eq!(widening.step, ContextWideningStep::Review);
+            assert_eq!(widening.activity, "review_gate_settle");
             assert_eq!(
                 widening.selectors,
                 ["file:coupled.txt", "file:undeclared.txt"]
