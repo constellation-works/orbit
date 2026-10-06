@@ -176,7 +176,7 @@ pub(crate) fn forward_call_with_status(
                 payload["detail"] = detail.clone();
             }
             let kind = if super::is_host_credentialed_read(tool)
-                || super::is_claimed_review_artifact(tool)
+                || orbit_types::tool::is_claimed_owner_tool(tool)
             {
                 "brokered tool"
             } else {

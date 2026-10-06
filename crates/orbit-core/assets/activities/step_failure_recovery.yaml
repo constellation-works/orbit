@@ -257,12 +257,12 @@ spec:
     `task_claimed_local_pipeline` (its implement input carries
     `claimed: true`) executes a task another machine owns, and ends at the
     typed handoff its `claim_handoff` step records. There the runner withholds
-    `orbit.task.show` and `orbit.task.update` from you, and:
+    `orbit.task.update` from you. `orbit.task.show` can read only the task
+    bound to this claim through its run's coordinator, and:
     - the execution summary of record is the implement step's output
       (`execution_summary` in the run's implement checkpoint); the handoff
-      carries it to the owner. Never read or write the owner's task record
-      for it, and never treat an unreachable owner task store as a failed
-      implementation;
+      carries it to the owner. Do not write the owner's task record, and never
+      treat an unreachable owner task store as a failed implementation;
     - only repair-and-retry applies. Direct delivery and job resume are not
       available: never move the task to review, never resume, never merge.
       The owner accepts only the pipeline's own typed handoff.

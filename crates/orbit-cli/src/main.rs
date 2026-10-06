@@ -351,20 +351,17 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
     (cli, requested, legacy)
 }
 
-/// Whether the public tool CLI is asking for one of the two claimed-review
-/// artifacts. The tool name only selects the bootstrap path; the worker's
+/// Whether the public tool CLI is asking for one of a claimed worker's owner
+/// calls. The tool name only selects the bootstrap path; the worker's
 /// protected invocation record supplies and limits its authority.
-fn claimed_review_artifact_tool(command: &command::Commands) -> bool {
+fn claimed_owner_tool(command: &command::Commands) -> bool {
     let command::Commands::Tool(tool) = command else {
         return false;
     };
     let command::tool::ToolSubcommand::Run(args) = &tool.command else {
         return false;
     };
-    matches!(
-        args.name.as_str(),
-        "orbit.task.artifact.get" | "orbit.task.artifact.put"
-    )
+    orbit_types::tool::is_claimed_owner_tool(&args.name)
 }
 
 fn main() {
@@ -512,16 +509,16 @@ fn run() {
         }
     };
 
-    // A claimed reviewer addresses the owner's task by ID, but the follower's
-    // task registry intentionally has no local copy. Bootstrap this one
-    // artifact tool in the worker's bound checkout so Core can carry it over
-    // the authenticated run broker. The worker binding is restored from the
+    // A claimed worker addresses the owner's task by ID, but the follower's
+    // task registry intentionally has no local copy. Bootstrap its owner
+    // calls in the worker's bound checkout so Core can carry them over the
+    // authenticated run broker. The worker binding is restored from the
     // host's protected invocation record; request fields never select this
     // path. ToolRunArgs validates any explicit selector against that binding.
-    let claimed_review_artifact = claimed_review_artifact_tool(&cli.command);
-    let claimed_review_worker = if unusable_tool_input {
+    let claimed_owner_call = claimed_owner_tool(&cli.command);
+    let claimed_owner_worker = if unusable_tool_input {
         false
-    } else if claimed_review_artifact && workspace_selector.is_none() {
+    } else if claimed_owner_call {
         let global_root = match orbit_core::runtime::resolve_global_root() {
             Ok(root) => root,
             Err(error) => {
@@ -542,7 +539,7 @@ fn run() {
     };
     let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
         Err(orbit_core::OrbitError::InvalidInput(message.clone()))
-    } else if claimed_review_worker {
+    } else if claimed_owner_worker {
         RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
     } else {
         match &runtime_need {

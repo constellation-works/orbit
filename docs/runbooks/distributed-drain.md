@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-10-04
 ---
 
@@ -436,8 +436,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - The implement step runs in **claimed mode**. The agent sandbox denies
   `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
   does not need one. It works from the injected task envelope, is not granted
-  `orbit.task.show` or `orbit.task.update` (nor is any recovery agent the leaf
-  launches, such as `step_failure_recovery`), and returns its execution summary
+  `orbit.task.update` (nor is any recovery agent the leaf launches, such as
+  `step_failure_recovery`). Its read-only `orbit.task.show` is scoped to the
+  claimed task through the run's coordinator. It returns its execution summary
   in the step output. `claim_handoff` carries that summary in the typed
   handoff, and the owner writes it as the task's `execution_summary` when it
   accepts. The leaf's delivery gate judges that same summary, so a retry is
@@ -446,14 +447,30 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   leaf; an agent that reports an unreachable owner store is a prompt or
   binary mismatch, not a transport problem (check the follower's binary is
   current).
-- The before-PR reviewer of a claimed leaf is the one agent that reads and
-  writes owner artifacts: it reads `review-manifest.json` and its prior review
-  evidence (the report, its history, the evidence hold and the evidence that
-  hold names), and writes `review-report.json`. Its nested `orbit` hands
-  those calls, from the CLI or MCP, to the run's coordinator (the step runner's broker, outside the sandbox),
-  which checks them against the claim and the running review attempt and
-  carries them to the owner over this follower's SSH route. Anything else is
-  refused without reaching the owner. Refusals and their recovery are in the
+- An agent in a claimed leaf reaches the owner only through the run's
+  coordinator (the step runner's broker, outside the sandbox), for a closed
+  list of calls: `orbit.task.show` of the claimed task,
+  `orbit.task.add` of a task `spawned_from` the claimed task and related to
+  nothing else, `orbit.friction.add` (during the claimed task, if it names
+  one), and `orbit.task.artifact.get`/`put` on the claimed task. Its nested
+  `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
+  the task and claim from its own records, applies the activity's tool
+  policy, and carries them to the owner over this follower's SSH route, where
+  the claim fence refuses them once the claim is no longer active
+  (`stale_claim`). Inside the sandbox, any other owner call is refused
+  (`claimed_owner_bridge_refused`) and none is tried over SSH. The claimed
+  implement step is still not granted `orbit.task.update` (above).
+- If the coordinator is missing or gone, the call fails as
+  `owner_route_unavailable` and the agent ends its step on that code. The
+  run skips step and final recovery, and the leaf releases its claim like an
+  unusable provider (below): the task goes back to `backlog` on the owner and
+  the drain stops offering that crew for the rest of its window. Check that
+  the follower's binary and launch pass `ORBIT_PLUGIN_BROKER` to the agent's
+  `orbit` before starting a new drain.
+- The before-PR reviewer's `review-*` reads (`review-manifest.json`, its
+  prior review evidence and the evidence the owner's hold names) and its
+  `review-report.json` write take the same route and are also checked against
+  the running review attempt. Refusals and their recovery are in the
   [claimed-review artifacts runbook](./claimed-review-artifacts.md); none is
   fixed by loosening the sandbox.
 - An owner that refuses a request is checked against its receipt first: a

@@ -123,13 +123,14 @@ spec:
     reuses the existing PR after a completion conflict.
 
     Claimed leaves: a run of `task_claimed_pr_pipeline` executes a task another
-    machine owns. There the runner withholds `orbit.task.show` and
-    `orbit.task.update` from you, so:
+    machine owns. There the runner withholds `orbit.task.update`; the
+    read-only `orbit.task.show` can read only the task bound to this claim
+    through its run's coordinator, so:
     - identify the task from `task_id` / `task_ids` and `failed_step_input`
       (its candidate branch, checkpoints and any rendered task fields), and
-      take the conflict evidence supplied here as authoritative; never read
-      or write the owner's task record, and never treat an unreachable owner
-      task store as a stop condition;
+      take the conflict evidence supplied here as authoritative; do not write
+      the owner's task record, and never treat an unreachable owner task store
+      as a stop condition;
     - the "task refuses writes" check below cannot be evaluated there and does
       not apply; the other identity checks still do.
 
