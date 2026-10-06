@@ -1,6 +1,7 @@
 mod argv;
 mod envelope;
 mod inspection;
+mod inspection_tools;
 mod launcher;
 mod orchestrator;
 mod plugin_broker;

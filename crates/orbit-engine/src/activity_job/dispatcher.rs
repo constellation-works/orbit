@@ -194,6 +194,11 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
+    /// An inspection cannot start without a supported native read and
+    /// command surface. Configuration errors never spend a provider session.
+    #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
+    InspectionToolsUnavailable { provider: String, reason: String },
+
     /// A host-owned Git child exceeded its finite budget. The supervisor has
     /// terminated its process group; recovery state must be inspected as-is.
     #[error("git {operation} timed out after {timeout_ms}ms in '{}': {diagnostic}", root.display())]
@@ -284,6 +289,7 @@ impl DispatchError {
                 | DispatchError::RetryConfigInvalid { .. }
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
+                | DispatchError::InspectionToolsUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
