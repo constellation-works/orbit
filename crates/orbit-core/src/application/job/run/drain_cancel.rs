@@ -83,6 +83,19 @@ impl OrbitRuntime {
         force: bool,
         block_task: bool,
     ) -> Result<JobRunCancelResult, OrbitError> {
+        // The shared cancellation path persists the task disposition before
+        // signalling so a worker that exits during the signal observes it.
+        // Refuse pull-drain owners already known to be unstoppably local or
+        // unverifiable first, leaving the drain state untouched when no
+        // signal can occur. Keep the injected signal seam below deterministic.
+        if force
+            && let Some(run) = self.get_job_run_backend(run_id)?
+            && run.job_id == PULL_DRAIN_JOB
+            && run.state == JobRunState::Running
+            && run_owner_unstoppable_reason(&run).is_some()
+        {
+            signal_run_owner_confirmed(&run)?;
+        }
         self.cancel_job_run_with_options_and_signal(
             run_id,
             CancellationRequest {
