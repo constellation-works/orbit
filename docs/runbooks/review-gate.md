@@ -39,7 +39,7 @@ merge request; waiting never extends the review certificate to another head.
 | `accept` | the implementation commit(s) only | the PR opens on that head |
 | `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` (or `incomplete`) | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
-| Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` |
+| Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished; a claimed leaf also pushes it to `orbit-evidence/<branch>` on `origin` | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
 
 The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
@@ -52,6 +52,13 @@ task meaning, and each required artifact. Attach a passing `ReviewExternalEviden
 result at each named path and its nonempty log artifact. Each result must match
 the held attempt, candidate, kind, name, and command. Unrelated, stale, failed,
 or incomplete evidence leaves the hold in place.
+
+A hold whose every requirement is kind `codeql` is fulfilled by a Linux
+owner without an operator. The owner runs the named
+`scripts/codeql-rust-local.sh` command at the held commit and attaches the
+result and its log. A failed or incomplete run attaches only the log, with a
+typed reason. Each attempt is audited as `review.evidence_fulfilment`. See
+[owner fulfilment](codeql-local.md#owner-fulfilment).
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review. It does not approve the candidate

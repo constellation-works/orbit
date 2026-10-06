@@ -96,7 +96,16 @@ claimed PR leaf runs the before-PR review between base synchronization and
 push: one reviewer with the captured crew fixes what it finds as the
 candidate's second commit and comments a summary on the owner's task. A
 `reject` or `incomplete` verdict fails the leaf before anything is pushed, and
-the owner blocks the task with the findings already on it. A passed verdict
+the owner blocks the task with the findings already on it. An evidence-only
+`incomplete`, such as a macOS reviewer owing the Linux CodeQL run, holds
+instead. The leaf pushes the held candidate to `orbit-evidence/<branch>` on
+`origin` and ends `held`. Its settlement releases the claim with the hold, and
+the owner keeps the task `in-progress` under `review_awaiting_evidence`. A
+held leaf is not a failure for the breaker, and the task is not pulled again
+while held. A Linux owner then fulfils `codeql`-only holds itself
+([owner fulfilment](codeql-local.md#owner-fulfilment)). Receipt of the
+evidence queues the task for a fresh review, which a later pull takes. A
+passed verdict
 travels in the handoff, and the owner checks the certificate against its own
 copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required

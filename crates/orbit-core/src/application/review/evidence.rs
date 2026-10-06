@@ -5,7 +5,7 @@ use orbit_automation::review::{
 };
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
@@ -132,6 +132,49 @@ pub(crate) fn evidence_ready(
     Ok(true)
 }
 
+/// Whether `hold` is still the in-progress task's latest delivery decision:
+/// the task is linked to the held run, its meaning is unchanged, and no later
+/// status decision or review superseded the hold. A stale artifact left
+/// behind after an operator changed the task or a later review failed is
+/// never current.
+pub(crate) fn hold_is_current(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    hold: &ReviewEvidenceHold,
+) -> Result<bool, OrbitError> {
+    if task.status != TaskStatus::InProgress
+        || hold.schema_version != 1
+        || task.job_run_id.as_deref() != Some(&hold.run_id)
+        || combined_task_meaning_digest(&[(
+            task.id.to_string(),
+            task_meaning_digest(task).map_err(super::automation_error)?,
+        )])
+        .map_err(super::automation_error)?
+            != hold.task_meaning_digest
+    {
+        return Ok(false);
+    }
+    let history = runtime.get_task_history(&task.id)?;
+    if history.last().is_some_and(|entry| {
+        matches!(
+            entry.to_status,
+            Some(
+                TaskStatus::Blocked
+                    | TaskStatus::Done
+                    | TaskStatus::Archived
+                    | TaskStatus::Rejected
+            )
+        )
+    }) {
+        return Ok(false);
+    }
+    Ok(history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some() || entry.event == "review_awaiting_evidence")
+        .is_some_and(|entry| entry.event == "review_awaiting_evidence"))
+}
+
 /// Called under the task write lock after an artifact update. All requirements
 /// must match the held candidate and unchanged task meaning before requeueing.
 /// This schedules another review; it never converts incomplete into accept.
@@ -156,39 +199,8 @@ pub(crate) fn resume_evidence_hold(
         || certificate.final_candidate != hold.candidate
         || certificate.task_meaning_digest != hold.task_meaning_digest
         || !evidence_only(&certificate, &hold.requirements)
-        || task.job_run_id.as_deref() != Some(&hold.run_id)
-        || runtime
-            .get_task_history(task_id)?
-            .last()
-            .is_some_and(|entry| {
-                matches!(
-                    entry.to_status,
-                    Some(
-                        TaskStatus::Blocked
-                            | TaskStatus::Done
-                            | TaskStatus::Archived
-                            | TaskStatus::Rejected
-                    )
-                )
-            })
-        || combined_task_meaning_digest(&[(
-            task.id.to_string(),
-            task_meaning_digest(&task).map_err(super::automation_error)?,
-        )])
-        .map_err(super::automation_error)?
-            != hold.task_meaning_digest
+        || !hold_is_current(runtime, &task, &hold)?
         || !evidence_ready(runtime, task_id, &hold)?
-    {
-        return Ok(());
-    }
-    // The hold must be the latest delivery decision, not a stale artifact
-    // left behind after an operator changed the task or a later review failed.
-    let history = runtime.get_task_history(task_id)?;
-    if history
-        .iter()
-        .rev()
-        .find(|entry| entry.to_status.is_some() || entry.event == "review_awaiting_evidence")
-        .is_none_or(|entry| entry.event != "review_awaiting_evidence")
     {
         return Ok(());
     }

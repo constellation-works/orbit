@@ -447,6 +447,24 @@ is never undone by a late artifact attachment.
 Passing grants no lifecycle transition; `completion: review` still stops at
 the handoff.
 
+A claimed leaf's hold reaches the owner. Settlement pushes the held candidate
+to `orbit-evidence/<branch>` on `origin`, apart from the delivery branch. The
+leaf's settlement then releases the claim with the hold, so the owner keeps
+the task in progress under `review_awaiting_evidence`; it does not block it.
+A hold whose every requirement is `codeql` is fulfilled by a Linux owner
+(`review_evidence_fulfilment_pipeline`, one run at a time). The run re-checks
+that the hold is current and gates on free disk. It admits only
+`scripts/codeql-rust-local.sh` with its own options, so a reviewer-authored
+command can never run anything else. It then runs that script without a shell
+in a detached checkout of the fetched held commit. A complete run with an
+empty SARIF attaches the results above; anything else attaches only the log,
+and the hold stays with a typed reason. Every attempt is audited as
+`review.evidence_fulfilment`.
+The owner already runs its required validation on foreign heads under the
+same host trust, so the fulfilment is no new trust in the candidate's own
+script. Details are in the
+[CodeQL runbook](../../runbooks/codeql-local.md#owner-fulfilment).
+
 ## 5. Budgets
 
 The ledger is keyed by workspace, sorted task set, base branch, and delivery

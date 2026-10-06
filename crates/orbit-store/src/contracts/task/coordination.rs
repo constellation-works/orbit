@@ -595,6 +595,13 @@ pub struct ClaimEvidence {
     /// failed. An owner that predates the field ignores it and only blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery: Option<ClaimFinalRecovery>,
+    /// Set on a release whose leaf's before-PR review settled into an
+    /// evidence hold. The owner keeps the task in progress with
+    /// `review_awaiting_evidence` as its latest decision, so receipt of the
+    /// named evidence queues a fresh review. An owner that predates the field
+    /// releases the task unheld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
 }
 
 /// A claimed leaf ended because its crew's provider could not be used on the

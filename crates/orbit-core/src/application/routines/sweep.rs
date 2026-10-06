@@ -434,6 +434,26 @@ pub(crate) fn run_sweep_at_with_providers_at(
                     "sweep.blocked_task_recovery_failed"
                 ),
             }
+            // A held review whose only missing evidence is a Linux CodeQL
+            // run gets that run here, on a Linux owner; one at a time.
+            match runtime.run_review_evidence_fulfilment_tick(now_utc) {
+                Ok(tick) => {
+                    if !tick.dispatched.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            dispatched = tick.dispatched.len(),
+                            "sweep.review_evidence_fulfilment"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.review_evidence_fulfilment_failed"
+                ),
+            }
         }
     }
 

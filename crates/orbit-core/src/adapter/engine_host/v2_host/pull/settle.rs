@@ -53,7 +53,8 @@ use std::time::Duration;
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
+    PullDrain, RefusedDelivery, SettleScope, held_evidence, leaf_failure_settlement,
+    release_settlement,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -117,12 +118,14 @@ impl OrbitRuntime {
         let cancellation_policy = state
             .as_ref()
             .and_then(|state| state.task_cancellation_policy.as_ref());
+        let evidence_hold = held_evidence(state.as_ref());
         let settlement = leaf_failure_settlement(
             &record,
             &run,
             diagnostic,
             final_recovery,
             cancellation_policy,
+            evidence_hold.as_ref(),
         );
         match jobs.mutate_local_pull(
             &record.destination,

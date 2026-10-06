@@ -137,12 +137,61 @@ reports it as not run for that reason. A reviewer whose remaining work is only
 this check returns `incomplete` with an `external_evidence` entry of kind
 `codeql`, name `Linux CodeQL (rust)`, that exact command, and the result
 artifact `evidence/codeql-rust-linux.json`. Settlement then holds the review
-for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). A Linux
-host fulfils the hold by running that command at the held candidate commit,
-inspecting `results.sarif` as above, and attaching the result and its log
-artifact; fresh review then verifies them. The hosted `CodeQL / Analyze (rust)`
+for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). The hosted `CodeQL / Analyze (rust)`
 job runs only for pull requests and pushes to `main` and `agent-main`, so it
 cannot supply evidence for a candidate before its PR opens.
+
+### Owner fulfilment
+
+A Linux owner fulfils such a hold without an operator. Its clock sweep
+dispatches `review_evidence_fulfilment_pipeline` for each in-progress task
+whose latest decision is a hold with only `codeql` requirements and no result
+yet, one run at a time. A claimed leaf's hold reaches the owner too: the leaf
+pushes the held candidate to `orbit-evidence/<branch>` on `origin`, and its
+settlement keeps the owner's task in progress under the hold.
+
+The run takes these steps:
+
+1. It re-checks that the hold is current.
+2. It admits only this script, with nothing but `--ram`, `--toolchain` and one
+   query selector, made of characters with no shell meaning. A hold can never
+   make the owner run another command.
+3. It defers while the state directory's filesystem has less than the job's
+   `min_free_mib` free (30 GiB by default).
+4. It fetches the held commit from `origin` when needed and checks its tree.
+5. It runs the script without a shell, in a detached checkout of the held
+   commit, with `ORBIT_SCRATCH_DIR` inside that checkout. The checkout is
+   removed afterwards, run directory included.
+
+The result is `passed` only when the script exits zero, reports completed
+analysis, and its `results.sarif` has runs and no results. The run then
+attaches `evidence/<name>.json` and its log `evidence/<name>.log.json`, which
+records the exit, SARIF summary and output tails. Receipt of every result
+moves the task to the backlog for a fresh review, which verifies them.
+
+Any other run attaches only the log and leaves the hold in place with a typed
+reason:
+
+| Reason | Cause |
+| --- | --- |
+| `analysis_incomplete` | Incomplete extraction, or no completed analysis or SARIF. |
+| `findings_reported` | The analysis reported results; a review must judge them. |
+| `tool_missing` | `codeql` or `rustup` is missing. |
+| `platform_refused` | The script exited 3. |
+| `command_failed` | The script failed for another reason. |
+| `timed_out` | The run exceeded three hours. |
+| `results_unreadable` | The SARIF could not be read. |
+| `command_not_allowed` | The command is not this script with admitted options. |
+| `candidate_unreachable` | The held commit could not be fetched, or its tree differs. |
+| `disk_insufficient` | The free space is below `min_free_mib`. |
+| `hold_not_current` | The hold was superseded before the run. |
+
+`disk_insufficient` and `candidate_unreachable` are retried on later ticks, as
+is a run that ended without an outcome (an interrupted worker). Each hold gets
+at most three runs. Every other refusal needs a new decision. Every
+attempt is audited as `review.evidence_fulfilment` and commented on the task.
+To lower or raise the disk gate, override `min_free_mib` in a workspace copy
+of the job.
 
 ## Behavior tests
 

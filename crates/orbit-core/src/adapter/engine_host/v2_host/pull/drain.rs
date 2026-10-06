@@ -11,8 +11,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::workflow::{
     BaselineRedHold, FinalRecoveryCheckpoint, FinalRecoveryDecision, JobRunState,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, TaskCancellationPolicy,
-    is_baseline_red_failure, is_provider_unavailable,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
+    TaskCancellationPolicy, is_baseline_red_failure, is_provider_unavailable,
 };
 
 use crate::application::distributed::{
@@ -623,8 +623,15 @@ impl PullDrain<'_> {
         let cancellation_policy = state
             .as_ref()
             .and_then(|state| state.task_cancellation_policy.as_ref());
-        let settlement =
-            leaf_failure_settlement(&record, &run, None, final_recovery, cancellation_policy);
+        let evidence_hold = held_evidence(state.as_ref());
+        let settlement = leaf_failure_settlement(
+            &record,
+            &run,
+            None,
+            final_recovery,
+            cancellation_policy,
+            evidence_hold.as_ref(),
+        );
         self.record_settlement(&record, settlement).map(Some)
     }
 
@@ -918,12 +925,17 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// decision rides on the settlement for the owner to apply — a follower never
 /// writes its owner's task — unless it was `resume`, whose rerun then failed
 /// on its own.
+///
+/// `evidence_hold` is the hold a `held` leaf's review settlement recorded
+/// ([`held_evidence`]). Such a leaf did not fail: its claim is released with
+/// the typed hold, which the owner records as the task's latest decision.
 pub(crate) fn leaf_failure_settlement(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
     final_recovery: Option<&FinalRecoveryCheckpoint>,
     cancellation_policy: Option<&TaskCancellationPolicy>,
+    evidence_hold: Option<&ReviewEvidenceHold>,
 ) -> ClaimMutation {
     if run.state == JobRunState::Cancelled
         && let Some(policy) = cancellation_policy.filter(|policy| !policy.block)
@@ -947,6 +959,32 @@ pub(crate) fn leaf_failure_settlement(
                 run.run_id, run.state
             ),
         );
+    }
+    if run.state == JobRunState::Held
+        && let Some(hold) = evidence_hold
+    {
+        let drain = &record.request.run_context.run_id;
+        let machine = &record.destination.execution_machine_id;
+        let names = hold
+            .requirements
+            .iter()
+            .map(|requirement| format!("`{}`", requirement.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let why = format!(
+            "leaf {} held its reviewed candidate {} for named external evidence ({names})",
+            run.run_id, hold.candidate.commit
+        );
+        return ClaimMutation::Release(ClaimEvidence {
+            summary: Some(format!("released by follower drain {drain}: {why}")),
+            comment: Some(format!(
+                "Follower drain {drain} on {machine} released this claim: {why}. The task stays \
+                 in progress under the evidence hold; attaching every named result queues a \
+                 fresh review. No pull request was opened."
+            )),
+            evidence_hold: Some(hold.clone()),
+            ..Default::default()
+        });
     }
     if let Some(unavailable) = provider_unavailable(record, run, diagnostic) {
         let crew = unavailable.crew.as_deref().unwrap_or("its crew");
@@ -1008,6 +1046,16 @@ pub(crate) fn leaf_failure_settlement(
         final_recovery,
         ..Default::default()
     })
+}
+
+/// The evidence hold a held leaf's review settlement recorded in its run
+/// state, under the `review_gate_settle` step's output.
+pub(crate) fn held_evidence(state: Option<&PipelineState>) -> Option<ReviewEvidenceHold> {
+    let hold = state?
+        .pipeline
+        .get("review_gate_settle")?
+        .get("evidence_hold")?;
+    serde_json::from_value(hold.clone()).ok()
 }
 
 /// Largest provider diagnostic a provider-unavailable release carries.

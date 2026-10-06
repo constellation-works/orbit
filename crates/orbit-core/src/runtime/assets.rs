@@ -186,6 +186,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/review_reconciliation_validate.yaml"),
     ),
     (
+        "fulfil_review_evidence",
+        include_str!("../../assets/activities/fulfil_review_evidence.yaml"),
+    ),
+    (
         "prepare_blocked_task_recovery",
         include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
@@ -264,6 +268,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "dependabot_alert_sweep_pipeline",
         include_str!("../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
+    ),
+    (
+        "review_evidence_fulfilment_pipeline",
+        include_str!("../../assets/jobs/review_evidence_fulfilment_pipeline.yaml"),
     ),
     (
         "task_auto_pipeline",
