@@ -439,9 +439,10 @@ impl OrbitRuntime {
         let status_event = (status_authority == StatusAuthority::Forced
             && requested_status.is_some())
         .then(|| FORCED_STATUS_EVENT.to_string());
+        let evidence_attached = !params.upsert_artifacts.is_empty();
         let previous_status = task.status;
         let written_note = status_note.clone();
-        let updated = self.with_mutation(|| {
+        let mut updated = self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 id,
                 TaskRecordUpdateParams {
@@ -471,6 +472,10 @@ impl OrbitRuntime {
             Ok((updated.clone(), event))
         })?;
 
+        if evidence_attached {
+            crate::application::review::evidence::resume_evidence_hold(self, id)?;
+            updated = self.get_task(id)?;
+        }
         Ok(LockedTaskUpdate {
             task: updated,
             previous_status,

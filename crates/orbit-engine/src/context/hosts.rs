@@ -31,6 +31,8 @@ use crate::activity_job::{
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskAutomationUpdate {
+    /// Status observed by a decision that must not overwrite a later operator transition.
+    pub expected_status: Option<TaskStatus>,
     pub status: Option<TaskStatus>,
     pub plan: Option<String>,
     /// Default `None` = leave the task's `context_files` untouched. `Some(v)`

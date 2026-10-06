@@ -30,6 +30,7 @@ use super::context::GateContext;
 /// The reviewer's claims, checked against the repository and the task scope.
 pub(super) struct Judgement {
     pub(super) verdict: ReviewVerdict,
+    pub(super) external_evidence: Vec<orbit_types::workflow::ReviewEvidenceRequirement>,
     pub(super) findings: Vec<orbit_types::workflow::ReviewFinding>,
     pub(super) validation: Vec<orbit_types::workflow::ReviewValidation>,
     pub(super) validation_complete: bool,
@@ -56,6 +57,7 @@ impl Judgement {
     ) -> Result<Self, OrbitError> {
         let task_meaning_digest = context.task_digests.1.clone();
         let incomplete = |reason: &str| Self {
+            external_evidence: Vec::new(),
             verdict: ReviewVerdict::Incomplete,
             findings: Vec::new(),
             validation: Vec::new(),
@@ -124,6 +126,7 @@ impl Judgement {
         };
         let retained_obligations = retained_obligations(revisions, &report.validation);
         Ok(Self {
+            external_evidence: report.external_evidence,
             verdict: report.verdict,
             findings: report.findings,
             validation: report.validation,
@@ -347,6 +350,7 @@ impl Judgement {
 
     fn downgrade(&mut self, reason: &str) {
         self.verdict = ReviewVerdict::Incomplete;
+        self.external_evidence.clear();
         self.validation_complete = false;
         self.escalate(reason);
     }
@@ -373,6 +377,11 @@ fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
     let mut reports = reports.into_iter();
     let mut merged = reports.next()?;
     for report in reports {
+        for required in report.external_evidence {
+            if !merged.external_evidence.contains(&required) {
+                merged.external_evidence.push(required);
+            }
+        }
         if verdict_severity(report.verdict) > verdict_severity(merged.verdict) {
             merged.verdict = report.verdict;
         }

@@ -28,6 +28,35 @@ use orbit_types::workflow::FinalRecoveryDecision;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
 
+#[test]
+fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
+    let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    assert_eq!(host.inputs("agent_review_repair").len(), 1);
+    assert!(host.inputs("review_gate_settle").is_empty());
+    assert!(host.inputs("pr_open").is_empty());
+    let handoff = host.inputs("pr_failure_handoff");
+    assert_eq!(handoff.len(), 1);
+    assert!(
+        handoff[0]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("review_timeout_incomplete:")
+    );
+    assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
+    assert!(matches!(
+        host.reviewer_events.lock().unwrap().as_slice(),
+        [
+            orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+            orbit_types::workflow::ReviewerInvocationEvent::TimedOut { .. },
+        ]
+    ));
+}
+
 /// No findings: the reviewed head is the implementation head, nothing is
 /// revalidated, and the PR opens with no "Review fixes" section.
 #[test]
@@ -340,6 +369,7 @@ pub(super) enum Settlement {
     AcceptWithFixes,
     /// An open finding: the gate refuses.
     Reject,
+    Timeout,
 }
 
 /// Whether owner revalidation of a reviewer commit passes.
@@ -358,6 +388,7 @@ pub(super) struct ScriptedHost {
     resume: Value,
     head: Mutex<String>,
     calls: Mutex<Vec<(String, Value)>>,
+    reviewer_events: Mutex<Vec<orbit_types::workflow::ReviewerInvocationEvent>>,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     log_tail: Option<String>,
     log_tail_run_ids: Mutex<Vec<String>>,
@@ -377,6 +408,7 @@ impl ScriptedHost {
             }),
             head: Mutex::new("candidate".to_string()),
             calls: Mutex::default(),
+            reviewer_events: Mutex::default(),
             admissions: Mutex::default(),
             log_tail: None,
             log_tail_run_ids: Mutex::default(),
@@ -456,15 +488,25 @@ impl ScriptedHost {
                     "review_fixes": REVIEW_FIXES,
                 }))
             }
-            Settlement::Reject => Err(DispatchError::DeterministicActionRefused {
-                action: "review_gate_settle".to_string(),
-                message: format!("review_gate_blocked: attempt {attempt} settled reject"),
-            }),
+            Settlement::Reject | Settlement::Timeout => {
+                Err(DispatchError::DeterministicActionRefused {
+                    action: "review_gate_settle".to_string(),
+                    message: format!("review_gate_blocked: attempt {attempt} settled reject"),
+                })
+            }
         }
     }
 }
 
 impl RuntimeHost for ScriptedHost {
+    fn record_reviewer_invocation(
+        &self,
+        request: &orbit_engine::ReviewerInvocationRequest,
+    ) -> Result<Option<u64>, OrbitError> {
+        self.reviewer_events.lock().unwrap().push(request.event);
+        Ok(None)
+    }
+
     fn run_deterministic(
         &self,
         action: &str,
@@ -524,7 +566,9 @@ impl RuntimeHost for ScriptedHost {
                 "report_artifact": "review-report.json",
                 "reviewer": { "crew": "reviewers" },
             }),
-            "agent_review_repair" => json!({ "summary": "reviewed", "verdict": "accept" }),
+            "agent_review_repair" => {
+                json!({ "summary": "partial review", "verdict": "accept", "timed_out": matches!(self.settlement, Settlement::Timeout) })
+            }
             "review_gate_settle" => return self.settle(input),
             "git_push" => json!({ "local_sha": head }),
             "pr_open" => json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" }),

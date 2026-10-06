@@ -145,6 +145,7 @@ fn implement_candidate(repo: &Path, task_id: &str) -> String {
 
 pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -> ReviewReport {
     ReviewReport {
+        external_evidence: Vec::new(),
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),
         verdict,

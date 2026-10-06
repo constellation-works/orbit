@@ -325,8 +325,8 @@ fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
                 timeout_seconds: 3600
             }
         ),
-        Some(60),
-        "the reviewer gets the review's minutes, not the activity's hour"
+        Some(30),
+        "the invocation reserves half the remaining minutes for continuation"
     );
     invoke(
         &gated.run_id,
@@ -350,7 +350,7 @@ fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
                 timeout_seconds: 3600
             }
         ),
-        Some(15)
+        Some(7)
     );
     invoke(
         &resumed,

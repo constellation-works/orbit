@@ -426,13 +426,20 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         let model = reviewer.get("model")?.as_str()?.trim();
         (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
     });
+    let attempt_id = input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get("review_gate_admit"))
+        .and_then(|admit| input_string_field(admit, "attempt_id"));
+    let attempt_trailer = attempt_id
+        .map(|id| format!("\nOrbit-Review-Attempt: {id}"))
+        .unwrap_or_default();
     let partial_repair = match &reviewer_model {
         Some(model) => super::review_gate::commit_reviewer_repairs(
             workspace_path,
             model,
             &format!(
                 "review: partial reviewer repairs preserved [{}]\n\nOrbit-Review-Run: {run_id}\n\
-                 Orbit-Review-Step: {failed_step_id}",
+                 Orbit-Review-Step: {failed_step_id}{attempt_trailer}",
                 task.id
             ),
         )?,
@@ -454,6 +461,38 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         workspace_path,
     )?;
 
+    let evidence_hold = task.status == TaskStatus::InProgress
+        && failed_step_id == "review_gate_settle"
+        && error_message.contains("review_awaiting_evidence:")
+        && host.get_task_artifacts(&task.id)?.iter().any(|artifact| {
+            artifact.path == orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT
+                && serde_json::from_slice::<orbit_types::workflow::ReviewEvidenceHold>(
+                    &artifact.content,
+                )
+                .is_ok_and(|hold| hold.run_id == run_id && hold.candidate.commit == head_sha)
+        });
+    let timed_out = task.status == TaskStatus::InProgress
+        && failed_step_id == "review"
+        && error_message.contains("review_timeout_incomplete:");
+    let (status, event, decision) = if evidence_hold {
+        (
+            TaskStatus::InProgress,
+            "review_awaiting_evidence",
+            "awaiting_review_evidence",
+        )
+    } else if timed_out {
+        (
+            TaskStatus::Backlog,
+            "review_timeout_incomplete",
+            "incomplete_review_timeout",
+        )
+    } else {
+        (
+            TaskStatus::Blocked,
+            REVIEW_GATE_EVENT,
+            "blocked_review_gate",
+        )
+    };
     let note = format!(
         "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
          candidate={head_sha}, branch={head}; no PR was opened"
@@ -474,8 +513,8 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
          - Partial reviewer commit: {}\n\
          - Uncommitted paths left in the worktree: {}\n\n\
          The review's verdict, findings and what changed for each are recorded in the gate's \
-         settlement comment on the task. Resuming delivery needs a recorded decision: fix or \
-         re-scope, then run the gate again within the lineage's remaining review budget.\n\n\
+         settlement comment on the task. Continuation follows the timeout, evidence, or \
+         substantive decision recorded with this handoff.\n\n\
          ## Failure\n\n```text\n{error_message}\n```",
         task.id,
         partial_repair
@@ -488,16 +527,24 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             leftover.join(", ")
         },
     );
+    let continuation = if evidence_hold {
+        "Awaiting named external evidence. Attach each matching passing result and its log to the task; once all checks arrive, delivery is requeued for review."
+    } else if timed_out {
+        "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued to continue the review within the remaining minute budget."
+    } else {
+        "A substantive review escalation requires a recorded repair or scope decision."
+    };
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
-            status: Some(TaskStatus::Blocked),
-            status_event: Some(REVIEW_GATE_EVENT.to_string()),
+            expected_status: Some(task.status),
+            status: Some(status),
+            status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("{note}\n\n{body}"),
+                message: format!("{note}\n\n{continuation}\n\n{body}"),
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -505,7 +552,7 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": "blocked_review_gate",
+        "decision": decision,
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -515,7 +562,7 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "uncommitted_paths": leftover,
         "push": pushed,
         "pr_created": false,
-        "task_status": "blocked",
+        "task_status": status.to_string(),
         "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }

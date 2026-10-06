@@ -24,6 +24,7 @@ use orbit_common::OrbitError;
 
 mod admission;
 mod coverage;
+pub(crate) mod evidence;
 mod gate;
 mod handoff;
 mod landing;

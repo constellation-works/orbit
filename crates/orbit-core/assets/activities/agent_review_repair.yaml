@@ -69,9 +69,11 @@ spec:
       validation then reruns on the fixed head.
     - Fix findings; do not do unrelated cleanup. Reading unrelated code does
       not authorize editing it.
-    - This invocation has its own wall-clock bound, independent of what the
-      lineage has already spent. If you cannot finish, write an `incomplete`
-      report before stopping rather than leaving no report.
+    - This invocation is bounded by the activity timeout and half the review's
+      remaining minutes, leaving time for continuation. Persist an initial
+      `incomplete` report and update it after meaningful review or validation
+      progress, so a wall-clock timeout retains your findings and checks.
+      If you cannot finish, leave an honest partial report before stopping.
     - Read the manifest and attach the report only with
       `orbit.task.artifact.get` and `orbit.task.artifact.put`, through the
       CLI or MCP. On a distributed-drain follower the host carries exactly
@@ -99,6 +101,13 @@ spec:
        `attempt_id`, that `git rev-parse HEAD` equals `candidate.commit`, and
        that `base.commit` is an ancestor of HEAD. On any mismatch write a
        report with verdict `incomplete` and stop.
+       Read the manifest's optional `previous_report` and the existing report
+       artifact before starting. Continue the recorded findings and checks,
+       verifying them against the pinned candidate. Earlier evidence is advisory:
+       when the attempt or candidate changed, repeat affected checks and write a
+       report naming the current attempt; never reuse a previous acceptance.
+       Read any `review-evidence-hold.json` and its named result/log artifacts
+       to assess external evidence that arrived since the earlier review.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
        and the implementer's execution summary in the manifest. A green summary
@@ -194,7 +203,14 @@ spec:
          to the decision needed. The task blocks with both commits preserved.
        - `incomplete`: the review could not be completed (missing evidence,
          a denied required check, ambiguous intent, mismatch); set
-         `escalation`.
+         `escalation`. If the only remaining work is a named hosted CI job,
+         native OS run or CodeQL result, list it in `external_evidence` with
+         `kind` (`hosted_ci`, `native_os`, `codeql`), `name`, the exact required
+         `command`, and the task `artifact` path where its result will arrive.
+         Keep its validation record `required` and `not_run` or `denied`.
+         External checks belong in this list; substantive open findings still
+         reject the candidate. Failed checks, ambiguous intent, stale candidates
+         and unnamed missing checks do not qualify for an evidence hold.
     6. Write the report to a temporary file and attach it with
        `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`).
        The put validates the report and refuses a malformed one with the
@@ -209,6 +225,12 @@ spec:
           "attempt_id":{"type":"string","description":"the supplied attempt_id"},
           "verdict":{"enum":["accept","accept_with_fixes","reject","incomplete"]},
           "summary":{"type":"string","description":"one paragraph"},
+          "external_evidence":{"type":"array","items":{"type":"object",
+            "required":["kind","name","command","artifact"],
+            "properties":{
+              "kind":{"enum":["hosted_ci","native_os","codeql"]},
+              "name":{"type":"string"},"command":{"type":"string"},
+              "artifact":{"type":"string","description":"task artifact path for the external result"}}}},
           "findings":{"type":"array","items":{"type":"object",
             "required":["id","severity","summary","disposition"],
             "properties":{

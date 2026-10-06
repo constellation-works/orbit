@@ -158,6 +158,7 @@ impl ReviewedLeaf {
             .unwrap();
         }
         let report = ReviewReport {
+            external_evidence: Vec::new(),
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.into(),
             verdict,

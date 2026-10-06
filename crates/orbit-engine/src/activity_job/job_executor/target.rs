@@ -45,7 +45,7 @@ pub(super) fn run_target(
     let dispatched_spec = dispatched_spec_storage.as_ref().unwrap_or(&t.spec);
     let mut reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
     if let Some(reviewer) = reviewer.take_if(|reviewer| reviewer.exhausted()) {
-        reviewer.finish(ctx);
+        reviewer.finish(ctx, false);
         return Err(DispatchError::DeterministicActionRefused {
             action: step.id.clone(),
             message: "review_minutes_exhausted: the candidate's review already spent its \
@@ -66,12 +66,22 @@ pub(super) fn run_target(
         run_id: &ctx.run_id,
         host: Some(ctx.host),
     });
+    let timed_out = reviewer.is_some()
+        && dispatch.as_ref().is_ok_and(|outcome| {
+            outcome.output.get("timed_out").and_then(Value::as_bool) == Some(true)
+        });
     if let Some(reviewer) = reviewer {
-        reviewer.finish(ctx);
+        reviewer.finish(ctx, timed_out);
     }
     let dispatch = dispatch?;
     persist_dispatch_invocation(ctx, &step.id, &rendered_input, &dispatch);
     record_pipeline(ctx, &step.id, dispatch.output.clone());
+    if timed_out {
+        return Err(DispatchError::DeterministicActionRefused {
+            action: step.id.clone(),
+            message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
+        });
+    }
     Ok(StepOutcome {
         success: dispatch.success,
         output: dispatch.output,

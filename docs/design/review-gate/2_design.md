@@ -167,7 +167,7 @@ exponential backoff) and the reviewer step retries once; each then gets one
 `step_failure_recovery` diagnosis before the run fails. A retried reviewer
 continues the same attempt and must verify or revert edits an interrupted
 invocation left in the worktree. Decisions are refusals that neither retry
-nor recover: a settled `reject` or `incomplete` verdict, an exhausted
+nor recover: a settled `reject` or `incomplete` verdict, a reviewer timeout, an exhausted
 budget, an unconfigured, unavailable, or excluded crew, and a local route.
 `review_validate` has no retry and no step recovery: its failure is the
 review's `reject`. Every such failure is still eligible for the job's final
@@ -194,8 +194,8 @@ review: <first line of the reviewer summary> [<task ids>]
 | --- | --- | --- | --- |
 | `accept` | No defects; every required check passed; nothing changed | none | PR opens on the implementation head |
 | `accept_with_fixes` | Every finding fixed; required checks passed on the fixed tree | one | `review_validate` reruns owner validation, then the PR opens on the reviewer commit |
-| `reject` | A finding stays open (unfixable, out of intent, a non-release `CHANGELOG.md` edit) | kept if made | Task blocked, both commits preserved, no PR |
-| `incomplete` | The review could not establish the candidate | kept if made | As `reject` |
+| `reject` | A substantive finding stays open (unfixable, out of intent, a non-release `CHANGELOG.md` edit) | kept if made | Substantive findings block; named external checks alone hold for evidence. Both commits stay preserved, no PR |
+| `incomplete` | The review could not establish the candidate | kept if made | Named external checks enter an awaiting-evidence hold; a wall-clock timeout requeues a continuation; other escalations block |
 
 Settlement posts one comment on every task in the bundle:
 
@@ -383,8 +383,50 @@ failure handoff — for any failure of `review_gate_admit`, `review`,
 `review_gate_settle`, or `review_validate` — releases the attempt if it has
 no verdict yet (§5), commits leftover reviewer work under the reviewer
 identity (`partial_repair_commit`), leaves the implementation and reviewer
-commits as they are, pushes the candidate branch, blocks the task with
-`review_gate_escalation`, and opens no PR.
+commits as they are, pushes the candidate branch, and opens no PR.
+Substantive failures block with `review_gate_escalation`. A reviewer wall-clock
+failure records `review_timeout_incomplete` and requeues the task; it does not
+retry the reviewer within the failing step. The partial report stays attached,
+and admission resumes the latest released attempt for the same candidate and
+task meaning. A newly admitted candidate receives the earlier report in the
+manifest's `previous_report`, as advisory context requiring revalidation.
+Finalization preserves the timeout requeue rather than adding a generic block.
+
+For a single-task delivery, an otherwise complete nonpassing report may name
+`external_evidence`: a list
+of `{kind, name, command, artifact}` requirements, where `kind` is `hosted_ci`,
+`native_os`, or `codeql`. Each exact command must have an unavailable required
+record (`not_run` or `denied`). All missing checks must be named, all other
+validation must be consistent, and no substantive finding may remain open.
+The typed requirements classify the hold even when an older reviewer spelled
+its evidence-only verdict `changes_required` / `reject`; the certificate retains
+that reported verdict and never qualifies as passing coverage. Open defects,
+failed checks, dropped earlier obligations, and host-detected candidate or
+meaning drift never enter this hold.
+
+Settlement retains its nonpassing certificate and writes
+`review-evidence-hold.json`, pinning the attempt, candidate revision, task
+meaning, and requirements. The failure handoff records
+`review_awaiting_evidence`, keeps the task in progress and its candidate
+recoverable, and holds publication. Run finalization preserves this decision.
+Admission refuses to continue while the matching hold has missing evidence.
+For each requirement, attach its result through `orbit.task.artifact.put` at
+its named artifact path, plus the separately referenced nonempty log artifact:
+
+```json
+{"schema_version":1,"attempt_id":"<held attempt>",
+ "candidate":{"commit":"<held commit>","tree":"<held tree>"},
+ "kind":"hosted_ci","name":"Windows CI job","command":"<exact command>",
+ "outcome":"passed","log_artifact":"evidence/windows-log.json"}
+```
+
+Only results matching the held attempt, exact revision, kind, name and command
+count. Stale, unrelated, failed or logless evidence leaves the hold in place.
+After all results and logs arrive, an unchanged task still owned by that hold's
+run moves to backlog with `review_evidence_received`. This queues fresh review,
+not acceptance: the new reviewer verifies the evidence, and every publication
+and validation gate still applies. An operator block or later review decision
+is never undone by a late artifact attachment.
 Passing grants no lifecycle transition; `completion: review` still stops at
 the handoff.
 
@@ -398,7 +440,7 @@ starts a new lineage with a full budget [ORB-13890]. Settlement uses the
 lineage its admission named. The first budget written on a lineage is
 captured; a later config change cannot expand or replace it. Each candidate
 (head commit plus task meaning) gets one review [ORB-13992], reserved before a
-reviewer launches: once an attempt on it settles with a verdict, or its
+reviewer launches: once an attempt on it settles with a final verdict, or its
 reviewer runtime reaches `review.minutes`, the candidate is not reviewed again.
 A changed candidate — new implementation work or a completion rebase — is a
 new review with its own minutes. The PR pipeline checks the same lineage
@@ -459,7 +501,7 @@ is stale.
 
 `review.minutes` is a wall-clock limit on the candidate's review. Each
 reviewer invocation records its start, and the ledger sets its deadline to the
-lesser of its activity timeout and the minutes the candidate has left; the
+lesser of its activity timeout and half the seconds the candidate has left; the
 engine shortens the reviewer's wall clock to that deadline and refuses the
 step (`review_minutes_exhausted`) when nothing is left. An accept that
 finished within its deadline settles on its evidence. A reviewer commit costs
