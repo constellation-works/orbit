@@ -466,7 +466,7 @@ xhard_complexity_crews = ["fable", "astra"]
 - **Changes are explicit.** Status transitions never change `task.crew`, and neither does changing `--complexity`. An explicit `task update --crew <name>` changes the selection; [`task update --crew ""`](#setting-taskcrew) draws again. Every stored crew change records the actor, prior and new crew, and whether it came from an explicit name or a pool draw.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. A pool whose members are all [disabled](#disabled-crews) is treated the same way; disabled members of a mixed pool are skipped. Blank entries and unknown crew names fail before dispatch.
-- **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name.
+- **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name. The one exception is a standing [provider failure hold](#provider-failure-holds), which redirects a task-crew draw away from the crews it excludes.
 - **Legacy tasks.** At admission (drain or ship), a task still without a crew is routed through the pools as a fallback, and nothing is written back to the task.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that one pool for one drain, and the flag with no names disables it. `orbit run ship` has no override flags.
 
@@ -488,6 +488,38 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 **Allowlists.** With `--allow-crew`, the draw renormalizes over the permitted members, preserving their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. The allowlist is checked against `task.crew`, and still applies to system and review activities at dispatch.
 
 **Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, and descendants inherit that copy. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep the admitted selection.
+
+### Provider failure holds
+
+Sometimes a local run fails because of its provider rather than the work. The step's error text then carries one of three typed markers, each followed by `provider=<name>`:
+
+- `[provider_capacity]`: the selected model was at capacity.
+- `[provider_unavailable]`: the provider could not be used on this host, for example because authentication failed.
+- `[provider_refusal]`: the provider's content policy refused the task. This covers a Codex content-filter `error` or `turn.failed` frame (`This content was flagged for possible …`) and a Claude `result` with `stop_reason: "refusal"`. Only text the failing provider CLI wrote counts. The agent's transcript, tool output and Orbit envelopes never set the marker.
+
+Step recovery and final recovery skip these failures. On the PR pipeline, the failure handoff returns `held_provider_failure`. It commits the candidate on the run's branch, but pushes nothing and opens no `[BLOCKED]` PR.
+
+Run finalization then moves the task to `backlog` under a `provider_failure_hold` history event, where a non-provider failure would block it. The event's note carries the hold: the failure class, the provider, the excluded crews, a `not_before` time and the run.
+
+**Which crews are excluded:**
+
+- A capacity or unavailability failure excludes the crew the run used. If the failing step ran on another provider (a reviewer, say), it excludes every crew of that provider instead.
+- A refusal excludes every crew of the refusing provider, because the same content would be refused again.
+- If an earlier hold still stands, its excluded crews stay excluded.
+
+**How long the hold lasts:** the base backoff is 15 minutes for capacity, 30 minutes for unavailability and 24 hours for a refusal. It doubles for each other hold the task got in the last 24 hours, up to 24 hours.
+
+**Admission during the hold:** until `not_before`, the task's crew is drawn from the crews the hold does not exclude. The draw tries, in order:
+
+1. the task's own crew or pool;
+2. its complexity pool;
+3. `default_crew`.
+
+`crew_selection.source` names the hold. When every one of those crews is excluded, the local drain defers the task, and `orbit run readiness --json` reports it with `reason: "provider_backoff"` and the release time. An explicit run-input `crew` ignores the hold.
+
+Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
+
+Pull drains and claimed leaves keep their own handling. An unavailable provider there releases the claim and excludes the crew for the window.
 
 ### Final recovery pool
 

@@ -71,6 +71,32 @@ pub fn provider_capacity_exhausted(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
+/// Phrases a provider CLI prints in its own failure diagnostics when its
+/// content policy refused the turn. Lowercase, matched case-insensitively.
+/// Codex: `This content was flagged for possible cybersecurity risk.`; Claude
+/// Code: `… appears to violate our Usage Policy …` [ORB-14266]
+const PROVIDER_REFUSAL_PHRASES: &[&str] = &[
+    "content was flagged",
+    "prompt was flagged",
+    "flagged for possible",
+    "flagged as potentially violating",
+    "violate our usage policy",
+    "violates our usage policy",
+];
+
+/// Whether a provider's own failure text says its content policy refused
+/// the turn, so the same provider would refuse a retry of the same task.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_content_refusal(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_REFUSAL_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInvocationSpec {
     pub runtime_key: &'static str,

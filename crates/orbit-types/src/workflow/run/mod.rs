@@ -2,6 +2,7 @@ mod agent_blocker;
 mod baseline;
 mod delivery;
 mod id;
+mod provider_hold;
 mod state;
 
 pub use agent_blocker::{
@@ -19,15 +20,21 @@ pub use delivery::{
     RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation, RunDeliveryStatus,
 };
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
+pub use provider_hold::{
+    PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,
+    ProviderFailureHold, failed_provider, provider_failure_text,
+};
 pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, CrewExclusion, CrewExclusionSource,
     DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest,
     DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     FinalRecoveryKey, FinalRecoveryObservedTask, PROVIDER_CAPACITY_ERROR_CODE,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle,
-    TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
-    is_provider_capacity_exhausted, is_provider_unavailable, is_validation_environment_failure,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_REFUSAL_ERROR_CODE, PROVIDER_REFUSAL_MARKER,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
+    PullSinglePass, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
+    is_provider_unavailable, is_validation_environment_failure,
 };
 
 #[cfg(test)]

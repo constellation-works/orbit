@@ -141,6 +141,7 @@ spec:
                 - host_os_mismatch
                 - inherited_only_epic_root
                 - local_route_before_pr
+                - provider_backoff
                 - surface_reserved
                 - unassessed_complexity
                 - unprepared

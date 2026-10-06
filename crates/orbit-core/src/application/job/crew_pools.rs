@@ -143,25 +143,41 @@ impl OrbitRuntime {
 
     /// One selection seam for both read-only eligibility and admission. The
     /// former inspects the candidates without drawing a random ticket.
+    ///
+    /// [ORB-14266] A standing provider failure hold removes the crews it
+    /// excludes from the draw, falling back to the complexity pool and then
+    /// the default. An explicit crew is the caller's decision and ignores it.
     pub(crate) fn auto_task_crew_candidates(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        if explicit.and_then(non_empty).is_some()
-            || task.crew.as_deref().and_then(non_empty).is_some()
-        {
+        if explicit.and_then(non_empty).is_some() {
             return Ok((
                 vec![sole_candidate(
                     self.resolve_crew_for_task(explicit, task.crew.as_deref())?,
                 )],
-                if explicit.and_then(non_empty).is_some() {
-                    "explicit"
-                } else {
-                    "task.crew"
-                }
-                .to_string(),
+                "explicit".to_string(),
+            ));
+        }
+        let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
+        self.apply_provider_hold(task, pools, candidates, source)
+    }
+
+    /// The task's own crew, else its complexity pool, else the default chain,
+    /// before any provider failure hold.
+    pub(crate) fn unheld_task_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        if task.crew.as_deref().and_then(non_empty).is_some() {
+            return Ok((
+                vec![sole_candidate(
+                    self.resolve_crew_for_task(None, task.crew.as_deref())?,
+                )],
+                "task.crew".to_string(),
             ));
         }
         if let Some(drawn) = self.complexity_pool_candidates(task.complexity, pools)? {
@@ -183,7 +199,7 @@ impl OrbitRuntime {
     /// `workflow.default_crew` — and dispatch refuses that too if it is
     /// disabled. Enabled state is read from the current configuration, not the
     /// captured pool, so disabling a crew takes effect for the next draw.
-    fn complexity_pool_candidates(
+    pub(crate) fn complexity_pool_candidates(
         &self,
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,

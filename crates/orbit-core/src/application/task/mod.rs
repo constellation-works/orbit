@@ -7,6 +7,7 @@ pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+mod provider_hold;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod helpers;

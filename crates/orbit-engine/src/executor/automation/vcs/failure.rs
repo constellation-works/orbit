@@ -222,6 +222,23 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         );
     }
 
+    // [ORB-14266] The provider failed the run, not the candidate: capacity,
+    // an unusable provider, or a content-policy refusal. Commit what the
+    // agent left so the next run resumes it, open no `[BLOCKED]` PR, and
+    // leave the task's status to run finalization, which holds it in the
+    // backlog with the failing provider's crews excluded. Checked before the
+    // review-gate branch because the reviewer's provider can fail too.
+    if orbit_types::workflow::is_provider_failure(Some(error_code), Some(error_message)) {
+        return hold_provider_failure_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
+    }
+
     // [ORB-11333] A review-gate failure keeps the implementation and any
     // partial reviewer repairs attributed to their authors, pushes the
     // candidate so the evidence survives, and opens no PR: publication is
@@ -509,6 +526,44 @@ fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>(
         "candidate_preserved": true,
         "pr_created": false,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    }))
+}
+
+/// Keep the candidate of a run its provider failed [ORB-14266].
+///
+/// Whatever the agent left is committed on the run's branch, attributed like
+/// any failure candidate, but nothing is pushed or published. The task's
+/// status is not written here: run finalization moves it to `backlog` under a
+/// provider failure hold, for local and PR pipelines alike. The next run
+/// resumes this candidate (`candidate_resume` treats the decision as
+/// preserving) on a crew the hold permits.
+fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let class = orbit_types::workflow::ProviderFailureClass::of(None, Some(error_message))
+        .map_or("provider_failure", |class| class.as_str());
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "held_provider_failure",
+        "provider_failure": class,
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "committed_files": committed_files,
+        "candidate_preserved": true,
+        "pr_created": false,
         "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }

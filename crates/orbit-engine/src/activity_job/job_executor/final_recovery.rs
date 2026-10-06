@@ -126,6 +126,17 @@ pub(super) fn attempt_final_recovery(
             "the provider reported the selected model at capacity; the candidate was not judged",
         );
     }
+    // [ORB-14266] Nor makes an unusable provider usable, or gets past its
+    // content policy. Run finalization holds the task in the backlog with
+    // that provider's crews excluded for a while instead.
+    if orbit_types::workflow::is_provider_unavailable(None, Some(error_message)) {
+        return skip("the provider could not be used on this host; the candidate was not judged");
+    }
+    if orbit_types::workflow::is_provider_refusal(None, Some(error_message)) {
+        return skip(
+            "the provider's content policy refused the turn; the candidate was not judged",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",

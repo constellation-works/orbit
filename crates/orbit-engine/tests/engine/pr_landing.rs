@@ -1315,6 +1315,68 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
     );
 }
 
+/// [ORB-14266] A run its provider failed did not judge the candidate. The
+/// handoff commits what the agent left, so the next run can resume it, but
+/// pushes nothing, opens no `[BLOCKED]` PR and leaves the status alone: run
+/// finalization holds the task in the backlog for another crew.
+#[test]
+fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
+    isolated(
+        "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fs::write(fx.repo.join("src/wip.txt"), "half written\n").unwrap();
+            let message = format!(
+                "step `implement_one`: {}",
+                orbit_types::workflow::provider_failure_text(
+                    orbit_types::workflow::ProviderFailureClass::Refusal,
+                    "codex",
+                    "cli subprocess exited with code 1: codex provider refused the request: \
+                     This content was flagged for possible cybersecurity risk.",
+                )
+            );
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "implement_one",
+                    "error_code": "provider_refusal",
+                    "error_message": message,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the provider failure");
+
+            assert_eq!(handoff["decision"], "held_provider_failure");
+            assert_eq!(handoff["provider_failure"], "provider_refusal");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_ne!(fx.head(), head_before, "the partial candidate is committed");
+            assert_eq!(handoff["head_sha"], fx.head());
+            assert_eq!(
+                git(&fx.repo, &["show", "HEAD:src/wip.txt"]),
+                "half written",
+                "the commit holds what the agent left"
+            );
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                host.status(TASK_ID),
+                TaskStatus::InProgress,
+                "run finalization owns the hold"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A red base and network flakes [ORB-14258]
 // ---------------------------------------------------------------------------

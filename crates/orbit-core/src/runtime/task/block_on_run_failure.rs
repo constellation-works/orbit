@@ -15,6 +15,12 @@
 //! A task the run's failure
 //! handoff already held is left as it is.
 //!
+//! [ORB-14266] A run that failed on its provider — `[provider_capacity]`,
+//! `[provider_unavailable]` or `[provider_refusal]` — did not judge the work
+//! either. Its tasks go back to the backlog under a `provider_failure_hold`
+//! that excludes the failing crews until a backoff passes, and admission
+//! draws another crew or defers (see `provider_hold`).
+//!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
 //! `in_progress`). The update comes from the engine's
@@ -54,12 +60,14 @@ use orbit_engine::{
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, ProviderFailureClass,
+    is_baseline_red_failure,
 };
 
 use crate::OrbitRuntime;
 
 use super::FINAL_RECOVERY_REQUEUED_EVENT;
+use super::provider_hold::{held_by_run, provider_failure_hold_update};
 
 pub(crate) const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
 
@@ -266,6 +274,11 @@ impl OrbitRuntime {
                 }
                 hold
             });
+        // [ORB-14266] Nor does a run its provider failed; its tasks wait in
+        // the backlog for another crew instead.
+        let provider_failure = (state == JobRunState::Failed && hold.is_none())
+            .then(|| ProviderFailureClass::of(error_code.as_deref(), error_message.as_deref()))
+            .flatten();
         let task_cancellation_policy = if state == JobRunState::Cancelled {
             self.read_run_state(run_id)?
                 .and_then(|state| state.task_cancellation_policy)
@@ -310,6 +323,12 @@ impl OrbitRuntime {
                                         && BaselineRedHold::from_text(note)
                                             .is_some_and(|held| held.run_id == run_id))
                             })
+                    {
+                        return Ok(());
+                    }
+                    // A replayed finalization finds this run's provider hold.
+                    if current.status == TaskStatus::Backlog
+                        && held_by_run(&self.get_task_history(&task.id)?, run_id)
                     {
                         return Ok(());
                     }
@@ -358,9 +377,19 @@ impl OrbitRuntime {
                             ..TaskAutomationUpdate::default()
                         }
                     } else {
-                        match &hold {
-                            Some(hold) => baseline_red_hold_update(&run.job_id, hold),
-                            None => blocked_update(
+                        match (&hold, provider_failure) {
+                            (Some(hold), _) => baseline_red_hold_update(&run.job_id, hold),
+                            (None, Some(class)) => provider_failure_hold_update(
+                                &run.job_id,
+                                &self.provider_failure_hold(
+                                    &current,
+                                    &run,
+                                    class,
+                                    error_message.as_deref(),
+                                    Utc::now(),
+                                )?,
+                            ),
+                            (None, None) => blocked_update(
                                 &run.job_id,
                                 run_id,
                                 error_code.as_deref(),

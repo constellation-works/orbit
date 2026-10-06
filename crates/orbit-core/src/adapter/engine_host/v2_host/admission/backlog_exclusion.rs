@@ -102,6 +102,13 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// the command passes on a new base tip, and `detail` names the base and
     /// command.
     BaselineRedHold,
+    /// The task's last local run failed on its provider (capacity, an
+    /// unusable provider, or a content-policy refusal), and the hold that
+    /// failure placed excludes every crew the task could run as until its
+    /// `not_before` [ORB-14266]. A hold that leaves another crew admits the
+    /// task on that crew instead. `detail` names the run, the failure, the
+    /// excluded crews and the time.
+    ProviderBackoff,
     /// A critical or high-priority task ranked ahead of this one waits only on
     /// context locks, and this task's surface overlaps the surface it reserves.
     /// Admitting this task would take a lock the reserving task needs as soon
@@ -571,6 +578,28 @@ fn backlog_snapshot_in_mode(
             true
         }
     });
+    // [ORB-14266] A task whose provider failure hold excludes every crew it
+    // could run as waits out the backoff; one that leaves another crew is
+    // admitted and drawn onto it. An unreadable hold is not one.
+    backlog.retain(
+        |task| match runtime.provider_backoff_deferral(task, pools) {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::ProviderBackoff,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read provider failure hold: {error}");
+                true
+            }
+        },
+    );
     // [ORB-14168] A task that cleared the per-task gates would still fail
     // closed at local-route admission while `review.before_pr` is on. Hold it
     // here so the drain does not spawn that delivery. Tasks already excluded

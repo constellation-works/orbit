@@ -30,6 +30,7 @@ mod implement_blocker;
 mod invocation_metrics;
 mod local_route_before_pr;
 mod plugin_inspection;
+mod provider_failure_hold;
 
 mod task_delivery;
 mod task_pilot;
