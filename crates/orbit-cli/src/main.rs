@@ -503,7 +503,7 @@ fn main() {
     // host's protected invocation record; request fields never select this
     // path. ToolRunArgs validates any explicit selector against that binding.
     let claimed_owner_call = claimed_owner_tool(&cli.command);
-    let claimed_owner_worker = if claimed_owner_call && workspace_selector.is_none() {
+    let claimed_owner_worker = if claimed_owner_call {
         let global_root = match orbit_core::runtime::resolve_global_root() {
             Ok(root) => root,
             Err(error) => {

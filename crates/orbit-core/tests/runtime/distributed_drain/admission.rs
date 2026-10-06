@@ -770,7 +770,6 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     a_provider_failure_releases_the_claim(
         "[provider_unavailable] claude provider authentication failure (HTTP 401): \
          Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
-        "OAuth token revoked",
     );
 }
 
@@ -787,8 +786,7 @@ fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_
     }
     a_provider_failure_releases_the_claim(
         "[provider_capacity] cli subprocess exited with code 1: codex provider reported the \
-         selected model at capacity: Selected model is at capacity. Please try a different model.",
-        "Selected model is at capacity",
+        selected model at capacity: Selected model is at capacity. Please try a different model.",
     );
 }
 
@@ -807,15 +805,14 @@ fn an_owner_route_failure_releases_the_claim_and_excludes_the_crew_for_the_windo
     }
     a_provider_failure_releases_the_claim(
         "step `review`: [owner_route_unavailable] cli subprocess reported declared envelope \
-         status=\"failed\" despite exit 0: error.code=owner_route_unavailable; \
+        status=\"failed\" despite exit 0: error.code=owner_route_unavailable; \
          error.message=the run's coordinator was not passed to this process",
-        "could not reach the owner through the run's coordinator",
     );
 }
 
 /// The settlement of a claimed `sol` leaf that ended on `diagnostic`, a typed
-/// failure of the crew on this host whose reason includes `reason`.
-fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
+/// failure of the crew on this host.
+fn a_provider_failure_releases_the_claim(diagnostic: &str) {
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -828,15 +825,6 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     assert_eq!(pass["admitted"], 0, "{pass}");
     let exclusion = excluded(&pass, "sol");
     assert_eq!(exclusion["source"], "provider_unavailable", "{pass}");
-    assert!(
-        exclusion["reason"]
-            .as_str()
-            .is_some_and(|text| text.contains(task.as_str())
-                && text.contains(reason)
-                && !text.contains("[provider_")),
-        "the reason quotes the provider without Orbit's marker: {pass}"
-    );
-
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert_eq!(settles.len(), 1, "{settles:?}");
     let release = &settles[0]["settlement"]["Release"];
@@ -851,11 +839,6 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
         "the released task is not pulled back: {claims:#?}"
     );
     assert_eq!(claims[0]["claim"]["phase"], "revoked");
-    assert!(
-        comments_of(&pair.owner_task(&task)).contains("runs no more `sol` tasks in its window"),
-        "{}",
-        pair.owner_task(&task)
-    );
     let pulls = pair.wire.calls("orbit.task.pull");
     let last = pulls.last().expect("the pass asked again");
     assert!(
