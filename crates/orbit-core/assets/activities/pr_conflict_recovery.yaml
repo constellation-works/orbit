@@ -41,6 +41,12 @@ spec:
         type: string
       failed_step_input:
         type: object
+      step_recovery_attempts:
+        type: array
+        items:
+          type: object
+      log_tail:
+        type: string
       crew:
         type: string
       crew_config_key:
@@ -133,11 +139,14 @@ spec:
 
     1. Read the supplied conflict evidence and `failed_step_input`, which
        retains the candidate branch and pre-rewrite checkpoint. Work only in
-       the supplied matching `workspace_path` and `repo_root`. Inspect the run
-       through `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its
-       checkpointed worktree. The only identity and safety checks that stop
-       you before editing are:
-       - the run is cancelled;
+       the supplied matching `workspace_path` and `repo_root`. Use the injected
+       `step_recovery_attempts` (chronological audit records with bounded
+       diagnostics, outputs and decisions) and `log_tail` (this run's bounded,
+       redacted worker-log tail, empty when no log exists), its task, and its
+       checkpointed worktree. Run observation is operator-only; do not call
+       run observation tools or CLI commands. Run cancellation and
+       authorization remain the executor's responsibility. The identity
+       and safety checks that stop you before editing are:
        - the task refuses writes (terminal, or `orbit.task.update` rejects;
          not evaluated in a claimed leaf);
        - the checked-out branch is not `failed_step_input.head`, or the
@@ -203,6 +212,8 @@ spec:
     - orbit.auto_task.update
     - orbit.command.exec
     - orbit.pipeline.invoke
+    - orbit.workflow.run.show
+    - orbit.workflow.run.list
     - orbit.workflow.run.resume
     - orbit.workflow.ship
   proc_disallowed_programs:

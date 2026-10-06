@@ -17,9 +17,9 @@ const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
 /// once as the `prompt` rendering of it — and a provider such as `codex exec`
 /// rejects the whole turn above 1,048,576 characters before the agent starts.
 /// A `primary_checkout_drift` diagnostic reached 2.5 MB, so the envelope was
-/// 5.1 MB and recovery exited 1 in 416 ms without running [ORB-12467]. Two
-/// 64 KiB fields leave the envelope an order of magnitude below that ceiling
-/// while still showing the agent both ends of the real diagnostic.
+/// 5.1 MB and recovery exited 1 in 416 ms without running [ORB-12467]. The
+/// 64 KiB limits bound diagnostics, rendered inputs and injected run evidence
+/// while still showing the agent both ends of an oversized diagnostic.
 pub(super) const MAX_RECOVERY_ERROR_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// Largest serialised `failed_step_input` the recovery input may carry.
@@ -417,6 +417,7 @@ fn dispatch_recovery(
             validate_bound_recovery_context(&input)
                 .map_err(|error| ("input", error.to_string()))?;
         }
+        inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
         input["system_crew"] = Value::Bool(true);
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)

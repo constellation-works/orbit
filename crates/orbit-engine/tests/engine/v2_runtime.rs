@@ -1381,6 +1381,10 @@ impl ReviewerHost {
 }
 
 impl RuntimeHost for ReviewerHost {
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     fn run_deterministic(
         &self,
         action: &str,
