@@ -14,7 +14,7 @@ use orbit_types::identity::{
 };
 use serde_json::Value;
 
-use super::{CommandOut, CommandOutput, Commands, Execute};
+use super::super::{CommandOut, CommandOutput, Commands, Execute};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMeta {
@@ -93,7 +93,7 @@ impl<'a> DispatchContext<'a> {
         }
     }
 
-    fn runtime(&self) -> Result<&'a OrbitRuntime, OrbitError> {
+    pub(super) fn runtime(&self) -> Result<&'a OrbitRuntime, OrbitError> {
         self.runtime.ok_or_else(|| {
             OrbitError::Execution(
                 "command operation required a runtime but dispatch did not provide one".to_string(),
@@ -145,7 +145,7 @@ pub struct GovernedCommand {
 }
 
 impl CommandOperation {
-    fn new(
+    pub(super) fn new(
         runtime_need: RuntimeNeed,
         audit_meta: Option<CommandMeta>,
         json_error_preference: Option<bool>,
@@ -164,7 +164,7 @@ impl CommandOperation {
         }
     }
 
-    fn with_task_owner_id(mut self, task_id: Option<String>) -> Self {
+    pub(super) fn with_task_owner_id(mut self, task_id: Option<String>) -> Self {
         self.task_owner_id = task_id;
         self
     }
@@ -173,7 +173,7 @@ impl CommandOperation {
     ///
     /// `when` is the destructiveness predicate: `gc worktrees` reports without
     /// it and reaps with it, and only the second is governed.
-    fn governed_when(
+    pub(super) fn governed_when(
         mut self,
         when: bool,
         command: &'static str,
@@ -192,7 +192,7 @@ impl CommandOperation {
     ///
     /// `when` is the subcommand predicate: `orbit tool run` is a callback,
     /// the rest of `orbit tool` is not.
-    fn plugin_callback_entry_point(mut self, when: bool) -> Self {
+    pub(super) fn plugin_callback_entry_point(mut self, when: bool) -> Self {
         self.plugin_callback_entry_point = when;
         self
     }
@@ -227,7 +227,10 @@ macro_rules! boxed_runtime_dispatch {
     }};
 }
 
-fn dispatch_mismatch(variant: &str) -> CommandOut {
+// Shared only with the sibling registry; dispatch helpers stay inside operation.
+pub(super) use {boxed_runtime_dispatch, runtime_dispatch};
+
+pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(
         "command operation dispatch invariant violated for {variant}"
     )))
@@ -236,7 +239,7 @@ fn dispatch_mismatch(variant: &str) -> CommandOut {
 /// `run logs`/`run events` reconcile stale runs at runtime open by default;
 /// `--no-reconcile` opens read-only so the whole command observes stored run
 /// state without finalizing an orphaned run.
-fn observation_runtime_need(no_reconcile: bool) -> RuntimeNeed {
+pub(super) fn observation_runtime_need(no_reconcile: bool) -> RuntimeNeed {
     if no_reconcile {
         RuntimeNeed::ReadOnly
     } else {
@@ -244,7 +247,7 @@ fn observation_runtime_need(no_reconcile: bool) -> RuntimeNeed {
     }
 }
 
-fn admin_meta(
+pub(super) fn admin_meta(
     command: &str,
     subcommand: Option<&str>,
     target_type: Option<&str>,
@@ -262,18 +265,15 @@ fn admin_meta(
     }
 }
 
-#[path = "operation_registry.rs"]
-mod registry;
-
-fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Init(command) => command.execute_without_runtime(context.root_override),
         _ => dispatch_mismatch("Init"),
     }
 }
 
-fn dispatch_workspace(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::workspace::{WorkspaceCommand, WorkspaceSubcommand};
+pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    use super::super::workspace::{WorkspaceCommand, WorkspaceSubcommand};
     match command {
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Init(args),
@@ -286,8 +286,8 @@ fn dispatch_workspace(command: Commands, context: DispatchContext<'_>) -> Comman
     }
 }
 
-fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::mcp::{McpCommand, McpSubcommand};
+pub(super) fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    use super::super::mcp::{McpCommand, McpSubcommand};
     match command {
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Init(args),
@@ -305,7 +305,7 @@ fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     }
 }
 
-fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Migrate(command) if !command.confirm => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
@@ -315,15 +315,15 @@ fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandO
     }
 }
 
-fn dispatch_update(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Update(command) => command.execute_without_runtime(context.root_override),
         _ => dispatch_mismatch("Update"),
     }
 }
 
-fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::run::{RunCommand, RunSubcommand};
+pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    use super::super::run::{RunCommand, RunSubcommand};
     match command {
         Commands::Run(RunCommand {
             command: RunSubcommand::ShipSweep(args),
@@ -333,7 +333,7 @@ fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     }
 }
 
-fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Sweep(command) => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
@@ -342,7 +342,7 @@ fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut
     }
 }
 
-fn dispatch_clock(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_clock(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Clock(command) => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
@@ -351,7 +351,7 @@ fn dispatch_clock(command: Commands, context: DispatchContext<'_>) -> CommandOut
     }
 }
 
-fn dispatch_routine(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Routine(command) => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
@@ -360,8 +360,8 @@ fn dispatch_routine(command: Commands, context: DispatchContext<'_>) -> CommandO
     }
 }
 
-fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::web::{WebCommand, WebSubcommand};
+pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    use super::super::web::{WebCommand, WebSubcommand};
     match command {
         Commands::Web(WebCommand {
             command: WebSubcommand::Serve(args),
@@ -379,8 +379,8 @@ fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     }
 }
 
-fn tool_operation(command: &super::tool::ToolCommand) -> CommandOperation {
-    use super::tool::ToolSubcommand;
+pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> CommandOperation {
+    use super::super::tool::ToolSubcommand;
     let (subcommand, tool_name, target_type, target_id, role, json_output) = match &command.command
     {
         ToolSubcommand::Run(args) => (
@@ -444,13 +444,13 @@ fn tool_operation(command: &super::tool::ToolCommand) -> CommandOperation {
     };
     let runtime_need = match &command.command {
         ToolSubcommand::Run(args) => match args.bootstrap_route() {
-            Ok(super::tool::ToolRunBootstrap::SelectedWorkspace(selector)) => {
+            Ok(super::super::tool::ToolRunBootstrap::SelectedWorkspace(selector)) => {
                 RuntimeNeed::SelectedWorkspace { selector }
             }
-            Ok(super::tool::ToolRunBootstrap::TaskOwner(task_id)) => {
+            Ok(super::super::tool::ToolRunBootstrap::TaskOwner(task_id)) => {
                 RuntimeNeed::TaskOwner { task_id }
             }
-            Ok(super::tool::ToolRunBootstrap::CwdWorkspace) => RuntimeNeed::Required,
+            Ok(super::super::tool::ToolRunBootstrap::CwdWorkspace) => RuntimeNeed::Required,
             Err(error) => RuntimeNeed::UnusableToolInput {
                 message: unusable_tool_input_message(error),
             },
@@ -477,7 +477,7 @@ fn tool_operation(command: &super::tool::ToolCommand) -> CommandOperation {
     .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))
 }
 
-fn tool_run_actor_role(args: &super::tool::ToolRunArgs) -> String {
+pub(super) fn tool_run_actor_role(args: &super::super::tool::ToolRunArgs) -> String {
     let (input_agent, input_model) = tool_run_input_identity(args);
     let env_agent = std::env::var("ORBIT_AGENT_NAME")
         .ok()
@@ -510,7 +510,9 @@ fn unusable_tool_input_message(error: OrbitError) -> String {
     }
 }
 
-fn tool_run_input_identity(args: &super::tool::ToolRunArgs) -> (Option<String>, Option<String>) {
+fn tool_run_input_identity(
+    args: &super::super::tool::ToolRunArgs,
+) -> (Option<String>, Option<String>) {
     // Share `parsed_input`'s single read. A second `read_to_string` here would
     // retry an unreadable `--input-file` while building the audit role.
     let Ok(Value::Object(map)) = args.parsed_input() else {

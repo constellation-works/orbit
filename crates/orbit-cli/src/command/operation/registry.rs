@@ -1,4 +1,5 @@
-use super::*;
+use super::super::{Commands, Execute};
+use super::spec::*;
 
 impl Commands {
     /// Resolve all cross-cutting behavior for this command from one exhaustive
