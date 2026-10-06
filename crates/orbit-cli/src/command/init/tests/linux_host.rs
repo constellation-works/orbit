@@ -548,7 +548,7 @@ fn package_selection_uses_available_commands_and_family_without_version_gates() 
 }
 
 const NO_BIND_FD: &str = "Bubblewrap at /usr/bin/bwrap does not support the required --bind-fd \
-                          object-authority mount, and no bundled Bubblewrap is installed";
+                          and --ro-bind-fd object-authority mounts, and no bundled Bubblewrap is installed";
 const BUNDLED_READY: &str = "ready-bundled:0.12.0";
 const BUNDLED_INSTALL: [&str; 2] = [
     "/usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec/orbit",

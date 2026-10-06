@@ -223,6 +223,200 @@ fn trusted_resolution_never_consults_path() {
     }
 }
 
+/// A private /tmp must preserve linked Git metadata without revealing the
+/// primary checkout or unrelated scratch. Exercise ordinary absolute pointers
+/// and relative pointers to a gitdir outside its common directory.
+#[test]
+fn tmp_linked_worktree_retains_git_without_exposing_host_scratch() {
+    use std::fs;
+    use std::process::Command;
+
+    for managed in [false, true] {
+        let temp = tempfile::tempdir_in("/tmp").expect("fixture under /tmp");
+        let root = temp.path().canonicalize().expect("canonical root");
+        let primary = root.join("primary");
+        let workspace = root.join("workspace");
+        fs::create_dir(&primary).expect("primary");
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            let output = Command::new("git")
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .current_dir(cwd)
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgSign=false",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.com",
+                ])
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .expect("git output")
+                .trim()
+                .to_string()
+        };
+        git(&primary, &["init", "--template="]);
+        git(&primary, &["commit", "--allow-empty", "-m", "initial"]);
+        git(
+            &primary,
+            &["worktree", "add", "-b", "leaf", workspace.to_str().unwrap()],
+        );
+        let expected_head = git(&workspace, &["rev-parse", "HEAD"]);
+        let mut git_dir =
+            std::path::PathBuf::from(git(&workspace, &["rev-parse", "--absolute-git-dir"]));
+        let common = primary.join(".git");
+        if managed {
+            let relocated = root.join("detached-metadata");
+            fs::rename(&git_dir, &relocated).expect("relocate per-worktree gitdir");
+            fs::write(workspace.join(".git"), "gitdir: ../detached-metadata\n")
+                .expect("relative gitdir");
+            fs::write(relocated.join("commondir"), "../primary/.git\n")
+                .expect("relative commondir");
+            git_dir = relocated;
+        }
+        let unrelated = root.join("unrelated.txt");
+        let main_content = primary.join("private.txt");
+        fs::write(&unrelated, "host scratch").expect("unrelated file");
+        fs::write(&main_content, "primary contents").expect("primary file");
+        // Discover the checkout from a descendant, as Git itself does.
+        let cwd = workspace.join("subdir");
+        fs::create_dir(&cwd).expect("cwd");
+        let resolved = profile(vec![format!("{}/**", workspace.display())]);
+        let plan = compile_linux_bwrap_argv(
+            &resolved,
+            "/bin/sh",
+            &[
+                "-c".to_string(),
+                r#"
+set -eu
+git rev-parse HEAD
+git cat-file -e 'HEAD^{commit}'
+test ! -e "$UNRELATED"
+test ! -e "$MAIN_CONTENT"
+if printf poisoned > "$GITDIR/HEAD"; then exit 91; fi
+if printf poisoned > "$COMMON/config"; then exit 92; fi
+printf written > result.txt
+"#
+                .to_string(),
+            ],
+            Some(&cwd),
+            managed,
+        )
+        .expect("compile linked-worktree plan");
+        // This public-plan check runs even on a host without user namespaces.
+        // It also covers independent gitdir/common-dir resolution above.
+        for metadata in [&git_dir, &common] {
+            let rendered = metadata.display().to_string();
+            let bind = plan
+                .args
+                .windows(3)
+                .find(|args| args[0] == "--ro-bind-fd" && args[2] == rendered)
+                .expect("metadata source must use a descriptor-backed read-only bind");
+            let fd = bind[1].parse::<i32>().expect("numeric metadata descriptor");
+            assert!(
+                unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0,
+                "plan must retain Git metadata descriptor {fd}"
+            );
+            assert!(
+                plan.args
+                    .windows(2)
+                    .position(|args| args == ["--tmpfs", "/tmp"])
+                    .zip(
+                        plan.args
+                            .windows(3)
+                            .position(|args| args[0] == "--ro-bind-fd" && args[2] == rendered)
+                    )
+                    .is_some_and(|(private_tmp, metadata_bind)| private_tmp < metadata_bind),
+                "Git metadata must be rebound after the private /tmp"
+            );
+            assert!(
+                !plan.args.windows(3).any(|args| {
+                    args[0] == "--ro-bind" && args[1] == rendered && args[2] == rendered
+                }),
+                "Git metadata source paths must not be resolved after /tmp is hidden: {}",
+                metadata.display()
+            );
+        }
+        let probe = probe_bwrap();
+        if !probe.available {
+            println!("skipping real Bubblewrap test: {}", probe.detail);
+            continue;
+        }
+        let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &[
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()),
+                ("GITDIR".to_string(), git_dir.display().to_string()),
+                ("COMMON".to_string(), common.display().to_string()),
+                ("UNRELATED".to_string(), unrelated.display().to_string()),
+                (
+                    "MAIN_CONTENT".to_string(),
+                    main_content.display().to_string(),
+                ),
+            ],
+            cwd: Some(&cwd),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        })
+        .expect("spawn")
+        .wait_with_output()
+        .expect("wait");
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .expect("confined HEAD")
+                .trim(),
+            expected_head
+        );
+        assert_eq!(
+            fs::read_to_string(cwd.join("result.txt")).expect("source write"),
+            "written"
+        );
+        assert_eq!(
+            git(&workspace, &["rev-parse", "HEAD"]),
+            expected_head,
+            "metadata must survive attempted writes"
+        );
+    }
+}
+
+#[test]
+fn git_metadata_pointer_cannot_restore_host_tmp_wholesale() {
+    let temp = tempfile::tempdir_in("/tmp").expect("fixture");
+    let workspace = temp.path().join("workspace");
+    let git_dir = temp.path().join("metadata");
+    std::fs::create_dir(&workspace).expect("workspace");
+    std::fs::create_dir(&git_dir).expect("metadata");
+    std::fs::write(workspace.join(".git"), "gitdir: ../metadata\n").expect("gitdir");
+    std::fs::write(git_dir.join("commondir"), "/tmp\n").expect("commondir");
+    let error = compile_linux_bwrap_argv(
+        &profile(Vec::new()),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("a crafted common directory must not reveal all host scratch");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+}
+
 /// The wrapper's trust rests on it being root-owned under root-owned
 /// directories: the sandboxed agent runs as the invoking user, so even a
 /// policy that binds the wrapper's own directory writable cannot let it

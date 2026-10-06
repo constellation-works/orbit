@@ -27,11 +27,11 @@ intended account, or reinstall with `ORBIT_SKIP_HOST_PREREQUISITES=1` (below) in
 image build or container that runs as root.
 
 Preparation first runs Orbit's exact namespace-and-mount probe as that account and checks
-`--bind-fd`. A ready host causes no package or profile writes. When required, Orbit uses
+`--bind-fd` and `--ro-bind-fd`. A ready host causes no package or profile writes. When required, Orbit uses
 an available package manager and, on Ubuntu with the exact
 `setting up uid map: Permission denied` probe failure, only the packaged
 `bwrap-userns-restrict` AppArmor rule. When the host still has no Bubblewrap, or only one
-without `--bind-fd`, Orbit installs its signed [bundled Bubblewrap](#bundled-bubblewrap). Administrator authentication is requested
+without either descriptor-backed bind option, Orbit installs its signed [bundled Bubblewrap](#bundled-bubblewrap). Administrator authentication is requested
 only during explicit interactive installation/onboarding. `orbit init --non-interactive`
 requires root or existing/passwordless `sudo` authority and never waits for a password.
 Package/profile failures are retryable with `orbit init --host-prerequisites-only` after
@@ -70,16 +70,16 @@ same, for example `host 0.11.1` or `bundled 0.12.0`.
 ## Capability-based support matrix
 
 Linux support depends on the capability probe, not a distribution or version allow-list:
-Bubblewrap must provide `--bind-fd` and create the user namespaces and mounts Orbit needs
+Bubblewrap must provide `--bind-fd` and `--ro-bind-fd` and create the user namespaces and mounts Orbit needs
 as the intended unprivileged account. A host that already passes needs no preparation.
 An initial kernel/container namespace denial stops before package changes.
 
-When Bubblewrap is missing or lacks `--bind-fd`, Orbit selects an installed package
+When Bubblewrap is missing or lacks either descriptor-backed bind option, Orbit selects an installed package
 manager at its fixed `/usr/bin/` path. `ID` and the ordered `ID_LIKE` families in
 `/etc/os-release` select the preferred manager when several are present. If none of those
 is available, Orbit tries `apt-get`, `dnf5`/`dnf`, `pacman`, then `zypper`, in that order;
 `dnf5` takes precedence over `dnf`. Versions do not affect selection. It installs
-`bubblewrap`, then repeats the probe. If the package remains missing or lacks `--bind-fd`,
+`bubblewrap`, then repeats the probe. If the package remains missing or lacks either option,
 or no supported manager is installed, Orbit tries the signed bundled Bubblewrap.
 Failure reports retain the missing capability and identify a missing manager or unavailable
 bundled release. Namespace or other host-policy denial never triggers a bundled install.
@@ -97,7 +97,7 @@ package inventories alone do not establish readiness.
 | Arch and derivatives | `pacman`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
 | openSUSE, SUSE and derivatives | `zypper`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
 | Other or unidentified distributions | Any installed supported manager, in the fallback order above | Preserve existing host policy; require probe | Not run |
-| No supported package manager installed | Bundled Bubblewrap when the host binary is missing or lacks `--bind-fd` | Preserve existing host policy; report the manager and capability gaps if the bundle cannot be installed | Not run |
+| No supported package manager installed | Bundled Bubblewrap when the host binary is missing or lacks either descriptor-backed bind option | Preserve existing host policy; report the manager and capability gaps if the bundle cannot be installed | Not run |
 
 Package availability references: [Ubuntu Noble bubblewrap](https://packages.ubuntu.com/noble/bubblewrap),
 [Debian Trixie bubblewrap](https://packages.debian.org/trixie/bubblewrap),
@@ -111,12 +111,12 @@ Package listings alone do not establish namespace policy or an unprivileged prob
 Some supported hosts package a Bubblewrap older than 0.8.0, which lacks `--bind-fd`
 (Ubuntu 22.04 ships 0.6.1), or none at all. Each Orbit release therefore publishes a
 static Bubblewrap built from a pinned upstream release for x86_64 and aarch64. It is a
-fallback only: the host's `/usr/bin/bwrap` is used whenever it advertises `--bind-fd`, and
+fallback only: the host's `/usr/bin/bwrap` is used whenever it advertises both descriptor-backed bind options, and
 nothing is bundled onto such a host.
 
 **When it is installed.** `orbit init` (and the shell installer, which runs it) installs
 the bundled binary only when the probe reports that `/usr/bin/bwrap` is missing or lacks
-`--bind-fd`, after the distribution package path, if any, has been tried. Namespace
+either descriptor-backed bind option, after the distribution package path, if any, has been tried. Namespace
 denial by the kernel or an enclosing container never triggers it. Ubuntu's AppArmor
 remedy requires the exact uid-map denial on any version with the packaged profile;
 derivatives and other distributions do not receive it. The bundled binary is never setuid; it needs the same

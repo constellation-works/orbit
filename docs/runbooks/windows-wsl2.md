@@ -155,11 +155,11 @@ orbit init --format json             # includes linux_sandbox.status and reason
 
 `orbit init` does here what it does on any Linux host (full detail in the
 [Linux sandbox runbook](linux-sandbox.md)): it runs Orbit's namespace-and-mount
-probe as the invoking user and checks `--bind-fd`. A ready host changes
+probe as the invoking user and checks `--bind-fd` and `--ro-bind-fd`. A ready host changes
 nothing. Otherwise it installs the distribution's `bubblewrap` package, loads
 Ubuntu's packaged `bwrap-userns-restrict` AppArmor rule only for the exact
 `setting up uid map: Permission denied` failure, and, when the host
-Bubblewrap is still missing or lacks `--bind-fd`, installs Orbit's signed
+Bubblewrap is still missing or lacks either descriptor-backed bind option, installs Orbit's signed
 bundled Bubblewrap at `/usr/local/libexec/orbit/bwrap` (root-owned, never
 setuid). Executors run only `/usr/bin/bwrap` or that bundled path. A
 kernel or container namespace denial is reported, never "repaired".

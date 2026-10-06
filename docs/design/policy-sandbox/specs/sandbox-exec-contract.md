@@ -236,7 +236,7 @@ profile regex. [AppArmor file permission implementation](https://raw.githubuserc
 Linux runtime directories and SQLite sidecars are an object-authority exception
 to path-only compilation. The host must open each accepted object while it is
 validating or descriptor-relatively creating it, carry that descriptor through
-engine dispatch, and supply `--bind-fd` as Bubblewrap's bind source. The
+engine dispatch, and supply `--bind-fd` or `--ro-bind-fd` as Bubblewrap's bind source. The
 pathname remains the namespace destination only. Replacing a validated name
 with a symlink or different object must either leave the held object as the sole
 writable source or reject the plan before spawn. A second canonicalization or

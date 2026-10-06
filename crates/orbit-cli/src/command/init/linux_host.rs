@@ -2,7 +2,7 @@
 //! Package/profile changes never run during dispatch or npm postinstall.
 //!
 //! The distribution's Bubblewrap is preferred. When it is missing or lacks
-//! `--bind-fd` after any supported package install, the static Bubblewrap
+//! either descriptor-backed bind option after any supported package install, the static Bubblewrap
 //! signed into this Orbit release is installed root-owned at
 //! [`BUNDLED_BWRAP_PATH`]; executors trust exactly those two paths.
 
@@ -397,7 +397,7 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
 }
 
 /// The probe found no wrapper it could use: the host's is missing or lacks
-/// `--bind-fd`, and no capable bundled binary is installed. A capable wrapper
+/// a required descriptor-backed bind option, and no capable bundled binary is installed. A capable wrapper
 /// is the remedy; every other failure is host policy.
 fn needs_capable_wrapper(detail: &str) -> bool {
     detail.contains("not available at")
