@@ -144,14 +144,31 @@ fn confined_writer_preserves_the_previous_file_when_staging_write_fails() {
 fn staging_write_failure_child() {
     use super::super::materialize::write_confined_routine;
 
+    struct FileSizeLimit(libc::rlimit);
+
+    impl Drop for FileSizeLimit {
+        fn drop(&mut self) {
+            // SAFETY: restore the soft limit this isolated child lowered,
+            // including on assertion failure before LLVM writes its profile.
+            unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &self.0) };
+        }
+    }
+
     let root = tempfile::tempdir().expect("create tempdir");
     let path = root.path().join("task_pilot.yaml");
     let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
     write_confined_routine(&path, &previous).expect("create the definition before limiting writes");
     let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
+    // SAFETY: getrlimit initializes this valid struct for the current process.
+    let original = unsafe {
+        let mut original: libc::rlimit = std::mem::zeroed();
+        assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original), 0);
+        original
+    };
+    let restore_limit = FileSizeLimit(original);
     let limit = libc::rlimit {
         rlim_cur: 1024,
-        rlim_max: 1024,
+        rlim_max: original.rlim_max,
     };
     // SAFETY: this isolated child owns its signal disposition and resource
     // limits. `limit` is a valid rlimit and lives through the synchronous call.
@@ -175,6 +192,12 @@ fn staging_write_failure_child() {
         1,
         "the failed staging file is cleaned up"
     );
+
+    // LLVM writes its profile at process exit. Leaving the fault-injection
+    // limit active truncated that profile to 1 KiB (ORB-14387).
+    drop(restore_limit);
+    std::fs::write(root.path().join("after-limit"), [0u8; 2048])
+        .expect("the restored limit permits writes larger than the injected limit");
 }
 
 /// Routine catalog confinement: a link anywhere on a routine's route —
