@@ -708,7 +708,7 @@ activity.
 |---|---|
 | `ORBIT_ACTIVITY_TOOL_POLICY` | `deny` |
 | `ORBIT_ACTIVITY_TOOLS_DENY` | the disallow list, comma-separated (stamped even when empty) |
-| `ORBIT_ACTIVITY_NAME` | the activity name |
+| `ORBIT_ACTIVITY_NAME` | the catalog activity name (not the pipeline step id that targets it) |
 | `ORBIT_ACTIVITY_TOOLS` | the concrete callable set: registered agent-facing tools minus the list |
 
 The concrete `ORBIT_ACTIVITY_TOOLS` set is there for mixed-version safety. An

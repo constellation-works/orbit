@@ -1,23 +1,274 @@
-//! Missing trusted macOS wrapper admission through the public dispatch boundary.
-//! Runs on Linux as well, without changing PATH or removing a host executable.
+//! Sandboxed CLI dispatch through the public boundaries: missing trusted
+//! macOS wrapper admission (runs on Linux as well, without changing PATH or
+//! removing a host executable), and the activity identity a sandboxed
+//! pipeline step hands its plugin broker and tool policy.
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
+use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, PluginBrokerHandle, PluginBrokerRun, ResolvedCliExecutor, ResolvedSandbox,
-    RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+    DispatchError, PluginBrokerHandle, PluginBrokerRun, ResolvedActivityTools, ResolvedCliExecutor,
+    ResolvedSandbox, RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::Store;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, V2AuditEventKind};
 use serde_json::Value;
+
+/// A pipeline step's id is not its activity: `task_claimed_pr_pipeline` step
+/// `review` targets `agent_review_repair`. Policy, `ORBIT_ACTIVITY_NAME`, tool
+/// denials and the plugin broker are keyed by the catalog name; events keep
+/// the step id. When the step id leaked through, the claimed review bridge
+/// refused every Mac pull reviewer (on-call 2026-10-06).
+///
+/// The broker is started only for a sandboxed provider, so its half of the
+/// check needs the platform sandbox; the policy half runs everywhere.
+#[test]
+fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
+    let kind = platform_sandbox();
+    // Bubblewrap mounts a private tmpfs over /tmp, so the provider's results
+    // must live on disk elsewhere.
+    let dir = match kind {
+        Some(_) => tempfile::Builder::new()
+            .prefix("ostep")
+            .tempdir_in("/var/tmp")
+            .unwrap(),
+        None => tempfile::tempdir().unwrap(),
+    };
+    let root = dir.path().canonicalize().unwrap();
+    let results = root.join("results");
+    fs::create_dir(&results).unwrap();
+    let command = root.join("codex");
+    fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\n\
+             printf '%s' \"${{ORBIT_ACTIVITY_NAME-}}\" > '{results}/activity'\n\
+             cat > /dev/null\n\
+             printf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            results = results.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut job = load_job_asset(
+        &serde_json::json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "claimed_review_shape"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [
+                {"id": "review", "target": "activity:agent_review_repair"}
+            ]}
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .spec;
+    let mut catalog = V2ActivityCatalog::new();
+    catalog.insert(
+        "agent_review_repair",
+        ActivityV2 {
+            description: String::new(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::AgentLoop(
+                serde_json::from_value(serde_json::json!({
+                    "instruction": "review fixture",
+                    "provider": "codex",
+                    "tool_disallow_list": ["proc.*"],
+                    "wall_clock_timeout_seconds": 30
+                }))
+                .unwrap(),
+            ),
+        },
+    );
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let host = RecordingHost {
+        command,
+        worktree: root.clone(),
+        sandbox: kind.map(|kind| ResolvedSandbox {
+            kind,
+            fs_profile: ResolvedFsProfile {
+                name: "step-identity".into(),
+                read: vec!["/**".into()],
+                modify: vec![format!("{}/**", results.display())],
+            },
+            allow_fallback: false,
+            managed_worktree: false,
+            runtime_write_authority: Vec::new(),
+            mask: None,
+        }),
+        broker_runs: Mutex::new(Vec::new()),
+        denial_activities: Mutex::new(Vec::new()),
+    };
+    let audit = V2AuditWriter::with_disk_sinks(
+        &root.join("audit"),
+        Arc::new(Store::open_in_memory().unwrap()),
+        "ws-sandbox",
+        "step-identity",
+        "codex".to_string(),
+        None,
+    )
+    .unwrap();
+    let outcome = execute_job_with_resume(
+        &job,
+        serde_json::json!({"prompt": "review"}),
+        "step-identity",
+        audit.clone(),
+        &host,
+        None,
+    )
+    .unwrap();
+    assert!(outcome.success, "{outcome:?}");
+
+    let broker_runs = host.broker_runs.lock().unwrap();
+    if kind.is_some() {
+        assert_eq!(broker_runs.len(), 1, "the sandboxed step starts one broker");
+        assert_eq!(
+            broker_runs[0].activity_name, "agent_review_repair",
+            "the broker authorizes the catalog activity, which the claimed review bridge requires"
+        );
+        assert_eq!(
+            broker_runs[0]
+                .tool_deny_policy
+                .as_ref()
+                .map(|policy| policy.activity.as_str()),
+            Some("agent_review_repair")
+        );
+    } else {
+        assert!(broker_runs.is_empty(), "an unsandboxed step has no broker");
+    }
+    assert_eq!(
+        *host.denial_activities.lock().unwrap(),
+        ["agent_review_repair"],
+        "tool denials resolve for the catalog activity"
+    );
+    assert_eq!(
+        fs::read_to_string(results.join("activity")).unwrap(),
+        "agent_review_repair",
+        "the provider's ORBIT_ACTIVITY_NAME names the catalog activity"
+    );
+    let started = audit
+        .events_snapshot()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            V2AuditEventKind::ActivityStarted { activity_name, .. } => Some(activity_name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(started, ["review"], "activity events keep the step id");
+}
+
+/// The agent sandbox this host can apply, or `None` after naming why the
+/// broker half is skipped (no Bubblewrap user namespaces, e.g. inside a
+/// sandbox).
+fn platform_sandbox() -> Option<ExecutorSandboxKind> {
+    #[cfg(target_os = "linux")]
+    let available = {
+        let probe = orbit_exec::probe_bwrap();
+        (probe.available)
+            .then_some(ExecutorSandboxKind::LinuxBwrap)
+            .ok_or(probe.detail)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let available = orbit_exec::sandbox_exec_available()
+        .then_some(ExecutorSandboxKind::MacosSandboxExec)
+        .ok_or_else(|| "sandbox-exec is unavailable".to_string());
+    available
+        .inspect_err(|reason| {
+            let _ = writeln!(
+                std::io::stderr(),
+                "skipped the plugin broker check: the agent sandbox is unavailable: {reason}"
+            );
+        })
+        .ok()
+}
+
+struct RecordingHost {
+    command: PathBuf,
+    worktree: PathBuf,
+    sandbox: Option<ResolvedSandbox>,
+    broker_runs: Mutex<Vec<PluginBrokerRun>>,
+    denial_activities: Mutex<Vec<String>>,
+}
+
+impl RuntimeHost for RecordingHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.display().to_string(),
+            args: Vec::new(),
+        })
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        _provider: &str,
+        _fs_profile: Option<&str>,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        Ok(self.sandbox.clone())
+    }
+
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        activity: &str,
+        _disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        self.denial_activities
+            .lock()
+            .unwrap()
+            .push(activity.to_string());
+        Ok(ResolvedActivityTools {
+            requested_tools: Vec::new(),
+            effective_tools: Vec::new(),
+        })
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: Some(self.worktree.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn start_plugin_broker(
+        &self,
+        run: &PluginBrokerRun,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        self.broker_runs.lock().unwrap().push(run.clone());
+        Ok(None)
+    }
+}
 
 #[test]
 fn missing_macos_wrapper_preserves_provider_confinement_and_honest_audit() {

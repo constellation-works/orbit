@@ -598,6 +598,16 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
         injected_defaults,
         "the audited argv must retain every injected managed MCP default"
     );
+    let forwarded: Vec<String> = serde_json::from_str(
+        argv[3 + 7]
+            .strip_prefix("mcp_servers.orbit.env_vars=")
+            .expect("env_vars override"),
+    )?;
+    assert!(
+        forwarded.iter().any(|name| name == "ORBIT_PLUGIN_BROKER"),
+        "Codex must forward the plugin broker locator to its orbit MCP server; without it a \
+         Codex reviewer cannot reach the claimed review bridge (on-call 2026-10-06)"
+    );
 
     let command_overrides = argv
         .windows(2)

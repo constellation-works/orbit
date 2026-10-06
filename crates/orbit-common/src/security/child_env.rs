@@ -60,7 +60,16 @@ pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
 /// The deny-mode activity's name, used to name it in a denial.
 pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
 
-/// Exact managed binding, identity, and activity policy names Codex must forward.
+/// Where a sandboxed agent's run plugin broker listens. A nested
+/// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
+/// bridge among them) only through it, so Codex must forward it. The value
+/// locates a socket and grants nothing: the broker authenticates every
+/// connection by the kernel's peer identity against the run it was started
+/// for, so a forwarded or forged path cannot borrow another run's authority.
+pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+
+/// Exact managed binding, identity, activity policy and broker locator names
+/// Codex must forward.
 pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     MCP_MANAGED_CONTEXT_ENV,
     MCP_MANAGED_RUN_ID_ENV,
@@ -78,6 +87,7 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",
     "ORBIT_PROC_DISALLOWED_PROGRAMS",
+    PLUGIN_BROKER_ENV,
 ];
 
 /// Exact envelope names a managed run exports or forwards into a child.
