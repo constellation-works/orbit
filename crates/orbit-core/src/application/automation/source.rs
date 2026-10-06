@@ -115,7 +115,7 @@ impl<'a> Source<'a> {
             .spawn()
             .map_err(|e| {
                 AutomationError::Deferred(format!(
-                    "evidence_unavailable: {}: {e}",
+                    "source_spawn_failed: {}: {e}",
                     command_line(program, args)
                 ))
             })?;
@@ -412,7 +412,7 @@ impl<'a> Source<'a> {
 
     /// `true` when `older` is an ancestor of `newer`. A missing object is
     /// divergence, not success. A source deadline propagates.
-    fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
+    pub(super) fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
         match self.git(&["merge-base", "--is-ancestor", older, newer]) {
             Ok(_) => Ok(true),
             Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => Ok(false),
