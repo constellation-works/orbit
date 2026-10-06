@@ -45,8 +45,11 @@ to the executor's available memory.
 Each invocation creates a fresh `codeql-rust-local.*` directory under
 `$ORBIT_SCRATCH_DIR` (or `<checkout>/.orbit/tmp` when unset). It isolates
 `RUSTUP_HOME`, `CARGO_HOME`, Cargo build output, temporary files, and CodeQL
-caches there. Toolchain installation uses `--no-self-update` and never writes
-to the user's `~/.rustup`. The run directory is printed before preparation,
+caches there. Toolchain installation uses
+`--profile minimal --component rust-src --no-self-update` and never writes
+to the user's `~/.rustup`. The minimal profile is required: a default-profile
+install writes rust-docs, and `macro.env.html` matches denyModify `**/*.env.*`
+even under the scratch directory. The run directory is printed before preparation,
 and retained on success or failure. It contains:
 
 - `toolchain.log`: preparation of the pinned toolchain and rust-src.

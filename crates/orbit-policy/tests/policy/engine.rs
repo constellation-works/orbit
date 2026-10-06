@@ -209,3 +209,117 @@ fn modify_exceptions_never_expand_profile_authority_across_rule_orders() {
         }
     }
 }
+
+/// The shipped secret globs stay fail-closed, including rust-docs under the
+/// `.orbit/tmp` write exception. [ORB-14337]
+#[test]
+fn shipped_env_denies_reject_dotenv_files_and_rust_docs_under_tmp() {
+    let deny_read = ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"];
+    let deny_modify = [
+        ".orbit/**",
+        "!.orbit/tmp/**",
+        "**/.env",
+        "**/.env.*",
+        "**/*.env",
+        "**/*.env.*",
+    ];
+    let docs = ".orbit/tmp/toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html";
+    let named = [
+        ("**/.env", ".env", FsOperation::Read),
+        ("**/.env", ".env", FsOperation::Modify),
+        ("**/.env.*", ".env.local", FsOperation::Read),
+        ("**/.env.*", ".env.local", FsOperation::Modify),
+        ("**/*.env", "secrets.env", FsOperation::Read),
+        ("**/*.env", "secrets.env", FsOperation::Modify),
+        ("**/*.env.*", docs, FsOperation::Read),
+        ("**/*.env.*", docs, FsOperation::Modify),
+    ];
+    for (rule, path, operation) in named {
+        let def = PolicyDef {
+            name: "shipped-env".into(),
+            description: None,
+            deny_read: if operation == FsOperation::Read {
+                vec![rule.into()]
+            } else {
+                vec![]
+            },
+            deny_modify: if operation == FsOperation::Modify {
+                vec![rule.into()]
+            } else {
+                vec![]
+            },
+            fs_profiles: HashMap::from([(
+                "implementer".into(),
+                FsProfile {
+                    read: vec!["**".into()],
+                    modify: vec!["**".into()],
+                },
+            )]),
+            created_at: None,
+            updated_at: None,
+        };
+        let decision = PolicyEngine::from_def(&def)
+            .expect("policy")
+            .check("implementer", operation, path)
+            .expect("check");
+        assert!(
+            !decision.allowed,
+            "ORB-14337: {rule} must deny {path} for {operation:?}: {decision:?}"
+        );
+        assert_eq!(
+            decision.matched_rule, rule,
+            "ORB-14337: {path} must be settled by {rule}"
+        );
+    }
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "implementer".into(),
+        FsProfile {
+            read: vec!["**".into()],
+            modify: vec!["**".into()],
+        },
+    );
+    let shipped = PolicyDef {
+        name: "default-shape".into(),
+        description: None,
+        deny_read: deny_read.into_iter().map(str::to_string).collect(),
+        deny_modify: deny_modify.into_iter().map(str::to_string).collect(),
+        fs_profiles: profiles,
+        created_at: None,
+        updated_at: None,
+    };
+    let engine = PolicyEngine::from_def(&shipped).expect("shipped shape");
+    for (operation, path) in [
+        (FsOperation::Read, ".env"),
+        (FsOperation::Modify, ".env"),
+        (FsOperation::Read, ".env.local"),
+        (FsOperation::Modify, ".env.local"),
+        (FsOperation::Read, "secrets.env"),
+        (FsOperation::Modify, "secrets.env"),
+        (FsOperation::Read, docs),
+        (FsOperation::Modify, docs),
+    ] {
+        let decision = engine
+            .check("implementer", operation, path)
+            .expect("shipped check");
+        assert!(
+            !decision.allowed,
+            "ORB-14337: shipped denies must still reject {path} for {operation:?} after the tmp exception: {decision:?}"
+        );
+    }
+    let ordinary = engine
+        .check("implementer", FsOperation::Modify, ".orbit/tmp/ok.txt")
+        .expect("ordinary scratch");
+    assert!(
+        ordinary.allowed,
+        "the tmp exception must still allow a non-secret scratch file: {ordinary:?}"
+    );
+    let docs_decision = engine
+        .check("implementer", FsOperation::Modify, docs)
+        .expect("docs");
+    assert_eq!(
+        docs_decision.matched_rule, "**/*.env.*",
+        "the later env rule must beat the .orbit/tmp exception: {docs_decision:?}"
+    );
+}

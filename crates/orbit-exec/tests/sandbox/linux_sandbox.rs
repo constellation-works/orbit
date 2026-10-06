@@ -1393,3 +1393,91 @@ printf 'source edit\n' > "$ALIAS/source.txt"
     );
     fs::write(recovery.join("manifest.json"), "host-updated").unwrap();
 }
+
+/// [ORB-14337] The `.orbit/tmp` write exception does not beat the later secret
+/// globs. A managed run that creates one of those paths still fails the
+/// post-run guard, including rust-docs `macro.env.html`.
+#[test]
+fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+    let root = workspace.display().to_string();
+    let resolved = profile(vec![
+        format!("{root}/**"),
+        format!("!{root}/.orbit/**"),
+        format!("{root}/.orbit/tmp/**"),
+        format!("!{root}/**/.env"),
+        format!("!{root}/**/.env.*"),
+        format!("!{root}/**/*.env"),
+        format!("!{root}/**/*.env.*"),
+    ]);
+    let ordinary = workspace.join(".orbit/tmp/ok.txt");
+    std::fs::write(&ordinary, "ok").expect("ordinary scratch");
+    LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("guard")
+        .verify()
+        .expect("a non-secret scratch file stays allowed");
+
+    let created = [
+        workspace.join(".env"),
+        workspace.join(".env.local"),
+        workspace.join("secrets.env"),
+        workspace.join(".orbit/tmp/toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html"),
+    ];
+    for path in created {
+        let parent = path.parent().expect("forbidden path has a parent");
+        let script = format!(
+            "mkdir -p '{parent}' && printf secret > '{path}'",
+            parent = parent.display(),
+            path = path.display()
+        );
+        let mut plan = compile_linux_bwrap_argv(
+            &resolved,
+            "/bin/sh",
+            &["-c".to_string(), script],
+            Some(&workspace),
+            true,
+        )
+        .expect("managed plan must accept the non-subtree secret globs");
+        let guard = plan
+            .take_post_run_guard()
+            .expect("managed worktree keeps a post-run guard");
+        let probe = probe_bwrap();
+        if probe.available {
+            let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+                plan: &plan,
+                env: &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
+                cwd: Some(&workspace),
+                stdin: Stdio::null(),
+                stdout: Stdio::null(),
+                stderr: Stdio::piped(),
+            })
+            .expect("spawn managed child");
+            let _ = child.wait().expect("wait");
+        } else {
+            println!(
+                "bwrap unavailable ({}); creating the forbidden path on the host",
+                probe.detail
+            );
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("parent");
+            }
+            std::fs::write(&path, "secret").expect("host write");
+        }
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("parent");
+            }
+            std::fs::write(&path, "secret").expect("record the created path");
+        }
+        let error = guard.verify().expect_err("new forbidden match");
+        let message = error.to_string();
+        assert!(
+            message.contains("before commit") && message.contains(&path.display().to_string()),
+            "post-run guard must fail the managed run for {}: {message}",
+            path.display()
+        );
+    }
+}
