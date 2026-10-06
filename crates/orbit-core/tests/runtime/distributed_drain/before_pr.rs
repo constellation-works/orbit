@@ -141,6 +141,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         request_id: "reviewed-pull".into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: true,
         run_context: AdmissionRunContext {

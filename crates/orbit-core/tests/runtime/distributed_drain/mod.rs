@@ -169,6 +169,7 @@ struct Wire {
     unreachable: Mutex<bool>,
     /// An older owner fixture: revision 1 rejects the new crews field.
     protocol: Mutex<Option<u32>>,
+    fingerprint: Mutex<Option<Value>>,
     /// When set, the owner refuses every settlement with this policy denial
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
@@ -321,6 +322,11 @@ impl DrainOwnerTransport for Wire {
             answer["refusal"] = json!("version_mismatch");
             answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
         }
+        if name == "orbit.drain.probe"
+            && let Some(fingerprint) = self.fingerprint.lock().unwrap().clone()
+        {
+            answer["protocol_fingerprint"] = fingerprint;
+        }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
             lose.remove(at);
@@ -454,6 +460,7 @@ impl Pair {
             task_reads_remote_error: Mutex::default(),
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
+            fingerprint: Mutex::default(),
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
         });
@@ -541,7 +548,7 @@ impl Pair {
     }
 
     /// One drain iteration with its window open and one leaf slot. A pass
-    /// never fails the drain; it reports what stopped it.
+    /// reports transient errors; typed protocol skew fails the drain.
     fn pass(&self, drain: &str) -> Value {
         self.pass_with(drain, 1)
     }

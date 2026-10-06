@@ -90,7 +90,9 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
 }
 
 /// Why a follower cannot run a crew for the rest of its pull drain window.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CrewExclusionSource {
     /// The window's provider preflight: the crew is disabled, or its
@@ -102,7 +104,7 @@ pub enum CrewExclusionSource {
 }
 
 /// One crew a follower will not run, and why.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CrewExclusion {
     pub crew: String,
     pub source: CrewExclusionSource,
@@ -234,6 +236,10 @@ pub struct DrainApprovalReport {
 /// overwritten every pass: the last one is the drain's final view.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DrainAdmissionPass {
+    /// Stable classifier of the latest failed pass, when available. A skew
+    /// failure is terminal even when the drain window remains open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_pass_error_code: Option<String>,
     pub recorded_at: DateTime<Utc>,
     /// Admissible tasks the pass did not admit: no free slot, or a lock
     /// conflict.

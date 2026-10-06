@@ -679,6 +679,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
         request_id: request_id.into(),
         caller_version: "1".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
         run_context: AdmissionRunContext {
@@ -1031,6 +1032,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
         run_context: AdmissionRunContext {

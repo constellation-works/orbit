@@ -107,6 +107,9 @@ flowchart BT
 ```
 
 - **`contracts`** holds every consumer-visible trait and DTO. Application code uses only these.
+  The distributed pull preflight fingerprints a JSON schema derived with
+  Schemars from the actual admission request and nested Types contracts. The
+  tool adapter also derives its accepted request fields from that schema.
 - **`driver/file`** and **`driver/sqlite`** are private, implement one technology each, and never import each other. Shared atomic-write, lock, path-safety, and YAML code lives in `fs`.
 - **`repository`** enforces invariants that span drivers. A task write, for example, is a canonical bundle plus registry rows. Task and reservation changes commit through one boundary ([pattern](docs/design-patterns/task_commit_boundary.md)).
 - **`workflow`** holds the explicit import, export, reindex, repair, publication, and layout-upgrade operations. Nothing imports implicitly on open.

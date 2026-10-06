@@ -659,3 +659,68 @@ fn replay_requires_workspace_operator_and_the_workspace_claim_token() {
         },
     );
 }
+
+/// A failed pull window retains its typed cause and pass health in the HTTP
+/// detail after terminalization, where the dashboard can show the remedy.
+#[test]
+fn failed_pull_protocol_is_visible_after_terminalization() {
+    isolated(
+        "workflows::failed_pull_protocol_is_visible_after_terminalization",
+        || {
+            let fixture = Fixture::new();
+            let mut run =
+                fixture.seed_run("jrun-skew", "workspace_pull_pipeline", JobRunState::Failed);
+            let now = Utc::now();
+            run.steps.push(orbit_types::workflow::JobRunStep {
+                step_index: 0,
+                target_type: orbit_types::workflow::JobTargetType::Job,
+                target_id: run.job_id.clone(),
+                started_at: Some(now),
+                finished_at: Some(now),
+                duration_ms: None,
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Failed,
+                error_code: Some("protocol_skew".into()),
+                error_message: Some("caller and owner pull request fingerprints differ".into()),
+            });
+            fixture.save_run(&run);
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_step_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &run.run_id,
+                    &run.steps[0],
+                )
+                .unwrap();
+            let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+            state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+                recorded_at: now,
+                queued: 0,
+                deferred: vec![],
+                excluded: vec![],
+                excluded_total: 0,
+                resource_throttle: None,
+                last_pass_error_code: Some("protocol_skew".into()),
+                last_pass_error: run.steps[0].error_message.clone(),
+                consecutive_pass_failures: 1,
+                degraded: true,
+            });
+            fixture
+                .runtime
+                .write_run_state(&run.run_id, &state)
+                .unwrap();
+            let server = fixture.server(false);
+            let detail = json_ok(server.get("/api/runs/jrun-skew?workspace=ws_http_fixture"));
+            assert_eq!(detail["run"]["state"], "failed", "{detail}");
+            assert_eq!(detail["run"]["error_code"], "protocol_skew", "{detail}");
+            assert_eq!(
+                detail["run"]["drain_last_pass"]["last_pass_error_code"],
+                "protocol_skew"
+            );
+            assert_eq!(detail["run"]["drain_last_pass"]["degraded"], true);
+        },
+    );
+}

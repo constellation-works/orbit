@@ -32,6 +32,12 @@ impl Tool for OrbitDrainProbeTool {
                 required: false,
             },
             ToolParam {
+                name: "caller_fingerprint".to_string(),
+                description: "Optional. Type-derived pull request schema fingerprint. Discover the owner's protocol_fingerprint before declaring this field; a mismatch raises protocol_skew before any pull.".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "caller_before_pr".to_string(),
                 description:
                     "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed \

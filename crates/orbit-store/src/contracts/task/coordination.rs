@@ -163,7 +163,7 @@ impl AdmissionIdentity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionRunContext {
     pub run_id: String,
     pub job_name: String,
@@ -171,7 +171,7 @@ pub struct AdmissionRunContext {
 }
 
 /// Owner-resolved configuration, included in immutable retry comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionShipContract {
     pub mode: String,
     pub base_branch: String,
@@ -194,7 +194,7 @@ pub struct AdmissionShipContract {
 /// owner resolved it when the claim was admitted [ORB-13895]. Its timing is
 /// the ship contract's `before_pr`; the rest is what the leaf's gate and the
 /// owner's acceptance hold it to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionReviewContract {
     /// The review evidence contract version the owner reads
     /// (`REVIEW_CONTRACT_VERSION`). A certificate under another version is
@@ -237,8 +237,9 @@ impl AdmissionShipContract {
 ///
 /// It versions the distributed-drain protocol alone, not the scoreboard's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
-/// Increment it whenever a new request field would be rejected by an older
-/// endpoint, even if optional. Revision 2 adds executor crew capabilities;
+/// Retained for persisted requests and lifecycle semantics. Pull request field
+/// compatibility is now derived by [`distributed_drain_protocol_fingerprint`],
+/// so an additive field needs no manual bump to detect skew. Revision 2 adds executor crew capabilities;
 /// revision 3 adds handoff footprint widening; revision 4 adds the executor's
 /// host OS; revision 5 replaces both endpoints' review-policy labels with
 /// their captured `review.before_pr` switch [ORB-13992]; revision 6 adds the
@@ -248,6 +249,39 @@ impl AdmissionShipContract {
 /// [ORB-13908]; revision 8 captures the owner's required validation
 /// commands in the before-PR review contract [ORB-14192].
 pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 8;
+
+/// The pull wire shape, derived from the same request and nested types that
+/// admission deserializes. No field list or manually bumped revision can drift
+/// from these types. Keep the draft explicit across generator upgrades.
+pub fn admission_request_schema() -> &'static serde_json::Value {
+    static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        schemars::generate::SchemaSettings::draft07()
+            // Prose edits must not create wire skew. Transform schema nodes,
+            // preserving request properties actually named title/description.
+            .with_transform(schemars::transform::RecursiveTransform(
+                |schema: &mut schemars::Schema| {
+                    schema.remove("title");
+                    schema.remove("description");
+                },
+            ))
+            .into_generator()
+            .into_root_schema_for::<AdmissionRequest>()
+            .to_value()
+    })
+}
+
+/// SHA-256 of the generated pull request schema, including nested contracts.
+/// Both endpoints compute this from their running build, independently of the
+/// release version and the legacy protocol revision.
+pub fn distributed_drain_protocol_fingerprint() -> &'static str {
+    static FINGERPRINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FINGERPRINT.get_or_init(|| {
+        orbit_common::security::release::sha256_hex(
+            admission_request_schema().to_string().as_bytes(),
+        )
+    })
+}
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -265,6 +299,7 @@ pub const ADMISSION_RECEIPT_LOOKUP_SCHEMA: u32 = 1;
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionRefusal {
     InvalidInput,
+    ProtocolSkew,
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
@@ -281,6 +316,7 @@ impl AdmissionRefusal {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::InvalidInput => "invalid_input",
+            Self::ProtocolSkew => "protocol_skew",
             Self::VersionMismatch => "version_mismatch",
             Self::ProtocolMismatch => "protocol_mismatch",
             Self::ShipModeUnsupported => "ship_mode_unsupported",
@@ -295,7 +331,7 @@ impl AdmissionRefusal {
 /// executor — its own `task.crew`, or `default_crew` for a task naming none —
 /// is runnable here. A task the executor cannot run is skipped, not refused:
 /// it stays in the backlog for the owner or another follower.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionCrewCapability {
     /// Crews the executor's window preflight found runnable, by registry
     /// name. `None` when the window took no preflight: then any crew not in
@@ -353,11 +389,15 @@ impl AdmissionCrewCapability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionRequest {
     pub request_id: String,
     pub caller_version: String,
     pub caller_schema: u32,
+    /// Type-derived request fingerprint. Optional when reading persisted
+    /// requests from before fingerprint negotiation; new followers declare it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_fingerprint: Option<String>,
     /// The executor's captured `review.before_pr` [ORB-13992]. Diagnostic
     /// only: a claimed leaf runs the review the ship contract captured, never
     /// the executor's own [ORB-13908]. Requests recorded before revision 5

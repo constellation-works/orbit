@@ -174,6 +174,10 @@ pub enum OrbitError {
     ToolNotOnThisHost(String),
     #[error("destination capability refused: {0}")]
     CapabilityRefused(String),
+    /// The owner's pull request contract differs from this executor's build.
+    /// Retrying cannot repair wire skew; deploy matching builds and restart.
+    #[error("protocol_skew: {0}")]
+    ProtocolSkew(String),
     /// A plugin tool or `orbit <ns>` verb was refused because the plugin is
     /// switched off in the workspace the call resolved to, although the host
     /// still has it enabled. The tool never ran; `workspace` names the

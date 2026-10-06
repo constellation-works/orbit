@@ -50,6 +50,14 @@ impl Tool for OrbitTaskPullTool {
             ToolParam {
                 required: false,
                 ..param(
+                    "caller_fingerprint",
+                    "string",
+                    "Type-derived pull request fingerprint negotiated with orbit.drain.probe. A mismatch is refused as protocol_skew before deserialization; optional for historical requests.",
+                )
+            },
+            ToolParam {
+                required: false,
+                ..param(
                     "review_gate",
                     "boolean",
                     "Whether the executor's claimed PR leaf runs the before-PR review the `ship` \

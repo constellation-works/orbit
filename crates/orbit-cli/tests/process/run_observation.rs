@@ -1057,6 +1057,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         deferred: Vec::new(),
         excluded: Vec::new(),
         excluded_total: 0,
+        last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
         degraded: false,
@@ -1168,6 +1169,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         excluded: Vec::new(),
         excluded_total: 0,
         resource_throttle: None,
+        last_pass_error_code: None,
         last_pass_error: Some("protocol_mismatch: caller revision 2; owner revision 1".into()),
         consecutive_pass_failures: 3,
         degraded: true,
@@ -1194,6 +1196,49 @@ fn run_show_exposes_degraded_pull_pass_health() {
         "{text}"
     );
     assert!(text.contains("Drain degraded:"), "{text}");
+    let pass = state.drain_last_pass.as_mut().unwrap();
+    pass.last_pass_error_code = Some("protocol_skew".into());
+    pass.last_pass_error =
+        Some("protocol_skew: caller and owner request fingerprints differ".into());
+    let skew_message = pass.last_pass_error.clone();
+    runtime.write_run_state(id, &state).unwrap();
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
+            target_id, state, started_at, finished_at, error_code, error_message)
+         VALUES (?1, ?2, 0, 'job', 'workspace_pull_pipeline', 'failed', ?3, ?3,
+            'protocol_skew', ?4)",
+            params![fixture.workspace_id(), id, now.to_rfc3339(), skew_message],
+        )
+        .unwrap();
+    orbit_engine::RuntimeHost::finalize_job_run(
+        &runtime,
+        id,
+        orbit_types::workflow::JobRunState::Failed,
+        now,
+        None,
+    )
+    .unwrap();
+    // The fixture intentionally has no provider CLIs, so other doctor rows
+    // fail and its process exits nonzero. Inspect the real JSON diagnostic.
+    let diagnosis = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    let diagnosed: Value = serde_json::from_slice(&diagnosis.stdout).unwrap();
+    let row = diagnosed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["check"] == "pull-protocol")
+        .unwrap();
+    assert_eq!(row["status"], "warning", "{diagnosed}");
+    assert!(
+        row["message"].as_str().unwrap().contains("protocol_skew"),
+        "{row}"
+    );
+    assert!(
+        row["remediation"].as_str().unwrap().contains("restart"),
+        "{row}"
+    );
 }
 
 #[cfg(unix)]

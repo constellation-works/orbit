@@ -46,6 +46,9 @@ pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), Or
 pub struct DeclaredCallerContract {
     pub caller_version: Option<String>,
     pub caller_schema: Option<u32>,
+    /// Type-derived pull request fingerprint, declared after discovering that
+    /// the owner supports fingerprint negotiation.
+    pub caller_fingerprint: Option<String>,
     pub caller_before_pr: Option<bool>,
 }
 
@@ -189,6 +192,7 @@ impl crate::OrbitRuntime {
                 .caller_schema
                 .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
             caller_before_pr: declared.caller_before_pr.unwrap_or(false),
+            caller_fingerprint: declared.caller_fingerprint.clone(),
             // Every executor of this binary runs the before-PR gate on its
             // claimed PR leaves [ORB-13908].
             review_gate: true,
@@ -209,6 +213,7 @@ impl crate::OrbitRuntime {
                     "declared caller version, schema, or drain context is missing or malformed"
                         .to_string()
                 }
+                AdmissionRefusal::ProtocolSkew => "pull request schema fingerprints differ".to_string(),
                 AdmissionRefusal::ProtocolMismatch => format!(
                     "protocol_mismatch: caller revision {}; owner revision {}",
                     request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
@@ -283,19 +288,66 @@ pub(super) fn trusted_identity(
     }
 }
 
-/// Compare the probe's contract revision before sending any admission fields.
-/// Older owners call this `version_mismatch`; the follower still reports the
-/// protocol-specific refusal with both revisions.
-pub(crate) fn protocol_mismatch(report: &serde_json::Value) -> Option<String> {
+/// Compare the owner's derived request shape before sending admission fields.
+/// Missing fingerprints and legacy revision mismatches fail by the same type.
+pub(crate) fn protocol_skew(report: &serde_json::Value) -> Option<OrbitError> {
     let owner = report
         .get("protocol_schema")
         .and_then(serde_json::Value::as_u64);
-    (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA))).then(|| {
+    let fingerprint = report
+        .get("protocol_fingerprint")
+        .and_then(serde_json::Value::as_str);
+    let caller = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA)) || fingerprint != Some(caller)).then(|| {
         let owner = owner.map_or_else(|| "unknown".to_string(), |value| value.to_string());
-        format!(
-            "protocol_mismatch: caller revision {}; owner revision {owner}; deploy matching \
-             protocol revisions on both endpoints and restart their long-lived processes",
-            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
-        )
+        OrbitError::ProtocolSkew(format!(
+            "caller revision {}; owner revision {owner}; caller fingerprint {caller}; owner fingerprint {}; deploy matching builds on both endpoints and restart their long-lived processes",
+            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, fingerprint.unwrap_or("unavailable")
+        ))
     })
+}
+
+/// Discover using fields older owners accept, then exchange fingerprints only
+/// with an owner whose response matches. A legacy owner lacking a fingerprint
+/// is refused locally by type, before it can reject a new probe or pull field.
+pub(crate) fn probe_pull_contract(
+    transport: &dyn orbit_tools::DrainOwnerTransport,
+    selector: &str,
+    before_pr: bool,
+) -> Result<serde_json::Value, OrbitError> {
+    let mut input = serde_json::json!({
+        "caller_version": owner_binary_version(),
+        "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        "caller_before_pr": before_pr,
+    });
+    let report = transport
+        .call(selector, "orbit.drain.probe", input.clone())
+        .map_err(owner_protocol_error)?;
+    if let Some(error) = protocol_skew(&report) {
+        return Err(error);
+    }
+    input["caller_fingerprint"] =
+        serde_json::json!(orbit_store::contracts::distributed_drain_protocol_fingerprint());
+    let report = transport
+        .call(selector, "orbit.drain.probe", input)
+        .map_err(owner_protocol_error)?;
+    if let Some(error) = protocol_skew(&report) {
+        return Err(error);
+    }
+    Ok(report)
+}
+
+/// Recover the typed protocol refusal across a structured remote tool error.
+pub(crate) fn owner_protocol_error(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::RemoteTool { code, message, .. } if code == "protocol_skew" => {
+            OrbitError::ProtocolSkew(
+                message
+                    .strip_prefix("protocol_skew: ")
+                    .unwrap_or(&message)
+                    .to_string(),
+            )
+        }
+        other => other,
+    }
 }

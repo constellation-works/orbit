@@ -8,14 +8,16 @@ use orbit_common::protocol::tool_input::RETIRED_TASK_ADD_INPUT_FIELDS;
 use orbit_tools::{ToolContext, ToolRegistry};
 
 #[test]
-fn every_task_tool_rejects_unknown_and_mistyped_fields_at_dispatch() {
+fn registry_validated_task_tools_reject_unknown_and_mistyped_fields_at_dispatch() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     let mut schemas = registry.all_schemas();
     schemas.sort_by(|left, right| left.name.cmp(&right.name));
+    // Pull checks its type-derived fingerprint before its request shape in
+    // Core; runtime/distributed_drain/admission.rs exercises that boundary.
     let tasks = schemas
         .iter()
-        .filter(|schema| schema.name.starts_with("orbit.task."))
+        .filter(|schema| schema.name.starts_with("orbit.task.") && schema.name != "orbit.task.pull")
         .collect::<Vec<_>>();
     assert!(
         !tasks.is_empty(),

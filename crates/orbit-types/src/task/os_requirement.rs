@@ -21,7 +21,19 @@ use crate::task::TaskError;
 pub const OS_TAG_PREFIX: &str = "os:";
 
 /// A host operating system a task can require.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum HostOs {
     Linux,

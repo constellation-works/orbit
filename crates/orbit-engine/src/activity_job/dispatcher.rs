@@ -160,6 +160,11 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// Pull request contracts differ. Retrying or recovery cannot repair the
+    /// running binaries, so the drain must end visibly as failed.
+    #[error("protocol_skew: {0}")]
+    ProtocolSkew(String),
+
     /// A deterministic action reached a decision rather than a fault — a
     /// settled non-pass review verdict, an exhausted budget, a refused
     /// policy. Repeating the action reaches the same decision, so neither
@@ -284,6 +289,7 @@ impl DispatchError {
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
+                | DispatchError::ProtocolSkew(_)
         )
     }
 
@@ -314,6 +320,7 @@ impl DispatchError {
 /// `docs/design-patterns/error_translation.md` [ORB-10013].
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     match error {
+        DispatchError::ProtocolSkew(message) => OrbitError::ProtocolSkew(message),
         DispatchError::JobValidation(message) => OrbitError::JobValidation(message),
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())

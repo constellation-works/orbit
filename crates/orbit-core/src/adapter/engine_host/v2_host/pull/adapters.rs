@@ -66,7 +66,9 @@ impl RoutedPullPeer {
         tool: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        self.transport.call(&destination.selector, tool, input)
+        self.transport
+            .call(&destination.selector, tool, input)
+            .map_err(crate::application::distributed::owner_protocol_error)
     }
 }
 

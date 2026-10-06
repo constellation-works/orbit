@@ -25,6 +25,8 @@ pub struct DrainProbeReport {
     pub schema_version: u32,
     /// Distributed-drain wire-protocol version this owner speaks.
     pub protocol_schema: u32,
+    /// Fingerprint derived from this build's pull request and nested types.
+    pub protocol_fingerprint: String,
     pub binary_version: String,
     pub workspace_id: String,
     /// Registered owner machine, absent on a standalone registry that predates
@@ -104,12 +106,21 @@ impl crate::OrbitRuntime {
         declared: &DeclaredCallerContract,
     ) -> Result<DrainProbeReport, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
+        let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+        if let Some(caller) = declared.caller_fingerprint.as_deref()
+            && caller != fingerprint
+        {
+            return Err(OrbitError::ProtocolSkew(format!(
+                "caller fingerprint {caller}; owner fingerprint {fingerprint}; deploy matching builds on both endpoints and restart their long-lived processes"
+            )));
+        }
         let ship = self.owner_ship_contract();
         let mut diagnostics = Vec::new();
         let refusal = self.declared_contract_refusal(session, declared, &ship, &mut diagnostics)?;
         Ok(DrainProbeReport {
             schema_version: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             protocol_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            protocol_fingerprint: fingerprint.to_string(),
             binary_version: owner_binary_version().to_string(),
             workspace_id: self.workspace_id()?,
             owner_machine_id: self.distributed_owner_machine_id(),
