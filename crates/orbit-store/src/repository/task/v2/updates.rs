@@ -22,6 +22,7 @@ impl TaskV2Store {
             ));
         }
 
+        reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let receipt = format!("operation_id={}", fields.operation_id);
@@ -47,6 +48,20 @@ impl TaskV2Store {
             }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
+            for entry in &fields.append_history {
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: next_event_id(&bundle.events),
+                    at: entry.at,
+                    by: fields.actor.clone(),
+                    event_type: entry.event.clone(),
+                    note: entry.note.clone(),
+                    from_status: None,
+                    to_status: None,
+                };
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
             let status_changed = fields.status != bundle.envelope.status;
             let event = TaskEventRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,

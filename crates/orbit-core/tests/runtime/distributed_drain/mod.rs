@@ -412,14 +412,22 @@ fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str
     }
     let task = owner.run_tool("orbit.task.add", input).expect("add task");
     let id = task["id"].as_str().unwrap().to_string();
-    for update in [
-        json!({"id": id, "plan": "1. Change it.", "model": "codex"}),
-        json!({"id": id, "status": "backlog", "model": "codex"}),
-    ] {
-        owner
-            .run_tool("orbit.task.update", update)
-            .expect("approve");
-    }
+    owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": id, "plan": "1. Change it.", "model": "codex"}),
+        )
+        .expect("plan");
+    owner
+        .update_task_as_human(
+            &id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("human approval");
     id
 }
 

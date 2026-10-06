@@ -21,6 +21,7 @@ mod query;
 mod records;
 mod transitions;
 mod update;
+pub(crate) mod validation_tools;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,
 /// reservations, status-derived locks, and the admission work that freezes a
@@ -44,7 +45,10 @@ pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
-pub(crate) use pilot_admission::PilotAdmissionHold;
+pub(crate) use pilot_admission::{
+    OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
+};
+pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub(crate) use lifecycle::{

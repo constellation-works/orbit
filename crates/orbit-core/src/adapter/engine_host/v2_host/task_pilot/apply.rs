@@ -46,7 +46,7 @@ pub(super) struct PreparedTaskSnapshot {
     pub(super) history_len: Option<usize>,
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
-    validation_tool_warnings: Vec<String>,
+    pub(super) validation_tool_warnings: Vec<String>,
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
     pub(super) context_creation_identity: Option<String>,

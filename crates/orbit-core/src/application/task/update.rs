@@ -51,6 +51,8 @@ struct TaskUpdateContext {
     expected_status: Option<TaskStatus>,
     status_authority: StatusAuthority,
     calling_run_id: Option<String>,
+    /// Trusted entrypoint authority; task/tool input cannot populate it.
+    operator_decision_authority: bool,
 }
 
 /// A locked write's result plus what the after-lock side effects need: the
@@ -94,6 +96,9 @@ impl OrbitRuntime {
             id,
             params,
             TaskUpdateContext {
+                operator_decision_authority: agent.is_none()
+                    && model.is_none()
+                    && self.actor().kind == crate::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
@@ -117,6 +122,7 @@ impl OrbitRuntime {
             params,
             TaskUpdateContext {
                 actor_override: Some(actor_label),
+                operator_decision_authority: true,
                 status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
             },
@@ -143,6 +149,9 @@ impl OrbitRuntime {
             id,
             params,
             TaskUpdateContext {
+                operator_decision_authority: agent.is_none()
+                    && model.is_none()
+                    && self.actor().kind == crate::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Forced,
@@ -293,6 +302,7 @@ impl OrbitRuntime {
             expected_status,
             status_authority,
             calling_run_id,
+            operator_decision_authority,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
             Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
@@ -378,6 +388,15 @@ impl OrbitRuntime {
             .filter(|replacement| task.source_task_id() != *replacement);
 
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if operator_decision_authority
+            && canonical_agent.is_none()
+            && canonical_model.is_none()
+            && !super::helpers::is_automation_actor(&effective_label)
+            && let Some(resolution) =
+                self.operator_validation_resolution(&task, &params, &effective_label)?
+        {
+            append_history.push(resolution);
+        }
         if let Some(replacement) = params.crew.as_ref()
             && replacement.as_deref() != task.crew.as_deref()
         {

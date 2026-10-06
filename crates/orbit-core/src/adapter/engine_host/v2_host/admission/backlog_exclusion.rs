@@ -89,6 +89,8 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     PilotDuplicate,
     /// The latest applied pilot assessment identifies work already landed.
     PilotAlreadyLanded,
+    /// Current validation needs an operator-reserved governed operation.
+    OperatorValidationHandoff,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
@@ -166,6 +168,12 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    runtime
+        .record_backlog_operator_validation_holds()
+        .map_err(|error| DispatchError::DeterministicActionFailed {
+            action: action.into(),
+            message: format!("record operator validation holds: {error}"),
+        })?;
     let max_tasks = input
         .get("max_tasks")
         .and_then(Value::as_u64)
@@ -762,13 +770,18 @@ fn pilot_finding_exclusion(
         }
     })?;
     Ok(hold.map(|hold| {
-        let (field, reason) = match hold {
-            PilotAdmissionHold::Duplicate => {
-                ("duplicate_of", BacklogTaskExclusionReason::PilotDuplicate)
-            }
+        let (reason, detail) = match hold {
+            PilotAdmissionHold::OperatorValidation(hold) => (
+                BacklogTaskExclusionReason::OperatorValidationHandoff,
+                hold.detail(),
+            ),
+            PilotAdmissionHold::Duplicate => (
+                BacklogTaskExclusionReason::PilotDuplicate,
+                pilot_decision_detail("duplicate_of"),
+            ),
             PilotAdmissionHold::AlreadyLanded => (
-                "already_landed",
                 BacklogTaskExclusionReason::PilotAlreadyLanded,
+                pilot_decision_detail("already_landed"),
             ),
         };
         BacklogTaskExclusion {
@@ -776,14 +789,18 @@ fn pilot_finding_exclusion(
             reason,
             conflicts: Vec::new(),
             crew: None,
-            detail: Some(format!(
-                "The latest task-pilot assessment records {field}. Run task-pilot again \
-                 to clear the finding, or append a human comment whose first line is \
-                 `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`. \
-                 A later pilot assessment supersedes that decision."
-            )),
+            detail: Some(detail),
         }
     }))
+}
+
+fn pilot_decision_detail(field: &str) -> String {
+    format!(
+        "The latest task-pilot assessment records {field}. Run task-pilot again \
+         to clear the finding, or append a human comment whose first line is \
+         `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`. \
+         A later pilot assessment supersedes that decision."
+    )
 }
 
 fn unprepared_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {

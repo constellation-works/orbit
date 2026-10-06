@@ -129,6 +129,8 @@ pub struct AtomicTaskMutationParams {
     pub history_summary: String,
     /// Full decision evidence stored as a task comment in the same bundle commit.
     pub audit_note: String,
+    /// Additional decision records committed before the operation receipt.
+    pub append_history: Vec<TaskHistoryEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

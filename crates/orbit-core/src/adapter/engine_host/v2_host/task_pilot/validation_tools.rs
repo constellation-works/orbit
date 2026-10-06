@@ -14,12 +14,13 @@
 //! [`orbit_tools::canonical_builtin_mcp_tool_definitions`], the implementation
 //! activity's tool allowlist, and the governed-operation registry.
 //!
-//! It is advisory in both directions, on purpose:
+//! Preparation findings remain advisory; admission separately holds a current
+//! operator-reserved requirement for an explicit operator decision:
 //!
 //! - Prose never grants. A tool named in a criterion stays ungranted;
 //!   `required_tools` remains the only grant, and this check merely reports
 //!   when the two disagree.
-//! - A mention never rejects. Every finding is a warning, so a criterion that
+//! - A mention never rejects preparation. A criterion that
 //!   quotes an expected denial, or a fixture that names a tool it expects to
 //!   be refused, cannot fail preparation.
 //!
@@ -37,6 +38,8 @@ use orbit_types::workflow::activity_job::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::task::validation_tools::{names_tool, positive_validation_sentences};
+use crate::application::task::{OperatorValidationRequirement, positive_validation_tools};
 
 /// Activity that implements a task. Its tool allowlist is the baseline a
 /// task's `required_tools` extends, so it is the lane a validation criterion
@@ -51,23 +54,6 @@ const MAX_FINDINGS_PER_TASK: usize = 8;
 /// nor can grant, paired with the precondition to state.
 const EXTERNAL_CREDENTIALS: &[(&str, &str)] = &[("github.", "GitHub authentication")];
 
-/// Lowercase wording that marks a sentence as expecting a refusal rather than
-/// requiring a call. A negative test names the tool it expects to be denied,
-/// which is a correct criterion, not a contradiction.
-const DENIAL_MARKERS: &[&str] = &[
-    "deny",
-    "denie",
-    "denial",
-    "reject",
-    "refus",
-    "unavailable",
-    "not granted",
-    "not in the allowlist",
-    "must not",
-    "cannot",
-];
-
-/// Lowercase wording that names the MCP transport specifically.
 const MCP_TRANSPORT_MARKERS: &[&str] = &["mcp", "tools/call", "tools/list"];
 
 /// The execution lane a task's validation criteria have to be feasible in.
@@ -153,20 +139,40 @@ impl ImplementationLane {
         });
 
         let mut findings = Findings::default();
-        for criterion in &task.acceptance_criteria {
-            for sentence in sentences(&blank_quoted_regions(criterion)) {
-                if expects_denial(sentence) {
-                    continue;
-                }
-                for tool in self.tools_named_in(sentence) {
-                    self.report(tool, sentence, granted.as_deref(), &mut findings);
-                    if findings.is_full() {
-                        return findings.ordered;
-                    }
+        for (_, sentence) in positive_validation_sentences(task) {
+            for tool in self.tools_named_in(&sentence) {
+                self.report(tool, &sentence, granted.as_deref(), &mut findings);
+                if findings.is_full() {
+                    return findings.ordered;
                 }
             }
         }
         findings.ordered
+    }
+
+    /// Typed operator requirements use the same positive-mention parser as
+    /// warning generation, so quoted denials never become admission holds.
+    pub(super) fn operator_requirements(
+        &self,
+        task: &Task,
+        warnings: &[String],
+    ) -> Vec<OperatorValidationRequirement> {
+        positive_validation_tools(task, &self.registered)
+            .into_iter()
+            .filter(|(_, tool)| {
+                governed_tool(tool)
+                    .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
+                    && warnings.iter().any(|warning| {
+                        warning.starts_with(&format!(
+                            "acceptance criterion requires `{tool}`, a governed operation reserved for the "
+                        ))
+                    })
+            })
+            .map(|(criterion, tool)| OperatorValidationRequirement {
+                criterion,
+                tool: tool.into(),
+            })
+            .collect()
     }
 
     /// Matching walks the registered surface rather than scanning for
@@ -256,109 +262,9 @@ fn capability_label(allowed: &[McpCapability]) -> String {
         .join(" or ")
 }
 
-/// Blank the regions a criterion uses to quote something rather than to
-/// require it: fenced code blocks and double-quoted strings.
-///
-/// A tool name inside a copied transcript or an expected error message is an
-/// example of what the work will observe, not a call the lane has to support.
-/// Inline single backticks are deliberately left alone: canonical tool names
-/// are conventionally written that way, so masking them would blind the check
-/// to nearly every real criterion.
-///
-/// Blanking preserves length and line structure so the sentence split below
-/// still sees the surrounding prose as the author wrote it.
-fn blank_quoted_regions(text: &str) -> String {
-    const FENCE: &str = "```";
-
-    let mut blanked = String::with_capacity(text.len());
-    let mut quoting = Quoting::None;
-    let mut chars = text.char_indices();
-    while let Some((index, character)) = chars.next() {
-        if matches!(quoting, Quoting::None | Quoting::Fence) && text[index..].starts_with(FENCE) {
-            blanked.push_str("   ");
-            // The scanner already consumed the first backtick.
-            chars.next();
-            chars.next();
-            quoting = match quoting {
-                Quoting::Fence => Quoting::None,
-                _ => Quoting::Fence,
-            };
-            continue;
-        }
-        match (quoting, character) {
-            (Quoting::None, '"') => {
-                quoting = Quoting::Double;
-                blanked.push(' ');
-            }
-            // An unterminated quote ends at the line break, so a stray `"`
-            // cannot blank the rest of the criterion.
-            (Quoting::Double, '"' | '\n') => {
-                quoting = Quoting::None;
-                blanked.push(blank(character));
-            }
-            (Quoting::None, _) => blanked.push(character),
-            _ => blanked.push(blank(character)),
-        }
-    }
-    blanked
-}
-
-#[derive(Clone, Copy)]
-enum Quoting {
-    None,
-    Fence,
-    Double,
-}
-
-fn blank(character: char) -> char {
-    if character == '\n' { '\n' } else { ' ' }
-}
-
-/// Split into sentences at a terminator followed by whitespace, or at a line
-/// break. Requiring the trailing whitespace keeps a canonical tool name's own
-/// dots inside one sentence.
-fn sentences(text: &str) -> Vec<&str> {
-    let mut split = Vec::new();
-    let mut start = 0;
-    for (index, character) in text.char_indices() {
-        let terminates = matches!(character, '.' | ';' | '!' | '?')
-            && text[index + character.len_utf8()..]
-                .chars()
-                .next()
-                .is_none_or(char::is_whitespace);
-        if character == '\n' || terminates {
-            split.push(&text[start..index]);
-            start = index + character.len_utf8();
-        }
-    }
-    split.push(&text[start..]);
-    split.retain(|sentence| !sentence.trim().is_empty());
-    split
-}
-
-fn expects_denial(sentence: &str) -> bool {
-    let lowered = sentence.to_ascii_lowercase();
-    DENIAL_MARKERS.iter().any(|marker| lowered.contains(marker))
-}
-
 fn names_mcp_transport(sentence: &str) -> bool {
     let lowered = sentence.to_ascii_lowercase();
     MCP_TRANSPORT_MARKERS
         .iter()
         .any(|marker| lowered.contains(marker))
-}
-
-/// Whether `sentence` names exactly `tool`, rather than containing it inside a
-/// longer dotted name. Dots count as name characters so `orbit.task.artifact`
-/// does not match inside `orbit.task.artifact.get`.
-fn names_tool(sentence: &str, tool: &str) -> bool {
-    sentence.match_indices(tool).any(|(index, _)| {
-        let before = sentence[..index].chars().next_back();
-        let after = sentence[index + tool.len()..].chars().next();
-        !before.is_some_and(is_tool_name_char) && !after.is_some_and(is_tool_name_char)
-    })
-}
-
-fn is_tool_name_char(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
 }

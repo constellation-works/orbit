@@ -302,7 +302,8 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
                     BacklogTaskExclusionReason::PilotDuplicate
-                    | BacklogTaskExclusionReason::PilotAlreadyLanded => {
+                    | BacklogTaskExclusionReason::PilotAlreadyLanded
+                    | BacklogTaskExclusionReason::OperatorValidationHandoff => {
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }

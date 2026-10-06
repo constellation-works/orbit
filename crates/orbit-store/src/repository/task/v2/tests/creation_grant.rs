@@ -87,6 +87,7 @@ fn pilot_write(
                 event_note: "pilot".to_string(),
                 history_summary: "pilot applied".to_string(),
                 audit_note: "evidence".to_string(),
+                append_history: vec![],
             },
         )
         .expect("atomic mutation")
