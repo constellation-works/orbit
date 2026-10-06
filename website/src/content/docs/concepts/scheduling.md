@@ -34,7 +34,7 @@ same path:
 
 :::tip[Let your agent set it up]
 Ask your agent to **schedule a weekly QA sweep** or **ship the backlog every
-20 minutes**. The `orbit-setup` skill installs the clock, then enables the
+30 minutes**. The `orbit-setup` skill installs the clock, then enables the
 routine or auto-task you asked for. Everything ships disabled until then.
 :::
 
@@ -61,7 +61,7 @@ schemaVersion: 1
 name: ship_sweep_myrepo
 enabled: true
 trigger:
-  cron: "*/20 * * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:workspace_ship_pipeline
 policy:

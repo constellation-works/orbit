@@ -113,6 +113,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
         "worktree_gc",
         include_str!("../../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
     ),
+    (
+        "ship_sweep",
+        include_str!("../../../assets/routines/superseded/ship_sweep.2026-07-15.yaml"),
+    ),
 ];
 
 // Widened to pub(crate) for test access in sibling tests/routine.rs.

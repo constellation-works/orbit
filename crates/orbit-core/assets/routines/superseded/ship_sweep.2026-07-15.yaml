@@ -1,3 +1,7 @@
+# Superseded `ship_sweep` default (shipped 2026-07-15 to 2026-10-06): cron
+# `*/20 * * * *` matched the 1200-second drain, so `overlap: forbid` skipped
+# the next fire [ORB-14358]. Kept as a provenance shape only — see
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
 # Default workspace ship-sweep routine. Seeded into
 # `.orbit/routines/` with a workspace-unique name resolved at seed time. It is
 # intentionally disabled: enabling scheduled shipment is an explicit,
@@ -7,12 +11,6 @@
 # workspace's ship mode and configured base branch, then invokes and waits for
 # `task_auto_pipeline` without explicit task IDs. The child pipeline remains
 # the only owner of backlog discovery, readiness, locks, bundles, and gates.
-#
-# The cron is every 30 minutes. That job drains for 20 minutes
-# (`for_seconds: 1200`) while this routine's `overlap: forbid` holds the
-# slot, so the extra 10 minutes is the slack that lets an in-flight drain
-# finish before the next fire. A cadence that does not outlast the drain
-# skips that fire (`missed_run: skip`).
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
@@ -21,7 +19,7 @@ description: >
   opt this workspace into scheduled shipment.
 enabled: false
 trigger:
-  cron: "*/30 * * * *"
+  cron: "*/20 * * * *"
   missed_run: skip
 target: job:workspace_ship_pipeline
 policy:

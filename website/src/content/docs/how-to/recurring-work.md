@@ -79,7 +79,7 @@ name: ship_sweep_myrepo
 description: Ship this workspace's ready backlog through the gated pipeline.
 enabled: true
 trigger:
-  cron: "*/20 * * * *"  # 5-field cron, host-local time
+  cron: "*/30 * * * *"  # 5-field cron, host-local time
   missed_run: skip      # or catch_up_once
 target: job:workspace_ship_pipeline
 policy:
@@ -204,7 +204,7 @@ Approve anything filed as `proposed`, then let a
 ## Ship unattended
 
 To ship on a schedule, turn on the seeded ship-sweep routine. As seeded, it
-runs every 20 minutes and ships this workspace's ready backlog through the
+runs every 30 minutes and ships this workspace's ready backlog through the
 gated pipeline. It never grants `--complete`, so shipped work waits in
 `review` for you. Turn on worktree GC first.
 
