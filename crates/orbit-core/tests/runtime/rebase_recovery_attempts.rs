@@ -237,6 +237,51 @@ fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged() {
     assert!(fixture.verifies(&recovery_c));
 }
 
+/// [ORB-14393] Completion bounds how often it follows a moving base by the
+/// distinct bases the host reserved recovery attempts for. The host reports
+/// every reservation of a step, oldest first, from its own record, across a
+/// restart; and the clean chase a retry certifies as the step's newest attempt
+/// supersedes the recovery it carried forward.
+#[test]
+fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest() {
+    let fixture = fixture();
+    let attempt = fixture.admit(CANDIDATE, PINNED);
+    let recovery = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
+    fixture
+        .runtime
+        .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery)
+        .unwrap();
+
+    // The base advanced past the recovery; the retry carries HEAD_A onto it.
+    let attempt = fixture.admit(CANDIDATE, ADVANCED);
+    let mut chase = fixture.completion(attempt, CANDIDATE, ADVANCED, HEAD_B);
+    chase["chased_from"] = json!(HEAD_A);
+    fixture
+        .runtime
+        .checkpoint_rebase_recovery(&fixture.run, STEP, &chase)
+        .expect("a chase certifies as the step's newest attempt");
+    assert!(fixture.verifies(&chase));
+    assert!(!fixture.verifies(&recovery));
+
+    let reserved = |runtime: &OrbitRuntime, step: &str| {
+        runtime
+            .rebase_recovery_attempts(&fixture.run, step)
+            .unwrap()
+            .into_iter()
+            .map(|scope| (scope.head_sha_before, scope.target_base_sha))
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![
+        (CANDIDATE.to_string(), PINNED.to_string()),
+        (CANDIDATE.to_string(), ADVANCED.to_string()),
+    ];
+    assert_eq!(reserved(&fixture.runtime, STEP), expected);
+    assert!(reserved(&fixture.runtime, "complete_pr").is_empty());
+    let restarted =
+        OrbitRuntime::from_roots(&fixture.global, &fixture.repo.join(".orbit")).unwrap();
+    assert_eq!(reserved(&restarted, STEP), expected);
+}
+
 /// Fail every run-state write whose state names `marker`, as a crash or a full
 /// disk would between certification and the run-store copy. Dropping the
 /// returned connection's trigger restores the store.

@@ -22,7 +22,10 @@
 //! retained `completion: done`, published-head, branch, and base checkpoints,
 //! completion reuses the ordinary pinned `git_rebase` and lease-checked push
 //! boundaries. Only a rebase that proves unmerged index entries can reach the
-//! existing bounded conflict-recovery leaf.
+//! existing bounded conflict-recovery leaf. The retry after that recovery
+//! re-pins to the base it fetches; when the base advanced past the certified
+//! recovery meanwhile, `git_rebase` chases it within a bound instead of
+//! refusing the recovered head [ORB-14393].
 //!
 //! [ORB-11982] tightens what "merged" is allowed to mean. The same checkpoints
 //! also pin *which* pull request this run may deliver, so a base-modification

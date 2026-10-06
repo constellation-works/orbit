@@ -178,13 +178,13 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
     let recovery = if sync_required && current_sha != head_sha_before {
         recovered_rewrite(host, input, context, &current_sha)?
     } else {
-        RecoveryCheckpointLookup::Absent
+        RecoveredRewrite::Absent
     };
     let base_sha = match &recovery {
-        RecoveryCheckpointLookup::Certified(checkpoint) => {
-            required_input_string(checkpoint, "base_sha")?
-        }
-        RecoveryCheckpointLookup::Uncertified | RecoveryCheckpointLookup::Absent => base_sha,
+        RecoveredRewrite::Current(checkpoint) => required_input_string(checkpoint, "base_sha")?,
+        RecoveredRewrite::Overtaken(_)
+        | RecoveredRewrite::Uncertified
+        | RecoveredRewrite::Absent => base_sha,
     };
 
     let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
@@ -192,6 +192,15 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         return Err(OrbitError::Execution(format!(
             "git_rebase: prepared base ref '{base_ref}' moved from checkpoint '{base_sha}' to '{observed_base_sha}'; refusing to lose concurrent base changes — prepare a fresh handoff checkpoint"
         )));
+    }
+    if let RecoveredRewrite::Overtaken(checkpoint) = &recovery {
+        return super::base_chase::chase_advanced_base(
+            host,
+            input,
+            context,
+            checkpoint,
+            &current_sha,
+        );
     }
 
     let current = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)?;
@@ -211,8 +220,8 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
             ("skipped_current", false, current_sha)
         } else if sync_required {
             match recovery {
-                RecoveryCheckpointLookup::Certified(_) => ("reused_recovery", true, current_sha),
-                RecoveryCheckpointLookup::Uncertified => {
+                RecoveredRewrite::Current(_) => ("reused_recovery", true, current_sha),
+                RecoveredRewrite::Uncertified => {
                     // No host-certified evidence justifies inheriting this
                     // changed HEAD (a pre-authority-boundary checkpoint and a
                     // forged one look identical, and neither is trusted).
@@ -222,7 +231,11 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
                     // conflicts falls into the ordinary supported
                     // conflict-recovery path, which certifies fresh evidence
                     // on completion.
-                    discard_unauthenticated_rewrite(&context.workspace_path, head_sha_before)?;
+                    discard_rewrite(
+                        &context.workspace_path,
+                        head_sha_before,
+                        "an unauthenticated rewritten HEAD",
+                    )?;
                     perform_rebase_onto_base(
                         &context.workspace_path,
                         head,
@@ -231,7 +244,8 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
                         base_sha,
                     )?
                 }
-                RecoveryCheckpointLookup::Absent => {
+                // Dispatched to the chase above, after the base check.
+                RecoveredRewrite::Overtaken(_) | RecoveredRewrite::Absent => {
                     return Err(OrbitError::Execution(
                         "git_rebase: changed HEAD has no exact host-validated recovery checkpoint"
                             .to_string(),
@@ -278,7 +292,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 /// A clean result is self-verifying and needs no stored evidence; a conflict
 /// routes into the existing supported conflict-recovery path via
 /// [`rebase_conflict_error`].
-fn perform_rebase_onto_base(
+pub(super) fn perform_rebase_onto_base(
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
@@ -321,34 +335,43 @@ fn perform_rebase_onto_base(
     Ok(("performed", true, commit_sha(workspace_path, head)?))
 }
 
-/// Discard a changed HEAD that could not be authenticated as a certified
-/// recovery, restoring the worktree to the last durable pre-rewrite
-/// checkpoint so the ordinary rebase path can redo the work from there.
+/// Discard a changed HEAD (`what` names it in errors), restoring the worktree
+/// to the last durable pre-rewrite checkpoint so the ordinary rebase path can
+/// redo the work from there.
 ///
 /// `git reset --hard` has no concept of "safe to discard": it silently drops
 /// staged changes, unstaged changes, and any untracked file or directory in
 /// the way, with nothing recorded afterward. Refuse instead of resetting
 /// whenever the worktree is not already clean, naming every dirty path so an
 /// operator can recover the state themselves before retrying.
-fn discard_unauthenticated_rewrite(
+pub(super) fn discard_rewrite(
     workspace_path: &Path,
     head_sha_before: &str,
+    what: &str,
+) -> Result<(), OrbitError> {
+    ensure_clean_for_rewrite(workspace_path, head_sha_before, what)?;
+    git_success(workspace_path, &["reset", "--hard", head_sha_before]).map_err(|error| {
+        OrbitError::Execution(format!(
+            "git_rebase: failed to discard {what} before redoing the rebase from checkpoint \
+             '{head_sha_before}': {error}"
+        ))
+    })
+}
+
+pub(super) fn ensure_clean_for_rewrite(
+    workspace_path: &Path,
+    head_sha_before: &str,
+    what: &str,
 ) -> Result<(), OrbitError> {
     let dirty_paths = dirty_worktree_paths(workspace_path)?;
     if !dirty_paths.is_empty() {
         return Err(OrbitError::Execution(format!(
-            "git_rebase: refusing to discard an unauthenticated rewritten HEAD before redoing \
-             the rebase from checkpoint '{head_sha_before}': the worktree has uncommitted \
-             changes that a reset would destroy: {}",
+            "git_rebase: refusing to rewrite {what} on top of checkpoint '{head_sha_before}': \
+             the worktree has uncommitted changes that a rebase or reset would destroy: {}",
             dirty_paths.join(", ")
         )));
     }
-    git_success(workspace_path, &["reset", "--hard", head_sha_before]).map_err(|error| {
-        OrbitError::Execution(format!(
-            "git_rebase: failed to discard an unauthenticated rewritten HEAD before redoing the \
-             rebase from checkpoint '{head_sha_before}': {error}"
-        ))
-    })
+    Ok(())
 }
 
 /// Every path `git status --porcelain` reports as staged, unstaged, or
@@ -458,7 +481,7 @@ fn recover_started_rebase_timeout<T>(
     )))
 }
 
-fn abort_owned_rebase(workspace_path: &Path) -> Result<(), OrbitError> {
+pub(super) fn abort_owned_rebase(workspace_path: &Path) -> Result<(), OrbitError> {
     git_success(workspace_path, &["rebase", "--abort"]).map_err(|error| {
         OrbitError::Execution(format!(
             "git_rebase: failed to abort an interrupted rebase started by this attempt: {error}"
@@ -526,7 +549,7 @@ fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>
 /// How `current_sha` relates to the host-certified recovery checkpoints of
 /// the prepared rewrite.
 ///
-/// - `Certified`: a certified checkpoint matches and its provenance agrees
+/// - `Current`: a certified checkpoint matches and its provenance agrees
 ///   with this attempt; the caller may reuse `current_sha` and must judge
 ///   freshness against the checkpoint's `base_sha`.
 /// - `Uncertified`: a checkpoint matching this exact HEAD exists but carries
@@ -537,6 +560,11 @@ fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>
 ///   conflicts a forged shortcut was trying to skip.
 /// - `Absent`: nothing at all backs this changed HEAD (the ordinary
 ///   "unexplained rewrite" refusal).
+/// - `Overtaken`: a certified checkpoint matches this attempt in everything
+///   but its base, and the prepared base strictly descends from the base the
+///   checkpoint landed on: the base advanced after recovery certified it. The
+///   caller chases the advance ([`super::base_chase::chase_advanced_base`]) rather than reusing
+///   or refusing it [ORB-14393].
 /// - `Err`: a certified checkpoint was found whose recorded provenance does
 ///   not match this attempt. A hard refusal with no redo.
 fn recovered_rewrite<H: RuntimeHost + ?Sized>(
@@ -544,33 +572,77 @@ fn recovered_rewrite<H: RuntimeHost + ?Sized>(
     input: &Value,
     context: &HandoffContext,
     current_sha: &str,
-) -> Result<RecoveryCheckpointLookup, OrbitError> {
-    let run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .unwrap_or(&context.batch_id);
-    let lookup = recovery_checkpoint_lookup(host, run_id, &context.workspace_path, current_sha)?;
-    let RecoveryCheckpointLookup::Certified(checkpoint) = &lookup else {
-        return Ok(lookup);
-    };
+) -> Result<RecoveredRewrite, OrbitError> {
+    let run_id = recovery_run_id(input, context);
+    let checkpoint =
+        match recovery_checkpoint_lookup(host, run_id, &context.workspace_path, current_sha)? {
+            RecoveryCheckpointLookup::Certified(checkpoint) => checkpoint,
+            RecoveryCheckpointLookup::Uncertified => return Ok(RecoveredRewrite::Uncertified),
+            RecoveryCheckpointLookup::Absent => return Ok(RecoveredRewrite::Absent),
+        };
     let task_ids = context
         .tasks
         .iter()
         .map(|task| task.id.as_str())
         .collect::<Vec<_>>();
+    let mismatch = || {
+        OrbitError::Execution(
+            "git_rebase: recovered HEAD provenance does not match the prepared rewrite checkpoint"
+                .to_string(),
+        )
+    };
     if checkpoint["head"] != input["head"]
         || checkpoint["head_sha_before"] != input["head_sha"]
-        || !recovery_pinned_base(checkpoint, &input["base_sha"])
         || checkpoint["remote_sha_before"]
             != input.get("remote_sha").cloned().unwrap_or(Value::Null)
         || checkpoint["task_ids"] != json!(task_ids)
     {
-        return Err(OrbitError::Execution(
-            "git_rebase: recovered HEAD provenance does not match the prepared rewrite checkpoint"
-                .to_string(),
-        ));
+        return Err(mismatch());
     }
-    Ok(lookup)
+    if recovery_pinned_base(&checkpoint, &input["base_sha"]) {
+        return Ok(RecoveredRewrite::Current(checkpoint));
+    }
+    if base_overtook_recovery(input, &context.workspace_path, &checkpoint)? {
+        return Ok(RecoveredRewrite::Overtaken(checkpoint));
+    }
+    Err(mismatch())
+}
+
+/// Whether the prepared base strictly descends from the base `checkpoint`
+/// landed on, for the step that certified it.
+fn base_overtook_recovery(
+    input: &Value,
+    workspace: &Path,
+    checkpoint: &Value,
+) -> Result<bool, OrbitError> {
+    let (Some(prepared), Some(landed)) = (
+        input_string_field(input, "base_sha"),
+        input_string_field(checkpoint, "base_sha"),
+    ) else {
+        return Ok(false);
+    };
+    // A chase is certified under the step that certified the recovery, so a
+    // different step's checkpoint is never chased from.
+    if input
+        .get("step_id")
+        .is_some_and(|step| *step != checkpoint["step_id"])
+    {
+        return Ok(false);
+    }
+    Ok(prepared != landed
+        && git_command_success(
+            workspace,
+            &["merge-base", "--is-ancestor", &landed, &prepared],
+        )?)
+}
+
+/// How the current HEAD relates to the certified recovery of the prepared
+/// rewrite; see [`recovered_rewrite`].
+enum RecoveredRewrite {
+    Current(Value),
+    Overtaken(Value),
+    Uncertified,
+    Absent,
 }
 
 /// Whether a recovery checkpoint was produced for the prepared base pin.
@@ -587,7 +659,7 @@ pub(super) fn recovery_pinned_base(checkpoint: &Value, prepared_base_sha: &Value
             .is_some_and(|pinned| pinned == prepared_base_sha)
 }
 
-fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
+pub(super) fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
     Ok(
         git_output(repo_root, &["diff", "--name-only", "--diff-filter=U"])?
             .lines()
@@ -868,4 +940,11 @@ pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
             RecoveryCheckpointLookup::Uncertified | RecoveryCheckpointLookup::Absent => None,
         },
     )
+}
+
+pub(super) fn recovery_run_id<'a>(input: &'a Value, context: &'a HandoffContext) -> &'a str {
+    input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&context.batch_id)
 }

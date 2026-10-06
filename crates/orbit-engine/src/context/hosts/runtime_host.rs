@@ -815,6 +815,18 @@ pub trait RuntimeHost: Send + Sync {
         Ok(false)
     }
 
+    /// Every recovery attempt this host reserved for `run_id` / `step_id`,
+    /// oldest first, read from the same host-only record that assigns them.
+    /// Completion counts the distinct bases a step rebased onto to bound how
+    /// often it follows a moving base [ORB-14393].
+    fn rebase_recovery_attempts(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        Err(unsupported_runtime_capability("rebase_recovery_attempts"))
+    }
+
     fn tool_context_for_activity(
         &self,
         _run_id: Option<&str>,

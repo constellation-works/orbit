@@ -1,4 +1,5 @@
 mod attribution;
+mod base_chase;
 mod base_obsolescence;
 mod baseline;
 mod candidate_resume;
