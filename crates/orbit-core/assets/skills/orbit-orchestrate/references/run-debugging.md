@@ -1,35 +1,40 @@
 # Debugging a failed job run
 
-Debug an Orbit job run without guessing. A failed run has multiple layers of evidence: the job-run bundle under `.orbit/state/job-runs/`, v2 audit events under `.orbit/state/audit/v2_loop/`, transcript blobs under `.orbit/state/audit/blobs/`, task records, Git state, and sometimes live processes. This gives a repeatable order of operations so you identify the first real failure, separate root cause from downstream fallout, and report a concrete next step.
+Debug an Orbit job run without guessing. A failed run has multiple layers of evidence: structured run state and steps via `orbit run show`, audit events via `orbit run events` and `orbit run trace`, captured logs via `orbit run logs`, transcript blobs under `.orbit/state/audit/blobs/`, task records, Git state, and sometimes live processes. This gives a repeatable order of operations so you identify the first real failure, separate root cause from downstream fallout, and report a concrete next step.
 
 ## Quick Triage
 
 Given a run id `<run_id>`, first read it through the authoritative
 `orbit_workflow_run_show` (`id`, `workspace`) or the owning host's
-`orbit run show`. Record the owner host and workspace before inspecting files.
-The following raw-file sequence is a fallback when public readers omit evidence:
+`orbit run show`. Record the owner host and workspace before inspecting evidence:
 
-1. Locate the run bundle:
-
-   ```bash
-   find .orbit/state/job-runs -maxdepth 3 -type d -name '<run_id>' -print
-   ```
-
-2. Read the run manifest and state:
+1. Inspect run state, step summary, and process details:
 
    ```bash
-   sed -n '1,140p' .orbit/state/job-runs/<job_id>/<run_id>/jrun.yaml
-   sed -n '1,220p' .orbit/state/job-runs/<job_id>/<run_id>/state.json
-   find .orbit/state/job-runs/<job_id>/<run_id>/steps -maxdepth 1 -type f -print -exec sed -n '1,220p' {} \;
+   orbit run show <run_id> --json
    ```
 
-3. Record before drawing conclusions: `job_id`; `state`; `pid` and `pid_start_time`; `input.task_ids`, `input.base_branch`, `input.base_sync`, mode flags; `started_at`/`finished_at`/`duration_ms`; failing `step_id`, `activity_name`, `error_message`, and any recovery attempt.
+2. Inspect audit events and failure trace:
 
-4. If there are multiple candidate run ids, compare `input.task_ids` first — the fastest way to identify which run owns a task.
+   ```bash
+   orbit run events <run_id> --json
+   orbit run trace <run_id>
+   ```
+
+3. Inspect captured stdout/stderr logs:
+
+   ```bash
+   orbit run logs <run_id> --json
+   orbit run logs <run_id> -s <step_id>
+   ```
+
+4. Record before drawing conclusions: `job_id`; `run.state`; `pid` and provider process `liveness`; `input.task_ids`, `input.base_branch`, `input.base_sync`, mode flags; `started_at`/`finished_at`/`duration_ms`; failing `step_id`, `activity_name`, `error_message`, and any recovery attempt.
+
+5. If there are multiple candidate run ids, compare `input.task_ids` first (via `orbit run history --json` or `orbit run show`) — the fastest way to identify which run owns a task.
 
 ## Use Orbit Inspection Commands First
 
-Prefer the public inspection surface before raw file spelunking:
+Use the public inspection surface to inspect the run:
 
 ```bash
 orbit run show <run_id> --json
@@ -109,13 +114,18 @@ especially after changing crew configuration.
 
 Step-scoped variants when the failing step is known: `orbit run show|logs|events <run_id> -s <step_id> --json`.
 
-If these commands fail or omit needed detail, fall back to files under `.orbit/state/` and mention the fallback in your report.
+If these commands fail or omit needed detail, inspect raw payload blobs under `.orbit/state/audit/blobs/` or definition snapshots under `.orbit/state/job-runs/` and mention the fallback in your report.
 
 ## Read The V2 Audit Trail
 
+Audit events are persisted in SQLite; use `orbit run events` and `orbit run trace` to inspect them:
+
 ```bash
-tail -80 .orbit/state/audit/v2_loop/<run_id>.jsonl
-rg -n 'failed|error|recovery|cli.invocation|step.started|step.finished|activity.started|activity.finished|run.finished' .orbit/state/audit/v2_loop/<run_id>.jsonl
+orbit run events <run_id> --json
+orbit run trace <run_id>
+orbit run events <run_id> -s <step_id> --json
+orbit run events <run_id> --type cli.invocation.finished --json
+orbit run events <run_id> --json | rg 'failed|error|recovery|cli.invocation|step.started|step.finished|activity.started|activity.finished|run.finished'
 ```
 
 Interpretation: `run.started`/`run.finished` define the overall lifecycle; `step.started`/`step.finished` are job step boundaries; `activity.started`/`activity.finished` identify activity execution and deterministic vs agent-loop type; `cli.invocation.started`/`.finished` identify provider command, model, cwd, timeout, exit code, stdout/stderr blob refs; `step.recovery_attempted` tells whether recovery ran and completed and, in `decision`, whether its written decision admitted the retry; `step.post_recovery_attempt` is that retry's outcome — a failed recovery can be a secondary problem, diagnose the original failed step first.
@@ -198,8 +208,9 @@ Check status/history, plan/execution_summary, comments, workspace_path, external
 Parent gate/auto runs can fail because a child failed, and children can keep working after a parent reports a gate failure:
 
 ```bash
-rg -n '<run_id>|<task_id>' .orbit/state/job-runs .orbit/state/audit/v2_loop
 orbit run history --json
+orbit run show <run_id> --json
+orbit run events <run_id> --json | rg '<run_id>|<task_id>'
 ```
 
 Look for `input.task_ids` overlap between candidate runs, parent events that invoke/wait on another `jrun-*`, child run ids named in gate/auto/`invoke_and_wait` step output, and parent runs still `pending`/`running` after a child failed. Report the run owning the first real failure as primary, then name parent/child fallout separately.
@@ -219,9 +230,10 @@ general dry-run mode — don't resolve conflicts unless asked to fix the run, no
 
 ## Check Live Processes
 
-If `jrun.yaml` says `state: running`, verify the recorded process still exists and its start time matches:
+If `orbit run show <run_id> --json` reports `state: "running"`, verify the recorded process (`pid`) and provider processes (`provider_processes`) still exist and match:
 
 ```bash
+orbit run show <run_id> --json
 ps -o pid,ppid,pgid,stat,etime,command -p <pid>
 ps -axo pid,ppid,pgid,stat,etime,command | rg '<run_id>|<workspace_path>|<task_id>'
 ```
