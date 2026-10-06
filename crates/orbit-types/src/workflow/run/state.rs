@@ -264,8 +264,9 @@ pub enum CrewExclusionSource {
     /// The window's provider preflight: the crew is disabled, or its
     /// provider CLI cannot be found or resolved here.
     Preflight,
-    /// A claimed leaf on this crew failed because the provider could not be
-    /// used (an authentication failure, for instance).
+    /// A claimed leaf failed because the provider could not be used.
+    /// Authentication excludes every configured crew of that provider; a
+    /// capacity failure excludes only the leaf's crew.
     ProviderUnavailable,
     /// A claimed leaf on this crew was released for a failure class that
     /// [excludes its crew](ClaimFailureClass::excludes_crew) [ORB-14257].

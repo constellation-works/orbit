@@ -325,8 +325,9 @@ impl DrainClaimedLeaf {
 /// The crews a pull drain's window can run, and those it will not [ORB-13941].
 ///
 /// The window's provider preflight, taken once when it opened, minus every
-/// crew a claimed leaf of this drain found unusable since — a provider that
-/// refused to authenticate, say — and, when the drain was submitted with
+/// crew a claimed leaf of this drain found unusable since — an authentication
+/// failure excludes every configured crew of that provider, a capacity
+/// failure only the leaf's crew — and, when the drain was submitted with
 /// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
 /// drain's run input and its own admission records, so it survives a follower
 /// restart and a resume, and ends with the drain.
@@ -614,17 +615,36 @@ impl crate::OrbitRuntime {
             }
             // [ORB-14257] A provider release keeps its own source; any other
             // released failure whose class blames this host excludes the crew
-            // too.
-            let (crew, source, reason) = match (&evidence.provider_unavailable, &evidence.failure) {
-                (Some(unavailable), _) => (
-                    unavailable.crew.as_deref(),
-                    CrewExclusionSource::ProviderUnavailable,
-                    format!("{task} failed: {}", unavailable.reason),
-                ),
+            // too. [ORB-14262] Authentication is the provider's login, not the
+            // crew's model, so every configured crew of that provider is
+            // excluded. Capacity stays on the named crew: another model may
+            // still have room. Provider labels are parsed, so `anthropic`
+            // groups with `claude`.
+            let authentication = evidence.provider_unavailable.is_some()
+                && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
+            let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
+            {
+                (Some(unavailable), _) => {
+                    let crews = match unavailable.crew.as_deref() {
+                        Some(crew) if authentication => self.crews_sharing_provider(crew),
+                        Some(crew) => vec![crew.to_string()],
+                        None => Vec::new(),
+                    };
+                    (
+                        crews,
+                        CrewExclusionSource::ProviderUnavailable,
+                        format!("{task} failed: {}", unavailable.reason),
+                    )
+                }
                 // A leaf whose task names no crew ran as the window's
                 // default, even when it died before resolving one.
                 (None, Some(failure)) if failure.class.excludes_crew() => (
-                    failure.crew.as_deref().or(default_crew.as_deref()),
+                    failure
+                        .crew
+                        .as_deref()
+                        .or(default_crew.as_deref())
+                        .map(|crew| vec![crew.to_string()])
+                        .unwrap_or_default(),
                     CrewExclusionSource::LeafReleased,
                     format!(
                         "{task} was released ({}): {}",
@@ -634,17 +654,16 @@ impl crate::OrbitRuntime {
                 ),
                 _ => continue,
             };
-            let Some(crew) = crew else {
-                continue;
-            };
-            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
-                continue;
+            for crew in crews {
+                if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                    continue;
+                }
+                excluded.push(CrewExclusion {
+                    crew,
+                    source,
+                    reason: reason.clone(),
+                });
             }
-            excluded.push(CrewExclusion {
-                crew: crew.to_string(),
-                source,
-                reason,
-            });
         }
         let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
@@ -695,6 +714,52 @@ impl crate::OrbitRuntime {
             excluded,
             host_suppressed,
         })
+    }
+
+    /// Whether `leaf`'s recorded step failure is provider authentication,
+    /// not model capacity. Capacity is also stored as `provider_unavailable`
+    /// evidence; only the authentication marker widens the exclusion.
+    fn leaf_reported_authentication(&self, leaf: Option<&str>) -> bool {
+        let Some(leaf) = leaf else {
+            return false;
+        };
+        self.stores()
+            .jobs()
+            .get_job_run(leaf)
+            .ok()
+            .flatten()
+            .is_some_and(|run| {
+                run.steps.iter().any(|step| {
+                    step.error_code.as_deref()
+                        == Some(orbit_types::workflow::PROVIDER_UNAVAILABLE_ERROR_CODE)
+                        || step.error_message.as_deref().is_some_and(|message| {
+                            message.contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
+                        })
+                })
+            })
+    }
+
+    /// `failed` plus every configured crew whose provider parses to the same
+    /// canonical provider. An unparsable or unknown crew stays a single name.
+    fn crews_sharing_provider(&self, failed: &str) -> Vec<String> {
+        let registry = self.context.settings().crews();
+        let Some(provider) = registry.get(failed).and_then(|crew| {
+            orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+        }) else {
+            return vec![failed.to_string()];
+        };
+        let mut names = registry
+            .values()
+            .filter(|crew| {
+                orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+                    == Some(provider)
+            })
+            .map(|crew| crew.name.clone())
+            .collect::<Vec<_>>();
+        if !names.iter().any(|name| name == failed) {
+            names.push(failed.to_string());
+        }
+        names
     }
 
     /// The pull admission a local run executes, when it is a claimed leaf.

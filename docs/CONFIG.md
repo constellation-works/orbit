@@ -519,7 +519,7 @@ Run finalization then moves the task to `backlog` under a `provider_failure_hold
 
 Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
 
-Pull drains and claimed leaves keep their own handling. An unavailable provider there releases the claim and excludes the crew for the window.
+Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider for the drain window. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room.
 
 ### Final recovery pool
 

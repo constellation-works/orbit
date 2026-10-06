@@ -459,8 +459,10 @@ owns delivery:
   whose own stderr, terminal error, or structured provider failure reports an authentication failure with the typed
   `[provider_unavailable]` marker, and a launched leaf that ended on such a step settles as a
   `Release` carrying `provider_unavailable { crew, reason }`. The task returns to `backlog`, the
-  breaker does not count it, and the drain excludes that crew for the rest of its window, so the
-  same task is not pulled straight back. The crew is the one the leaf resolved at start.
+  breaker does not count it, and the drain excludes every configured crew that resolves to the
+  same provider for the rest of its window — labels are parsed, so `anthropic` groups with
+  `claude` — so the same login is not spent again on another crew of that provider. The named
+  crew is the one the leaf resolved at start.
   Claude error results with HTTP 401/403 or authentication failure text, Codex error/failed-turn
   frames, and Grok/Gemini error objects are provider evidence, even when the CLI exits 0.
   Assistant transcripts, tool results, and Orbit work-failure envelopes are not provider evidence.
@@ -469,10 +471,14 @@ owns delivery:
   A provider that reports its selected model at capacity on a failed exit (Codex's
   `Selected model is at capacity`, in its stderr, terminal error, or own failure frames) is a
   kind of unavailability [ORB-14149]: the runner stamps `[provider_capacity]`, which counts as
-  `provider_unavailable` everywhere above, so the leaf releases its claim and the crew is excluded
-  for the window. Neither step recovery nor its post-recovery attempt reruns the same model, and
+  `provider_unavailable` for the release, the failure class and recovery, so the leaf releases
+  its claim and that crew is excluded for the window. It does not exclude the provider's other
+  crews. Neither step recovery nor its post-recovery attempt reruns the same model, and
   final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
-  provider evidence.
+  provider evidence. An authentication failure stamped `[provider_unavailable]` also skips step
+  recovery and final recovery; the final-recovery skip is audited as
+  `job.final_recovery_attempted` with outcome `skipped`, because another agent cannot sign the
+  provider in [ORB-14262].
 - *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a
   `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
   `candidate` (the default: the candidate's implementation, checks or review failed) and
@@ -490,9 +496,10 @@ owns delivery:
   candidate that `sync_base` and its conflict recovery could not carry onto a base that moved).
   The class is read from the last failed step's typed marker, then any provider or red-base
   failure the run recorded, then the terminalizing diagnostic, then the leaf's progress.
-  `operator_cancel`, `transient` and `provider` exclude the leaf's crew for
-  the rest of the drain's window (source `leaf_released`, or
-  `provider_unavailable` for a provider). `environment` and `owner_route`
+  `operator_cancel` and `transient` exclude the leaf's crew for the rest of
+  the drain's window (source `leaf_released`). `provider` uses source
+  `provider_unavailable`: authentication excludes every configured crew of
+  that provider, and capacity excludes only the leaf's crew. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. For any excluding class the owner's admission also holds the released
@@ -709,7 +716,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 
 | Check | Source of truth |
 |---|---|
-| Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); an unauthenticated provider is excluded by its first typed `provider_unavailable` leaf |
+| Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); the first typed `provider_unavailable` authentication leaf excludes every crew of that provider |
 | Binary version and type-derived pull request fingerprint match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
