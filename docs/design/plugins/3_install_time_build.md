@@ -5,7 +5,7 @@ summary: "Threat model and binding decisions for an opt-in spec.build that build
 owner: claude
 status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build.rs", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
@@ -413,7 +413,7 @@ deterministic, matching the archive-digest finding that already exists.
 | `spec.build` schema and validation (§1) | `orbit-types` `plugin/build.rs`; `PluginSpec.build` |
 | Commit fetch and `HEAD` check (§3.1) | `orbit-tools` `plugin/source.rs` (`fetch_git_commit`) |
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
-| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build.rs` |
+| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
 | Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |
 | Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
 | Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
