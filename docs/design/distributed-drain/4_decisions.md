@@ -591,7 +591,7 @@ claim-scoped handoff approval instead of the refused status write.
 `jrun-20260928-0230-c1` and both commit steps failed.
 **Code anchors:** `crates/orbit-core/src/application/task/query.rs::list_run_tasks`,
 `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` (`filtered` owner read),
-`crates/orbit-engine/src/context/hosts.rs::RuntimeHost::list_run_tasks`
+`crates/orbit-engine/src/context/hosts/runtime_host.rs::RuntimeHost::list_run_tasks`
 
 ### Context
 
