@@ -311,9 +311,12 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
                 )
             }),
         ),
+        // Routines are loaded and reconciled from the shared catalog. A linked
+        // worktree's `local_dir` is its own `.orbit` and must not hide a fault
+        // in the catalog the loader and sweep read. Auto-tasks stay local.
         ManagedCatalog::names_only(
             ArtifactKind::Routine,
-            local_dir.join("routines"),
+            runtime.shared_root().join("routines"),
             DEFAULT_ROUTINE_FILES
                 .iter()
                 .map(|(name, _)| (*name).to_string()),

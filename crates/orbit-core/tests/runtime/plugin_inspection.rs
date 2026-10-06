@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use orbit_common::fs::io::create_dir_symlink;
+use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactKind};
 use orbit_core::application::plugin::{
     PluginAddOptions, PluginEnableOptions, PluginUpgradeOptions, enable_plugin, install_plugin,
     plugin_doctor, sync_plugins, upgrade_plugin,
@@ -107,6 +108,99 @@ fn linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins() {
     let runtime = OrbitRuntime::initialize().expect("reload with valid shared pins");
     assert!(plugin_doctor(&runtime).unwrap().is_empty());
     assert!(sync_plugins(&runtime, true, &[]).unwrap().is_empty());
+    drop(runtime);
+    std::env::set_current_dir(original_cwd).unwrap();
+}
+
+#[test]
+fn linked_worktree_doctor_reports_faulty_routine_in_shared_catalog() {
+    if !isolated(
+        "plugin_inspection::linked_worktree_doctor_reports_faulty_routine_in_shared_catalog",
+    ) {
+        return;
+    }
+
+    let original_cwd = std::env::current_dir().unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let fixture_root = fixture.path().canonicalize().unwrap();
+    let main = fixture_root.join("main");
+    let linked = fixture_root.join("linked");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init"]);
+    git(
+        &main,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+    );
+    init_workspace_at_root(&main.join(".orbit"), InitOptions::default())
+        .expect("initialize the fixture's main workspace");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    let shared_root = main.join(".orbit");
+    let local_root = linked.join(".orbit");
+    let shared_routines = shared_root.join("routines");
+    let local_routines = local_root.join("routines");
+    std::fs::create_dir_all(&shared_routines).unwrap();
+    std::fs::create_dir_all(&local_routines).unwrap();
+    let malformed = "schemaVersion: 1\nkind: [\n";
+    let shared_fault = shared_routines.join("broken-shared.yaml");
+    std::fs::write(&shared_fault, malformed).unwrap();
+    // A worktree-local fault must not satisfy the check: doctor used to scan
+    // this directory and miss the shared catalog entirely.
+    std::fs::write(local_routines.join("broken-local.yaml"), malformed).unwrap();
+
+    std::env::set_current_dir(&linked).unwrap();
+    let runtime = OrbitRuntime::initialize().expect("initialize from a linked worktree");
+    assert_eq!(runtime.shared_root(), shared_root);
+    assert_eq!(runtime.paths().local_dir, local_root);
+    assert_ne!(runtime.shared_root(), runtime.paths().local_dir);
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("definition-artifact health from the linked worktree");
+    let routines = report
+        .iter()
+        .find(|health| health.kind == ArtifactKind::Routine)
+        .expect("routine catalog is part of the doctor report");
+    let faulty = routines
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.condition == ArtifactCondition::Faulty && finding.name == "broken-shared"
+        })
+        .expect("shared catalog fault must be reported");
+    assert_eq!(faulty.path, shared_fault);
+    assert!(
+        routines
+            .findings
+            .iter()
+            .all(|finding| !finding.path.starts_with(&local_routines)),
+        "doctor must ignore the worktree-local routines directory: {:?}",
+        routines.findings
+    );
+    assert!(
+        routines.scanned >= 1,
+        "the shared routine file must be scanned"
+    );
     drop(runtime);
     std::env::set_current_dir(original_cwd).unwrap();
 }
