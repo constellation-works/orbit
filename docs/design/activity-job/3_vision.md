@@ -3,8 +3,8 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-07-20
-last_validated: 2026-09-13
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: activity-job
 doc_role: vision
@@ -37,7 +37,7 @@ Agent dispatch advises rather than enforces: the declared `tools:` list is deleg
 
 ### 1.5 Which limits should stay structural literals?
 
-`task_auto_pipeline` relies on literal `max_workers` and `max_iterations`. Should those stay static, or do we need templated numerics?
+The concurrency cap in `task_auto_pipeline` remains the literal `fan_out.max_workers: 5`; the `input.concurrency` value does not reach that cap. Should the cap stay fixed or become configurable through templated numerics?
 
 ### 1.6 What is the right audit landing zone?
 
