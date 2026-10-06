@@ -183,15 +183,25 @@ spec:
 
     Your decision about the executor's one post-recovery attempt is durable
     too. When the input carries `recovery_decision`, write that decision to the
-    file at `recovery_decision.path` before you finish, with your ordinary
-    file-writing tools (the path is in the worktree's run-local scratch
-    directory, `.orbit/tmp/`). Write exactly one JSON object, copying the
-    binding fields verbatim from `recovery_decision`:
+    file at `recovery_decision.path` before you finish, with your native
+    file-write/edit tool or a shell heredoc (the path is in the worktree's
+    run-local scratch directory, `.orbit/tmp/`). Write exactly one JSON object,
+    copying the binding fields verbatim from `recovery_decision`:
 
         {"schema_version": 1, "run_id": "<run_id>",
          "failed_step_id": "<failed_step_id>", "attempt": <attempt>,
          "nonce": "<nonce>", "decision": "retry" | "not_recovered",
          "reason": "<one short sentence>"}
+
+    The only allowed bytes after the closing brace are an optional real
+    newline. Do not append a literal backslash followed by `n` or any other
+    trailing characters. After writing, re-read the file and parse it. For
+    example, set `DECISION_PATH` to the exact `recovery_decision.path` value,
+    then run `python3 -m json.tool "$DECISION_PATH"` or
+    `jq . "$DECISION_PATH"`. Confirm that `decision`, `run_id`,
+    `failed_step_id`, `attempt` and `nonce` match the intended values and the
+    input bindings. If parsing fails or any field differs, rewrite the file
+    and repeat the read-and-parse check before finishing.
 
     - `retry`: you repaired what made the step fail, so its re-run can
       succeed on its own. The executor makes exactly one attempt; that
