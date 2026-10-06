@@ -272,6 +272,20 @@ outside it. Direct Bubblewrap calls still refuse absent write-deny roots;
 macOS kernel coverage checks both absent and prepared roots, including file
 creation, modification, and moving the root aside to replace it.
 
+Task-pilot source inspections use provider-native tools independently of the Orbit MCP
+tool list. Dispatch explicitly enables Codex's shell and unified exec features;
+Claude uses Read and Bash, with an explicit native tool set when its executor
+does not select one. The host appends the selected provider's inspection
+instructions to the agent contract. An unsupported provider, a Claude executor
+that omits or disallows Read/Bash, or a profile other than `reviewer` fails
+before allocating the inspection checkout or starting a provider session with
+the non-retryable `InspectionToolsUnavailable` configuration error. This also
+applies to non-Git pilots (`inspection_revision: null`). The pilot contract's
+`partition_index` and `inspection_revision` fields select this preparation;
+other source-inspection activities retain their own provider/tool contracts. Native commands
+remain inside the same reviewer filesystem sandbox; the pilot uses them only
+to read files and inspect with git/rg, never to build or validate a repair.
+
 The other checkout callers do not need this preparation: delivery and
 step/final-recovery activities reuse managed worktrees; source inspections
 create standalone repositories and require the read-only `reviewer` profile,

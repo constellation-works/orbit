@@ -26,6 +26,7 @@ use super::super::argv::{
     try_audit_argv_for_dispatch,
 };
 use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
+use super::super::inspection_tools::prepare_inspection_tools;
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
 use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV, SpawnError};
@@ -63,7 +64,12 @@ pub fn run_cli_backend(
     let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
     let provider = spec.provider.as_str().to_string();
     let trusted_host = trusted_host_admission(spec, activity_name, input)?;
+    // Reject an unsupported inspection provider before executor lookup can
+    // classify it as a transient missing-CLI error.
+    prepare_inspection_tools(&provider, input, fs_profile, &[])?;
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
+    let inspection_tools =
+        prepare_inspection_tools(&provider, input, fs_profile, &cli_executor.args)?;
     let timeout_seconds = invocation_timeout_seconds(spec, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
 
@@ -125,8 +131,13 @@ pub fn run_cli_backend(
         prepare_dispatch_sandbox(trusted_host.as_ref(), resolved_sandbox.as_ref())?;
     let sandbox = prepared_sandbox.effective;
 
+    let mut envelope_spec = spec.clone();
+    if let Some(tools) = &inspection_tools {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(tools.instruction);
+    }
     let envelope_json = cli_agent_envelope_json(
-        spec,
+        &envelope_spec,
         run_id,
         inspection_input.as_ref().unwrap_or(input),
         inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
@@ -215,6 +226,9 @@ pub fn run_cli_backend(
     // custom `--print-timeout` without duplicating it, and the remaining
     // spawn deadline is known here. [ORB-11337]
     apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+    if let Some(tools) = inspection_tools {
+        subprocess_args.extend(tools.args);
+    }
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
     // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;

@@ -22,6 +22,8 @@ mod pr_landing;
 #[cfg(unix)]
 mod provider_capacity;
 mod review_fixes;
+#[cfg(unix)]
+mod source_inspection;
 mod v2_cli_agent;
 #[cfg(unix)]
 mod v2_cli_sandbox;
