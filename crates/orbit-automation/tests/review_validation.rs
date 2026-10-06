@@ -40,7 +40,9 @@ fn scope() -> Vec<String> {
         "file:crates/orbit-review/tests/fix.rs".to_string(),
     ]
 }
-const CORRECTED: &str = "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core";
+/// Differs from [`ATTEMPT`] by an argument. A leading environment assignment
+/// is the same command, not this fixture [ORB-14302].
+const CORRECTED: &str = "cargo test --package orbit-core --locked";
 
 #[test]
 fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_fail_closed() {
@@ -194,6 +196,17 @@ fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
             vec![
                 superseded(ATTEMPT, Some("orbit-core-tests")),
                 required(CORRECTED, Some(" orbit-core-tests "), true),
+            ],
+        ),
+        (
+            "leading environment assignment is the same command",
+            vec![
+                superseded(ATTEMPT, None),
+                required(
+                    "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+                    None,
+                    true,
+                ),
             ],
         ),
     ] {
@@ -972,6 +985,77 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
         certificate_acceptable(&legacy),
         Err(ReviewInvalidation::ValidationContractMissing)
     );
+}
+
+/// ORB-14302: reviewers prefix `TMPDIR` because a nested temp directory is
+/// not hermetic. That required pass is the host command. A different
+/// command is not, including one that only grows the name or changes the
+/// program after its own leading assignment.
+#[test]
+fn a_leading_env_assignment_satisfies_the_host_required_command() {
+    let host = "make ci-fast";
+    let host_required = vec![host.to_string()];
+    let task_scope = scope();
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        required_validation_commands: Some(&host_required),
+    };
+    let satisfied = [
+        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        "TMPDIR='$PWD/.orbit/tmp' make ci-fast",
+        "TMPDIR=$PWD/.orbit/tmp make ci-fast",
+        r#"FOO=1 TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        r#"TMPDIR="/tmp/orbit tmp" make  ci-fast"#,
+    ];
+    for command in satisfied {
+        let records = [required(command, None, true)];
+        assert_eq!(validation_evidence(&records, &context), Ok(()), "{command}");
+        let mut certificate = certificate_with(records.to_vec(), &task_scope, Vec::new());
+        certificate.required_validation_commands = Some(host_required.clone());
+        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{command}");
+    }
+
+    let wrapped = [required(
+        r#"env TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        Some(host),
+        true,
+    )];
+    assert_eq!(
+        validation_evidence(&wrapped, &context),
+        Ok(()),
+        "a non-assignment wrap satisfies the host command when check names it"
+    );
+    let wrapped_without_check = [required(
+        r#"env TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        None,
+        true,
+    )];
+    assert_eq!(
+        validation_evidence(&wrapped_without_check, &context),
+        Err(ValidationDefect::HostCheckNotEstablished {
+            command: host.into(),
+        }),
+        "a non-assignment wrap without check is a different command"
+    );
+
+    let refused = [
+        "make ci-fast-extra",
+        "FOO=1 make other",
+        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast-extra"#,
+        "make TMPDIR=1 ci-fast",
+        r#""TMPDIR=1" make ci-fast"#,
+    ];
+    for command in refused {
+        let records = [required(command, None, true)];
+        assert_eq!(
+            validation_evidence(&records, &context),
+            Err(ValidationDefect::HostCheckNotEstablished {
+                command: host.into(),
+            }),
+            "{command}"
+        );
+    }
 }
 
 #[test]

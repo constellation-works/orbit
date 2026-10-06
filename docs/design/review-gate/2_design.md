@@ -252,7 +252,10 @@ establishes. Settlement and delivery coverage both read that one function, so
 a certificate cannot mean one thing when it is issued and another when it is
 spent. It also requires every command in the immutable owner snapshot to be
 present as `required` and `passed`, or to be a valid superseded record followed
-by a passing check with the same command or explicit check identity. A
+by a passing check with the same command or explicit check identity. Command
+identity ignores whitespace and leading `NAME=value` assignments, so a required
+`TMPDIR="$PWD/.orbit/tmp" make ci-fast` pass establishes host-required
+`make ci-fast`. `make ci-fast-extra` and `FOO=1 make other` do not. A
 diagnostic, exclusion, negative control, omission, or later unrelated pass
 cannot satisfy a host-required command. Certificates retain that snapshot;
 legacy certificates without it cannot be spent as coverage.
@@ -262,7 +265,7 @@ legacy certificates without it cannot be spent as coverage.
 | `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
-| `superseded` | A diagnostic attempt a later required check replaced | a later record that is `required` and `passed` and names the same check: the same `command` (whitespace ignored), or the same non-empty `check` identity when the command or environment was corrected. A record without `check` is matched by its command, so a missing optional field never downgrades a pass. An unrelated later pass, a corrected command with no shared identity, or a related check that did not pass is not a replacement |
+| `superseded` | A diagnostic attempt a later required check replaced | a later record that is `required` and `passed` and names the same check: the same `command` (whitespace ignored, and a leading `NAME=value` assignment ignored), or the same non-empty `check` identity when the command itself was corrected. A record without `check` is matched by its command, so a missing optional field never downgrades a pass. An unrelated later pass, a corrected command with no shared identity, or a related check that did not pass is not a replacement |
 | `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. It supplies no coverage and creates no requirement |
 
 A negative control is bound to more than its label [ORB-14192]: an
