@@ -117,6 +117,11 @@ class LocalCodeqlTests(unittest.TestCase):
             path = self.bin / name
             path.write_text(STUB)
             path.chmod(0o755)
+        # The host platform is stubbed too, so every case runs as on Linux
+        # unless it names another host.
+        uname = self.bin / "uname"
+        uname.write_text('#!/bin/sh\n[ "$1" = -s ] || exit 99\necho "${STUB_UNAME:-Linux}"\n')
+        uname.chmod(0o755)
         self.calls_file = self.root / "calls.jsonl"
         self.global_dirs = [self.root / "user-rustup", self.root / "user-cargo"]
         for directory in self.global_dirs:
@@ -299,15 +304,30 @@ class LocalCodeqlTests(unittest.TestCase):
             ("semantic analysis disabled", False),
             ("[WARN] unable to load crate graph", True),
             ("ERROR: extractor failed to resolve dependencies", False),
+            # On Linux every production module is active, the Linux-only ones
+            # included, so a skip of one is never a platform exclusion.
+            ("WARN skipping semantic analysis of crates/orbit-core/src/runtime/linux.rs", True),
         ]
         for log, file_only in cases:
             with self.subTest(log=log, file_only=file_only):
                 self.calls_file.write_text("")
                 result = self.run_script("fixture.qls", STUB_EXTRACTION_LOG=log,
                                          STUB_LOG_FILE_ONLY="1" if file_only else "")
+                self.assertEqual(result.returncode, 1, result.stderr)
                 self.assert_no_result(result, ["rustup", "codeql"])
                 self.assertIn(log, result.stderr)
                 self.assertIn(self.calls()[0]["args"][2], result.stderr)
+
+    def test_non_linux_host_refuses_before_preparation_with_platform_status(self):
+        # Its extractor always skips the Linux-only modules, so the run is
+        # owed by Linux evidence rather than attempted and found incomplete.
+        for host in ("Darwin", "FreeBSD"):
+            with self.subTest(host=host):
+                result = self.run_script("fixture.qls", STUB_UNAME=host)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assert_no_result(result, [])
+                self.assertIn(host, result.stderr)
+                self.assertFalse(self.scratch.exists())
 
     def test_install_refusal_names_version_and_leaves_user_homes_untouched(self):
         before = {path.relative_to(self.root) for path in self.root.rglob("*")}

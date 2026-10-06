@@ -230,7 +230,13 @@ spec:
          `command`, and the task `artifact` path where its result will arrive.
          Keep its validation record `required` and `not_run` or `denied`.
          External checks belong in this list; substantive open findings still
-         reject the candidate. Failed checks, ambiguous intent, stale candidates
+         reject the candidate. A required command that repository guidance
+         says cannot run on this host's platform (such as local CodeQL off
+         Linux) and that refused without running did not run: record it
+         `not_run` and, when it is the only remaining work, name the run on
+         the supported platform that the guidance specifies as external
+         evidence. Never accept a run that reported incomplete analysis.
+         Failed checks, ambiguous intent, stale candidates
          and unnamed missing checks do not qualify for an evidence hold.
     6. Write the report to a temporary file and attach it with
        `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`).
