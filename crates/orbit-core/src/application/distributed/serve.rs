@@ -244,14 +244,32 @@ impl crate::OrbitRuntime {
     ///
     /// `remote` refuses a local candidate: it exists only in the executor's
     /// checkout, which the owner cannot read, and followers never run local
-    /// mode. Already-landed delivery keeps its own typed report through the
-    /// no-diff verifier and is not a route a claimed leaf takes.
+    /// mode. NoDiff verifies a clean-tree checkpoint against the owner's live
+    /// base; the executor's branch need not be published.
     pub(crate) fn observe_claim_handoff(
         &self,
         handoff: &TaskHandoff,
         remote: bool,
     ) -> Result<HandoffObservation, OrbitError> {
+        let claim = self.current_claim(&handoff.claim_id)?;
+        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
+            &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
+            &claim.request_id,
+        )?
+        else {
+            return Err(refused("original claim receipt unavailable"));
+        };
         let candidate = match handoff.candidate.delivery {
+            HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
+                self,
+                &self.paths().repo_root,
+                handoff,
+                if receipt.request.ship.mode == "pr" {
+                    "remote"
+                } else {
+                    "local"
+                },
+            )?,
             HandoffDelivery::LocalCandidate if remote => {
                 return Err(refused(
                     "a follower cannot hand off a local candidate: followers never execute \
@@ -284,14 +302,6 @@ impl crate::OrbitRuntime {
                      verifier; a claimed leaf does not hand one off",
                 ));
             }
-        };
-        let claim = self.current_claim(&handoff.claim_id)?;
-        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
-            &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
-            &claim.request_id,
-        )?
-        else {
-            return Err(refused("original claim receipt unavailable"));
         };
         let original = receipt
             .claim

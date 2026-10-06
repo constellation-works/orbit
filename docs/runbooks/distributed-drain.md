@@ -300,7 +300,7 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 8,
+  "caller_schema": 9,
   "caller_before_pr": false
 }'
 ```
@@ -411,7 +411,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   with no signed-in user is caught by its first claimed leaf (below). The
   result is kept for the drain's window. Every pull request declares the
   runnable crews and this host's OS, and the owner admits only tasks this host
-  can run. If no
+  can run. Tagged `no-diff-expected` work stays on the owner; the receipt
+  records that a tag does not supply a verified NoDiff handoff. If no
   crew is runnable, the drain requests nothing and reports
   `no_runnable_crew`. After you install a CLI or sign a provider in, start a
   new drain to pick it up.
@@ -423,6 +424,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   validate on the exact candidate, push, open the PR, hand off. The owner
   observes the PR itself and moves the task to `review`. **Nothing lands until
   the owner approves the handoff** on its dashboard.
+  A leaf whose implementation proves no change is needed hands off `NoDiff`
+  instead. The implementer writes `no-diff.json` (or `already-landed.json`)
+  and its validation logs beneath `.orbit/tmp/`, returning their artifact paths
+  and scratch `source_path`s as `no_diff_artifacts`. Commit imports these
+  bounded files through the claim and verifies them before the leaf skips PR
+  preparation and publication.
+  The handoff pins that verifier report; the owner rechecks it against its live
+  base and completes without a PR under the same completion authority. A moved
+  base or changed report requires fresh validation; a skip flag alone is refused.
 - The implement step runs in **claimed mode**. The agent sandbox denies
   `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
   does not need one. It works from the injected task envelope, is not granted
@@ -1058,7 +1068,7 @@ orbit doctor
 orbit config get review.before_pr
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 8,
+  "caller_schema": 9,
   "caller_before_pr": false
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'

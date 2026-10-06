@@ -331,12 +331,20 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             // deliver; it just is not sitting uncommitted.
             return Ok(already_committed_result(&task.id, base_sha.as_deref()));
         }
-        if no_diff_expected || allow_empty {
+        if (no_diff_expected || allow_empty) && !matches!(new_path_policy, NewPathPolicy::Claimed) {
             return Ok(skipped_no_diff_expected_result(&task.id));
         }
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
+            if matches!(new_path_policy, NewPathPolicy::Claimed) {
+                super::super::claim::import_implementation_evidence(
+                    host,
+                    &task.id,
+                    &workspace_path,
+                    input,
+                )?;
+            }
             return verify_clean_tree(
                 host,
                 &task,

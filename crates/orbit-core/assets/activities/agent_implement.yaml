@@ -52,6 +52,19 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # Claimed no-diff evidence: the deterministic commit step imports only
+      # these bounded scratch files and verifies them before delivery.
+      no_diff_artifacts:
+        type: array
+        items:
+          type: object
+          required: [path, source_path]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            source_path:
+              type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -92,6 +105,14 @@ spec:
       - `comment`: any task comment or leftovers (item 11). A real blocker
         (item 8) is `result.blocker` `{kind, evidence}`, not a status write
         and not only this comment.
+    - In claimed mode, for a clean no-op or already-satisfied base, write the structured
+      `no-diff.json` or `already-landed.json` report and every validation log
+      under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
+      `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
+      including each report-referenced log. The deterministic commit step
+      attaches these bytes through the claim and runs the existing verifier;
+      the sandboxed implementer does not call owner artifact tools. This
+      replaces the artifact-attachment requirement in item 12 for claimed mode.
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
 

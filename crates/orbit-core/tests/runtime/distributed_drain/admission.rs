@@ -7,12 +7,12 @@ use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 use super::*;
 
 /// Owner admission cannot hand selector-free implementation work to a follower.
-/// Preparing its scope clears the hold; side-effect-only chores stay admissible.
+/// Preparing its scope clears the hold; tagged no-diff work stays on the owner.
 #[test]
-fn owner_pull_waits_for_context_preparation_but_admits_no_diff_work() {
+fn owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner() {
     if !isolated(
         module_path!(),
-        "owner_pull_waits_for_context_preparation_but_admits_no_diff_work",
+        "owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner",
     ) {
         return;
     }
@@ -33,8 +33,9 @@ fn owner_pull_waits_for_context_preparation_but_admits_no_diff_work() {
     }
     let drain = pair.start_drain();
     let first = pair.pass(&drain);
-    assert!(launch_refused(&first), "{first}");
-    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[1]);
+    assert!(first["error"].is_null(), "{first}");
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[1]), "backlog");
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
     let receipts = pair.follower_jobs.local_pull_admissions().unwrap();
     assert!(
@@ -49,6 +50,19 @@ fn owner_pull_waits_for_context_preparation_but_admits_no_diff_work() {
                 })
             }),
         "{receipts:#?}"
+    );
+    assert!(
+        receipts
+            .iter()
+            .filter_map(|record| record.receipt.as_ref())
+            .any(|receipt| {
+                receipt.deferred_conflicts.iter().any(|entry| {
+                    entry.task_id == pair.tasks[1]
+                        && entry.reason.contains("no-diff-expected")
+                        && entry.reason.contains("verified handoff")
+                })
+            }),
+        "tag alone cannot establish a verified NoDiff handoff: {receipts:#?}"
     );
     pair.wire
         .owner

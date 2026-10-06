@@ -313,6 +313,20 @@ impl TaskCommitBoundary {
             .iter()
             .filter(|task| task.status == TaskStatus::Backlog)
         {
+            // Side-effect-only work stays on the owner. A tag is not the
+            // verified NoDiff report an executor must deliver [ORB-14259].
+            if identity.is_remote()
+                && task
+                    .tags
+                    .iter()
+                    .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+            {
+                receipt.deferred_conflicts.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: "no-diff-expected work stays on the owner; a claimed NoDiff delivery requires a verified handoff report".into(),
+                });
+                continue;
+            }
             if task
                 .dependencies()
                 .iter()

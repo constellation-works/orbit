@@ -67,6 +67,30 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
     }
 }
 
+/// Owner revalidation on an independently observed base, without modifying
+/// the owner's checkout or requiring the executor's branch to exist there.
+pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revision<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    workspace: &Path,
+    run_id: &str,
+    checkpoint: &Value,
+) -> Result<(), OrbitError> {
+    match checkpoint["decision"].as_str() {
+        Some(no_diff::DECISION) => {
+            no_diff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+        }
+        Some(already_landed::DECISION) => {
+            already_landed::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+        }
+        _ => Err(OrbitError::PolicyDenied(
+            "a NoDiff handoff requires a verified clean-tree checkpoint".into(),
+        )),
+    }
+}
+
 /// Outcome of comparing `input.base_sha` with the worktree's current HEAD.
 pub(super) enum PinnedHead {
     /// No base was pinned by the caller, so this step attributes no history.

@@ -116,6 +116,14 @@ impl OrbitRuntime {
                 update.handoff_id
             )));
         }
+        if matches!(
+            accepted.handoff.candidate.delivery,
+            orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }
+        ) {
+            // Completion re-runs the same base and verifier-report checks as
+            // acceptance, including current owner-required validation policy.
+            return self.observe_claim_handoff(&accepted.handoff, false);
+        }
         Ok(HandoffObservation {
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             candidate: accepted.handoff.candidate.clone(),

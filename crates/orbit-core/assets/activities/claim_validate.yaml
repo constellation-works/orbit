@@ -22,7 +22,9 @@ spec:
     runs nothing and records `skipped_no_required_commands` with no
     validation references. Task, claim, execution machine and bound run come
     from the trusted worker binding; a step input that disagrees is refused
-    rather than preferred.
+    rather than preferred. A verified clean-tree commit checkpoint takes the
+    NoDiff route: recheck the report, run required commands on the clean base,
+    and pin the verifier report for owner revalidation without publication.
   input_schema_json:
     type: object
     required: [workspace_path]
@@ -47,6 +49,11 @@ spec:
       # so the live value is a string. Integers remain accepted.
       pull_request:
         type: [string, integer, "null"]
+      skipped_no_diff_expected:
+        type: [boolean, "null"]
+      already_landed_checkpoint:
+        type: [object, "null"]
+        description: Commit's verified no-diff or already-landed checkpoint; a skip flag alone refuses.
       # The output of this activity's pre-publication run on the same
       # candidate. When set, no command runs: the passed results are pinned
       # to the candidate as published, which must be the commit and base they
@@ -84,6 +91,9 @@ spec:
         description: Digest-pinned owner artifact references, one per command.
         items:
           type: object
+      no_diff_evidence:
+        type: [object, "null"]
+        description: Digest-pinned clean-tree verifier report for the NoDiff handoff.
       validation_env:
         type: [object, "null"]
         description: >

@@ -57,7 +57,9 @@ pub use context::{
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 pub use executor::automation::execute_action as execute_deterministic_action;
-pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};
+pub use executor::automation::vcs::claim::{
+    observe_candidate, observe_no_diff_candidate, observe_published_candidate,
+};
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
     BaselineHoldStatus, WorktreeGcOptions, WorktreeGcResult, baseline_hold_status,

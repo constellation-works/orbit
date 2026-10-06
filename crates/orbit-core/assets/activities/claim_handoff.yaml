@@ -12,6 +12,8 @@ spec:
     disposition is `not_required` unless the leaf ran the before-PR gate and
     passes that review's evidence, which must name the candidate handed off;
     the owner judges it against the review contract the claim captured.
+    A NoDiff handoff rechecks its clean-base verifier report and needs no
+    before-PR reviewer; owner completion authority still applies.
   input_schema_json:
     type: object
     required: [workspace_path, candidate, validation]
@@ -26,6 +28,9 @@ spec:
       # Same shape as `claim_validate`: `pr_open` emits a JSON string.
       pull_request:
         type: [string, integer, "null"]
+      no_diff_evidence:
+        type: [object, "null"]
+        description: Digest-pinned verifier report from the NoDiff validation step.
       candidate:
         type: object
         description: The candidate the required validation actually ran on.
