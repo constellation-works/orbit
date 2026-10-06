@@ -541,14 +541,17 @@ fn the_written_decision_controls_the_single_retry_whatever_the_final_response_sa
         &fixture,
         &Case {
             name: "declined",
-            producer: r#"bound not_recovered "the base is red" > "$path""#,
+            producer: r#"bound not_recovered "the base is red" > "$path"; printf '\n' >> "$path""#,
             response: SAYS_RECOVERED,
             ..Case::default()
         },
     );
     assert!(declined.attempted.recovery_succeeded);
     let decision = declined.decision();
-    assert_eq!(decision.status, "verified");
+    assert_eq!(
+        decision.status, "verified",
+        "a real trailing newline is accepted"
+    );
     assert_eq!(decision.verdict.as_deref(), Some("not_recovered"));
     assert!(!decision.retry_admitted);
     assert_eq!(decision.detail.as_deref(), Some("the base is red"));
@@ -676,6 +679,11 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
     }
     let fixture = fixture();
     let cases: &[(&str, &str, &str)] = &[
+        (
+            "literal_backslash_n_suffix",
+            r#"bound retry "x" > "$path"; printf '\\n' >> "$path""#,
+            "literal backslash-n suffix",
+        ),
         (
             "malformed",
             r#"printf '{"decision":' > "$path""#,

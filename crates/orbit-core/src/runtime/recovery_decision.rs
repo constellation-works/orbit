@@ -206,6 +206,9 @@ pub(crate) fn read(
     if bytes.len() as u64 > MAX_DECISION_BYTES {
         return invalid(format!("the decision exceeds {MAX_DECISION_BYTES} bytes"));
     }
+    if bytes.ends_with(b"\\n") {
+        return invalid("the decision ends with a literal backslash-n suffix".to_string());
+    }
     let decision: DecisionFile = match serde_json::from_slice(&bytes) {
         Ok(decision) => decision,
         Err(error) => return invalid(format!("the decision is malformed: {error}")),
