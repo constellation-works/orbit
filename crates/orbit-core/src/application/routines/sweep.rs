@@ -384,6 +384,31 @@ pub(crate) fn run_sweep_at_with_providers_at(
             }),
         }
     }
+    // [ORB-14273] After the executable generation settles, the clock resumes each
+    // upgrade-interrupted run at most once.
+    if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
+        for (workspace, runtime) in &discovered.entries {
+            match runtime.auto_resume_upgrade_interrupted_runs() {
+                Ok(resumed) => {
+                    if !resumed.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            resumed = resumed.len(),
+                            "sweep.upgrade_interrupted_runs_resumed"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.upgrade_interrupted_runs_resume_failed"
+                ),
+            }
+        }
+    }
+
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
     // `workflow.final_recovery_crews` pool.
