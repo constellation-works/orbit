@@ -24,6 +24,22 @@ impl MockRunner {
     pub(super) fn commands(&self) -> Vec<String> {
         self.commands.lock().expect("test command log lock").clone()
     }
+
+    /// Queue probe outputs ahead of the boolean results [`Self::run`] consumes.
+    ///
+    /// Convergence classifies manager status from stdout and stderr. A boolean
+    /// result alone cannot tell a transport failure from a paused unit.
+    pub(super) fn with_probes(
+        probes: Vec<Result<ManagerCommandOutput, OrbitError>>,
+        results: Vec<Result<bool, OrbitError>>,
+    ) -> Self {
+        Self {
+            results: Mutex::new(results.into_iter().rev().collect()),
+            outputs: Mutex::new(Vec::new()),
+            probes: Mutex::new(probes.into_iter().rev().collect()),
+            commands: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl ClockCommandRunner for MockRunner {
