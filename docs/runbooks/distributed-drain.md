@@ -137,6 +137,16 @@ owner accepts its handoff without validation logs. Every other handoff check
 (footprint, protected paths, candidate and base integrity) still applies.
 `orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
+Task-pilot checks acceptance criteria for native OS evidence requirements.
+When a criterion requires a particular native host and its matching tag is
+missing, the pilot reports a `utility_warnings` finding citing the criterion
+and naming `os:macos`, `os:linux` or `os:windows` to add before dispatch. The
+pilot recommends the tag; it does not retag the task. A matching tag already
+present needs no warning, even when the pilot runs on another OS. Platform
+mentions, cross-compilation, mocked checks and negative admission tests alone
+do not require a native host. If evidence is required on every named OS, use
+separate host-scoped validation tasks: multiple tags allow any one OS.
+
 Per-host compiler capacity is independent. Keep the shared build-budget
 defaults (two heavy slots, four Cargo jobs) unless you deliberately raise them;
 see [build-budget.md](./build-budget.md).

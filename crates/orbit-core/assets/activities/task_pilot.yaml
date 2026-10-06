@@ -234,6 +234,23 @@ spec:
        variable to make a criterion reachable. A criterion that expects a
        refusal is a correct negative test, and a tool name inside a quoted
        example is not a requirement; report neither.
+       Also check whether a criterion requires execution or evidence on a
+       specific native operating system, such as a real macOS launch or
+       sandbox-exec result, a Linux Bubblewrap result, or a native Windows
+       integration check. Compare that requirement with the task's current
+       tags, ignoring case. If the required OS has no matching tag, report a
+       `utility_warnings` finding citing the criterion and naming the exact
+       tag to add: `os:macos`, `os:linux`, or `os:windows`. A different OS tag
+       does not satisfy the requirement. Recommend adding the matching tag
+       before dispatch so admission can select a capable host; never edit
+       tags yourself. If the matching tag is already present, do not repeat
+       this warning merely because the inspecting host runs another OS.
+       A platform mention, cross-compilation target, mocked platform check,
+       or negative test of another OS's admission refusal does not by itself
+       require that native host. Multiple OS tags admit any one of those
+       OSes; when evidence is required on every named OS, recommend separate
+       host-scoped validation tasks rather than claiming those tags arrange
+       execution on all hosts.
     6. Assess the bounded logical repair, not alert severity, alert count, file
        count, version increment, or expected wall-clock time. Evaluate repair
        certainty, behavioral change, component coupling, and validation
