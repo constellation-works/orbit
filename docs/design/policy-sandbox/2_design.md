@@ -19,9 +19,9 @@ This document describes Orbit's shipped policy and sandboxing implementation: v2
 
 ## 1. Policy Schema
 
-`PolicyDef` in `crates/orbit-common/src/types/policy_def.rs` is v2-only. `crates/orbit-common/src/types/resource.rs` rejects schema v1 with a migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
+`PolicyDef` in `crates/orbit-types/src/policy/policy_def.rs` is v2-only. `crates/orbit-common/src/protocol/yaml.rs` rejects schema v1 with a migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
 
-A valid policy declares `name`, optional `description`, global `denyRead` / `denyModify`, and `fsProfiles` mapping names to `FsProfile { read, modify }`. The policy name must also pass the centralized resource-name validator in `crates/orbit-common/src/types/resource.rs`: it is a non-empty single file stem, not a hidden dot name, and contains no separators, traversal markers, drive-prefix characters, extension dots, or control characters ([T20260509-28]). File-backed stores validate before constructing `<name>.yaml` paths.
+A valid policy declares `name`, optional `description`, global `denyRead` / `denyModify`, and `fsProfiles` mapping names to `FsProfile { read, modify }`. The policy name must also pass the centralized resource-name validator in `crates/orbit-types/src/resource/data.rs`: it is a non-empty single file stem, not a hidden dot name, and contains no separators, traversal markers, drive-prefix characters, extension dots, or control characters ([T20260509-28]). File-backed stores validate before constructing `<name>.yaml` paths.
 
 `PolicyDef::validate` enforces:
 
@@ -75,7 +75,7 @@ PolicyEngine::check(profile, operation, path) -> FsPolicyEvaluation
 
 `FsPolicyEvaluation` carries `{ profile, operation, path, allowed, matched_rule }`. `evaluator.rs` currently passes through to `PolicyDef::check_path`; the indirection leaves room for caching or layered evaluators later.
 
-`PolicyDecision` (`crates/orbit-common/src/types/policy_decision.rs`) is a separate `Allow | Deny { reason }` enum for broader policy/RBAC callers. `PolicyEngine::check` does not produce it; fs callers use `FsPolicyEvaluation`.
+`PolicyDecision` (`crates/orbit-types/src/policy/policy_decision.rs`) is a separate `Allow | Deny { reason }` enum for broader policy/RBAC callers. `PolicyEngine::check` does not produce it; fs callers use `FsPolicyEvaluation`.
 
 ---
 
