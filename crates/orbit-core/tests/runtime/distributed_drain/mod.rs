@@ -61,6 +61,7 @@ mod cancel;
 mod claimed_review;
 mod desktop_completion;
 mod landing_attribution;
+mod landing_repair;
 mod recovery;
 mod settlement;
 mod single_pass;

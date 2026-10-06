@@ -467,6 +467,7 @@ fn phase_label(phase: ExecutionClaimPhase) -> &'static str {
         ExecutionClaimPhase::Claimed => "claimed",
         ExecutionClaimPhase::Running => "running",
         ExecutionClaimPhase::HandedOff => "handed_off",
+        ExecutionClaimPhase::RepairPending => "repair_pending",
         ExecutionClaimPhase::Failed => "failed",
         ExecutionClaimPhase::Revoked => "revoked",
         ExecutionClaimPhase::Landed => "landed",
@@ -480,6 +481,9 @@ fn phase_summary(phase: ExecutionClaimPhase) -> &'static str {
         ExecutionClaimPhase::Running => "executing on its bound run",
         ExecutionClaimPhase::HandedOff => {
             "delivery handed off and awaiting completion authority — this is not a code review"
+        }
+        ExecutionClaimPhase::RepairPending => {
+            "landing stopped on its base; awaiting the one automatic repair"
         }
         ExecutionClaimPhase::Failed => "settled as failed; the task is blocked with its evidence",
         ExecutionClaimPhase::Revoked => "revoked by deliberate recovery",

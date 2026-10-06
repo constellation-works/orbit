@@ -26,6 +26,13 @@ spec:
     tool is `resumed_unjudged`: the run's own validation step decides. Every
     outcome with a candidate is written to the task history as a
     `candidate_resume` event naming the source run and SHA.
+    A claimed leaf (`claimed: true`) instead resumes only the candidate its
+    claim carries in `claim_repair` — the one an owner's landing stopped on
+    a base conflict or stale base — and reads and writes no task state. It
+    is squash-merged the same way and is always `resumed_repaired`: trigger
+    `conflict` with `conflicting_paths`, or `landing` when it applied
+    cleanly. No `claim_repair`, or a candidate that cannot be applied, is
+    `fresh`.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, base_sha, task_ids]
@@ -43,6 +50,13 @@ spec:
           type: string
       prior_job_run_id:
         type: [string, "null"]
+      claimed:
+        type: boolean
+      # The claim's repair, from a claimed leaf's input: `branch`,
+      # `head_sha`, `base_sha`, `repairs_claim_id`, `handoff_id` and
+      # `stop_evidence`.
+      claim_repair:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [phase, outcome, implement]
@@ -60,7 +74,7 @@ spec:
         type: [object, "null"]
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
-          `validation` or `review`) and its `output`, plus `failed_step_id`,
+          `validation`, `review` or `landing`) and its `output`, plus `failed_step_id`,
           `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]

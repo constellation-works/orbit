@@ -13,14 +13,15 @@ use orbit_types::task::{
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use serde::{Deserialize, Serialize};
 
+use super::landing::LandingStop;
 use super::{COORDINATION_LOCK_LABEL, TaskCommitBoundary, TaskCommitIntent};
 use crate::contracts::*;
 use crate::driver::file::task_bundle::truncate_jsonl_file;
 use crate::repository::task::v2::{normalize_v2_artifact_path, review_report_history};
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
-const CLAIM: &str = "distributed-execution-claim-v1";
-const STATE: &str = "distributed-claim-lifecycle-v1";
+pub(super) const CLAIM: &str = "distributed-execution-claim-v1";
+pub(super) const STATE: &str = "distributed-claim-lifecycle-v1";
 const RECEIPT: &str = "distributed-claim-mutation-v1";
 
 pub(super) fn invalid(message: &str) -> OrbitError {
@@ -98,7 +99,7 @@ impl TaskCommitBoundary {
 
     /// Caller holds the boundary and has already settled or excluded a
     /// pending commit.
-    fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+    pub(super) fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
         self.store
             .task_coordination_rows(&self.workspace_id, CLAIM)?
             .iter()
@@ -184,7 +185,9 @@ impl TaskCommitBoundary {
         let state = self.claim_state(claim.clone())?;
         if (matches!(
             claim.phase,
-            ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+            ExecutionClaimPhase::Running
+                | ExecutionClaimPhase::HandedOff
+                | ExecutionClaimPhase::RepairPending
         ) && state.bound_run.is_none())
             || (claim.phase == ExecutionClaimPhase::Claimed && state.bound_run.is_some())
         {
@@ -218,7 +221,10 @@ impl TaskCommitBoundary {
             ExecutionClaimPhase::HandedOff => TaskStatus::Review,
             ExecutionClaimPhase::Failed => TaskStatus::Blocked,
             ExecutionClaimPhase::Landed => TaskStatus::Done,
-            _ => TaskStatus::InProgress,
+            ExecutionClaimPhase::Claimed
+            | ExecutionClaimPhase::Running
+            | ExecutionClaimPhase::Revoked
+            | ExecutionClaimPhase::RepairPending => TaskStatus::InProgress,
         };
         if bundle.envelope.status != expected_status {
             return Err(invalid("stale_claim"));
@@ -584,15 +590,32 @@ impl TaskCommitBoundary {
                 state.claim.phase = ExecutionClaimPhase::Landed;
                 state.last_event = "landing_completed".into();
             }
-            ClaimMutation::StopLanding { handoff_id, reason } => {
-                self.stop_landing_attempt(
+            ClaimMutation::StopLanding {
+                handoff_id,
+                reason,
+                repairable,
+            } => {
+                match self.stop_landing_attempt(
                     auth,
                     &state,
                     handoff_id,
                     reason,
+                    *repairable,
                     &mut params,
                     &mut handoff_effects,
-                )?;
+                )? {
+                    LandingStop::Stopped => {}
+                    LandingStop::Repair => {
+                        state.claim.phase = ExecutionClaimPhase::RepairPending;
+                        state.landing_invalidated = true;
+                    }
+                    LandingStop::Blocked(comment) => {
+                        state.claim.phase = ExecutionClaimPhase::Failed;
+                        state.landing_invalidated = true;
+                        evidence.comment = Some(comment);
+                        release = true;
+                    }
+                }
                 state.last_event = "landing_stopped".into();
             }
             ClaimMutation::MergeIntent {

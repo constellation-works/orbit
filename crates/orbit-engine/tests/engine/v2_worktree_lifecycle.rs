@@ -1109,6 +1109,85 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
     );
 }
 
+/// [ORB-14261] A repair claim's leaf re-applies the candidate the owner's
+/// stopped landing preserved onto its fresh base. The implementer always gets
+/// it: a conflict to resolve against what the base gained, or a clean apply to
+/// confirm on the moved base. Neither reads nor writes the owner's task.
+#[test]
+fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
+    isolated(
+        "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
+        || {
+            let conflicting = PreservedCandidate::new("base.txt", "candidate\n");
+            let base = commit_file(&conflicting.fixture.repo, "base.txt", "v2\n");
+            let history = conflicting.host.history(RESUME_TASK).len();
+            let setup = conflicting.next_setup();
+
+            let resumed = conflicting
+                .resume_claim_repair(&setup)
+                .expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "conflict");
+            assert_eq!(resumed["repair"]["conflicting_paths"], json!(["base.txt"]));
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("conflicts with its base"),
+                "the implementer sees why the landing stopped: {resumed}"
+            );
+            assert_eq!(resumed["source_sha"], conflicting.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            let conflicted = fs::read_to_string(checkout.path.join("base.txt")).unwrap();
+            assert!(
+                conflicted.contains("<<<<<<<")
+                    && conflicted.contains("candidate")
+                    && conflicted.contains("v2"),
+                "the implementer starts from both sides: {conflicted}"
+            );
+            assert_eq!(
+                conflicting.host.history(RESUME_TASK).len(),
+                history,
+                "a claimed leaf records nothing on a task it does not own"
+            );
+
+            let clean = PreservedCandidate::new("feature.txt", "feature\n");
+            commit_file(&clean.fixture.repo, "base.txt", "v2\n");
+            let setup = clean.next_setup();
+            let resumed = clean.resume_claim_repair(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "landing");
+            assert_eq!(
+                git(
+                    &Checkout::from_setup(&setup).path,
+                    &["status", "--porcelain"]
+                ),
+                "?? feature.txt",
+                "the candidate is applied as uncommitted work"
+            );
+
+            let fresh = action(
+                &clean.host,
+                "candidate_resume",
+                &json!({
+                    "job_run_id": NEXT_RUN,
+                    "task_ids": [RESUME_TASK],
+                    "workspace_path": setup["workspace_path"],
+                    "base_sha": setup["base_sha"],
+                    "claimed": true,
+                    "claim_repair": null,
+                }),
+            )
+            .expect("a first attempt carries no repair");
+            assert_eq!(fresh["outcome"], "fresh", "{fresh}");
+            assert_eq!(fresh["repair"], Value::Null);
+        },
+    );
+}
+
 const RESUME_TASK: &str = "T-RESUME";
 const FAILED_RUN: &str = "jrun-failed";
 const NEXT_RUN: &str = "jrun-next";
@@ -1198,6 +1277,28 @@ impl PreservedCandidate {
         .unwrap_or_else(|error| panic!("the next run's setup ({run_id}): {error}"));
         assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
         setup
+    }
+
+    /// A claimed leaf's resume of the repair its claim carries.
+    fn resume_claim_repair(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_resume",
+            &json!({
+                "job_run_id": NEXT_RUN,
+                "task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_sha": setup["base_sha"],
+                "claimed": true,
+                "claim_repair": {
+                    "repairs_claim_id": "claim-1",
+                    "handoff_id": "handoff-1",
+                    "branch": self.branch,
+                    "head_sha": self.candidate,
+                    "stop_evidence": "pull request #42 conflicts with its base",
+                },
+            }),
+        )
     }
 
     fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {

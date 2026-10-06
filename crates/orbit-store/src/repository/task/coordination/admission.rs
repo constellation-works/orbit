@@ -16,13 +16,13 @@ use super::TaskCommitBoundary;
 use crate::contracts::*;
 use crate::repository::task::v2::TaskV2Store;
 
-const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
+pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
 pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
-enum StoredReceipt {
+pub(super) enum StoredReceipt {
     Full {
         receipt: Box<AdmissionReceipt>,
     },
@@ -39,7 +39,7 @@ fn encode<T: Serialize>(value: &T) -> Result<String, OrbitError> {
 fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> {
     serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
 }
-fn digest<T: Serialize>(value: &T) -> Result<String, OrbitError> {
+pub(super) fn digest<T: Serialize>(value: &T) -> Result<String, OrbitError> {
     Ok(sha256_hex(encode(value)?.as_bytes()))
 }
 fn receipt_key(machine: &str, request: &str) -> Result<String, OrbitError> {
@@ -61,6 +61,21 @@ fn canonical_footprint(files: &[String], root: &Path) -> Result<Vec<String>, Orb
         })
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
+}
+/// Why `task`'s `os:` tags exclude the requesting executor, or `None` when
+/// they admit it.
+pub(super) fn os_unavailable(
+    task: &orbit_types::task::Task,
+    request: &AdmissionRequest,
+) -> Option<String> {
+    let wait = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
+        .unsatisfied_reason(request.os)?;
+    Some(format!(
+        "{wait}; the executor runs {}",
+        request
+            .os
+            .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
+    ))
 }
 fn overlaps(left: &[String], right: &[String]) -> bool {
     left.iter()
@@ -292,6 +307,11 @@ impl TaskCommitBoundary {
                 .count(),
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
+        // A stopped landing's repair is nearly finished work for its task, so
+        // it is offered before any backlog candidate [ORB-14261].
+        if self.admit_repair_locked(identity, request, &key, orbit_dir, &tasks, &mut receipt)? {
+            return self.lookup_admission(identity, &request.request_id);
+        }
         for task in tasks
             .iter()
             .filter(|task| task.status == TaskStatus::Backlog)
@@ -324,17 +344,10 @@ impl TaskCommitBoundary {
             // A task whose `os:` tags the executor's OS does not satisfy stays
             // for a host that does, rather than being claimed and failed. The
             // tags are read at each admission, so a retag applies to the next.
-            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-                .unsatisfied_reason(request.os)
-            {
+            if let Some(reason) = os_unavailable(task, request) {
                 receipt.os_unavailable.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
-                    reason: format!(
-                        "{wait}; the executor runs {}",
-                        request
-                            .os
-                            .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
-                    ),
+                    reason,
                 });
                 continue;
             }
@@ -432,6 +445,7 @@ impl TaskCommitBoundary {
                         .expires_at
                         .clone()
                         .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
+                    repair: None,
                 };
                 let mut admitted = receipt.clone();
                 admitted.claim = Some(claim.clone());

@@ -25,6 +25,12 @@
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
+# ORB-14261: a repair claim — admitted after the owner's landing of an earlier
+# handoff stopped on a base conflict or stale base — runs this same leaf with
+# `claim_repair` set. `resume_candidate` re-applies that handoff's candidate
+# onto the current base before the implementer, so the attempt rebases and
+# revalidates the preserved work instead of starting over.
+#
 schemaVersion: 2
 kind: Job
 metadata:
@@ -51,6 +57,9 @@ spec:
     base_sync: remote
     landing_branch: ""
     allowed_crews: []
+    # The repair a claim carries when it re-runs a handoff whose landing
+    # stopped on its base [ORB-14261]; null for a first attempt.
+    claim_repair: null
     title: null
     body: null
 
@@ -66,6 +75,22 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+
+    # ORB-14261: a repair claim carries the candidate its stopped landing
+    # preserved. It is squash-applied onto this base and handed to the
+    # implementer as a `conflict` or `landing` repair; the leaf then commits,
+    # rebases, revalidates and hands off again under the same task. Without a
+    # repair the outcome is `fresh`. The implementer always runs: every later
+    # step reads its output, and its summary is what the handoff carries.
+    - id: resume_candidate
+      target: activity:candidate_resume
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        claimed: true
+        claim_repair: "{{ input.claim_repair }}"
 
     - id: implement_bundle
       loop:
@@ -83,6 +108,7 @@ spec:
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
               claimed: true
+              resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
       recovery_activity: step_failure_recovery

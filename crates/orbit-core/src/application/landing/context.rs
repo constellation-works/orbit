@@ -85,11 +85,12 @@ impl OrbitRuntime {
                     evidence: update.evidence.clone(),
                 },
             ),
-            HandoffLandingStep::Stop => (
+            HandoffLandingStep::Stop { repairable } => (
                 format!("landing-stop:{}:{attempt}", update.handoff_id),
                 ClaimMutation::StopLanding {
                     handoff_id: update.handoff_id.clone(),
                     reason: update.evidence.clone(),
+                    repairable: *repairable,
                 },
             ),
         };

@@ -15,8 +15,8 @@ use super::queries::{
 };
 use crate::Store;
 use crate::contracts::{
-    AdmissionRequest, ClaimMutation, DrainLeafOccupancy, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase, PullDestination,
+    AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
+    LocalPullMutation, LocalPullPhase, PullDestination,
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
@@ -476,6 +476,23 @@ fn claim_review_admission(
 /// Provenance label of a review admission seeded from a claim.
 const CLAIM_SOURCE: &str = "claim";
 
+/// The claimed leaf input naming the candidate a repair claim restores.
+const CLAIM_REPAIR_KEY: &str = "claim_repair";
+
+/// What a repair claim's leaf needs to restore its preserved candidate: the
+/// published branch and head, the base it was validated on, and why its
+/// landing stopped.
+fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
+    serde_json::json!({
+        "repairs_claim_id": repair.repairs_claim_id,
+        "handoff_id": repair.handoff_id,
+        "branch": repair.candidate.source_branch,
+        "head_sha": repair.candidate.candidate.commit,
+        "base_sha": repair.candidate.base.commit,
+        "stop_evidence": repair.stop_evidence,
+    })
+}
+
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
 pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
@@ -625,6 +642,11 @@ pub(super) fn mutate(
                 // never this host's settings [ORB-13908].
                 if let (Some(review), Some(object)) = (claim_review_admission(&record.request, now), input.as_object_mut()) {
                     object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(db_error)?);
+                }
+                // A repair claim's leaf restores the candidate its stopped
+                // landing preserved rather than implementing afresh [ORB-14261].
+                if let (Some(repair), Some(object)) = (&claim.repair, input.as_object_mut()) {
+                    object.insert(CLAIM_REPAIR_KEY.into(), claim_repair_input(repair));
                 }
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);

@@ -332,8 +332,11 @@ pub enum HandoffLandingStep {
     ResolveIntent { intent_id: String, merged: bool },
     /// Verified merge evidence permits the guarded `review -> done` transition.
     Complete,
-    /// Durable evidence for a landing that must not proceed.
-    Stop,
+    /// Durable evidence for a landing that must not proceed. `repairable`
+    /// marks a candidate that conflicts with, or is stale against, the base
+    /// it lands on: the owner hands it to one automatic repair rather than
+    /// leaving it in review [ORB-14261].
+    Stop { repairable: bool },
 }
 
 /// A landing transition with the owner observation that justifies it.

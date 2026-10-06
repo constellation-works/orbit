@@ -26,6 +26,15 @@
 //!
 //! Whenever a candidate was found, the outcome, source run and SHA are also
 //! written to the task's history.
+//!
+//! A claimed leaf (`claimed: true`) resumes only what its claim carries
+//! [ORB-14261]: the candidate an owner's stopped landing preserved, named in
+//! `claim_repair`. It is squash-merged onto the leaf's base the same way, and
+//! the implementer always runs — on a `conflict` to resolve, or on a
+//! `landing` repair that applied cleanly onto the moved base — because its
+//! summary is what the new handoff carries. The owner task is not this host's,
+//! so nothing is read from or written to task state; the owner recorded the
+//! repair when it admitted the claim.
 
 use std::path::Path;
 
@@ -129,6 +138,9 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         "workspace_path",
     )?;
     let base_sha = required_input_string(input, "base_sha")?.to_string();
+    if input.get("claimed").and_then(Value::as_bool) == Some(true) {
+        return resume_claim_repair(&workspace_path, &base_sha, input.get("claim_repair"));
+    }
     let task_ids = input
         .get("task_ids")
         .and_then(Value::as_array)
@@ -226,15 +238,86 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn resume<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task: &Task,
+/// Resume the candidate a repair claim carries, or implement fresh when the
+/// claim carries none.
+fn resume_claim_repair(
+    workspace_path: &Path,
+    base_sha: &str,
+    repair: Option<&Value>,
+) -> Result<Value, OrbitError> {
+    let Some(repair) = repair.filter(|repair| repair.is_object()) else {
+        return Ok(output(
+            &Outcome::Fresh("the claim carries no repair".to_string()),
+            None,
+            base_sha,
+        ));
+    };
+    let (Some(branch), Some(head_sha)) = (
+        input_string_field(repair, "branch"),
+        input_string_field(repair, "head_sha"),
+    ) else {
+        return Err(OrbitError::InvalidInput(
+            "candidate_resume: claim_repair requires the candidate's branch and head_sha"
+                .to_string(),
+        ));
+    };
+    let stopped = input_string_field(repair, "stop_evidence")
+        .unwrap_or_else(|| "the owner's landing stopped on its base".to_string());
+    let candidate = Candidate {
+        run_id: input_string_field(repair, "repairs_claim_id").unwrap_or_default(),
+        branch,
+        head_sha,
+        failed_step_id: "landing".to_string(),
+    };
+    let outcome = match apply(&candidate, workspace_path, base_sha)? {
+        Applied::Refused(reason) => Outcome::Fresh(reason),
+        Applied::Conflict { paths, output } => Outcome::Repair(json!({
+            "trigger": "conflict",
+            "conflicting_paths": paths,
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\n{output}"
+            )),
+        })),
+        Applied::Clean => Outcome::Repair(json!({
+            "trigger": "landing",
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\nIt applied cleanly \
+                 onto the current base {base_sha}; confirm it still meets the acceptance \
+                 criteria there."
+            )),
+        })),
+    };
+    tracing::info!(
+        head_sha = %candidate.head_sha,
+        branch = %candidate.branch,
+        outcome = outcome_name(&outcome),
+        "candidate resume for a repair claim"
+    );
+    let mut resumed = output(&outcome, None, base_sha);
+    resumed["source_branch"] = json!(candidate.branch);
+    resumed["source_sha"] = json!(candidate.head_sha);
+    Ok(resumed)
+}
+
+/// What squash-merging a candidate onto a clean base checkout left behind.
+enum Applied {
+    /// Nothing usable was applied, and why; the checkout is the clean base.
+    Refused(String),
+    /// Uncommitted changes with conflict markers in `paths`.
+    Conflict { paths: Vec<String>, output: String },
+    /// Uncommitted changes that applied without conflict.
+    Clean,
+}
+
+/// Squash-merge `candidate` onto the clean checkout of `base_sha`, leaving the
+/// result as plain uncommitted edits — conflict markers included.
+fn apply(
     candidate: &Candidate,
     workspace_path: &Path,
     base_sha: &str,
-) -> Result<Outcome, OrbitError> {
+) -> Result<Applied, OrbitError> {
     if !candidate_available(workspace_path, candidate)? {
-        return Ok(Outcome::Fresh(format!(
+        return Ok(Applied::Refused(format!(
             "candidate {} (branch '{}') is not available in this repository",
             candidate.head_sha, candidate.branch
         )));
@@ -279,24 +362,44 @@ fn resume<H: RuntimeHost + ?Sized>(
         // Refused before touching the checkout; put back exactly what was
         // verified clean above.
         git_success(workspace_path, &["reset", "--quiet", "--hard", base_sha])?;
-        return Ok(Outcome::Fresh(format!(
+        return Ok(Applied::Refused(format!(
             "candidate {} could not be merged onto base {base_sha}: {}",
             candidate.head_sha,
             merge.stderr.trim()
         )));
     }
     if !conflicting_paths.is_empty() {
-        return Ok(Outcome::Repair(json!({
-            "trigger": "conflict",
-            "conflicting_paths": conflicting_paths,
-            "output": tail(&format!("{}\n{}", merge.stdout.trim(), merge.stderr.trim())),
-        })));
+        return Ok(Applied::Conflict {
+            paths: conflicting_paths,
+            output: format!("{}\n{}", merge.stdout.trim(), merge.stderr.trim()),
+        });
     }
     if !applied {
-        return Ok(Outcome::Fresh(format!(
+        return Ok(Applied::Refused(format!(
             "candidate {}'s changes are already on base {base_sha}",
             candidate.head_sha
         )));
+    }
+    Ok(Applied::Clean)
+}
+
+fn resume<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    candidate: &Candidate,
+    workspace_path: &Path,
+    base_sha: &str,
+) -> Result<Outcome, OrbitError> {
+    match apply(candidate, workspace_path, base_sha)? {
+        Applied::Refused(reason) => return Ok(Outcome::Fresh(reason)),
+        Applied::Conflict { paths, output } => {
+            return Ok(Outcome::Repair(json!({
+                "trigger": "conflict",
+                "conflicting_paths": paths,
+                "output": tail(&output),
+            })));
+        }
+        Applied::Clean => {}
     }
     // A clean apply of work that never reached `commit` is not an
     // implementation. Owner validation, including an empty command list,

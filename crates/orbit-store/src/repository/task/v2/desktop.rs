@@ -20,13 +20,22 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
 /// Why an active claim refuses desktop writes, and the supported way out: a
 /// claim-scoped mutation, never a status change.
 fn active_claim_reason(phase: crate::contracts::ExecutionClaimPhase) -> &'static str {
-    if phase == crate::contracts::ExecutionClaimPhase::HandedOff {
-        "active execution claim requires a claim-scoped mutation: its handoff awaits the \
-         owner's completion authority; land it through that authority, or revoke the handoff \
-         and recover the claim from the owner's operator console"
-    } else {
-        "active execution claim requires a claim-scoped mutation: its run is still executing; \
-         wait for it to settle, or recover the claim from the owner's operator console"
+    match phase {
+        crate::contracts::ExecutionClaimPhase::HandedOff => {
+            "active execution claim requires a claim-scoped mutation: its handoff awaits the \
+             owner's completion authority; land it through that authority, or revoke the \
+             handoff and recover the claim from the owner's operator console"
+        }
+        crate::contracts::ExecutionClaimPhase::RepairPending => {
+            "active execution claim requires a claim-scoped mutation: its landing stopped on \
+             its base and an automatic repair is pending; let the repair re-hand it off, or \
+             recover the claim from the owner's operator console"
+        }
+        _ => {
+            "active execution claim requires a claim-scoped mutation: its run is still \
+             executing; wait for it to settle, or recover the claim from the owner's operator \
+             console"
+        }
     }
 }
 

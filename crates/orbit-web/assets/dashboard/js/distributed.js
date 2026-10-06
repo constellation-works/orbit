@@ -152,6 +152,7 @@ const PHASE_LABELS = {
   claimed: "claimed",
   running: "running",
   handed_off: "handed off",
+  repair_pending: "repair pending",
   failed: "failed",
   revoked: "revoked",
   landed: "landed",
@@ -171,6 +172,7 @@ const EVENT_LABELS = {
   landing_completed: "landing completed",
   landing_dispatched: "landing dispatched",
   landing_stopped: "landing stopped",
+  repair_admitted: "repair admitted",
 };
 const AUTHORITY_LABELS = {
   not_authorized: "awaiting approval",

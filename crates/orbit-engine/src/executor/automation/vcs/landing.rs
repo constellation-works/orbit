@@ -21,7 +21,9 @@
 //!    unsatisfied branch protection or a check budget that runs out stops the
 //!    attempt with durable evidence. Repairing the candidate needs fresh
 //!    validation and a new handoff; this activity never rebases, force-pushes
-//!    or merges around a gate.
+//!    or merges around a gate. A stop on a conflicting or stale base is
+//!    recorded as repairable, and the owner store hands that candidate to one
+//!    automatic repair leaf that does exactly that [ORB-14261].
 //!
 //! The guarded `review -> done` transition is the owner store's, behind its own
 //! recheck of the current authorization and the digest-pinned validation
@@ -336,17 +338,20 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Blocked(reason) => {
-                return Err(stop(
-                    host,
-                    context,
-                    &format!(
-                        "pull request #{pr_number} cannot be merged ({reason}); branch \
-                         protection and required checks are not bypassed"
-                    ),
-                )?);
+                let reason = format!(
+                    "pull request #{pr_number} cannot be merged ({reason}); branch \
+                     protection and required checks are not bypassed"
+                );
+                // A branch that is only behind its base is stale, not refused:
+                // the repair brings it up to date and revalidates it.
+                return Err(if behind_base(&status) {
+                    stop_for_repair(host, context, &reason)?
+                } else {
+                    stop(host, context, &reason)?
+                });
             }
             PrMergeState::Conflict => {
-                return Err(stop(
+                return Err(stop_for_repair(
                     host,
                     context,
                     &format!(
@@ -532,7 +537,7 @@ fn land_local_candidate<H: RuntimeHost + ?Sized>(
         &evidence,
     )?;
     if !merged {
-        return Err(stop(
+        return Err(stop_for_repair(
             host,
             context,
             &format!(
@@ -783,14 +788,42 @@ fn stop<H: RuntimeHost + ?Sized>(
     context: &HandoffLandingContext,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
+    record_stop(host, context, reason, false)
+}
+
+/// [`stop`] for a candidate that conflicts with, or is stale against, the base
+/// it lands on. The owner store hands it to one automatic repair.
+fn stop_for_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    record_stop(host, context, reason, true)
+}
+
+fn record_stop<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    reason: &str,
+    repairable: bool,
+) -> Result<OrbitError, OrbitError> {
     record(
         host,
         context,
-        HandoffLandingStep::Stop,
+        HandoffLandingStep::Stop { repairable },
         None,
         &Value::String(reason.to_string()),
     )?;
     Ok(OrbitError::Execution(format!("handoff_land: {reason}")))
+}
+
+/// Whether the provider reports the pull request's branch as behind its base,
+/// which branch protection refuses until the branch is brought up to date.
+fn behind_base(status: &Value) -> bool {
+    status
+        .get("mergeStateStatus")
+        .and_then(Value::as_str)
+        .is_some_and(|state| state.eq_ignore_ascii_case("BEHIND"))
 }
 
 fn describe(state: &PrMergeState) -> String {
