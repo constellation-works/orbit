@@ -16,7 +16,9 @@ spec:
     pull requests, each persisted before it is sent. An owner refusal is
     reconciled against the owner's receipt before the request is closed. An
     unreachable or refusing owner is reported in `error` or `refusal`.
-    Three consecutive failed passes latch `degraded`, stop new admissions
+    Type-derived protocol skew immediately records a degraded pass and fails the
+    drain with `protocol_skew`; its durable settlement outbox is preserved.
+    Other failures: three consecutive failed passes latch `degraded`, stop new admissions
     and preserve `last_pass_error` and `consecutive_pass_failures` on the
     drain's last pass. Settlement retries continue; fix the cause and start
     a new drain. An unreadable or unwritable pass record fails visibly. `unsettled` counts admissions still

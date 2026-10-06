@@ -4,7 +4,8 @@
 //! settle — and, while the window is open and the owner would admit this
 //! executor, tops the free slots up with new pull requests. Three consecutive
 //! failed passes latch a durable degraded warning and stop new admissions.
-//! Settlement retries keep flowing. If run state cannot be read or recorded,
+//! Protocol skew fails immediately with its typed code and preserves the
+//! durable settlement outbox. Other settlement retries keep flowing. If run state cannot be read or recorded,
 //! the activity fails visibly rather than retrying without health evidence.
 //!
 //! Each request declares the crews this window can run [ORB-13941]: the
@@ -149,6 +150,22 @@ pub(crate) fn pull_refill(
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
         .is_some_and(|pass| pass.degraded);
+    if let Some(pass) = state
+        .as_ref()
+        .and_then(|state| state.drain_last_pass.as_ref())
+        && pass.degraded
+        && (pass.last_pass_error_code.as_deref() == Some("protocol_skew")
+            || pass
+                .last_pass_error
+                .as_deref()
+                .is_some_and(|message| message.starts_with("protocol_mismatch:")))
+    {
+        return Err(DispatchError::ProtocolSkew(
+            pass.last_pass_error
+                .clone()
+                .unwrap_or_else(|| "pull request schema mismatch".into()),
+        ));
+    }
     // A launched leaf whose worker died is reconciled first, so this pass
     // records and delivers its failure rather than waiting on it. Cancellation
     // is read again afterwards: an operator can record it while reconciliation
@@ -231,6 +248,10 @@ pub(crate) fn pull_refill(
                         request_id: String::new(),
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                        caller_fingerprint: Some(
+                            orbit_store::contracts::distributed_drain_protocol_fingerprint()
+                                .to_string(),
+                        ),
                         caller_before_pr,
                         // The claimed PR leaf runs the before-PR gate the
                         // ship contract captures [ORB-13908].
@@ -257,22 +278,33 @@ pub(crate) fn pull_refill(
                 refilled = true;
                 admitted = pass.admitted;
                 if let Some(failure) = pass.error {
+                    if let OrbitError::ProtocolSkew(message) = failure {
+                        return Err(protocol_skew_failure(
+                            runtime,
+                            action,
+                            &run_id,
+                            resource.throttle.clone(),
+                            message,
+                        ));
+                    }
                     error = Some(failure.to_string());
                 }
             }
             Ok(verdict) => {
-                if verdict
-                    .refusal
-                    .as_deref()
-                    .is_some_and(|message| message.starts_with("protocol_mismatch:"))
-                {
-                    error = verdict.refusal.clone();
-                }
                 refusal = Some(
                     verdict
                         .refusal
                         .unwrap_or_else(|| "owner probe returned no ship contract".into()),
                 );
+            }
+            Err(OrbitError::ProtocolSkew(message)) => {
+                return Err(protocol_skew_failure(
+                    runtime,
+                    action,
+                    &run_id,
+                    resource.throttle.clone(),
+                    message,
+                ));
             }
             Err(failure) => error = Some(failure.to_string()),
         }
@@ -379,7 +411,7 @@ pub(crate) fn pull_refill(
         })
         .or_else(|| runs_nothing.then(|| no_runnable_crew.to_string()));
     let health = runtime
-        .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref())
+        .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref(), None)
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
     admitting &= !health.degraded;
     let refusal =
@@ -411,6 +443,29 @@ pub(crate) fn pull_refill(
         "wait": !done && sleep_seconds > 0,
         "sleep_seconds": sleep_seconds,
     }))
+}
+
+/// Preserve the cause before the engine terminalizes the drain. Its outbox
+/// remains available to leaf workers and later settlement-only passes.
+fn protocol_skew_failure(
+    runtime: &OrbitRuntime,
+    action: &str,
+    run_id: &str,
+    throttle: Option<orbit_types::workflow::ResourceThrottle>,
+    message: String,
+) -> DispatchError {
+    match runtime.record_pull_pass(
+        run_id,
+        throttle,
+        Some(&format!("protocol_skew: {message}")),
+        Some("protocol_skew"),
+    ) {
+        Ok(_) => DispatchError::ProtocolSkew(message),
+        Err(error) => DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("pull drain could not record pass health: {error}"),
+        },
+    }
 }
 
 /// The settlements for `destination` its owner refused while still holding
@@ -494,7 +549,7 @@ fn cancelling_pass(
             "cancelling pull drain pass did not complete; retrying next iteration",
         );
     }
-    let health = runtime.record_pull_pass(run_id, None, error.as_deref())?;
+    let health = runtime.record_pull_pass(run_id, None, error.as_deref(), None)?;
     Ok(json!({
         "admitted": 0,
         "unsettled": unsettled,
@@ -612,14 +667,10 @@ fn probe(
     transport: &std::sync::Arc<dyn orbit_tools::DrainOwnerTransport>,
     destination: &PullDestination,
 ) -> Result<ProbeVerdict, OrbitError> {
-    let report = transport.call(
+    let report = crate::application::distributed::probe_pull_contract(
+        transport.as_ref(),
         &destination.selector,
-        "orbit.drain.probe",
-        json!({
-            "caller_version": owner_binary_version(),
-            "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            "caller_before_pr": captured_before_pr(runtime, run_id)?,
-        }),
+        captured_before_pr(runtime, run_id)?,
     )?;
     if report.get("owner_machine_id").and_then(Value::as_str)
         != Some(destination.owner_machine_id.as_str())
@@ -631,12 +682,6 @@ fn probe(
                 report.get("owner_machine_id"),
                 destination.owner_machine_id
             )),
-        });
-    }
-    if let Some(refusal) = crate::application::distributed::protocol_mismatch(&report) {
-        return Ok(ProbeVerdict {
-            ship: None,
-            refusal: Some(refusal),
         });
     }
     let admits = report.get("admits").and_then(Value::as_bool) == Some(true);

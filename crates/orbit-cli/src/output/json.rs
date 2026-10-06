@@ -90,6 +90,7 @@ fn error_code(error: &OrbitError) -> &str {
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
+        OrbitError::ProtocolSkew(_) => "protocol_skew",
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",

@@ -544,6 +544,13 @@ pub fn admission_refusal(
     request: &AdmissionRequest,
     owner_version: &str,
 ) -> Option<AdmissionRefusal> {
+    if request
+        .caller_fingerprint
+        .as_deref()
+        .is_some_and(|caller| caller != crate::contracts::distributed_drain_protocol_fingerprint())
+    {
+        return Some(AdmissionRefusal::ProtocolSkew);
+    }
     if [
         &identity.location().machine_id,
         &request.request_id,
@@ -599,8 +606,16 @@ fn validate_request(
     version: &str,
 ) -> Result<(), OrbitError> {
     match admission_refusal(identity, request, version) {
-        Some(AdmissionRefusal::ProtocolMismatch) => Err(OrbitError::InvalidInput(format!(
-            "protocol_mismatch: caller revision {}; owner revision {}",
+        Some(AdmissionRefusal::ProtocolSkew) => Err(OrbitError::ProtocolSkew(format!(
+            "caller fingerprint {}; owner fingerprint {}",
+            request
+                .caller_fingerprint
+                .as_deref()
+                .unwrap_or("unavailable"),
+            crate::contracts::distributed_drain_protocol_fingerprint(),
+        ))),
+        Some(AdmissionRefusal::ProtocolMismatch) => Err(OrbitError::ProtocolSkew(format!(
+            "caller revision {}; owner revision {}",
             request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
         ))),
         Some(refusal) => Err(OrbitError::InvalidInput(refusal.as_str().into())),

@@ -346,7 +346,12 @@ impl OrbitRuntime {
 
         let outcome_res: Result<JobOutcome, OrbitError> =
             execute_job_with_resume(&asset.spec, input, &run_id, writer.clone(), self, resume)
-                .map_err(|err| OrbitError::Execution(format!("v2 job dispatch: {err}")));
+                .map_err(|err| match err {
+                    orbit_engine::DispatchError::ProtocolSkew(message) => {
+                        OrbitError::ProtocolSkew(message)
+                    }
+                    other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
+                });
 
         let (outcome_str, error_message) = match &outcome_res {
             Ok(o) if o.success => ("success", None),
@@ -474,11 +479,13 @@ impl OrbitRuntime {
                 log_best_effort(
                     "record failure step",
                     &run.run_id,
-                    self.record_pipeline_failure_step(
+                    self.record_pipeline_diagnostic_step(
                         run,
                         started_at,
                         finished_at,
+                        matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
                         &error.to_string(),
+                        JobRunState::Failed,
                     ),
                 );
                 JobRunState::Failed

@@ -529,6 +529,14 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     })
     .collect::<Vec<_>>();
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
+    // Keep pass health visible after terminalization, independently of the
+    // live waiting-state fields the shared run projection omits then.
+    full["drain_last_pass"] = serde_json::to_value(
+        state
+            .as_ref()
+            .and_then(|state| state.drain_last_pass.as_ref()),
+    )
+    .unwrap_or(Value::Null);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
     let stored_steps = full

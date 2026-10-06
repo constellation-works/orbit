@@ -79,7 +79,7 @@ impl ReviewTiming {
 ///
 /// Budgets captured before [ORB-13992] also carry a `reviewer_starts` limit,
 /// and those before [ORB-13989] a `repair_cycles` limit; reading ignores both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReviewBudget {
     /// Reviewer runtime one candidate's review may spend.
     pub minutes: u32,

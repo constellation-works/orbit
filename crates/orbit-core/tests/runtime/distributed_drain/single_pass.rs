@@ -195,8 +195,8 @@ fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
     assert_eq!(pull_request_ids(&pair).len(), 2);
     assert_eq!(
         pair.wire.calls("orbit.drain.probe").len(),
-        2,
-        "submission and the one pass"
+        4,
+        "submission and the one pass each negotiate the fingerprint"
     );
     assert!(single_pass_taken(&pair, &drain));
     for claim in pair.owner_claims() {

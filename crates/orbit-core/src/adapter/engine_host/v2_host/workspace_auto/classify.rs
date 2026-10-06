@@ -217,6 +217,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             excluded: waiting_excluded(&snapshot.excluded),
             excluded_total: snapshot.excluded.len() as u64,
             resource_throttle: resource.throttle.clone(),
+            last_pass_error_code: None,
             last_pass_error: None,
             consecutive_pass_failures: 0,
             degraded: false,

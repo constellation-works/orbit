@@ -353,7 +353,9 @@ const FAILED_STEP_STATES = new Set(["error", "failed", "timeout", "interrupted"]
 function buildRunFailure(run, steps) {
   if (!FAILED_RUN_STATES.has(run.state)) return null;
   const step = steps.find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
-  const message = run.error_message || (step && step.error_message) || "";
+  const pass = run.drain_last_pass || {};
+  const code = run.error_code || (step && step.error_code) || pass.last_pass_error_code;
+  const message = run.error_message || (step && step.error_message) || pass.last_pass_error || "";
   const where = step
     ? `at step ${step.step_index} of ${steps.length} · ${step.target_id || step.target_type || "step"}`
     : "";
@@ -361,11 +363,12 @@ function buildRunFailure(run, steps) {
   const head = el("div", { class: "run-failure-head" }, [
     el("strong", { text: verb }),
     where ? el("span", { class: "run-failure-where", text: ` ${where}` }) : null,
-    run.error_code ? el("span", { class: "run-failure-code mono", text: run.error_code }) : null,
+    code ? el("span", { class: "run-failure-code mono", text: code }) : null,
   ]);
   const box = el("section", { class: "run-failure" }, [head]);
   box.setAttribute("aria-label", "Why this run failed");
   if (message) box.appendChild(el("pre", { class: "run-failure-message mono", text: message }));
+  if (code === "protocol_skew") box.appendChild(el("p", { text: "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain." }));
   return box;
 }
 

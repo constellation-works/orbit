@@ -697,9 +697,14 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
     match error {
         OrbitError::RemoteTool { code, .. } => matches!(
             code.as_str(),
-            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
+            "invalid_input"
+                | "capability_refused"
+                | "capability_denied"
+                | "policy_denied"
+                | "protocol_skew"
         ),
         OrbitError::InvalidInput(_)
+        | OrbitError::ProtocolSkew(_)
         | OrbitError::CapabilityRefused(_)
         | OrbitError::CapabilityDenied(_)
         | OrbitError::PolicyDenied(_) => true,

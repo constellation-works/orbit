@@ -65,6 +65,50 @@ pub(super) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
     )
 }
 
+/// The latest pull window remains actionable after it ends on wire skew.
+/// A newer healthy window supersedes that diagnosis, avoiding stale warnings.
+pub(super) fn doctor_check_pull_protocol(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "pull-protocol";
+    let inspect = || -> Result<Option<String>, OrbitError> {
+        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
+            job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
+        let Some(run) = runs.first() else {
+            return Ok(None);
+        };
+        let state = runtime.read_run_state(&run.run_id)?;
+        let pass = state
+            .as_ref()
+            .and_then(|state| state.drain_last_pass.as_ref());
+        let failure = run
+            .steps
+            .iter()
+            .find(|step| step.error_code.as_deref() == Some("protocol_skew"));
+        if failure.is_some()
+            || pass
+                .is_some_and(|pass| pass.last_pass_error_code.as_deref() == Some("protocol_skew"))
+        {
+            let detail = failure
+                .and_then(|step| step.error_message.as_deref())
+                .or_else(|| pass.and_then(|pass| pass.last_pass_error.as_deref()))
+                .unwrap_or("pull request schema mismatch");
+            return Ok(Some(format!(
+                "{} ended {} with protocol_skew: {detail}",
+                run.run_id, run.state
+            )));
+        }
+        Ok(None)
+    };
+    match inspect() {
+        Ok(Some(message)) => actionable_check(CHECK, WorkspaceDoctorStatus::Warning, message,
+            "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain.".to_string()),
+        Ok(None) => check(CHECK, WorkspaceDoctorStatus::Ok, "no protocol skew recorded on the latest pull drain".to_string()),
+        Err(error) => check(CHECK, WorkspaceDoctorStatus::Warning, format!("cannot inspect pull protocol: {error}")),
+    }
+}
+
 /// Follower pull settlements recorded locally but never delivered to the
 /// owner. Nothing retries delivery on a timer, so the owner keeps the claim
 /// `running` until an operator runs a settle-only pass; this row is what makes

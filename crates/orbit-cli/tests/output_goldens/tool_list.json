@@ -494,6 +494,12 @@
         "required": false
       },
       {
+        "name": "caller_fingerprint",
+        "description": "Optional. Type-derived pull request schema fingerprint. Discover the owner's protocol_fingerprint before declaring this field; a mismatch raises protocol_skew before any pull.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "caller_before_pr",
         "description": "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
@@ -1210,6 +1216,12 @@
         "description": "The `review.before_pr` the executor's drain captured at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": true
+      },
+      {
+        "name": "caller_fingerprint",
+        "description": "Type-derived pull request fingerprint negotiated with orbit.drain.probe. A mismatch is refused as protocol_skew before deserialization; optional for historical requests.",
+        "param_type": "string",
+        "required": false
       },
       {
         "name": "review_gate",

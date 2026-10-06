@@ -31,11 +31,11 @@
 //! that pass sends a request ([`PullSinglePass`]).
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination};
+use orbit_store::contracts::PullDestination;
 use orbit_types::workflow::{DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle};
 use serde_json::{Value, json};
 
-use super::{ensure_distributed_mutation_available, owner_binary_version};
+use super::{ensure_distributed_mutation_available, probe_pull_contract};
 use crate::application::job::PipelineInvokeResult;
 
 /// The job a follower drain runs.
@@ -66,6 +66,7 @@ impl crate::OrbitRuntime {
         run_id: &str,
         resource_throttle: Option<ResourceThrottle>,
         error: Option<&str>,
+        error_code: Option<&str>,
     ) -> Result<DrainAdmissionPass, OrbitError> {
         let mut recorded = None;
         self.stores()
@@ -82,6 +83,11 @@ impl crate::OrbitRuntime {
                     0
                 };
                 let pass = DrainAdmissionPass {
+                    last_pass_error_code: error_code.map(ToOwned::to_owned).or_else(|| {
+                        was_degraded
+                            .then(|| previous.and_then(|pass| pass.last_pass_error_code.clone()))
+                            .flatten()
+                    }),
                     recorded_at: chrono::Utc::now(),
                     queued: 0,
                     deferred: Vec::new(),
@@ -94,7 +100,9 @@ impl crate::OrbitRuntime {
                             .flatten()
                     }),
                     consecutive_pass_failures,
-                    degraded: was_degraded || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
+                    degraded: was_degraded
+                        || error_code == Some("protocol_skew")
+                        || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
                 };
                 state.drain_last_pass = Some(pass.clone());
                 recorded = Some(pass);
@@ -226,34 +234,26 @@ impl crate::OrbitRuntime {
                     .into(),
             )
         })?;
-        let report = transport
-            .call(
-                selector,
-                "orbit.drain.probe",
-                json!({
-                    "caller_version": owner_binary_version(),
-                    "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                    "caller_before_pr": self.local_review_before_pr(),
-                }),
-            )
-            .map_err(|error| match error {
-                // The selector parsed and names this replica's own owner, so
-                // the only thing missing is a route to that machine.
-                OrbitError::UnknownSelector(token) => OrbitError::UnknownSelector(format!(
-                    "{token}: this host has no destination for owner machine '{owner_machine}'; \
+        let report = probe_pull_contract(
+            transport.as_ref(),
+            selector,
+            self.local_review_before_pr(),
+        )
+        .map_err(|error| match error {
+            // The selector parsed and names this replica's own owner, so
+            // the only thing missing is a route to that machine.
+            OrbitError::UnknownSelector(token) => OrbitError::UnknownSelector(format!(
+                "{token}: this host has no destination for owner machine '{owner_machine}'; \
                      add it to ~/.orbit/mcp-destinations.toml and check the selector against \
                      federated orbit.workspace.list"
-                )),
-                other => other,
-            })?;
+            )),
+            other => other,
+        })?;
         let answered_as = report.get("owner_machine_id").and_then(Value::as_str);
         if answered_as != Some(owner_machine) {
             return Err(OrbitError::InvalidInput(format!(
                 "the owner answered as {answered_as:?}, not this replica's owner '{owner_machine}'"
             )));
-        }
-        if let Some(refusal) = super::protocol_mismatch(&report) {
-            return Err(OrbitError::CapabilityRefused(refusal));
         }
         if report.get("admits").and_then(Value::as_bool) != Some(true) {
             let diagnostics = report

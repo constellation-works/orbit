@@ -107,6 +107,7 @@ fn admission(
         request_id: format!("request-{}", owner.receipts.lock().unwrap().len()),
         caller_version: "fixture".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
         run_context: AdmissionRunContext {

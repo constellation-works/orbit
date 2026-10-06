@@ -116,7 +116,7 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
         ),
         "an empty requirement list must not refuse a pull drain: {submitted}"
     );
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
 }
 
 /// An unreadable persisted cancel request fails the whole pass visibly; it
@@ -196,14 +196,24 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     let pair = Pair::new(1);
     *pair.wire.protocol.lock().unwrap() = Some(1);
     let drain = pair.start_drain();
-    let pass = pair.pass(&drain);
-    let refusal = pass["refusal"].as_str().unwrap();
-    assert!(refusal.starts_with("protocol_mismatch:"), "{pass}");
+    let failure = pair
+        .follower
+        .run_deterministic(
+            "pull_refill",
+            &json!({}),
+            &json!({"run_id": drain, "destination": pair.destination, "window_expired": false}),
+            ToolContext::default(),
+        )
+        .unwrap_err();
     assert!(
-        refusal.contains(&format!(
+        matches!(&failure, orbit_engine::DispatchError::ProtocolSkew(_)),
+        "{failure}"
+    );
+    assert!(
+        failure.to_string().contains(&format!(
             "caller revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}; owner revision 1"
         )),
-        "{pass}"
+        "{failure}"
     );
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
     assert!(pair.owner_claims().is_empty());
@@ -232,11 +242,179 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     let failure = pair.wire.call("", "orbit.task.pull", request).unwrap_err();
     assert!(
         failure.to_string().contains(&format!(
-            "protocol_mismatch: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
+            "protocol_skew: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
         )),
         "{failure}"
     );
     assert!(pair.owner_claims().is_empty());
+}
+
+/// The incident's same-version builds must differ as soon as an admission
+/// field changes, including a nested field. This checks the live probe against
+/// the generated request shape instead of pinning a manually bumped hash.
+#[test]
+fn probe_fingerprint_tracks_request_types_and_refuses_changed_shapes() {
+    if !isolated(
+        module_path!(),
+        "probe_fingerprint_tracks_request_types_and_refuses_changed_shapes",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let schema = orbit_store::contracts::admission_request_schema();
+    let fingerprint = sha256_hex(schema.to_string().as_bytes());
+    assert_eq!(
+        probe["protocol_fingerprint"], fingerprint,
+        "the failed-pull incident requires the live fingerprint to change with the derived request types"
+    );
+    for (section, name, field) in [
+        ("properties", "future_field", json!({"type": "string"})),
+        (
+            "definitions",
+            "AdmissionRunContext",
+            json!({"type": "object", "properties": {"future_field": {"type": "boolean"}}}),
+        ),
+    ] {
+        let mut changed = schema.clone();
+        changed[section][name] = field;
+        let changed_fingerprint = sha256_hex(changed.to_string().as_bytes());
+        assert_ne!(changed_fingerprint, fingerprint);
+        let error = pair
+            .wire
+            .call(
+                "",
+                "orbit.drain.probe",
+                json!({
+                    "caller_fingerprint": changed_fingerprint,
+                    "caller_version": probe["binary_version"],
+                    "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                }),
+            )
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+    }
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// The owner can upgrade after preflight: skew is checked before unknown
+/// request fields or malformed nested values can hide it as invalid input.
+#[test]
+fn owner_checks_fingerprint_before_deserializing_an_incompatible_pull() {
+    if !isolated(
+        module_path!(),
+        "owner_checks_fingerprint_before_deserializing_an_incompatible_pull",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let error = pair
+        .wire
+        .call(
+            "",
+            "orbit.task.pull",
+            json!({
+                "caller_fingerprint": "skewed", "unknown_new_field": true,
+                "ship": "cannot deserialize this request on the owner",
+            }),
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+    let matching = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    for input in [
+        json!({"caller_fingerprint": matching, "unknown_new_field": true}),
+        json!({"caller_fingerprint": matching, "ship": "malformed"}),
+    ] {
+        let error = pair.wire.call("", "orbit.task.pull", input).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+            ),
+            "{error}"
+        );
+    }
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// The real pull job ends failed on same-release wire skew, even with an open
+/// window; neither stop nor cancellation can turn the failed pass into success.
+#[test]
+fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
+    if !isolated(
+        module_path!(),
+        "same_version_skew_ends_the_pull_job_failed_before_any_pull",
+    ) {
+        return;
+    }
+    let mut pair = Pair::new(1);
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &pair.follower.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    pair.follower = OrbitRuntime::from_roots(
+        &pair.follower.global_root(),
+        &pair.follower_repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_machine_identity(Some(FOLLOWER.into()))
+    .with_coordination_write_owner(Some(OWNER.into()))
+    .with_drain_owner_transport(pair.wire.clone());
+    let job = pair
+        .follower
+        .show_job_catalog_entry("workspace_pull_pipeline")
+        .unwrap();
+    // No fingerprint covers a legacy owner; a different hash covers wire skew
+    // between two builds with the same version and manual revision.
+    for fingerprint in [Value::Null, json!("different-request-shape")] {
+        *pair.wire.fingerprint.lock().unwrap() = Some(fingerprint);
+        let error = pair
+            .follower
+            .run_job_v2_from_yaml(
+                &job.path,
+                json!({"for_seconds": 3600, "destination": pair.destination}),
+            )
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+        let runs = pair
+            .follower
+            .list_job_runs(orbit_core::application::job::JobRunListParams {
+                job_id: Some("workspace_pull_pipeline".into()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
+        let run = &runs[0];
+        assert_eq!(run.state, JobRunState::Failed);
+        assert!(
+            run.steps
+                .iter()
+                .any(|step| step.error_code.as_deref() == Some("protocol_skew")),
+            "{run:#?}"
+        );
+        let pass = pair
+            .follower
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .drain_last_pass
+            .unwrap();
+        assert!(pass.degraded);
+        assert_eq!(pass.last_pass_error_code.as_deref(), Some("protocol_skew"));
+        assert_eq!(pass.consecutive_pass_failures, 1);
+    }
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
 }
 
 /// Transport errors persist, a successful pass resets a transient streak,
@@ -361,7 +539,7 @@ fn readable_state_without_cancel_permits_refill() {
         "the admitted leaf reaches launch: {pass}"
     );
     assert_eq!(pass["cancelling"], false, "{pass}");
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1);
     assert_eq!(pair.owner_claims().len(), 1);
     assert_eq!(pair.leaf_runs().len(), 1);

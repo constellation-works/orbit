@@ -178,9 +178,11 @@ returns.
   unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`
   flushes it by hand, with or without an active drain.
 - An unreachable or refusing owner is reported in each iteration's output.
-  Failed passes are retried until three in a row degrade the drain; settlement
-  retries continue in the degraded state. A request the owner refused and holds no receipt for closes as
-  `Refused`; a committed one is carried forward.
+  Protocol skew ends the drain failed immediately with `protocol_skew`; its
+  durable settlements remain available to leaf workers and the settle-only
+  pass. Other failed passes are retried until three in a row degrade the drain,
+  where settlement retries continue. A request the owner refused and holds no
+  receipt for closes as `Refused`; a committed one is carried forward.
 - A settlement the owner refuses while it still holds the claim (for example a
   footprint widening onto a path the owner protects) stays
   recorded, holds new requests, and is retried with a backoff of at most 15
@@ -252,16 +254,25 @@ inside the task detail (`orbit web serve --operator`, then
 only for a task this workspace holds a claim for, and a replica reports that
 the owner machine holds that state.
 
-Followers must match the owner's distributed-drain protocol revision, independently of
-`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
-The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
-revisions, including when an older owner calls its refusal `version_mismatch`.
+Followers must match the owner's pull request schema, independently of `orbit --version`.
+The read-only probe reports `protocol_fingerprint`, a SHA-256 fingerprint of the JSON schema
+derived from the running build's `AdmissionRequest` and all its nested types. The follower
+first probes with legacy-compatible fields, checks that fingerprint and `protocol_schema`,
+then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
+including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
+The integer revision remains for persisted requests and lifecycle semantics; request field
+changes no longer depend on a manual bump. Deploy matching builds on both hosts and restart
+long-lived processes.
 
 `orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
-count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
-the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+the streak. Protocol skew immediately latches degradation and ends the drain **failed** with `protocol_skew`,
+even with an open window. `orbit doctor` reports the latest skewed pull drain, and the dashboard
+keeps its pass health and failure code visible after it ends. Its durable admissions and settlement
+records remain available to leaf workers, the settle-only pass, and the clock sweep. Other
+degraded drains keep retrying settlements and outlive their window until nothing
 is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
 `orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 

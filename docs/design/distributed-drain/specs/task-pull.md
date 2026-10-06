@@ -83,6 +83,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
+| `caller_fingerprint` | string, optional for historical requests | Type-derived request fingerprint, checked before request deserialization |
 | `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
 | `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.before_pr` on admits only an executor that declares it. Absent: `false` |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
@@ -101,21 +102,30 @@ sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-1
 captures the owner's `required_validation_commands` in the before-PR `review` contract [ORB-14192].
 An explicit empty list means no required checks; a missing legacy field is unknown authority,
 never an admitted-empty list. The current protocol revision is 8. Before persisting a new request,
-the follower compares the probe's `protocol_schema` with its own revision and
-reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
+the follower negotiates the type-derived fingerprint as described below and
+reports typed `protocol_skew` before sending any pull. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
 from durable owner-side grants; the input does not grant merge rights.
 
-Followers must match the owner's distributed-drain protocol revision, independently of
-`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
-The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
-revisions, including when an older owner calls its refusal `version_mismatch`.
+Followers must match the owner's pull request schema, independently of `orbit --version`.
+The read-only probe reports `protocol_fingerprint`, a SHA-256 fingerprint of the JSON schema
+derived from the running build's `AdmissionRequest` and all its nested types. The follower
+first probes with legacy-compatible fields, checks that fingerprint and `protocol_schema`,
+then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
+including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
+The integer revision remains for persisted requests and lifecycle semantics; request field
+changes no longer depend on a manual bump. Deploy matching builds on both hosts and restart
+long-lived processes.
 
 `orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
-count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
-the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+the streak. Protocol skew immediately latches degradation and ends the drain **failed** with `protocol_skew`,
+even with an open window. `orbit doctor` reports the latest skewed pull drain, and the dashboard
+keeps its pass health and failure code visible after it ends. Its durable admissions and settlement
+records remain available to leaf workers, the settle-only pass, and the clock sweep. Other
+degraded drains keep retrying settlements and outlive their window until nothing
 is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
 `orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
@@ -228,7 +238,8 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `capability_refused` | Destination is a replica or caller lacks required authority |
 | `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `version_mismatch` | Caller binary version differs from owner |
-| `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
+| `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
+| `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
 | `before_pr_unsupported` | Owner has `review.before_pr` on and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |

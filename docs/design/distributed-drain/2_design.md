@@ -308,16 +308,25 @@ no settlement can ever be accepted, so the record settles locally with the refus
 its settlement pending. One record that cannot move forward does not stop the others from being
 reconciled in the same pass, though its error still blocks fresh admission for that pass.
 
-Followers must match the owner's distributed-drain protocol revision, independently of
-`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
-The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
-revisions, including when an older owner calls its refusal `version_mismatch`.
+Followers must match the owner's pull request schema, independently of `orbit --version`.
+The read-only probe reports `protocol_fingerprint`, a SHA-256 fingerprint of the JSON schema
+derived from the running build's `AdmissionRequest` and all its nested types. The follower
+first probes with legacy-compatible fields, checks that fingerprint and `protocol_schema`,
+then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
+including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
+The integer revision remains for persisted requests and lifecycle semantics; request field
+changes no longer depend on a manual bump. Deploy matching builds on both hosts and restart
+long-lived processes.
 
 `orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
-count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
-the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+the streak. Protocol skew immediately latches degradation and ends the drain **failed** with `protocol_skew`,
+even with an open window. `orbit doctor` reports the latest skewed pull drain, and the dashboard
+keeps its pass health and failure code visible after it ends. Its durable admissions and settlement
+records remain available to leaf workers, the settle-only pass, and the clock sweep. Other
+degraded drains keep retrying settlements and outlive their window until nothing
 is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
 `orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
@@ -625,7 +634,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 | Check | Source of truth |
 |---|---|
 | Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); an unauthenticated provider is excluded by its first typed `provider_unavailable` leaf |
-| Binary version and distributed-drain protocol revision match the owner | Owner read-only capability/version response; pull enforces parity again |
+| Binary version and type-derived pull request fingerprint match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
@@ -639,16 +648,17 @@ what it can run and the owner admits only that. Policy and toolchain must still 
 ### 4.1 Read-only admission probe
 
 The owner serves a read-only probe ([ORB-12495]). Input: the host-qualified workspace selector.
-Response: owner/workspace, binary version, distributed-drain protocol schema version, effective
+Response: owner/workspace, binary version, type-derived request fingerprint, legacy protocol revision, effective
 session capabilities, diagnostic caller machine, resolved ship mode and `review`: both review
 switches with their sources (before-PR on/off and minutes; after-landing enabled and its next batch
 due). It creates no receipts, reservations, claims or tasks. A caller may declare its version,
 protocol schema and `caller_before_pr`, and the probe reports the first refusal admission would raise by running the same
 ordered ladder (`orbit_store::admission_refusal`).
 
-- Protocol revision `2` includes executor crew capabilities. Increment the revision for request
-  fields an older endpoint rejects, including optional fields. The follower compares the owner
-  probe's revision before sending admission fields; `protocol_mismatch` names both revisions.
+- Protocol revision `2` introduced executor crew capabilities. Request field compatibility,
+  including optional fields and nested types, now uses the derived schema fingerprint. The follower
+  compares the owner probe's fingerprint before sending admission fields; typed `protocol_skew`
+  names both fingerprints.
   Matching crate versions alone are insufficient on development branches. This is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
 - The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the

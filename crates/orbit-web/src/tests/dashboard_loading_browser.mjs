@@ -213,6 +213,38 @@ async function assertCrewWindow(page) {
   }
 }
 
+// A terminal skew failure must lead with the typed code and its repair, with
+// both full run diagnostics and the persisted pass fallback.
+async function assertProtocolSkewFailure(page) {
+  for (const fallback of [false, true]) {
+    await page.evaluate(async fallback => {
+      const detail = await import('/js/run-detail.js');
+      const message = 'caller fingerprint aaa; owner fingerprint bbb';
+      detail.setActiveRunDetail({
+        run: {
+          run_id: 'jrun-skew', job_id: 'workspace_pull_pipeline', state: 'failed',
+          ...(fallback ? { drain_last_pass: { last_pass_error_code: 'protocol_skew', last_pass_error: message, degraded: true } }
+            : { error_code: 'protocol_skew', error_message: message }),
+        }, steps: [],
+      });
+      for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+      detail.renderRunDetailMeta();
+    }, fallback);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const failure = page.locator('#run-detail-meta .run-failure');
+      await failure.scrollIntoViewIfNeeded();
+      if (!await failure.isVisible()) throw new Error('Terminal protocol skew failure is hidden');
+      if (await failure.locator('.run-failure-code').textContent() !== 'protocol_skew') throw new Error('Typed protocol skew code missing');
+      if (!(await failure.locator('.run-failure-message').textContent()).includes('owner fingerprint bbb')) throw new Error('Skew fingerprints missing');
+      if (!(await failure.locator('p').textContent()).includes('restart')) throw new Error('Skew repair missing');
+      const bounds = await failure.boundingBox();
+      if (bounds.x < 0 || bounds.x + bounds.width > width + 1) throw new Error(`Skew failure clipped at ${width}px`);
+      await page.screenshot({ path: path.join(evidence, `run-skew-${fallback}-${width}.png`) });
+    }
+  }
+}
+
 // Every scoreboard metric cell must paint its bar and value inside its own
 // agent column, and each value must be reachable by scrolling the matrix's
 // own wrapper: a fixed-layout table squeezed below its content width paints
@@ -385,6 +417,7 @@ try {
   await assertScoreboardLayout(page);
   await assertRunStepLayout(page);
   await assertCrewWindow(page);
+  await assertProtocolSkewFailure(page);
   await new Promise(resolve => server.close(resolve));
   await page.evaluate(() => {
     globalThis.fetch = globalThis.nativeFetch;
@@ -392,7 +425,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();
