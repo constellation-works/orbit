@@ -195,12 +195,13 @@ spec:
 
     The only allowed bytes after the closing brace are an optional real
     newline. Do not append a literal backslash followed by `n` or any other
-    trailing characters. After writing, re-read the file and parse it (for
-    example, `python3 -m json.tool <path>` or `jq . <path>`). Confirm that
-    `decision`, `run_id`, `failed_step_id`, `attempt` and `nonce` match the
-    intended values and the input bindings. If parsing fails or any field
-    differs, rewrite the file and repeat the read-and-parse check before
-    finishing.
+    trailing characters. After writing, re-read the file and parse it. For
+    example, set `DECISION_PATH` to the exact `recovery_decision.path` value,
+    then run `python3 -m json.tool "$DECISION_PATH"` or
+    `jq . "$DECISION_PATH"`. Confirm that `decision`, `run_id`,
+    `failed_step_id`, `attempt` and `nonce` match the intended values and the
+    input bindings. If parsing fails or any field differs, rewrite the file
+    and repeat the read-and-parse check before finishing.
 
     - `retry`: you repaired what made the step fail, so its re-run can
       succeed on its own. The executor makes exactly one attempt; that
