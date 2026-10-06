@@ -1,12 +1,27 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
+use orbit_types::identity::{
+    MACHINE_ID_PREFIX, agent_from_model, all_agent_families, normalize_attribution_label,
+    normalize_optional_attribution_label,
+};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 
 use crate::application::job::crew_pools::CreationCrewAssignment;
 use crate::context::resolve_write_actor_label;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
+
+/// Whether a persisted writer label belongs to Orbit automation rather than
+/// an operator. Other labels include `human:<user>`, `operator`, an
+/// `ORBIT_ACTOR` or dashboard author. Shared by recovery and pilot admission.
+pub(crate) fn is_automation_actor(label: &str) -> bool {
+    let label = label.trim();
+    label == SYSTEM_ACTOR_LABEL
+        || label == "task-pilot"
+        || label.starts_with(MACHINE_ID_PREFIX)
+        || all_agent_families().contains(&label)
+        || agent_from_model(label).is_some()
+}
 
 /// Provenance for the crew a task was assigned when it was created, or when an
 /// operator cleared the field and the pools chose again [ORB-12717]. Updates

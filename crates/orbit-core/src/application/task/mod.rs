@@ -15,6 +15,7 @@ mod lint;
 mod listing;
 mod params;
 mod paths;
+mod pilot_admission;
 mod pr_closure;
 mod query;
 mod records;
@@ -43,6 +44,7 @@ pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
+pub(crate) use pilot_admission::PilotAdmissionHold;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub(crate) use lifecycle::{

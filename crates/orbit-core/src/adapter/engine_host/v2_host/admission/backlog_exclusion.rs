@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
-use crate::application::task::list_task_metadata_in;
+use crate::application::task::{PilotAdmissionHold, list_task_metadata_in};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
     TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
@@ -78,6 +78,11 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// A live task-pilot run holds a successful preparation checkpoint for
     /// this task. Delivery waits until that run settles its assessment.
     ActivePilotPreparation,
+    /// The latest applied pilot assessment identifies duplicate work. Only a
+    /// newer clear assessment or an explicit operator decision releases it.
+    PilotDuplicate,
+    /// The latest applied pilot assessment identifies work already landed.
+    PilotAlreadyLanded,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
@@ -286,6 +291,10 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     continue;
                 }
             }
+            if let Some(exclusion) = pilot_finding_exclusion(runtime, action, &task)? {
+                excluded.push(exclusion);
+                continue;
+            }
             if let Some(exclusion) = unprepared_exclusion(&task) {
                 excluded.push(exclusion);
                 continue;
@@ -465,6 +474,15 @@ fn backlog_snapshot_in_mode(
             false
         });
     }
+    let mut kept = Vec::with_capacity(backlog.len());
+    for task in backlog {
+        if let Some(exclusion) = pilot_finding_exclusion(runtime, action, task)? {
+            excluded.push(exclusion);
+        } else {
+            kept.push(task);
+        }
+    }
+    backlog = kept;
     backlog.retain(|task| {
         let Some(exclusion) = unprepared_exclusion(task) else {
             return true;
@@ -705,6 +723,42 @@ fn inherited_only_epic_root_exclusion(
 fn clears_complexity_gate(task: &Task) -> bool {
     task.complexity.is_some_and(TaskComplexity::is_assessed)
         || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+}
+
+fn pilot_finding_exclusion(
+    runtime: &OrbitRuntime,
+    action: &str,
+    task: &Task,
+) -> Result<Option<BacklogTaskExclusion>, DispatchError> {
+    let hold = runtime.pilot_admission_hold(&task.id).map_err(|error| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("read pilot findings: {error}"),
+        }
+    })?;
+    Ok(hold.map(|hold| {
+        let (field, reason) = match hold {
+            PilotAdmissionHold::Duplicate => {
+                ("duplicate_of", BacklogTaskExclusionReason::PilotDuplicate)
+            }
+            PilotAdmissionHold::AlreadyLanded => (
+                "already_landed",
+                BacklogTaskExclusionReason::PilotAlreadyLanded,
+            ),
+        };
+        BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: Some(format!(
+                "The latest task-pilot assessment records {field}. Run task-pilot again \
+                 to clear the finding, or append a human comment whose first line is \
+                 `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`. \
+                 A later pilot assessment supersedes that decision."
+            )),
+        }
+    }))
 }
 
 fn unprepared_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {

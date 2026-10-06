@@ -100,6 +100,24 @@ Common reasons a backlog task waits:
   on, which is what really limits your parallelism.
 - **`crew_not_allowed`**, when you preview a
   [crew restriction](#restrict-a-window-to-some-crews).
+- **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied
+  task-pilot assessment found duplicate work or work already landed. This
+  also holds tasks filed directly into backlog. Read the finding in the task
+  comments. Run task-pilot again to reassess it; a new assessment without
+  either finding releases the hold. To approve the work anyway or clear a
+  mistaken finding, append an explicit human decision from your CLI:
+
+  ```bash
+  orbit task update "$TASK_ID" --comment 'task-pilot-admission: approve-anyway'
+  # Or clear a mistaken finding:
+  orbit task update "$TASK_ID" --comment 'task-pilot-admission: clear'
+  ```
+
+  The first line must match exactly; put any explanation on later lines.
+  Both decisions release the current assessment's admission hold while
+  preserving its audit evidence. A later pilot assessment supersedes the
+  decision. Ordinary edits, unrelated comments, and agent-authored decisions
+  do not release it. All other admission checks still apply.
 - **`delivery_job_unavailable`**: the task's `delivery:<job>` tag selects a
   plugin delivery job whose plugin is disabled or uninstalled, or that does not
   declare the drain's ship mode. The detail names the plugin. Enable it or

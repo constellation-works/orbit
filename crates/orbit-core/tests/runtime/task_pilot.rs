@@ -23,6 +23,7 @@ use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod admission;
 mod creation;
 mod races;
 
