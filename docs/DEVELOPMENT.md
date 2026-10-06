@@ -214,6 +214,9 @@ uploads an lcov report as the `coverage-lcov` workflow artifact. The job is
 **informational only — it never gates a merge**. It runs the tests through
 `cargo llvm-cov nextest`, so each test gets its own process and the
 `.config/nextest.toml` test groups apply, as in the `Check / Clippy / Test` job.
+Both Linux jobs install ripgrep before running tests: provider inspection
+fixtures execute real `git` and `rg` commands inside a pinned checkout, so
+coverage needs the same host tools as the regular test job.
 
 Per-crate line-coverage **targets** — goals to steer test investment, not
 gates that fail CI:
