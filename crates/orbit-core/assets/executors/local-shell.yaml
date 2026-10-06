@@ -14,9 +14,10 @@ spec:
   # No `sandbox` is declared, so shell steps run bare under the process
   # supervisor and are confined only by the cwd containment check and by
   # whatever sandbox already contains the Orbit process. Add
-  # `sandbox: macos-sandbox-exec` (translated to `linux-bwrap` on Linux) plus an
-  # activity `fsProfile` to confine them at the kernel; each step reports the
-  # backend it actually ran under.
+  # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux,
+  # plus an activity `fsProfile` to confine them at the kernel. Installed
+  # settings are not translated between platforms; an incompatible backend
+  # fails closed. Each step reports the backend it actually ran under.
   executor_type: local_shell
   args: []
   env: {}

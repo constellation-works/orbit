@@ -117,14 +117,16 @@ Two independent limits apply.
    OS primitive is unavailable, the step fails closed unless the definition sets
    `allow_fallback: true`.
 
-To confine shell steps at the kernel, add a sandbox to the definition and give
-the activity a profile:
+To confine shell steps at the kernel, add the host's sandbox to the definition
+and give the activity a profile. Use `linux-bwrap` on Linux or
+`macos-sandbox-exec` on macOS. Installed settings are not translated between
+platforms; an incompatible backend fails closed:
 
 ```yaml
 # kind: Executor, metadata.name: local-shell
 spec:
   executor_type: local_shell
-  sandbox: macos-sandbox-exec   # translated to linux-bwrap on Linux at seed time
+  sandbox: linux-bwrap         # use macos-sandbox-exec on macOS
   allow_fallback: false
 ```
 
