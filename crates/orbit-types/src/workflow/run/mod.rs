@@ -38,6 +38,3 @@ pub use state::{
     is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
     is_provider_unavailable, is_validation_environment_failure,
 };
-
-#[cfg(test)]
-mod tests;

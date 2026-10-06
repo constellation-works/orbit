@@ -1,0 +1,42 @@
+//! Independent review policy contracts [ORB-11333].
+//!
+//! A managed PR delivery may hold PR creation for a fresh reviewer. The
+//! records here are the durable evidence that gate produces: the admission
+//! snapshot a run captures, the manifest handed to the reviewer, the honest
+//! verdict, the certificate that binds a passed verdict to exact base and
+//! candidate trees, the mapping to the commit that actually landed, and the
+//! per-lineage attempt ledger. None of these is a task status, a human
+//! approval, or merge permission; they only describe what was examined.
+
+mod admission;
+mod certificate;
+mod history;
+mod ledger;
+mod report;
+mod verdict;
+
+#[cfg(test)]
+mod tests;
+
+pub use admission::{
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION,
+    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
+    ReviewBudget, ReviewTiming,
+};
+pub use certificate::{
+    LandingTransformation, ReviewCertificate, ReviewConsumption, ReviewInvalidation, ReviewLanding,
+    ReviewManifest, ReviewerIdentity,
+};
+pub use history::{
+    REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
+    ReviewReportHistory, ReviewReportRevision,
+};
+pub use ledger::{
+    ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewReservation, ReviewResetDecision,
+    ReviewerInvocation, ReviewerInvocationEvent, seconds_between,
+};
+pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
+pub use verdict::{
+    NegativeControl, RetainedObligation, ReviewAssurance, ReviewValidation, ReviewVerdict,
+    ValidationOutcome, ValidationRole,
+};
