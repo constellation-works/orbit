@@ -19,7 +19,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::{run_cli_backend, task_id_from_input};
+use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCliExecutor {
@@ -588,9 +588,10 @@ fn run_agent_loop_activity(
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    run_cli_backend(
+    run_cli_backend_for_step(
         host,
         spec,
+        step_id,
         target_activity,
         run_id,
         audit,

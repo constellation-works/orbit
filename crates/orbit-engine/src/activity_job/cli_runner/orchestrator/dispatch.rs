@@ -59,6 +59,32 @@ pub fn run_cli_backend(
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    run_cli_backend_for_step(
+        host,
+        spec,
+        activity_name,
+        activity_name,
+        run_id,
+        audit,
+        input,
+        fs_profile,
+    )
+}
+
+/// Run a catalog activity on behalf of a pipeline step whose id differs from
+/// the activity name. Policy and broker authorization use `activity_name`;
+/// audit labels and worktree-boundary reports use `step_id`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_cli_backend_for_step(
+    host: &dyn RuntimeHost,
+    spec: &AgentLoopSpec,
+    step_id: &str,
+    activity_name: &str,
+    run_id: &str,
+    audit: Arc<V2AuditWriter>,
+    input: &Value,
+    fs_profile: Option<&str>,
+) -> Result<DispatchOutcome, DispatchError> {
     let budget = GitTimeoutBudget::from_input(input)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
@@ -267,7 +293,7 @@ pub fn run_cli_backend(
     .map(|boundary| {
         boundary
             .with_audit(Arc::clone(&audit))
-            .with_activity(activity_name)
+            .with_activity(step_id)
     });
 
     if activity_name == "pr_conflict_recovery" {
@@ -284,6 +310,7 @@ pub fn run_cli_backend(
             target: "orbit.trusted_host",
             run_id,
             activity_name,
+            step_id,
             provider = %provider,
             authorized_by = %admission.authorized_by,
             authorizer_provenance = %admission.authorizer_provenance,
@@ -294,7 +321,7 @@ pub fn run_cli_backend(
         );
         audit.emit_lossy(V2AuditEventKind::TrustedHostExecutionAdmitted {
             provider: provider.clone(),
-            activity_name: activity_name.to_string(),
+            activity_name: step_id.to_string(),
             authorized_by: admission.authorized_by.clone(),
             authorizer_provenance: admission.authorizer_provenance.clone(),
             caller_machine_id: admission.caller_machine_id.clone(),
