@@ -167,7 +167,7 @@ impl PolicyDef {
         extend_unique(&mut deny_read, &workspace.deny_read);
 
         let mut deny_modify = global.deny_modify.clone();
-        extend_unique(&mut deny_modify, &workspace.deny_modify);
+        extend_ordered_modify_rules(&mut deny_modify, &workspace.deny_modify);
 
         let merged = Self {
             name: workspace.name.clone(),
@@ -238,6 +238,23 @@ fn extend_unique(target: &mut Vec<String>, extra: &[String]) {
     for value in extra {
         if !target.iter().any(|existing| existing == value) {
             target.push(value.clone());
+        }
+    }
+}
+
+fn extend_ordered_modify_rules(target: &mut Vec<String>, extra: &[String]) {
+    for rule in extra {
+        let is_exception = rule.trim_start().starts_with('!');
+        // An intervening exception can reopen a deny, and an intervening
+        // deny can close an exception. Only deduplicate within the trailing
+        // run of rules with the same polarity, where repeats are redundant.
+        let redundant = target
+            .iter()
+            .rev()
+            .take_while(|existing| existing.trim_start().starts_with('!') == is_exception)
+            .any(|existing| existing == rule);
+        if !redundant {
+            target.push(rule.clone());
         }
     }
 }

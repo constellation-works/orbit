@@ -22,6 +22,87 @@ fn policy(modify: &[&str], deny_modify: &[&str]) -> PolicyDef {
 }
 
 #[test]
+fn workspace_modify_rules_preserve_order_across_host_exceptions() {
+    // ORB-14290: a repeated workspace deny was dropped before it could narrow
+    // a host exception. Repeated exceptions must also retain their position.
+    for (host, workspace, path, allowed) in [
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/**"],
+            ".orbit/tmp/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/x"],
+            vec![".orbit/**"],
+            ".orbit/tmp/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", " !.orbit/tmp/** "],
+            vec![".orbit/**"],
+            ".orbit/tmp/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/**"],
+            vec![".orbit/**"],
+            ".orbit/tmp/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", "!.orbit/resources/**"],
+            vec![".orbit/**"],
+            ".orbit/resources/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            ".orbit/tmp/x",
+            true,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/**"],
+            ".orbit/tmp/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/tmp/x", "!.orbit/tmp/**"],
+            ".orbit/tmp/x",
+            true,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/tmp/x", "!.orbit/tmp/**"],
+            ".orbit/other/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**"],
+            vec![".orbit/resources/**"],
+            ".orbit/tmp/x",
+            true,
+        ),
+        (vec![".orbit/**"], vec![".orbit/**"], ".orbit/tmp/x", false),
+    ] {
+        let merged = PolicyDef::merged(&policy(&["**"], &host), &policy(&["**"], &workspace))
+            .expect("merge valid ordered modify rules");
+        let engine = PolicyEngine::from_def(&merged).expect("validated merged policy");
+        let result = engine
+            .check("implementer", FsOperation::Modify, path)
+            .expect("check merged modify authority");
+        assert_eq!(
+            result.allowed, allowed,
+            "ORB-14290: merge must preserve workspace deny/exception order: \
+             host={host:?}, workspace={workspace:?}, path={path}, result={result:?}"
+        );
+    }
+}
+
+#[test]
 fn modify_exception_respects_the_last_covering_profile_rule() {
     // ORB-14286: an early nested allow was replayed after a covering deny.
     for (modify, path, allowed) in [
