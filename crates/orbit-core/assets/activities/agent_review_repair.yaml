@@ -74,11 +74,18 @@ spec:
       `incomplete` report and update it after meaningful review or validation
       progress, so a wall-clock timeout retains your findings and checks.
       If you cannot finish, leave an honest partial report before stopping.
-    - Read the manifest and attach the report only with
+    - Read task artifacts and attach the report only with
       `orbit.task.artifact.get` and `orbit.task.artifact.put`, through the
-      CLI or MCP. On a distributed-drain follower the host carries exactly
-      these two calls to the task's owner for you. If either is refused with
-      `review_attempt_stale`, `review_manifest_stale` or
+      CLI or MCP. On a distributed-drain follower the host carries these
+      calls to the task's owner for you: reads of the manifest, the existing
+      report, `review-report-history.json`, `review-evidence-hold.json` and
+      the evidence artifacts that hold names, and the report write.
+    - Only the manifest read and the report write are required. The other
+      reads are optional prior evidence: when one is absent (`not_found`) or
+      refused, note it in `summary` and continue the review from the
+      manifest; do not stop or retry around it.
+    - If the manifest read or the report write is refused with
+      `review_attempt_stale`, `review_manifest_stale`, `stale_claim` or
       `claimed_review_bridge_refused`, or cannot reach the run's coordinator,
       do not retry around it: do not read SSH credentials, change the sandbox,
       or use another tool or path. Return verdict `incomplete` with the
@@ -108,6 +115,8 @@ spec:
        report naming the current attempt; never reuse a previous acceptance.
        Read any `review-evidence-hold.json` and its named result/log artifacts
        to assess external evidence that arrived since the earlier review.
+       These prior-evidence reads are optional: an absent or refused one is
+       not a mismatch and not a reason to stop; review from the manifest.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
        and the implementer's execution summary in the manifest. A green summary

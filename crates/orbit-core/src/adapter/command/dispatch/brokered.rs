@@ -1,7 +1,7 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
-//! host's `gh` credentials, or a claimed reviewer's manifest read or report
-//! write that needs the claim's owner route — through the audited dispatch,
+//! host's `gh` credentials, or a claimed reviewer's review-artifact read or
+//! report write that needs the claim's owner route — through the audited dispatch,
 //! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
@@ -192,8 +192,8 @@ impl BrokerDispatch for RunDispatch {
                 audit,
                 |input| {
                     checked?;
-                    // The claimed reviewer's manifest read and report write
-                    // reach the owner over the claim's route, which the
+                    // The claimed reviewer's review-artifact reads and report
+                    // write reach the owner over the claim's route, which the
                     // sandbox cannot open; the broker carries exactly those.
                     if is_claimed_review_artifact(&tool) {
                         self.runtime.ensure_tool_agent_facing(&tool)?;

@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Verify and recover a distributed-drain follower's before-PR reviewer, whose manifest read and report write reach the owner through the run's coordinator instead of SSH inside the sandbox.
+summary: Verify and recover a distributed-drain follower's before-PR reviewer, whose review-artifact reads and report write reach the owner through the run's coordinator instead of SSH inside the sandbox.
 tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
@@ -9,27 +9,38 @@ paths:
   - "crates/orbit-cli/src/command/mcp/claimed_review.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14194, ORB-14221, ORB-14171]
-last_validated: 2026-10-05
+related_artifacts: [ORB-14194, ORB-14221, ORB-14171, ORB-14321]
+last_validated: 2026-10-06
 ---
 
 # Verify and Recover Claimed-Review Artifacts
 
 Use this runbook when a distributed-drain follower runs the before-PR review
 of a claimed leaf, and you need to check that the reviewer can read its
-manifest and attach its report, or to recover a review that reported
-`incomplete` because one of those calls was refused.
+manifest and prior review evidence and attach its report, or to recover a
+review that reported `incomplete` because one of those calls was refused.
 
 ## 1. The route
 
 A claimed leaf's task lives on its owner. The follower's reviewer runs inside
 the agent sandbox, which masks `~/.ssh`, so it cannot reach the owner
 itself. Its nested `orbit`, from `orbit tool run` or `orbit mcp serve`, hands
-exactly two calls to the run's coordinator: the plugin broker that the step
-runner starts outside the sandbox (`ORBIT_PLUGIN_BROKER`).
+its artifact calls to the run's coordinator: the plugin broker that the step
+runner starts outside the sandbox (`ORBIT_PLUGIN_BROKER`). The coordinator
+carries these and nothing else:
 
-- `orbit.task.artifact.get` of `review-manifest.json`
-- `orbit.task.artifact.put` of `review-report.json`
+- `orbit.task.artifact.get` of `review-manifest.json`, `review-report.json`,
+  `review-report-history.json` and `review-evidence-hold.json`;
+- `orbit.task.artifact.get` of an evidence artifact the owner's current
+  `review-evidence-hold.json` names: a requirement's result artifact, or the
+  log that result names for that requirement. The coordinator reads the hold
+  and results from the owner to decide, never from the request; with no hold,
+  no evidence path is readable;
+- `orbit.task.artifact.put` of `review-report.json`.
+
+Only the manifest read and the report write are required. The other reads
+are optional prior evidence: the reviewer continues from the manifest when
+one is absent or refused.
 
 The coordinator takes the task, claim, owner and attempt from its own records,
 never from the request. It carries a call only when all of these hold:
@@ -40,12 +51,13 @@ never from the request. It carries a call only when all of these hold:
   reviewer is running and inside its deadline.
 
 The coordinator also checks the content. It accepts a manifest only if the
-owner's copy names the running attempt. It accepts a report only if the
+owner's copy names the running attempt; the other reads return the owner's
+bytes unchanged. It accepts a report only if the
 report parses, is at most 1 MiB and names that attempt. The coordinator then
 sends the call to the owner over the follower's own SSH route.
 
-The owner's claim fence decides both calls. The owner answers the manifest
-read, and takes the report write, only while the claim is still active: running
+The owner's claim fence decides every call. The owner answers the reads, and
+takes the report write, only while the claim is still active: running
 or handed off, bound to this leaf on this follower, and still the task's
 current claim. If the claim was released, failed, revoked or superseded, the
 owner refuses the call with `stale_claim` and changes nothing. This holds
@@ -76,7 +88,7 @@ attaching a report by hand, or disabling before-PR review.
 | `review_attempt_stale` | The reviewer finished or ran past its deadline, or its attempt was settled or replaced | Preserve the call and run evidence. Do not replay it. After the normal run reaches terminal settlement, verify there is no live owner, diagnose the cause, and use the existing authorized backlog recovery to start a fresh attempt. |
 | `stale_claim` | The owner no longer holds the claim as active: it was released, failed, revoked by recovery, or superseded by a later pull, or it is bound to another run | Preserve the refusal, the claim's owner state (`ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'` on the owner) and the follower's ledger. Do not replay the call. The claim's lifecycle already ended, so the review cannot finish in this run. Let the run settle. Then follow the [distributed drain runbook](./distributed-drain.md) for that claim state. |
 | `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
-| `claimed_review_bridge_refused` | Another activity, task, path, request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
+| `claimed_review_bridge_refused` | Another activity, task, path (including an evidence path the owner's current hold does not name), request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
 | `plugin_broker_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | Treat the outcome as unknown. Preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
 | `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
 | `capability_denied`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before normal recovery; a version string alone is not proof. |
