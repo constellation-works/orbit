@@ -368,6 +368,13 @@ fn claimed_review_artifact_tool(command: &command::Commands) -> bool {
 }
 
 fn main() {
+    run();
+    // Statics are never dropped, so returning from `main` would not flush the
+    // JSONL feed either.
+    orbit_common::observability::logging::shutdown_jsonl_writer();
+}
+
+fn run() {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
     orbit_core::mark_process_as_pipeline_worker_binary();
@@ -427,7 +434,7 @@ fn main() {
         && let Err(error) = refuse_plugin_child_cli(&audit_meta, root_override.as_deref())
     {
         print_error(&error, &sink, json_error_preference);
-        std::process::exit(1);
+        orbit_common::observability::logging::exit(1);
     }
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
@@ -446,7 +453,7 @@ fn main() {
                 Ok(root) => root,
                 Err(error) => {
                     print_error(&error, &sink, None);
-                    std::process::exit(1);
+                    orbit_common::observability::logging::exit(1);
                 }
             };
         let root_source = explicit_root_source(root_override.as_deref());
@@ -455,7 +462,7 @@ fn main() {
             && let Err(error) = root_check::validate_explicit_root(&root, source)
         {
             print_error(&error, &sink, None);
-            std::process::exit(1);
+            orbit_common::observability::logging::exit(1);
         }
         match pin_executable_generation_as(
             &root,
@@ -491,7 +498,7 @@ fn main() {
                     .is_ok()
                     && quiet_clock_tick
                 {
-                    std::process::exit(1);
+                    orbit_common::observability::logging::exit(1);
                 }
                 let error = match root_source {
                     Some(source) if !root_existed => {
@@ -500,7 +507,7 @@ fn main() {
                     _ => error,
                 };
                 print_error(&error, &sink, None);
-                std::process::exit(1);
+                orbit_common::observability::logging::exit(1);
             }
         }
     };
@@ -519,7 +526,7 @@ fn main() {
             Ok(root) => root,
             Err(error) => {
                 print_error(&error, &sink, json_error_preference);
-                std::process::exit(1);
+                orbit_common::observability::logging::exit(1);
             }
         };
         match orbit_core::OrbitRuntime::current_worker_invocation(&global_root) {
@@ -527,7 +534,7 @@ fn main() {
                 .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
             Err(error) => {
                 print_error(&error, &sink, json_error_preference);
-                std::process::exit(1);
+                orbit_common::observability::logging::exit(1);
             }
         }
     } else {
@@ -608,7 +615,7 @@ fn main() {
                 return;
             }
             print_error(&err, &sink, json_error_preference);
-            std::process::exit(1);
+            orbit_common::observability::logging::exit(1);
         }
     }
     .with_actor(actor);
@@ -690,10 +697,10 @@ fn finish_command(
             return;
         }
         print_error(&err, sink, json_error_preference);
-        std::process::exit(1);
+        orbit_common::observability::logging::exit(1);
     }
     if exit_code != 0 {
-        std::process::exit(exit_code);
+        orbit_common::observability::logging::exit(exit_code);
     }
 }
 

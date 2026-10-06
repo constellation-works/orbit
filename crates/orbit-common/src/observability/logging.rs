@@ -40,7 +40,7 @@ use std::{
     fs::File,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock, PoisonError},
 };
 
 use chrono::{SecondsFormat, Utc};
@@ -66,7 +66,9 @@ use tracing_subscriber::{
 use crate::fs::io::{append_private_file, create_private_dir_all};
 use crate::security::redaction;
 
-static FILE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+/// The JSONL writer's guard. Statics are never dropped, so the guard is held
+/// in an `Option` that [`shutdown_jsonl_writer`] can take and drop at exit.
+static FILE_GUARD: OnceLock<Mutex<Option<WorkerGuard>>> = OnceLock::new();
 
 const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
 const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
@@ -381,7 +383,7 @@ pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str
     match global_jsonl_log_path() {
         Ok(path) => {
             let (file_layer, guard) = jsonl_layer_at_path(&path);
-            if FILE_GUARD.set(guard).is_ok() {
+            if FILE_GUARD.set(Mutex::new(Some(guard))).is_ok() {
                 let _ = Registry::default()
                     .with(stderr_layer)
                     .with(file_layer.with_filter(env_filter(file_default)))
@@ -396,6 +398,30 @@ pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str
             emit_log_init_warning(&err.to_string());
         }
     }
+}
+
+/// Drain the JSONL writer's queue to disk and stop its worker.
+///
+/// The JSONL layer writes through a background worker, and only dropping its
+/// guard flushes the queue and joins the worker. Rust never drops statics and
+/// `std::process::exit` skips destructors, so a process that ends without
+/// calling this loses whatever it logged last. Call it once when the process
+/// is about to end; JSONL records emitted afterwards are discarded, while
+/// stderr logging continues. Repeated calls are no-ops.
+pub fn shutdown_jsonl_writer() {
+    let Some(slot) = FILE_GUARD.get() else {
+        return;
+    };
+    // Taken under the lock, dropped after it: the drop joins the worker.
+    let guard = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+    drop(guard);
+}
+
+/// [`std::process::exit`] after [`shutdown_jsonl_writer`], so the records
+/// logged right before an early exit reach the JSONL feed.
+pub fn exit(code: i32) -> ! {
+    shutdown_jsonl_writer();
+    std::process::exit(code)
 }
 
 /// Whether a stream may carry ANSI styling, given its terminal-ness and the
