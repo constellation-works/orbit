@@ -27,6 +27,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 
 ## Supervision Invariants
 
+- **Cleanup ownership.** From successful spawn through streaming stdout relay setup and supervision, a cleanup guard owns the child. Relay allocation, pipe setup, signal-handler setup and wait errors kill the child's process group and reap the direct child before returning; dropping a bare `Child` would do neither.
 - **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
 - **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.
@@ -64,7 +65,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 - **Stdin write failure.** Writer-thread error → child terminated → `OrbitError::Execution(<error>)` returned. Captured stdout/stderr up to that point are discarded.
 - **Stdin writer panic.** Writer-thread panic → `OrbitError::Execution("stdin writer thread panicked")` returned.
 - **Signal handler install failure.** If `sigaction` fails for SIGINT or SIGTERM, the guard rolls back any partial install and `run_process` returns `OrbitError::Execution(<error>)` before entering the wait loop.
-- **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The child is left to be reaped by the OS rather than force-killed in this path; this is a known soft spot.
+- **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The cleanup guard kills the child's process group and reaps the direct child before returning the error.
 - **Timeout.** `success = false`, `exit_code = None`, stderr suffixed with `process timed out`.
 - **Parent signal.** `success = false`, `exit_code = Some(128 + signal)`, stderr suffixed with the signal name.
 - **Pipe held outside the process group.** The result keeps the child's own outcome (exit status, timeout, cancellation), output after the drain stop is missing, and stderr carries the drain note.

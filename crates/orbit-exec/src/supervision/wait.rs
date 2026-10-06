@@ -24,7 +24,7 @@ type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
 
 /// Own cleanup from the first setup operation until the child is reaped.
 /// `Child` itself does neither kill nor wait on drop.
-struct SupervisedChild {
+pub(crate) struct SupervisedChild {
     process: Child,
     reaped: bool,
     #[cfg(unix)]
@@ -32,13 +32,17 @@ struct SupervisedChild {
 }
 
 impl SupervisedChild {
-    fn new(process: Child) -> Self {
+    pub(crate) fn new(process: Child) -> Self {
         Self {
             process,
             reaped: false,
             #[cfg(unix)]
             signal_guard: None,
         }
+    }
+
+    pub(crate) fn process_mut(&mut self) -> &mut Child {
+        &mut self.process
     }
 
     fn mark_reaped(&mut self) {
@@ -159,7 +163,7 @@ pub(super) fn wait_with_timeout_and_output_limit(
     output_limit: usize,
 ) -> Result<WaitResult, OrbitError> {
     wait_cancellable(
-        child,
+        SupervisedChild::new(child),
         timeout_ms,
         debug,
         stdin_payload,
@@ -173,7 +177,7 @@ pub(super) fn wait_with_timeout_and_output_limit(
 /// stdout into `relay` instead of capturing it. The relay is closed within
 /// the same drain bound, so its reader always reaches EOF.
 pub(crate) fn wait_with_stdout_relay(
-    child: Child,
+    child: SupervisedChild,
     timeout_ms: Option<u64>,
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
@@ -197,7 +201,7 @@ pub(crate) fn wait_with_cancellation(
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
     wait_cancellable(
-        child,
+        SupervisedChild::new(child),
         timeout_ms,
         false,
         stdin_payload,
@@ -208,7 +212,7 @@ pub(crate) fn wait_with_cancellation(
 }
 
 fn wait_cancellable(
-    child: Child,
+    mut child: SupervisedChild,
     timeout_ms: Option<u64>,
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
@@ -216,7 +220,6 @@ fn wait_cancellable(
     stdout_relay: Option<PipeWriter>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
-    let mut child = SupervisedChild::new(child);
     // Every pipe worker is bounded by `drain_stop`: once the child is gone
     // the supervisor waits at most `DRAIN_BUDGET` for them (see its docs).
     // Dropping it on an early error return stops them as well.
