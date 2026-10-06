@@ -883,6 +883,11 @@ fn instruction_edits_change_the_preparation_fingerprint() {
     let now = Utc::now();
     let empty = pending_fingerprint(&workspace, &routine, &task.id, now);
 
+    workspace.commit_file(
+        " instructions/AGENTS.md",
+        "spaced directory rules\n",
+        "spaced directory instructions",
+    );
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
     workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
     workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
@@ -891,7 +896,7 @@ fn instruction_edits_change_the_preparation_fingerprint() {
     let listed = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(1));
     assert_ne!(
         listed, empty,
-        "tracked instruction files enter the snapshot"
+        "tracked instruction files, including a leading-space path, enter the snapshot"
     );
 
     workspace.commit_file("AGENTS.md", "root rules revised\n", "edit root");
@@ -926,22 +931,34 @@ fn instruction_edits_change_the_preparation_fingerprint() {
         "a nested CLAUDE.md edit changes the fingerprint"
     );
 
+    workspace.commit_file(
+        "AGENTS.md",
+        "    root rules revised\n",
+        "indent root instructions",
+    );
+    let indented_root =
+        pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(5));
+    assert_ne!(
+        indented_root, nested_claude,
+        "leading instruction whitespace is part of the pinned content"
+    );
+
     workspace.commit_file("docs/guide.md", "ordinary revised\n", "edit ordinary");
     workspace.commit_file(
         "docs/AGENTS.md.bak",
         "still not an instruction\n",
         "edit near name",
     );
-    let unchanged = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(5));
+    let unchanged = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(6));
     assert_eq!(
-        unchanged, nested_claude,
+        unchanged, indented_root,
         "only AGENTS.md and CLAUDE.md basenames are instruction material"
     );
 
     let untracked = workspace.repo.join("scratch/CLAUDE.md");
     std::fs::create_dir_all(untracked.parent().unwrap()).unwrap();
     std::fs::write(&untracked, "untracked rules\n").unwrap();
-    let still = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(6));
+    let still = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(7));
     assert_eq!(
         still, unchanged,
         "an untracked instruction file is not in the pinned snapshot"

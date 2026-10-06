@@ -132,7 +132,7 @@ pub(crate) fn instructions(
     // `**/AGENTS.md` lists nothing. List the pinned tree and keep instruction
     // basenames. `-z` keeps a path that contains spaces or quotes intact.
     // Dirty worktree files are not in that tree, so they cannot certify it.
-    let paths = source.git(&[
+    let paths = source.git_preserving_output(&[
         "ls-tree",
         "-r",
         "-z",
@@ -151,7 +151,7 @@ pub(crate) fn instructions(
         }
         instructions.push((
             path.to_string(),
-            source.git(&["show", &format!("{revision}:{path}")])?,
+            source.git_preserving_output(&["show", &format!("{revision}:{path}")])?,
         ));
     }
 

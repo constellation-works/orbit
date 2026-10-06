@@ -45,7 +45,7 @@ impl<'a> Source<'a> {
     /// its stderr, so an operator reading a sweep row or `auto-task show`
     /// learns which ref git could not resolve instead of a bare token.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
-        self.command_with(program, args, &[], None, COMMAND_BUDGET)
+        self.command_with_output(program, args, &[], None, COMMAND_BUDGET, true)
     }
 
     fn command_with(
@@ -55,6 +55,18 @@ impl<'a> Source<'a> {
         env: &[(&str, &str)],
         input: Option<&[u8]>,
         budget: Duration,
+    ) -> Result<String, AutomationError> {
+        self.command_with_output(program, args, env, input, budget, true)
+    }
+
+    fn command_with_output(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        input: Option<&[u8]>,
+        budget: Duration,
+        trim_output: bool,
     ) -> Result<String, AutomationError> {
         if self.started.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
@@ -152,11 +164,21 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred("source_budget".into()));
         }
 
-        Ok(result.trim().into())
+        Ok(if trim_output {
+            result.trim().into()
+        } else {
+            result
+        })
     }
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
         self.command("git", args)
+    }
+
+    /// [`Self::git`] without trimming stdout. Use for NUL-delimited path lists,
+    /// where leading or trailing path bytes are data rather than whitespace.
+    pub(crate) fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError> {
+        self.command_with_output("git", args, &[], None, COMMAND_BUDGET, false)
     }
 
     /// [`Self::git`] with `input` on standard input, under the same budget.
