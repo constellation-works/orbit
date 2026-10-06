@@ -246,11 +246,12 @@ pub(super) fn converge_clock_unit_with(
     // Ask the manager whether the unit is registered *before* rewriting it: a
     // clock the operator paused must come back paused, not running. A unit an
     // earlier failed reload left unloaded is not paused, so a pending marker
-    // counts as registered and skips the probe. A status command that merely
-    // exits non-zero is not a pause: transport failures and any other output
-    // that does not name a disabled or not-loaded unit are treated as
-    // registered, so the rewrite is activated and a failed activation stays
-    // pending instead of exiting clean.
+    // counts as registered and skips the probe. A non-zero status command is
+    // not by itself a pause. For systemd, only diagnostics naming a disabled
+    // or missing unit mean paused; other failures count as registered. For
+    // launchd, an explicit not-loaded diagnostic means paused, and otherwise
+    // the follow-up manager probe distinguishes a reachable manager from an
+    // unqueryable one.
     let was_registered = reload_pending || clock_unit_registered(platform, runner)?;
     let settings = load_clock_settings(global_root)?;
     let orbit_bin = program.to_string_lossy().to_string();
