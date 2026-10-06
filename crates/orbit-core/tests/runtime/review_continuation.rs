@@ -258,6 +258,19 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             "ORB-14313: evidence holds must not fail delivery"
         );
         assert!(run.finished_at.is_some());
+        let terminal_runs = fixture
+            .runtime
+            .list_job_runs_observed(orbit_core::application::job::JobRunListParams {
+                terminal_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            terminal_runs
+                .iter()
+                .any(|candidate| candidate.run_id == hold.run_id),
+            "held delivery runs must appear in terminal-only history"
+        );
         let wait = fixture
             .runtime
             .wait_pipeline_runs(std::slice::from_ref(&hold.run_id), 1, 1, None)

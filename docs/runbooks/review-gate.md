@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Read a before-PR review's verdict, reviewer commit and findings comment, and decide what to do with a task the gate blocked.
+summary: Inspect before-PR review verdicts, findings, and evidence holds, then decide how to resume a task.
 tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
 related_features: [review-gate]
@@ -10,9 +10,9 @@ last_validated: 2026-10-06
 
 # Operate the Before-PR Review Gate
 
-Use this runbook when `review.before_pr = true` and you need to
-read what a review did to a delivery, or a task is `blocked` with a
-`review_gate_escalation` event.
+Use this runbook when `review.before_pr = true` and you need to read what a
+review did to a delivery, or a task is `blocked` with a `review_gate_escalation`
+event or `in-progress` while awaiting named external evidence.
 
 ## 1. What the gate does
 
