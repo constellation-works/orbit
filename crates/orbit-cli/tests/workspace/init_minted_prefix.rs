@@ -47,7 +47,7 @@ fn init_refuses_a_prefix_that_contradicts_minted_ids_and_writes_no_identity() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     fs::create_dir_all(&home).expect("fixture home");
-    fs::create_dir_all(work.join(".git")).expect("fixture work repo");
+    crate::git_repo::init(&work);
 
     let init = run(&work, &home, &["workspace", "init", "--name", "minted"]);
     assert!(init.status.success(), "workspace init: {init:?}");
@@ -95,7 +95,7 @@ fn init_on_a_machine_with_no_minted_ids_still_creates_the_identity() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     fs::create_dir_all(&home).expect("fixture home");
-    fs::create_dir_all(work.join(".git")).expect("fixture work repo");
+    crate::git_repo::init(&work);
 
     let init = run(&work, &home, &["workspace", "init", "--name", "fresh"]);
     assert!(init.status.success(), "workspace init: {init:?}");
