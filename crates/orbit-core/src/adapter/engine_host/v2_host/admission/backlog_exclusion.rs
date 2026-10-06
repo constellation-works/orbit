@@ -403,6 +403,9 @@ fn backlog_snapshot_in_mode(
     // this path would only add a way for the drain's hot loop to fail on a
     // journal awaiting repair. The paths that can reach a claimed task
     // directly, rather than through the backlog, consult it themselves.
+    // [ORB-14247] `no-diff-expected` is omitted from this map. The claim
+    // journal still fences that task's own writes; it just does not exclude
+    // overlapping backlog work.
     let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order

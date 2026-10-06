@@ -11,8 +11,9 @@ spec:
     `orbit run readiness` reads, so the two cannot disagree about which task
     takes a slot. Every candidate is an ordinary leaf admitted on its own
     declared footprint — parent/child relations change nothing — so an
-    `in-progress` task excludes exactly the leaves that overlap it and
-    conflict-free chores keep shipping alongside it. Leaves are capped at the
+    `in-progress` task excludes exactly the leaves that overlap it, except a
+    task tagged `no-diff-expected`, which holds no context lock.
+    Conflict-free chores keep shipping alongside it. Leaves are capped at the
     number of free leaf-run slots (`max_active_leaf_runs` minus the live
     `task_auto_pipeline` runs), and tasks a live child is already carrying are
     excluded — a detached leaf stays `backlog` until its child moves it to
