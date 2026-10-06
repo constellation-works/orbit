@@ -115,14 +115,14 @@ pub(super) fn migrated_default_executor_for_platform(
         changed = true;
     }
 
-    // Re-align a leftover platform-mismatched sandbox on an installed default
-    // to the platform-appropriate value chosen at seed time. Upgrading a host
-    // that can't apply the persisted primitive (e.g. `macos-sandbox-exec`
-    // installed on Linux before [ORB-10112]) drops it to the seeded value so
-    // dispatch doesn't fail closed. See [ORB-10047].
+    // Re-align a platform-mismatched sandbox only when the shipped default
+    // declares a replacement. A default without a sandbox (e.g. local-shell)
+    // must keep an operator's setting so dispatch still fails closed rather
+    // than silently removing confinement. See [ORB-14342].
     if let Some(kind) = existing.sandbox
+        && let Some(seeded_kind) = seeded.sandbox
         && !kind.is_available_on(target_os)
-        && existing.sandbox != seeded.sandbox
+        && kind != seeded_kind
     {
         tracing::debug!(
             executor = %existing.name,
@@ -130,7 +130,7 @@ pub(super) fn migrated_default_executor_for_platform(
             target_os,
             "re-aligning platform-mismatched sandbox on installed default executor to seeded value",
         );
-        migrated.sandbox = seeded.sandbox;
+        migrated.sandbox = Some(seeded_kind);
         changed = true;
     }
 
