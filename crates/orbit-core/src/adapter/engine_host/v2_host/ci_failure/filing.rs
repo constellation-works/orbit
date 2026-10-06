@@ -74,13 +74,6 @@ pub(crate) const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
 /// Title prefix on every task this step files, so a sweep-filed task is
 /// identifiable in a backlog listing without reading its tags.
 pub(super) const CI_FAILURE_SWEEP_TITLE_PREFIX: &str = "[ci-failure-sweep] ";
-/// The system crew name. Filed tasks belong on the system lane, matching the
-/// shipped `ci-failure-remediation` auto-task — but this is a plain default,
-/// not a hard-coded assumption that the lane is configured: a workspace whose
-/// crew roster has no `system` entry still gets its task filed, just without
-/// a crew set.
-const SYSTEM_CREW: &str = "system";
-
 const DEFAULT_MAX_TASKS: u64 = 5;
 const MAX_MAX_TASKS: u64 = 20;
 /// Log bytes carried into a task description. `collect_ci_evidence` has already
@@ -364,15 +357,6 @@ where
     // Two clusters in one snapshot can share a failure key when the same root
     // cause was tested at two commits. The first filing closes the second.
     let mut filed_keys: BTreeSet<String> = BTreeSet::new();
-    // Probed once per sweep rather than assumed: a workspace whose crew
-    // roster has no `system` entry still needs filing to succeed, degrading
-    // the same way any other task with an unrecognized crew does instead of
-    // failing the sweep.
-    let system_crew = runtime
-        .validate_crew_name(Some(SYSTEM_CREW))
-        .is_ok()
-        .then(|| SYSTEM_CREW.to_string());
-
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
     // Every cluster and legacy key is assessed against one snapshot: the
@@ -520,9 +504,9 @@ where
             // Deliberately empty: the evidence is already in the description,
             // so the task ships on the ordinary agent baseline.
             required_tools: Vec::new(),
-            crew: system_crew.clone(),
+            crew: None,
             priority: TaskPriority::High,
-            complexity: TaskComplexity::Unassessed,
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Bug),
             // Filing is quarantine, not dispatch authorization. The
             // task-pilot apply boundary is the only CI-sweep path that may

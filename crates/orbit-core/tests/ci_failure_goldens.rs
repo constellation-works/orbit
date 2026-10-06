@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
+use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -467,4 +468,54 @@ fn ci_failure_sweep_tags_repairs_with_the_failing_runner_os() {
             "{name}: the description records the runner evidence"
         );
     }
+}
+
+#[test]
+fn ci_failure_sweep_uses_medium_pool_and_preserves_failure_key_tag() {
+    if !isolated("ci_failure_sweep_uses_medium_pool_and_preserves_failure_key_tag") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        r#"[workflow]
+default_crew = "system"
+medium_complexity_crews = ["fixture"]
+
+[crews.fixture]
+provider = "codex"
+model = "fixture-model"
+backend = "cli"
+
+[crews.system]
+provider = "codex"
+model = "system-model"
+backend = "cli"
+"#,
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let output = file(
+        &runtime,
+        vec![failure(
+            "error: pool routing regression",
+            0,
+            &"3".repeat(40),
+        )],
+    );
+    let entry = &output["filed"][0];
+    let task = runtime
+        .get_task(entry["task_id"].as_str().unwrap())
+        .unwrap();
+
+    assert_eq!(task.complexity, Some(TaskComplexity::Medium));
+    assert_eq!(task.crew.as_deref(), Some("fixture"));
+    assert!(task.tags.contains(&format!(
+        "ci-failure:{}",
+        entry["failure_key"].as_str().unwrap()
+    )));
 }
