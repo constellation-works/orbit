@@ -347,6 +347,28 @@ worker permission no longer depends on Cargo's filename layout.
   test module does. CLI integration tests that execute the real `orbit`
   binary instead exercise its production entry point.
 
+## Workspace-local Rust toolchains
+
+`proc.spawn` refuses a default-profile rustup toolchain install whose resolved
+`RUSTUP_HOME` is inside the workspace. The default and complete profiles write
+rust-docs, including `share/doc/rust/html/core/macro.env.html`. denyModify
+`**/*.env.*` matches that name even under `.orbit/tmp/`: the earlier
+`!.orbit/tmp/**` exception does not win. The refusal is returned before the
+child starts, and the error names the install and that deny rule.
+
+A validation command that needs a toolchain inside the workspace must use an
+absolute preprovisioned minimal toolchain, or install with
+`rustup toolchain install <version> --profile minimal --component rust-src --no-self-update`,
+as `scripts/codeql-rust-local.sh` does. `--profile minimal` does not install
+rust-docs. Setting `RUSTUP_HOME` inside the workspace and letting `cargo` or
+another rustup proxy auto-install a missing toolchain uses the default profile
+and is refused. A toolchain already installed under that root is left alone, as
+is an install whose root is outside the workspace (the usual `~/.rustup`).
+
+The secret globs are unchanged. A managed Linux run that still creates
+`macro.env.html`, `.env`, `.env.local`, or `secrets.env` fails the post-run
+guard.
+
 ## Toolchain (MSRV)
 
 Orbit's minimum supported Rust version is declared as `rust-version` in the

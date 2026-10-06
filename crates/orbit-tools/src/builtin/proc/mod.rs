@@ -1,4 +1,5 @@
 mod git_config;
+mod rustup_install;
 pub mod spawn;
 
 use crate::ToolRegistry;

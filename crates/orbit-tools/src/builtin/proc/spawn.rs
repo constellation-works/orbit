@@ -8,6 +8,7 @@ use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::{Value, json};
 
 use super::git_config::enforce_no_persistent_git_config;
+use super::rustup_install::enforce_no_workspace_default_rustup_install;
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
 
 pub struct ProcSpawnTool;
@@ -68,6 +69,18 @@ impl Tool for ProcSpawnTool {
         let requested_timeout_ms = input.get("timeout_ms").and_then(Value::as_u64);
         let timeout_ms = proc_spawn_timeout_ms(&input);
         let request = spawn_request(ctx, program, args, timeout_ms);
+        // The child environment is always ClearAndSet: this boundary composes
+        // it before launch, and the rustup refusal has to see that environment
+        // rather than the worker's ambient one.
+        if let EnvironmentMode::ClearAndSet(ref env) = request.environment_mode {
+            enforce_no_workspace_default_rustup_install(
+                "proc.spawn",
+                &request.program,
+                &request.args,
+                env,
+                ctx.workspace_root.as_deref(),
+            )?;
+        }
         // A managed CLI worker already runs under Bubblewrap (Linux) or
         // sandbox-exec (macOS). Its children inherit that OS boundary. Adding
         // Landlock here would narrow reads again and refuse macOS outright.
