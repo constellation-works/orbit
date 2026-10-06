@@ -158,6 +158,14 @@ jobs:
           rm -f "$archive"
           cargo nextest --version
 
+      # Provider inspection fixtures run real git/rg commands. The runner
+      # image lacks ripgrep, so coverage needs the same prerequisite as ci.
+      - name: Install ripgrep
+        run: |
+          set -euo pipefail
+          command -v rg >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version | head -1
+
       # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
       # binary comes from the network; the plugin fixture's dependency is a
       # wheel inside the fixture, so the test itself never reaches PyPI.
