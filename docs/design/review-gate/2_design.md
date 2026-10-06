@@ -323,7 +323,11 @@ the final report does not repeat verbatim are kept on the certificate as
 obligations are only what reports recorded; the gate never infers
 requirements from free-form repository instructions.
 
-Required records carry a stable `id` across revisions [ORB-14370]. Matching
+Required records carry a non-empty stable `id` from their first submission
+across revisions [ORB-14370]. The report put refuses a newly submitted
+required record with no id or distinct records reusing an id, while reports
+already stored without ids remain readable under their legacy rules. One
+`superseded` attempt and its required replacement may share an id. Matching
 an earlier record by command text could not converge: reviewers legitimately
 rename, rewrap and concretise commands between revisions, and seven correct
 candidates in one shift settled `incomplete` that way (ORB-14360 recorded the

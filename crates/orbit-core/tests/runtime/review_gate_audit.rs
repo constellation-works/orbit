@@ -153,7 +153,7 @@ impl Fixture {
             "attempt_id": self.input["admission"]["attempt_id"],
             "verdict": verdict, "summary": "Checked candidate.",
             "findings": [],
-            "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+            "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
             "escalation": if verdict == "accept" { None } else { Some("Reviewer cannot accept candidate.") },
         }));
     }

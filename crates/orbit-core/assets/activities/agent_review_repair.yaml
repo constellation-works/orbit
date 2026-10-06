@@ -205,8 +205,9 @@ spec:
          the candidate changes; a failure inside them is the task's own and
          must be `required`. It cannot share its check with a required pass.
 
-       Give every `required` record a stable `id` (`V1`, `V2`, ...) the first
-       time you file it. A record you once filed `required` stays an
+       Give every `required` record a distinct, non-empty stable `id` (`V1`,
+       `V2`, ...) the first time you file it. Reuse an id only for one
+       `superseded` attempt and its required replacement. A record you once filed `required` stays an
        obligation for this attempt: the host keeps every report revision you
        attach, and every later revision must carry that `id` forward with the
        check's current `command` and `outcome` — rename, rewrap or concretise
@@ -219,7 +220,11 @@ spec:
        cannot be retired; rerun it. The report put refuses a revision that
        drops, relabels as `diagnostic` or `expected_failure`, or improperly
        retires an earlier id, naming the record: fix the report and put it
-       again. Records without an `id` fall back to matching by `check` or
+       again. The put also refuses a newly submitted `required` record with
+       a missing or blank id, naming its command, or distinct records that
+       reuse an id. Reports already stored
+       without ids remain readable under their legacy command-identity
+       rules. Records without an `id` fall back to matching by `check` or
        normalized command, which a renamed command does not satisfy.
 
        At least one `required` record must pass, or the review establishes
@@ -285,7 +290,7 @@ spec:
           "validation":{"type":"array","items":{"type":"object",
             "required":["command","outcome"],
             "properties":{
-              "id":{"type":"string","description":"stable record id, e.g. V1; give one to every required record and keep it across revisions"},
+              "id":{"type":"string","description":"stable record id, e.g. V1; required for every required record and kept across revisions"},
               "command":{"type":"string"},
               "outcome":{"enum":["passed","failed","denied","not_run"]},
               "role":{"enum":["required","expected_failure","excluded","superseded","diagnostic"]},

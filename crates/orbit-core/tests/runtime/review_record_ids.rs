@@ -8,11 +8,18 @@
 //! drops an earlier record id while the reviewer can still correct it, and
 //! the deterministic settlement then compares by id.
 
+use chrono::{Duration, Utc};
 use orbit_automation::review::certificate_acceptable;
+use orbit_common::security::release::sha256_hex;
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::{
+    ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME,
+    TASK_ARTIFACTS_DIR_NAME,
+};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    REVIEW_REPORT_HISTORY_ARTIFACT, RetiredValidation, ReviewCertificate, ReviewReportHistory,
-    ReviewVerdict, ValidationOutcome,
+    REVIEW_REPORT_HISTORY_ARTIFACT, RetiredValidation, ReviewCertificate, ReviewReport,
+    ReviewReportHistory, ReviewReportRevision, ReviewVerdict, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -50,6 +57,60 @@ fn history_len(fixture: &Fixture) -> usize {
         .unwrap()
         .revisions
         .len()
+}
+
+/// Seed the artifacts a pre-id build could already have stored, bypassing
+/// today's submit-time validation while exercising normal runtime settlement.
+fn seed_legacy_reports(fixture: &Fixture, earlier: &Value, current: &Value) {
+    let earlier_bytes = earlier.to_string().into_bytes();
+    let current_bytes = current.to_string().into_bytes();
+    let earlier_report = ReviewReport::parse(&earlier_bytes).unwrap();
+    let current_report = ReviewReport::parse(&current_bytes).unwrap();
+    let mut history = ReviewReportHistory::default();
+    history
+        .record(ReviewReportRevision {
+            attempt_id: earlier_report.attempt_id,
+            sha256: sha256_hex(&earlier_bytes),
+            observed_at: Utc::now() - Duration::seconds(1),
+            recorded_by: "legacy-reviewer".into(),
+            verdict: earlier_report.verdict,
+            validation: earlier_report.validation,
+        })
+        .unwrap();
+    let history_bytes = serde_json::to_vec_pretty(&history).unwrap();
+
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
+    let bundle = registry
+        .canonical_task_bundle_path(&fixture.runtime.workspace_id().unwrap(), &fixture.task_id)
+        .unwrap();
+    let artifacts = bundle.join(TASK_ARTIFACTS_DIR_NAME);
+    let manifest_path = artifacts.join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+    let mut manifest: ArtifactManifestV2 =
+        serde_yaml::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+
+    for (path, bytes) in [
+        (REVIEW_REPORT_ARTIFACT, current_bytes),
+        (REVIEW_REPORT_HISTORY_ARTIFACT, history_bytes),
+    ] {
+        let digest = sha256_hex(&bytes);
+        let blob = format!("files/.blob-{}-{digest}", sha256_hex(path.as_bytes()));
+        std::fs::write(artifacts.join(&blob), &bytes).unwrap();
+        manifest.files.retain(|file| file.path != path);
+        manifest.files.push(ArtifactManifestFileV2 {
+            origin: None,
+            path: path.into(),
+            blob,
+            sha256: digest,
+            media_type: "application/json".into(),
+            size_bytes: bytes.len() as u64,
+            created_by: "legacy-reviewer".into(),
+            created_at: Utc::now(),
+        });
+    }
+    std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    assert_eq!(current_report.validation[0].id, None);
 }
 
 /// ORB-14360 recorded a prose-named check `not_run` and later the real
@@ -130,6 +191,37 @@ fn a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted() {
     }
     let mut fixture = Fixture::new();
     fixture.admit();
+    let missing_id = fixture
+        .try_put_report(&report(
+            &fixture,
+            "incomplete",
+            json!([{"command": "make ci-fast", "outcome": "not_run", "role": "required"}]),
+            json!([]),
+        ))
+        .expect_err("a newly submitted required record needs an id");
+    assert!(
+        missing_id.to_string().contains(
+            "required validation record `make ci-fast` must have a stable, non-empty `id`"
+        ),
+        "the first-submission refusal names the missing field and record: {missing_id}"
+    );
+    let duplicate_id = fixture
+        .try_put_report(&report(
+            &fixture,
+            "incomplete",
+            json!([
+                {"id": "V1", "command": "make ci-fast", "outcome": "not_run", "role": "required"},
+                {"id": "V1", "command": "cargo test -p orbit-core", "outcome": "not_run", "role": "required"}
+            ]),
+            json!([]),
+        ))
+        .expect_err("distinct required records cannot share an id");
+    assert!(
+        duplicate_id
+            .to_string()
+            .contains("validation record id `V1` is used by multiple records"),
+        "the duplicate-id refusal identifies the ambiguous id: {duplicate_id}"
+    );
     let first = report(
         &fixture,
         "incomplete",
@@ -186,17 +278,27 @@ fn a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted() {
     );
     assert_eq!(history_len(&fixture), 1);
 
-    // The corrected revision reruns V1 under a wrapped command and retires
-    // V2, which never ran.
+    // The corrected revision carries V1 as a superseded failed attempt and
+    // its required passing rerun, both under V1, then retires V2, which never
+    // ran.
     fixture.put_report(&report(
         &fixture,
         "accept",
-        json!([{
-            "id": "V1",
-            "command": "set -o pipefail; make ci-fast 2>&1 | tee .orbit/tmp/ci-fast.log",
-            "outcome": "passed",
-            "role": "required",
-        }]),
+        json!([
+            {
+                "id": "V1",
+                "command": "make ci-fast",
+                "outcome": "failed",
+                "role": "superseded",
+                "note": "rerun after the failed first attempt",
+            },
+            {
+                "id": "V1",
+                "command": "set -o pipefail; make ci-fast 2>&1 | tee .orbit/tmp/ci-fast.log",
+                "outcome": "passed",
+                "role": "required",
+            }
+        ]),
         json!([{"id": "V2", "reason": "the docs target was removed from this repository"}]),
     ));
     assert_eq!(history_len(&fixture), 2);
@@ -254,18 +356,19 @@ fn reports_without_record_ids_keep_the_command_identity_rules() {
     ] {
         let mut fixture = Fixture::new();
         fixture.admit();
-        fixture.put_report(&report(
+        let earlier_report = report(
             &fixture,
             "incomplete",
             json!([{"command": earlier, "outcome": "not_run"}]),
             json!([]),
-        ));
-        fixture.put_report(&report(
+        );
+        let current_report = report(
             &fixture,
             "accept",
             json!([{"command": current, "outcome": "passed"}]),
             json!([]),
-        ));
+        );
+        seed_legacy_reports(&fixture, &earlier_report, &current_report);
         let settled = fixture.settle();
         let certificate = certificate(&fixture);
         assert_eq!(settled.is_ok(), passes, "{earlier} -> {current}");

@@ -10,6 +10,8 @@
 //! applies this rule when a report is attached, while the reviewer can still
 //! correct it, and settlement applies the same rule to the final report.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::review::{
@@ -109,6 +111,64 @@ pub fn record_gap(
 }
 
 impl ReviewReportHistory {
+    /// Refuse a newly submitted required validation record without its stable
+    /// id. Existing stored reports still parse and settle under their legacy
+    /// command-identity rules; this check applies at report attachment time.
+    pub fn check_required_record_ids(report: &ReviewReport) -> Result<(), String> {
+        for record in &report.validation {
+            if record.role == ValidationRole::Required && record.record_id().is_none() {
+                return Err(format!(
+                    "{REVIEW_REPORT_ARTIFACT}: required validation record `{}` must have a stable, non-empty `id` (for example `V1`); add `\"id\": \"V1\"` and attach the report again",
+                    record
+                        .command
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+        }
+
+        let mut records_by_id: BTreeMap<&str, Vec<&ReviewValidation>> = BTreeMap::new();
+        for record in &report.validation {
+            if let Some(id) = record.record_id() {
+                records_by_id.entry(id).or_default().push(record);
+            }
+        }
+        for (id, records) in records_by_id {
+            let is_superseded_pair = records.len() == 2
+                && records
+                    .iter()
+                    .filter(|record| record.role == ValidationRole::Required)
+                    .count()
+                    == 1
+                && records
+                    .iter()
+                    .filter(|record| record.role == ValidationRole::Superseded)
+                    .count()
+                    == 1;
+            if records.len() > 1 && !is_superseded_pair {
+                let commands = records
+                    .iter()
+                    .map(|record| {
+                        format!(
+                            "`{}`",
+                            record
+                                .command
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "{REVIEW_REPORT_ARTIFACT}: validation record id `{id}` is used by multiple records ({commands}); give each check a distinct id. Only one `superseded` attempt and its `required` replacement may share an id; correct the report and attach it again"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Refuse `report` when it drops a required record an earlier revision of
     /// its attempt filed under an id, naming that record and how to fix the
     /// report. Records written without ids are left to settlement's

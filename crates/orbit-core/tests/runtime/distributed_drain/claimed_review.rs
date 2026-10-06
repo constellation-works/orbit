@@ -176,7 +176,7 @@ impl ReviewedLeaf {
                 change: fix.then(|| "Replaced the stub".into()),
             }],
             validation: vec![ReviewValidation {
-                id: None,
+                id: Some("V1".into()),
                 command: "make ci-fast".into(),
                 outcome: ValidationOutcome::Passed,
                 role: ValidationRole::Required,

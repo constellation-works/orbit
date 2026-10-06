@@ -38,6 +38,7 @@ pub(crate) fn review_report_history(
     let Ok(parsed) = ReviewReport::parse(&report.content) else {
         return Ok(None);
     };
+    ReviewReportHistory::check_required_record_ids(&parsed).map_err(OrbitError::InvalidInput)?;
     let mut history = match held.get(REVIEW_REPORT_HISTORY_ARTIFACT) {
         Some(file) => {
             let path = resolve_v2_artifact_file_path(bundle_dir, &file.blob)?.ok_or_else(|| {
