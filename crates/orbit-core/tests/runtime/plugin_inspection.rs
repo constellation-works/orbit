@@ -1,9 +1,13 @@
 //! Plugin inspection uses the same workspace pins as sync and runtime loading.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use orbit_core::application::plugin::{plugin_doctor, sync_plugins};
+use orbit_common::fs::io::create_dir_symlink;
+use orbit_core::application::plugin::{
+    PluginAddOptions, PluginEnableOptions, PluginUpgradeOptions, enable_plugin, install_plugin,
+    plugin_doctor, sync_plugins, upgrade_plugin,
+};
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::plugin::PluginStatus;
@@ -105,4 +109,206 @@ fn linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins() {
     assert!(sync_plugins(&runtime, true, &[]).unwrap().is_empty());
     drop(runtime);
     std::env::set_current_dir(original_cwd).unwrap();
+}
+
+struct SkillPluginFixture {
+    root: tempfile::TempDir,
+    runtime: OrbitRuntime,
+}
+
+impl SkillPluginFixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = OrbitRuntime::from_roots(
+            &root.path().join("global"),
+            &root.path().join("repo/.orbit"),
+        )
+        .unwrap();
+        Self { root, runtime }
+    }
+
+    fn source(&self, version: &str, skills: &[&str]) -> PathBuf {
+        let source = self
+            .root
+            .path()
+            .join("sources")
+            .join(version)
+            .join(orbit_types::plugin::PLUGIN_DIR_NAME);
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::fs::write(source.join("bin/backend.sh"), "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                source.join("bin/backend.sh"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        for skill in skills {
+            let directory = source.join("skills").join(skill);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("SKILL.md"), "# Fixture skill\n").unwrap();
+        }
+        let skill_paths: Vec<_> = skills
+            .iter()
+            .map(|skill| format!("skills/{skill}"))
+            .collect();
+        std::fs::write(
+            source.join("plugin.yaml"),
+            format!(
+                "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: guide\n  version: {version}\n  \
+                 description: Skill lifecycle fixture.\nspec:\n  backend:\n    type: exec\n    \
+                 command: bin/backend.sh\n  skills: [{}]\n  tools:\n    - name: hello\n      \
+                 description: Hello.\n      execution_kind: read_only\n",
+                skill_paths.join(", ")
+            ),
+        )
+        .unwrap();
+        source
+    }
+
+    fn discovery_roots(&self) -> Vec<PathBuf> {
+        [".agents", ".claude"]
+            .into_iter()
+            .map(|directory| self.root.path().join(directory).join("skills"))
+            .collect()
+    }
+}
+
+#[test]
+fn enabled_upgrade_reconciles_dropped_and_renamed_skills() {
+    if !isolated("plugin_inspection::enabled_upgrade_reconciles_dropped_and_renamed_skills") {
+        return;
+    }
+    let fixture = SkillPluginFixture::new();
+    let source = fixture.source("1.0.0", &["keep", "drop", "rename"]);
+    let installed = install_plugin(
+        &fixture.runtime,
+        source.to_str().unwrap(),
+        &PluginAddOptions {
+            enable: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut old_install = PathBuf::from(installed.install_path);
+    let foreign = fixture
+        .root
+        .path()
+        .join("global/plugins/other/1.0.0/skills/guide");
+    std::fs::create_dir_all(&foreign).unwrap();
+    let namespace = old_install.parent().unwrap();
+    let escaped = namespace.join("../other/1.0.0/skills/guide");
+    for root in fixture.discovery_roots() {
+        assert!(root.join("guide-drop").exists());
+        create_dir_symlink(&escaped, &root.join("foreign")).unwrap();
+        // A nonstandard discovery name and a relative target must still be
+        // cleaned by ownership, rather than by the current manifest's names.
+        let relative = PathBuf::from("../../global/plugins/guide/1.0.0/skills/drop");
+        create_dir_symlink(&relative, &root.join("custom-old")).unwrap();
+        std::fs::write(root.join("notes"), "keep").unwrap();
+    }
+    for (version, skills) in [("2.0.0", vec!["keep", "renamed"]), ("3.0.0", vec![])] {
+        let source = fixture.source(version, &skills);
+        let upgraded = upgrade_plugin(
+            &fixture.runtime,
+            "guide",
+            Some(source.to_str().unwrap()),
+            &PluginUpgradeOptions::default(),
+        )
+        .unwrap();
+        assert!(upgraded.summary.host_enabled);
+        assert!(!old_install.exists(), "upgrade prunes the old version");
+        let current = PathBuf::from(upgraded.summary.install_path);
+        for root in fixture.discovery_roots() {
+            for removed in ["guide-drop", "guide-rename", "custom-old"] {
+                assert!(std::fs::symlink_metadata(root.join(removed)).is_err());
+            }
+            for name in ["keep", "renamed"] {
+                let link = root.join(format!("guide-{name}"));
+                if skills.contains(&name) {
+                    assert_eq!(
+                        link.canonicalize().unwrap(),
+                        current.join("skills").join(name).canonicalize().unwrap()
+                    );
+                } else {
+                    assert!(std::fs::symlink_metadata(link).is_err());
+                }
+            }
+            assert_eq!(std::fs::read_link(root.join("foreign")).unwrap(), escaped);
+            assert_eq!(std::fs::read_to_string(root.join("notes")).unwrap(), "keep");
+            create_dir_symlink(&current, &root.join("current-alias")).unwrap();
+        }
+        // Re-enable preserves custom links owned by the current install.
+        let enabled =
+            enable_plugin(&fixture.runtime, "guide", &PluginEnableOptions::default()).unwrap();
+        assert!(enabled.warnings.is_empty(), "{:?}", enabled.warnings);
+        for root in fixture.discovery_roots() {
+            assert_eq!(
+                std::fs::read_link(root.join("current-alias")).unwrap(),
+                current
+            );
+        }
+        // The next upgrade must clean this custom link into the old version.
+        old_install = current;
+    }
+}
+
+#[test]
+fn doctor_reports_dangling_skill_links_across_namespace_versions() {
+    if !isolated("plugin_inspection::doctor_reports_dangling_skill_links_across_namespace_versions")
+    {
+        return;
+    }
+    let fixture = SkillPluginFixture::new();
+    let source = fixture.source("2.0.0", &["keep"]);
+    let installed = install_plugin(
+        &fixture.runtime,
+        source.to_str().unwrap(),
+        &PluginAddOptions {
+            enable: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let current = PathBuf::from(installed.install_path);
+    let runtime = OrbitRuntime::from_roots(
+        &fixture.runtime.global_root(),
+        &fixture.runtime.shared_root(),
+    )
+    .unwrap();
+    let baseline = plugin_doctor(&runtime).unwrap();
+    let mut expected = Vec::new();
+    for root in fixture.discovery_roots() {
+        for version in ["1.0.0", "2.0.0", "9.0.0"] {
+            let target = current
+                .parent()
+                .unwrap()
+                .join(version)
+                .join("skills/missing");
+            let link = root.join(format!("missing-{version}"));
+            create_dir_symlink(&target, &link).unwrap();
+            expected.push(link);
+        }
+        let foreign = fixture
+            .root
+            .path()
+            .join("global/plugins/other/1.0.0/skills/missing");
+        create_dir_symlink(&foreign, &root.join("foreign-missing")).unwrap();
+    }
+    let rows = plugin_doctor(&runtime).unwrap();
+    let findings: Vec<_> = rows.iter().filter(|row| !baseline.contains(row)).collect();
+    assert_eq!(findings.len(), expected.len(), "{rows:?}");
+    for link in expected {
+        assert!(
+            findings.iter().any(|row| {
+                row.plugin == "guide"
+                    && !row.intentional
+                    && row.message.contains(link.to_str().unwrap())
+            }),
+            "doctor must report dangling link {}: {rows:?}",
+            link.display()
+        );
+    }
 }
