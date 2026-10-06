@@ -249,7 +249,7 @@ want before upgrading a machine that matters.
 ```bash
 orbit audit list --since 1h --status failure
 orbit audit stats --since 7d
-orbit audit export --json > audit.json
+orbit audit export --output audit.json
 orbit audit prune --older-than 90d --confirm
 ```
 

@@ -105,7 +105,7 @@ target only the intended run:
 
 ```bash
 orbit run show <run-id> --json
-orbit run cancel <run-id>
+orbit run cancel <run-id> --confirm
 ```
 
 Cancelling a parent may affect children. Inspect that behavior before replacing
