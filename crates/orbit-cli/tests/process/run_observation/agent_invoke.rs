@@ -2,13 +2,15 @@
 
 use super::*;
 
+const AGENT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn operator_json(fixture: &Fixture, args: &[&str]) -> Value {
     let output = fixture
         .orbit()
         .env("ORBIT_OPERATOR", "1")
         .env_remove("RUST_LOG")
         .args(args)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .output()
         .unwrap();
     assert!(output.status.success(), "{args:?}: {output:?}");
@@ -133,6 +135,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
         .env("ORBIT_OPERATOR", "1")
         .env_remove("RUST_LOG")
         .args(["run", "agent", "probe", "--wait", "--timeout", "30s"])
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .assert()
         .success()
         .get_output()
@@ -143,9 +146,14 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
         "the human wait view prints the answer"
     );
 
-    for (body, timeout, reason) in [
-        ("printf '%s\\n' 'no envelope'", "30", "response envelope"),
-        ("/bin/sleep 30", "1", "wall-clock timeout"),
+    for (body, timeout, reason, expected_log) in [
+        (
+            "printf '%s\\n' 'no envelope'",
+            "30",
+            "response envelope",
+            Some("no envelope"),
+        ),
+        ("/bin/sleep 30", "1", "wall-clock timeout", None),
     ] {
         plant_invoke_provider(&fixture, body);
         let output = fixture
@@ -161,7 +169,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
                 timeout,
                 "--json",
             ])
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(AGENT_COMMAND_TIMEOUT)
             .output()
             .unwrap();
         assert!(
@@ -169,6 +177,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
             "a failed invocation must fail --wait: {output:?}"
         );
         let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["waited"], true, "{result}");
         assert!(
             result["agent_invocation"]["failure_reason"]
                 .as_str()
@@ -177,18 +186,31 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
             "{result}"
         );
         assert_eq!(result["answer"], Value::Null);
-        fixture
+        let run_id = result["run_id"].as_str().unwrap();
+        assert_eq!(fixture.run_state(run_id), "failed", "{result}");
+        // ORB-14397: the old five-second assertion deadline killed this new
+        // CLI process under full-suite load, even after --wait finished the run.
+        // Allow the same startup budget as the agent commands; the provider's
+        // one-second timeout above still exercises invocation termination.
+        let logs = fixture
             .orbit()
-            .args([
-                "run",
-                "logs",
-                result["run_id"].as_str().unwrap(),
-                "--follow",
-                "--json",
-            ])
-            .timeout(std::time::Duration::from_secs(5))
+            .env_remove("RUST_LOG")
+            .args(["run", "logs", run_id, "--follow", "--json"])
+            .timeout(AGENT_COMMAND_TIMEOUT)
             .assert()
-            .success();
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let mut captured = String::new();
+        for line in String::from_utf8(logs).unwrap().lines() {
+            let record: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(record["run_id"], run_id, "{record}");
+            captured.push_str(record["text"].as_str().unwrap());
+        }
+        if let Some(expected_log) = expected_log {
+            assert!(captured.contains(expected_log), "{captured}");
+        }
     }
 }
 
