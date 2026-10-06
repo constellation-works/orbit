@@ -119,7 +119,8 @@ jobs:
       - name: Run macOS proc.spawn regressions
         run: |
           /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
-          cargo test --locked -p orbit-tools a_git_shell_alias -- --nocapture
+          cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
+          cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.
