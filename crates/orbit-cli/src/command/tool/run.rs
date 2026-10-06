@@ -29,7 +29,7 @@ pub struct ToolRunArgs {
     /// Exact agent model for provenance attribution (overrides ORBIT_AGENT_MODEL)
     #[arg(long)]
     pub model: Option<String>,
-    /// Validate without executing
+    /// Check tool admission and required parameters without executing
     #[arg(long)]
     pub dry_run: bool,
     /// Comma-separated top-level fields to keep from object output. For an
@@ -139,8 +139,15 @@ impl Execute for ToolRunArgs {
         };
         let runtime = bound.as_ref().unwrap_or(runtime);
 
+        let owner = bound_workspace_identity(runtime);
+        let session_context = local_tool_session_context(runtime, owner.as_ref())?;
+
         if self.dry_run {
-            let result = runtime.run_tool_dry_run(&self.name, &input)?;
+            let result = runtime.run_tool_dry_run_with_session_context(
+                &self.name,
+                &input,
+                session_context,
+            )?;
             let policy = if result.policy_allowed {
                 "allowed"
             } else {
@@ -154,17 +161,19 @@ impl Execute for ToolRunArgs {
             let doc = serde_json::json!({
                 "tool_name": result.tool_name,
                 "policy_allowed": result.policy_allowed,
+                "policy_denial_reason": result.policy_denial_reason,
                 "missing_params": result.missing_params,
             });
-            let text = format!(
+            let mut text = format!(
                 "Tool:           {}\nPolicy:         {policy}\nMissing params: {missing}",
                 result.tool_name
             );
+            if let Some(reason) = result.policy_denial_reason {
+                text.push_str(&format!("\nDenial reason:  {reason}"));
+            }
             return Ok(Payload::detail(doc, text).into());
         }
 
-        let owner = bound_workspace_identity(runtime);
-        let session_context = local_tool_session_context(runtime, owner.as_ref())?;
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
             input.clone(),

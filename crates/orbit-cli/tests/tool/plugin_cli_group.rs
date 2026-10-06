@@ -546,6 +546,16 @@ fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
                 .is_some_and(|diagnostic| diagnostic.contains(expected)),
             "{json}"
         );
+        let tool = format!("{namespace}.status");
+        let preview = fixture
+            .orbit_as_operator()
+            .args(["tool", "run", &tool, "--dry-run", "--format", "json"])
+            .output()
+            .expect("preview inactive plugin");
+        assert!(preview.status.success(), "{preview:?}");
+        let preview = stdout_json(&preview);
+        assert_eq!(preview["policy_allowed"], false, "{preview}");
+        assert_eq!(preview["policy_denial_reason"], json["diagnostic"]);
     }
 }
 

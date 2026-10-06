@@ -8,7 +8,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
-use crate::{NotFoundKind, OrbitError, OrbitRuntime};
+use crate::{OrbitError, OrbitRuntime};
 
 /// Which trusted inputs Core may use when applying its capability registry.
 ///
@@ -38,60 +38,11 @@ impl OrbitRuntime {
 
         populate_filesystem_policy_context(self, &mut tool_context)?;
 
-        self.check_tool_enabled(name)?;
-        check_tool_active(self.tool_registry(), name)?;
-
-        // ORB-10453: the capability chokepoint. Every tool caller in the
-        // workspace reaches the registry through this function, so this is the
-        // only place a governed tool operation is authorized — a per-command
-        // guard would be reopened by the next entry point that skips it.
-        self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
-        // Domain extensions preserve the authority of the operations they expose.
-        // Discovery and a client-supplied mode never grant operator capabilities.
-        if name == "orbit.pipeline.invoke"
-            && !orbit_tools::has_pipeline_child_admission(&tool_context)
-        {
-            self.authorize_tool_operation(
-                "orbit.workflow.ship",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if (name == "orbit.pipeline.invoke"
-            && input.get("default_input") == Some(&Value::Bool(true)))
-            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
-            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
-        {
-            self.authorize_tool_operation(
-                "orbit.routine.control",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if name == "orbit.auto_task.list"
-            && input.get("view").and_then(Value::as_str) == Some("bounded")
-        {
-            self.authorize_tool_operation(
-                "orbit.workflow.run.show",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if !tool_context.allowed_tools.is_empty()
-            && !tool_allowed(name, &tool_context.allowed_tools)
-        {
-            return Err(self.deny_activity_tool(
-                name,
-                format!("tool '{name}' is not in the activity allowlist"),
-            ));
-        }
-        if let Some(policy) = tool_context
-            .tool_deny_policy
-            .as_ref()
-            .filter(|policy| policy.denies(name))
-        {
-            return Err(self.deny_activity_tool(name, policy.denial_message(name)));
-        }
+        self.authorize_registered_tool(name, &input, &tool_context, capability_enforcement)?;
+        check_activity_tool_policy(name, &tool_context).map_err(|error| match error {
+            OrbitError::PolicyDenied(reason) => self.deny_activity_tool(name, reason),
+            error => error,
+        })?;
 
         if self.worker_invocation().is_some()
             && super::worker_coordination::is_coordination_tool(name)
@@ -165,44 +116,55 @@ impl OrbitRuntime {
         }
     }
 
-    pub fn run_tool_dry_run(&self, name: &str, input: &Value) -> Result<DryRunResult, OrbitError> {
-        self.ensure_tool_agent_facing(name)?;
+    /// Admission shared by dispatch and dry-run, including input-dependent
+    /// capability floors. This never invokes a tool implementation.
+    pub(crate) fn authorize_registered_tool(
+        &self,
+        name: &str,
+        input: &Value,
+        tool_context: &ToolContext,
+        capability_enforcement: CapabilityEnforcement,
+    ) -> Result<(), OrbitError> {
         self.check_tool_enabled(name)?;
+        check_tool_active(self.tool_registry(), name)?;
 
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
-
-        let mut tool_context = ToolContext {
-            cwd: std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.to_string_lossy().into_owned()),
-            ..Default::default()
-        };
-        tool_context.workspace_root = resolve_workspace_root_from_context(self, &tool_context)?;
-
-        // Validate required parameters are present
-        let mut missing_params = Vec::new();
-        if let Some(obj) = input.as_object() {
-            for param in &schema.parameters {
-                if param.required && !obj.contains_key(&param.name) {
-                    missing_params.push(param.name.clone());
-                }
-            }
-        } else if !schema.parameters.is_empty() {
-            for param in &schema.parameters {
-                if param.required {
-                    missing_params.push(param.name.clone());
-                }
-            }
+        // ORB-10453: the capability chokepoint. Every tool caller in the
+        // workspace reaches the registry through this function, so this is the
+        // only place a governed tool operation is authorized — a per-command
+        // guard would be reopened by the next entry point that skips it.
+        self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
+        // Domain extensions preserve the authority of the operations they expose.
+        // Discovery and a client-supplied mode never grant operator capabilities.
+        if name == "orbit.pipeline.invoke"
+            && !orbit_tools::has_pipeline_child_admission(tool_context)
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.ship",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
         }
-
-        Ok(DryRunResult {
-            tool_name: name.to_string(),
-            policy_allowed: true,
-            missing_params,
-        })
+        if (name == "orbit.pipeline.invoke"
+            && input.get("default_input") == Some(&Value::Bool(true)))
+            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
+            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
+        {
+            self.authorize_tool_operation(
+                "orbit.routine.control",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if name == "orbit.auto_task.list"
+            && input.get("view").and_then(Value::as_str) == Some("bounded")
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.run.show",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        Ok(())
     }
 
     /// A registered-but-inactive entry is refused before it runs.
@@ -222,6 +184,27 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+/// Evaluate activity policy without emitting a mutation event. Real dispatch
+/// records a refusal; dry-run only reports the decision.
+pub(crate) fn check_activity_tool_policy(
+    name: &str,
+    tool_context: &ToolContext,
+) -> Result<(), OrbitError> {
+    if !tool_context.allowed_tools.is_empty() && !tool_allowed(name, &tool_context.allowed_tools) {
+        return Err(OrbitError::PolicyDenied(format!(
+            "tool '{name}' is not in the activity allowlist"
+        )));
+    }
+    if let Some(policy) = tool_context
+        .tool_deny_policy
+        .as_ref()
+        .filter(|policy| policy.denies(name))
+    {
+        return Err(OrbitError::PolicyDenied(policy.denial_message(name)));
+    }
+    Ok(())
 }
 
 /// Refuse a *plugin* entry the host registered inactive, reporting the
@@ -381,11 +364,4 @@ fn read_activity_fs_profile_from_env() -> Option<String> {
     let value = std::env::var("ORBIT_ACTIVITY_FS_PROFILE").ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed.to_string())
-}
-
-#[derive(Debug, Clone)]
-pub struct DryRunResult {
-    pub tool_name: String,
-    pub policy_allowed: bool,
-    pub missing_params: Vec<String>,
 }
