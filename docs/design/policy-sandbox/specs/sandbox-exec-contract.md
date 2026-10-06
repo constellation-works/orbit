@@ -65,7 +65,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 - **Stdin write failure.** Writer-thread error → child terminated → `OrbitError::Execution(<error>)` returned. Captured stdout/stderr up to that point are discarded.
 - **Stdin writer panic.** Writer-thread panic → `OrbitError::Execution("stdin writer thread panicked")` returned.
 - **Signal handler install failure.** If `sigaction` fails for SIGINT or SIGTERM, the guard rolls back any partial install and `run_process` returns `OrbitError::Execution(<error>)` before entering the wait loop.
-- **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The child is left to be reaped by the OS rather than force-killed in this path; this is a known soft spot.
+- **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The cleanup guard kills the child's process group and reaps the direct child before returning the error.
 - **Timeout.** `success = false`, `exit_code = None`, stderr suffixed with `process timed out`.
 - **Parent signal.** `success = false`, `exit_code = Some(128 + signal)`, stderr suffixed with the signal name.
 - **Pipe held outside the process group.** The result keeps the child's own outcome (exit status, timeout, cancellation), output after the drain stop is missing, and stderr carries the drain note.
