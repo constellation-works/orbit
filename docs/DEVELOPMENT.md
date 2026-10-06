@@ -352,6 +352,24 @@ constraint, and the test either returns early or asserts the fail-safe
 branch, logging `reason` so the choice is attributable from the log. Never
 weaken the assertion taken when the probe *is* available.
 
+### Process fixture readiness
+
+Process fixtures wait for observable readiness with a generous startup ceiling;
+they measure signal shutdown separately. The detached-worker registry-lock
+fixture observes the real worker's persisted run with a read-only SQLite
+connection and keeps the registry writer held through claim and completion.
+This avoids conflating total CLI startup time or a competing CLI participant's
+generation admission with registry-lock independence.
+
+The parent-signal fixture selects the proc tool from MCP `tools/list`, using the
+CLI when that tool is not advertised. Its child writes a marker under the
+fixture's own directory with a shell builtin and a quoted positional argument,
+including when the temporary path contains spaces. Readiness waits detect early
+supervisor exit and retain its output; process guards reap children on failure.
+The SIGINT/SIGTERM shutdown ceiling remains ten seconds in the host and box
+lanes. Do not add launch retries or relax shutdown assertions to hide startup
+failures.
+
 ### Tests and macOS temp paths
 
 On macOS `TMPDIR` is `/var/folders/...`, and `/var` is a symlink to

@@ -797,7 +797,6 @@ spec:
 
     let custom_root_arg = custom_root.to_string_lossy().into_owned();
     let job_path_arg = job_path.to_string_lossy().into_owned();
-    let submitted_at = Instant::now();
     let submitted = run_orbit_json(
         &repo,
         &home,
@@ -811,20 +810,15 @@ spec:
         ],
         None,
     );
-    assert!(
-        submitted_at.elapsed() < Duration::from_secs(4),
-        "current-schema parent/worker bootstrap waited for the registry writer"
-    );
     let run_id = submitted["run_id"]
         .as_str()
         .unwrap_or_else(|| panic!("expected run_id in {submitted}"))
         .to_string();
     assert_eq!(submitted["state"].as_str(), Some("submitted"));
-    registry_writer
-        .execute_batch("ROLLBACK")
-        .expect("release registry writer");
-
-    let shown = wait_for_run_terminal_state(&repo, &home, &custom_root, &run_id);
+    // Readiness, not total CLI startup time, proves independence from the
+    // registry writer (ORB-14396). Keep the writer held through the real
+    // worker's claim AND completion; a busy timeout must still fail the run.
+    let shown = wait_for_run_terminal_state(&custom_root, &run_id);
     let state = shown["run"]["state"].as_str().unwrap_or("missing");
     assert_eq!(
         state,
@@ -836,6 +830,9 @@ spec:
         shown["run"]["pid"].as_u64().is_some(),
         "the real worker must claim its persisted run: {shown}"
     );
+    registry_writer
+        .execute_batch("ROLLBACK")
+        .expect("release registry writer");
 }
 
 #[test]
@@ -1320,23 +1317,31 @@ fn assert_root_fields(value: &Value, shared_root: &Path, local_root: &Path) {
     );
 }
 
-fn wait_for_run_terminal_state(cwd: &Path, home: &Path, custom_root: &Path, run_id: &str) -> Value {
-    let custom_root_arg = custom_root.to_string_lossy();
-    let deadline = Instant::now() + Duration::from_secs(15);
+fn wait_for_run_terminal_state(custom_root: &Path, run_id: &str) -> Value {
+    // Observe the worker's persisted state without starting another Orbit
+    // participant during bootstrap. Repeated `run show` clients can lose the
+    // 2s generation-admission race under suite load, independently of the
+    // registry writer this test holds (ORB-14396).
+    let observer = rusqlite::Connection::open_with_flags(
+        custom_root.join("orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open run observer");
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let last = run_orbit_json(
-            cwd,
-            home,
-            &[
-                "--root",
-                custom_root_arg.as_ref(),
-                "run",
-                "show",
-                run_id,
-                "--json",
-            ],
-            None,
-        );
+        let last = observer
+            .query_row(
+                "SELECT state, pid, started_at FROM job_runs WHERE run_id = ?1",
+                [run_id],
+                |row| {
+                    Ok(serde_json::json!({"run": {
+                        "state": row.get::<_, String>(0)?,
+                        "pid": row.get::<_, Option<u32>>(1)?,
+                        "started_at": row.get::<_, Option<String>>(2)?,
+                    }}))
+                },
+            )
+            .expect("observe the submitted run");
         if last["run"]["state"]
             .as_str()
             .is_some_and(|state| state != "pending" && state != "running")
