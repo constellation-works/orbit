@@ -32,6 +32,11 @@ fn runtime_on(os: HostOs) -> (TempDir, OrbitRuntime) {
 }
 
 fn task(runtime: &OrbitRuntime, title: &str, tags: &[&str], status: TaskStatus) -> Task {
+    let file = format!(
+        "fixture-{}.txt",
+        runtime.list_task_metadata().unwrap().len()
+    );
+    std::fs::write(runtime.paths().repo_root.join(&file), "fixture\n").unwrap();
     runtime
         .add_task(TaskAddParams {
             title: title.to_string(),
@@ -40,6 +45,7 @@ fn task(runtime: &OrbitRuntime, title: &str, tags: &[&str], status: TaskStatus) 
             plan: "Fixture plan.".to_string(),
             tags: tags.iter().map(ToString::to_string).collect(),
             complexity: TaskComplexity::Medium,
+            context_files: vec![format!("file:{file}")],
             status: Some(status),
             ..Default::default()
         })

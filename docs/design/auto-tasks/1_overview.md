@@ -118,7 +118,10 @@ definition of the same name.
 - `doc-duties` — disabled-by-default daily validation of the oldest tracked
   documentation. Existing `last_validated` dates take precedence; documents
   without the key use git last-touched dates and completed task summaries for
-  rotation, without gaining frontmatter solely for this task.
+  rotation, without gaining frontmatter solely for this task. Its template
+  reserves `dir:.` for root and workspace-specific documentation and does not
+  carry `no-diff-expected`, since verified drift corrections produce diffs.
+  Clean batches use validated no-diff evidence.
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
   since the previous scan's `run-failure-cursor.json` artifact. Failures

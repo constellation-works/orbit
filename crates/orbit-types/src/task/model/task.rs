@@ -72,6 +72,12 @@ impl Display for Task {
 }
 
 impl Task {
+    /// Whether admission has a declared context surface to serialize this work.
+    /// Side-effect-only work tagged `no-diff-expected` needs no surface.
+    pub fn has_prepared_context(&self) -> bool {
+        !self.context_files.is_empty() || self.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+    }
+
     /// Digest of what a candidate implementation answers to: the description,
     /// acceptance criteria and context selectors (order-insensitive). A
     /// preserved candidate is resumed only while this is unchanged

@@ -153,7 +153,7 @@ struct Seed<'a> {
     task_type: TaskType,
     tags: &'a [&'a str],
     dependencies: Vec<String>,
-    context_files: &'a [&'a str],
+    context_files: Option<&'a [&'a str]>,
 }
 
 impl Default for Seed<'_> {
@@ -165,12 +165,23 @@ impl Default for Seed<'_> {
             task_type: TaskType::Chore,
             tags: &[],
             dependencies: Vec::new(),
-            context_files: &[],
+            context_files: None,
         }
     }
 }
 
 fn seed(runtime: &OrbitRuntime, seed: Seed<'_>) -> Task {
+    let context_files = match seed.context_files {
+        Some(selectors) => selectors.iter().map(ToString::to_string).collect(),
+        None => {
+            let name = format!(
+                "fixture-{}.txt",
+                runtime.list_task_metadata().unwrap().len()
+            );
+            std::fs::write(runtime.paths().repo_root.join(&name), "fixture\n").unwrap();
+            vec![format!("file:{name}")]
+        }
+    };
     runtime
         .add_task(TaskAddParams {
             title: seed.title.to_string(),
@@ -179,7 +190,7 @@ fn seed(runtime: &OrbitRuntime, seed: Seed<'_>) -> Task {
             plan: "Fixture plan.".to_string(),
             tags: seed.tags.iter().map(ToString::to_string).collect(),
             dependencies: seed.dependencies,
-            context_files: seed.context_files.iter().map(ToString::to_string).collect(),
+            context_files,
             priority: seed.priority,
             complexity: TaskComplexity::Medium,
             task_type: Some(seed.task_type),
@@ -207,6 +218,126 @@ fn admitted(output: &Value) -> Vec<String> {
         .iter()
         .map(|id| id.as_str().expect("task id").to_string())
         .collect()
+}
+
+/// Empty-context backlog work cannot race prepared work on any local admission
+/// route; an operator's scope repair takes effect on the next pass.
+#[test]
+fn empty_context_waits_for_preparation_on_auto_ship_and_readiness() {
+    if !isolated("empty_context_waits_for_preparation_on_auto_ship_and_readiness") {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    let unprepared = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&[]),
+            ..Seed::default()
+        },
+    );
+    let no_diff = seed(
+        &runtime,
+        Seed {
+            title: "side effects only",
+            context_files: Some(&[]),
+            tags: &["no-diff-expected"],
+            ..Seed::default()
+        },
+    );
+    for input in [json!({}), json!({"task_ids": [unprepared.id, no_diff.id]})] {
+        let output = list_backlog_tasks(&runtime, input);
+        assert_eq!(admitted(&output), vec![no_diff.id.clone()], "{output}");
+        let excluded = output["excluded"].as_array().unwrap();
+        let waiting = excluded
+            .iter()
+            .find(|entry| entry["id"] == unprepared.id)
+            .unwrap();
+        assert_eq!(waiting["reason"], "unprepared");
+        assert!(waiting["detail"].as_str().unwrap().contains("task-pilot"));
+    }
+    let wave = runtime
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"max_active_leaf_runs": 2}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert_eq!(wave["loose_task_ids"], json!([no_diff.id]), "{wave}");
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let waiting = readiness_task(&readiness, &unprepared.id);
+    assert_eq!(waiting["eligible"], false);
+    assert_eq!(waiting["reason"], "unprepared");
+    assert!(waiting["detail"].as_str().unwrap().contains("task-pilot"));
+    assert_eq!(readiness_task(&readiness, &no_diff.id)["eligible"], true);
+
+    std::fs::write(repo.join("prepared.rs"), "fixture\n").unwrap();
+    runtime
+        .update_task_as_human(
+            &unprepared.id,
+            orbit_core::application::task::TaskUpdateParams {
+                context_files: Some(vec!["file:prepared.rs".into()]),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    for input in [json!({}), json!({"task_ids": [unprepared.id]})] {
+        assert!(admitted(&list_backlog_tasks(&runtime, input)).contains(&unprepared.id));
+    }
+    let wave = runtime
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"max_active_leaf_runs": 2}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert!(
+        wave["loose_task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(unprepared.id)),
+        "{wave}"
+    );
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(readiness_task(&readiness, &unprepared.id)["eligible"], true);
+}
+
+/// The shipped documentation chore mints with a locking scope, so a drain can
+/// admit it without pilot preparation and withhold overlapping work.
+#[test]
+fn doc_duties_mints_an_admissible_locking_context() {
+    if !isolated("doc_duties_mints_an_admissible_locking_context") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    std::fs::create_dir_all(&definitions).unwrap();
+    std::fs::write(
+        definitions.join("doc-duties.yaml"),
+        include_str!("../../assets/auto_tasks/doc-duties.yaml"),
+    )
+    .unwrap();
+    let minted = runtime.auto_task_mint("doc-duties").unwrap();
+    assert!(
+        !minted.context_files.is_empty(),
+        "the documentation chore must reserve its edits"
+    );
+    assert_eq!(
+        admitted(&list_backlog_tasks(&runtime, json!({}))),
+        vec![minted.id.clone()]
+    );
+    let reservation = reserve_locks(&runtime, &minted.id);
+    assert_eq!(reservation["reserved"], true, "{reservation}");
+    assert!(
+        !reservation["reserved_files"].as_array().unwrap().is_empty(),
+        "{reservation}"
+    );
 }
 
 /// Automatic dispatch order is total: critical work first, then the
@@ -378,7 +509,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         Seed {
             title: "holder",
             status: TaskStatus::InProgress,
-            context_files: &["crates/foo/src/lib.rs"],
+            context_files: Some(&["crates/foo/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -386,7 +517,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         &runtime,
         Seed {
             title: "locked",
-            context_files: &["crates/foo/src/lib.rs"],
+            context_files: Some(&["crates/foo/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -394,7 +525,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         &runtime,
         Seed {
             title: "free",
-            context_files: &["crates/bar/src/lib.rs"],
+            context_files: Some(&["crates/bar/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -439,7 +570,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
             title: "review holder",
             status: TaskStatus::InProgress,
             tags: &["no-diff-expected"],
-            context_files: &["dir:crates/review"],
+            context_files: Some(&["dir:crates/review"]),
             ..Seed::default()
         },
     );
@@ -447,7 +578,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
         &runtime,
         Seed {
             title: "overlapping repair",
-            context_files: &["file:crates/review/lib.rs"],
+            context_files: Some(&["file:crates/review/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -456,7 +587,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
         Seed {
             title: "ordinary holder",
             status: TaskStatus::InProgress,
-            context_files: &["file:crates/ordinary/lib.rs"],
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -464,7 +595,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
         &runtime,
         Seed {
             title: "ordinary overlap",
-            context_files: &["file:crates/ordinary/lib.rs"],
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -473,7 +604,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
         Seed {
             title: "tagged task still waits on an ordinary lock",
             tags: &["no-diff-expected"],
-            context_files: &["file:crates/ordinary/lib.rs"],
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -491,7 +622,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
             title: "tagged task still waits on its dependency",
             tags: &["no-diff-expected"],
             dependencies: vec![unfinished.id.clone()],
-            context_files: &["file:crates/elsewhere/lib.rs"],
+            context_files: Some(&["file:crates/elsewhere/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -1294,7 +1425,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         &runtime,
         Seed {
             title: "running",
-            context_files: &["file:src/running.rs"],
+            context_files: Some(&["file:src/running.rs"]),
             ..Seed::default()
         },
     );
@@ -1302,7 +1433,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         &runtime,
         Seed {
             title: "queued",
-            context_files: &["file:src/queued.rs"],
+            context_files: Some(&["file:src/queued.rs"]),
             ..Seed::default()
         },
     );

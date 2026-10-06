@@ -72,6 +72,9 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
+    /// The task has no declared context surface. Task-pilot or an operator
+    /// must prepare it before admission; side-effect-only work is exempt.
+    Unprepared,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
@@ -210,16 +213,6 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
-            if !clears_complexity_gate(&task) {
-                excluded.push(BacklogTaskExclusion {
-                    id: task.id,
-                    reason: BacklogTaskExclusionReason::UnassessedComplexity,
-                    conflicts: Vec::new(),
-                    crew: None,
-                    detail: None,
-                });
-                continue;
-            }
             if let Some(exclusion) = host_os_exclusion(runtime, &task) {
                 excluded.push(exclusion);
                 continue;
@@ -278,6 +271,20 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     excluded.push(inherited_only_epic_root_exclusion(&task.id, &descendants));
                     continue;
                 }
+            }
+            if let Some(exclusion) = unprepared_exclusion(&task) {
+                excluded.push(exclusion);
+                continue;
+            }
+            if !clears_complexity_gate(&task) {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id,
+                    reason: BacklogTaskExclusionReason::UnassessedComplexity,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: None,
+                });
+                continue;
             }
             tasks.push(task);
         }
@@ -419,19 +426,6 @@ fn backlog_snapshot_in_mode(
         .collect();
     sort_tasks_for_automatic_dispatch(&mut backlog);
     let mut excluded = Vec::new();
-    backlog.retain(|task| {
-        if clears_complexity_gate(task) {
-            return true;
-        }
-        excluded.push(BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::UnassessedComplexity,
-            conflicts: Vec::new(),
-            crew: None,
-            detail: None,
-        });
-        false
-    });
     // A root that declared no context of its own, while its descendants did,
     // inherits nothing now that epic execution is retired: it would take a slot
     // holding no reservation and race the very children that union covered.
@@ -449,6 +443,26 @@ fn backlog_snapshot_in_mode(
             false
         });
     }
+    backlog.retain(|task| {
+        let Some(exclusion) = unprepared_exclusion(task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    backlog.retain(|task| {
+        if clears_complexity_gate(task) {
+            return true;
+        }
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::UnassessedComplexity,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: None,
+        });
+        false
+    });
     // A selection the gate would refuse is withheld here instead: the task is
     // still `backlog` after a refused gate, so the drain would otherwise
     // dispatch it again, and fail again, on every pass. A task with no
@@ -648,6 +662,19 @@ fn inherited_only_epic_root_exclusion(
 fn clears_complexity_gate(task: &Task) -> bool {
     task.complexity.is_some_and(TaskComplexity::is_assessed)
         || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+}
+
+fn unprepared_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
+    (!task.has_prepared_context()).then(|| BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::Unprepared,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(
+            "Run task-pilot or set context_files before admission; this task declares no context scope."
+                .to_string(),
+        ),
+    })
 }
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical

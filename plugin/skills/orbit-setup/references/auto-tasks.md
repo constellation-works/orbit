@@ -242,7 +242,9 @@ plugin being removed.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the oldest
   workspace documentation against current behavior, and corrects factual drift
   and broken links. A batch whose claims are already accurate is a successful
-  no-diff run.
+  no-diff run with validated no-diff evidence. Its template declares `dir:.`
+  because a batch may include root and workspace-specific documents, and omits
+  `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run

@@ -54,6 +54,7 @@ fn seed(runtime: &OrbitRuntime, title: &str) -> String {
             acceptance_criteria: vec!["The task is observable.".to_string()],
             plan: "Fixture plan.".to_string(),
             complexity: TaskComplexity::Medium,
+            context_files: vec!["dir:.".into()],
             task_type: Some(orbit_core::TaskType::Chore),
             status: Some(TaskStatus::Backlog),
             ..Default::default()

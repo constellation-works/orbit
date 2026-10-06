@@ -5,6 +5,70 @@ use orbit_types::task::HostOs;
 
 use super::*;
 
+/// Owner admission cannot hand selector-free implementation work to a follower.
+/// Preparing its scope clears the hold; side-effect-only chores stay admissible.
+#[test]
+fn owner_pull_waits_for_context_preparation_but_admits_no_diff_work() {
+    if !isolated(
+        module_path!(),
+        "owner_pull_waits_for_context_preparation_but_admits_no_diff_work",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    for (index, id) in pair.tasks.iter().enumerate() {
+        pair.wire
+            .owner
+            .update_task_as_human(
+                id,
+                orbit_core::application::task::TaskUpdateParams {
+                    context_files: Some(vec![]),
+                    tags: (index == 1).then(|| vec!["no-diff-expected".into()]),
+                    ..Default::default()
+                },
+                "fixture operator".into(),
+            )
+            .unwrap();
+    }
+    let drain = pair.start_drain();
+    let first = pair.pass(&drain);
+    assert!(launch_refused(&first), "{first}");
+    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[1]);
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let receipts = pair.follower_jobs.local_pull_admissions().unwrap();
+    assert!(
+        receipts
+            .iter()
+            .filter_map(|record| record.receipt.as_ref())
+            .any(|receipt| {
+                receipt.invalid_candidates.iter().any(|entry| {
+                    entry.task_id == pair.tasks[0]
+                        && entry.reason.starts_with("unprepared:")
+                        && entry.reason.contains("task-pilot")
+                })
+            }),
+        "{receipts:#?}"
+    );
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &pair.tasks[0],
+            orbit_core::application::task::TaskUpdateParams {
+                context_files: Some(vec!["file:src/f0.rs".into()]),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    let second = pair.pass(&drain);
+    assert!(launch_refused(&second), "{second}");
+    assert!(
+        pair.owner_claims()
+            .iter()
+            .any(|claim| claim["claim"]["task_id"] == pair.tasks[0])
+    );
+}
+
 /// A replica that declares no `workflow.required_validation_commands` starts
 /// its pull drain: an empty list means no required check, as it does for an
 /// owner's own delivery, so submission notes it rather than refusing. This

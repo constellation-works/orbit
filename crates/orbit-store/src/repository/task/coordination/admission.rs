@@ -53,11 +53,6 @@ fn row<T: Serialize>(kind: &str, id: &str, value: &T) -> Result<TaskCoordination
     })
 }
 fn canonical_footprint(files: &[String], root: &Path) -> Result<Vec<String>, OrbitError> {
-    if files.is_empty() {
-        return Err(OrbitError::InvalidInput(
-            "empty own context footprint".into(),
-        ));
-    }
     files
         .iter()
         .map(|f| {
@@ -316,6 +311,13 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("live local delivery run {run_id} is carrying it"),
+                });
+                continue;
+            }
+            if !task.has_prepared_context() {
+                receipt.invalid_candidates.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: "unprepared: run task-pilot or set context_files before admission; this task declares no context scope".into(),
                 });
                 continue;
             }
