@@ -241,6 +241,14 @@ Three failure counts answer different questions:
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
 
+The Audit **Failure categories** card and Health scoreboard group failed audit
+events into incidents. When the incident scan reaches its limit, these views
+label the incident counts **capped** and show partial coverage. Counts then
+cover only the newest non-success audit rows in the selected window; older
+incidents and affected runs may be omitted. A zero in the scoreboard means no
+incidents in that scanned sample. The total audited events and raw tool-call
+counts still cover the full window.
+
 ## Automation
 
 **Automation** has three views: **Routines** (with the sweep clock),

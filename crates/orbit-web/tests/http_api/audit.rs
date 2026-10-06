@@ -133,6 +133,73 @@ fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInse
 }
 
 #[test]
+fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
+    isolated(
+        "audit::failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard",
+        || {
+            let fixture = Fixture::new();
+            fixture
+                .runtime
+                .record_audit_event(&row(
+                    "scan-0",
+                    Some("orbit.workflow.run.list"),
+                    AuditEventStatus::Failure,
+                ))
+                .unwrap();
+            let server = fixture.server(false);
+            let complete =
+                json_ok(server.get("/api/audit/summary?since=1h&workspace=ws_http_fixture"));
+            let scoreboard =
+                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            let cap = complete["failure_incidents_scan_limit"].as_u64().unwrap();
+            assert!(cap > 0);
+            for payload in [&complete, &scoreboard] {
+                assert_eq!(payload["failure_incidents_truncated"], false);
+                assert_eq!(payload["failure_incidents_scan_limit"], cap);
+            }
+            assert_eq!(
+                scoreboard["coverage"]["failure_incidents"]["availability"],
+                "observed"
+            );
+            assert_eq!(complete["failed_events"], 1);
+            assert_eq!(scoreboard["agents"]["codex"]["failure_incident_events"], 1);
+
+            // Exceed the advertised production cap, without pinning its value
+            // or adding a test-only query path. Use another summary window to
+            // avoid the first response's memoized bundle.
+            for index in 1..=cap {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("scan-{index}"),
+                        Some("orbit.workflow.run.list"),
+                        AuditEventStatus::Failure,
+                    ))
+                    .unwrap();
+            }
+            let partial =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let scoreboard = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            for payload in [&partial, &scoreboard] {
+                assert_eq!(payload["failure_incidents_truncated"], true);
+                assert_eq!(payload["failure_incidents_scan_limit"], cap);
+            }
+            assert_eq!(
+                scoreboard["coverage"]["failure_incidents"]["availability"],
+                "partial"
+            );
+            assert_eq!(partial["events"], cap + 1, "SQL total remains uncapped");
+            assert_eq!(partial["failed_events"], cap);
+            assert_eq!(
+                scoreboard["agents"]["codex"]["failure_incident_events"],
+                cap
+            );
+            assert_eq!(scoreboard["agents"]["codex"]["failed_tool_calls"], cap + 1);
+        },
+    );
+}
+
+#[test]
 fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
     isolated(
         "audit::callable_failures_reconcile_raw_classified_and_denied_rows_with_events",

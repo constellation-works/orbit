@@ -322,6 +322,7 @@ struct AuditSummaryBundle {
     v2_denials: i64,
     failed_events: u64,
     failure_incidents: u64,
+    failure_incidents_truncated: bool,
     failure_incidents_by_class: BTreeMap<String, u64>,
     failed_events_by_class: BTreeMap<String, u64>,
     affected_runs_by_class: BTreeMap<String, u64>,
@@ -379,6 +380,10 @@ fn summary_payload(
         // is how many distinct problems those rows represent.
         "failed_events": bundle.failed_events,
         "failure_incidents": bundle.failure_incidents,
+        // All counts derived from the incident scan share this coverage,
+        // while `events` is the uncapped SQL total for the window.
+        "failure_incidents_truncated": bundle.failure_incidents_truncated,
+        "failure_incidents_scan_limit": ROLLUP_SCAN_LIMIT,
         "failure_incidents_by_class": bundle.failure_incidents_by_class,
         "failed_events_by_class": bundle.failed_events_by_class,
         "affected_runs_by_class": bundle.affected_runs_by_class,
@@ -586,6 +591,7 @@ fn compute_audit_summary_bundle(
         v2_denials,
         failed_events: incidents.raw_failed_events,
         failure_incidents: incidents.incident_count(),
+        failure_incidents_truncated: incidents.truncated,
         failure_incidents_by_class: incidents.incidents_by_class,
         failed_events_by_class: incidents.raw_events_by_class,
         affected_runs_by_class: incidents.affected_runs_by_class,
