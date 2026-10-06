@@ -84,7 +84,12 @@ fn an_unsandboxed_backend_is_refused_to_an_agent_but_still_runs_for_the_operator
     let mut spec = fixture.spec.clone();
     spec.command = stub_backend(&root, SENTINEL_BACKEND);
     spec.sandbox = PluginSandbox::None;
-    spec.grants = PluginGrantSet::from_grants([PluginGrant::Fs, PluginGrant::Unsandboxed]);
+    spec.permissions.env_pass = vec!["SENTINEL".into()];
+    spec.grants = PluginGrantSet::from_grants([
+        PluginGrant::Fs,
+        PluginGrant::Unsandboxed,
+        PluginGrant::EnvPass,
+    ]);
     let backend = tool(std::sync::Arc::new(spec), None);
     let operator = ToolContext {
         proc_spawn_environment: Some(vec![

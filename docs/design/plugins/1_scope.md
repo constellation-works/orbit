@@ -542,7 +542,13 @@ when present (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`,
 `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_SCRATCH_DIR`,
 `ORBIT_BIN`, `ORBIT_STEP_INDEX`, `ORBIT_TASK_ACTOR_KIND` and `ORBIT_ACTIVITY_*`). Any
 `permissions.env_pass` names the operator grants are copied when available. Other ambient
-variables are cleared. Orbit then sets:
+variables are cleared. Both `exec` and `mcp` apply this admission rule to the caller's
+supplied environment: `[execution.env].pass` or `inherit = true` makes a value available
+to the caller, but the plugin still needs its own request and `env_pass` grant. A name
+omitted by caller policy cannot be recovered from the host environment; the host process
+is the source only when no caller environment was supplied. Privilege-bearing Orbit names
+such as `ORBIT_OPERATOR` and `ORBIT_WORKSPACE_CLAIM_TOKEN` are excluded even if a legacy
+manifest requests them. Orbit then sets:
 
 ```
 ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
