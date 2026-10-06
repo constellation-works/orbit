@@ -181,11 +181,13 @@ Classification and delivery are budgeted separately [ORB-11023]. SSH setup, the 
 
 Once that request is written the call may already have executed and committed on the destination, and killing the transport does not undo it. A lost answer there is therefore `outcome_unknown`, never `unreachable_destination`: the latter means a delivery miss and invites the retry that would duplicate the write. This is a post-dispatch outcome and does **not** enter the precedence ladder above — everything in that ladder is decided before the destination sees the call.
 
+An unusable answer has the same ambiguity: malformed JSON and oversized response lines preserve `outcome_unknown`, along with the destination/tool/request identity and the failure diagnostics. This also applies to calls on the internal drain admission route. The mux does not automatically replay these requests. Malformed answers during read-only initialization or discovery remain `unreachable_destination`.
+
 Both budgets bound writing a request as well as awaiting its answer, and unrelated messages the destination emits never extend them. A write still blocked at its deadline ends the session: `unreachable_destination` if the request line never fully left, otherwise `outcome_unknown` for a routed `tools/call`.
 
 | Class | Error identity | When |
 |---|---|---|
-| outcome unknown | `outcome_unknown` | The routed `tools/call` request was written and its answer never arrived (budget exceeded, or the session ended mid-call) |
+| outcome unknown | `outcome_unknown` | The routed tool or internal drain request was written and its answer was lost or unusable (budget exceeded, session ended, malformed JSON, or oversized response line) |
 
 ## mcp-bridge invariant exception
 
