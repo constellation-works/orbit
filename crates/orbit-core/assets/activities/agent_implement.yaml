@@ -27,7 +27,8 @@ spec:
         type: boolean
       # Set by `candidate_resume` when the checkout already holds this
       # task's preserved candidate that needs repair: `trigger`
-      # (`implementation`, `conflict`, `validation` or `review`), `output`,
+      # (`implementation`, `conflict`, `validation`, `review` or
+      # `continuation`), `output`,
       # and `failed_step_id`, `conflicting_paths` or the failing `command`.
       resume_candidate:
         type: [object, "null"]
@@ -160,8 +161,10 @@ spec:
       a partial implementation — complete the task from it; a compiling
       subset is not done), `conflict` (resolve the conflict markers in
       `conflicting_paths` against the new base), `validation` (the `output`
-      of the failing `command`) or `review` (the findings in the review
-      settlement comment). Then rerun the checks and say in the summary that
+      of the failing `command`), `review` (the findings in the review
+      settlement comment) or `continuation` (an earlier claim committed it
+      but did not deliver it — check it against the task and finish what is
+      missing). Then rerun the checks and say in the summary that
       you repaired a resumed candidate.
 
     Scope and implementation

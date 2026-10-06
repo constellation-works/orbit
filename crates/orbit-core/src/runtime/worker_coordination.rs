@@ -149,6 +149,30 @@ impl OrbitRuntime {
             .as_ref()
             .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?
             .call(name, input, session)
+            .map_err(owner_route_failure)
+    }
+}
+
+/// Type a call the owner never answered as an owner-route failure
+/// [ORB-14257]: the step it fails carries the marker, so a claimed leaf that
+/// lost its route to the owner settles as a release rather than as a failure
+/// of its candidate. The variant is kept; a refusal, an ambiguous outcome and
+/// a local error are left as they are.
+fn owner_route_failure(error: OrbitError) -> OrbitError {
+    let typed = |message: String| {
+        format!(
+            "{} {message}",
+            orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_MARKER
+        )
+    };
+    match error {
+        OrbitError::UnreachableDestination(message) => {
+            OrbitError::UnreachableDestination(typed(message))
+        }
+        OrbitError::OwnerUnavailable(message) => OrbitError::OwnerUnavailable(typed(message)),
+        OrbitError::StaleRoute(message) => OrbitError::StaleRoute(typed(message)),
+        OrbitError::OwnerNegotiation(message) => OrbitError::OwnerNegotiation(typed(message)),
+        error => error,
     }
 }
 

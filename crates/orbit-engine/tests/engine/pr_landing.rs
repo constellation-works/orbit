@@ -45,7 +45,8 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ReviewTiming, ReviewVerdict, is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, ReviewTiming, ReviewVerdict,
+    is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1645,6 +1646,48 @@ fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
             assert_eq!(hold.base_ref, BASE);
             assert_eq!(hold.base_sha, fx.base_sha);
             assert_eq!(hold.command, RED_LINT);
+            assert_eq!(
+                *host.claim_logs.lock().unwrap(),
+                [
+                    "validation/claim-landing/0.failed.json",
+                    "validation/claim-landing/0.baseline.json"
+                ]
+            );
+            assert!(host.handoffs.lock().unwrap().is_empty());
+        },
+    );
+}
+
+/// [ORB-14257] A claimed leaf's required command that still cannot reach the
+/// network after its reruns, on a base that passes, says nothing about the
+/// candidate: it fails typed `transient`, so the leaf releases its claim
+/// instead of blocking the task, and the owner is still sent both logs.
+#[test]
+fn a_claimed_candidate_that_cannot_reach_the_network_fails_transient() {
+    isolated(
+        "a_claimed_candidate_that_cannot_reach_the_network_fails_transient",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            // Only the candidate has src/feature.txt, so the base passes.
+            host.require_commands(&["test ! -e src/feature.txt || \
+                 { echo 'curl: (6) Could not resolve host: forge.invalid' >&2; exit 6; }"]);
+            let input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+
+            let error = action(&host, "claim_validate", &input)
+                .expect_err("an unreachable network fails the step");
+
+            let message = error.to_string();
+            assert_eq!(
+                ClaimFailureClass::of_step_failure(None, Some(&message)),
+                Some(ClaimFailureClass::Transient),
+                "{message}"
+            );
+            assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
             assert_eq!(
                 *host.claim_logs.lock().unwrap(),
                 [

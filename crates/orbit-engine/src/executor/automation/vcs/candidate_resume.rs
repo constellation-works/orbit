@@ -27,6 +27,15 @@
 //!
 //! Whenever a candidate was found, the outcome, source run and SHA are also
 //! written to the task's history.
+//!
+//! A claimed leaf (`claimed: true`) resumes the candidate its owner kept from
+//! the task's last claim [ORB-14257] instead, handed in as `candidate`: the
+//! owner already retired a discarded one or one whose spec changed, and the
+//! task's history is the owner's, so neither is consulted here. The claimed
+//! implementer always runs, because the handoff carries its summary: a clean
+//! apply is `resumed_repaired` with trigger `continuation` (or `review` when
+//! the before-PR review refused it), and
+//! the leaf's own validation judges the result.
 
 use std::path::Path;
 
@@ -147,18 +156,71 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             &base_sha,
         ));
     };
+    if input.get("claimed").and_then(Value::as_bool) == Some(true) {
+        return claimed_resume(host, input, task_id, &workspace_path, &base_sha);
+    }
     let task = host.get_task(task_id)?;
     let prior_run_id = input_string_field(input, "prior_job_run_id");
     let (candidate, outcome) = match preserved_candidate(host, &task, prior_run_id)? {
         Preserved::None(reason) => return Ok(output(&Outcome::Fresh(reason), None, &base_sha)),
         Preserved::Refused(candidate, reason) => (candidate, Outcome::Fresh(reason)),
         Preserved::Usable(candidate) => {
-            let outcome = resume(host, &task, &candidate, &workspace_path, &base_sha)?;
+            let outcome = resume(
+                host,
+                &task.id,
+                &candidate,
+                &workspace_path,
+                &base_sha,
+                false,
+            )?;
             (candidate, outcome)
         }
     };
     record(host, &task, &run_id, &candidate, &outcome)?;
     Ok(output(&outcome, Some(&candidate), &base_sha))
+}
+
+/// [ORB-14257] Resume the candidate the owner kept from the task's last
+/// claim. Nothing is written to the task: its history lives on the owner.
+fn claimed_resume<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task_id: &str,
+    workspace_path: &Path,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let preserved = input.get("candidate").filter(|value| !value.is_null());
+    let (Some(branch), Some(head_sha)) = (
+        preserved.and_then(|value| input_string_field(value, "branch")),
+        preserved.and_then(|value| input_string_field(value, "head_sha")),
+    ) else {
+        return Ok(output(
+            &Outcome::Fresh("the claim carries no preserved candidate".to_string()),
+            None,
+            base_sha,
+        ));
+    };
+    let preserved = preserved.unwrap_or(&Value::Null);
+    // A leaf that stopped after its last delivery step names none; its
+    // candidate is complete.
+    let failed_step_id =
+        input_string_field(preserved, "failed_step_id").unwrap_or_else(|| "handoff".to_string());
+    let candidate = Candidate {
+        run_id: input_string_field(preserved, "source_run_id")
+            .unwrap_or_else(|| "an earlier claim".to_string()),
+        branch,
+        head_sha,
+        needs_review_repair: failed_step_id == REVIEW_VERDICT_STEP,
+        failed_step_id,
+    };
+    let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
+    tracing::info!(
+        task_id,
+        outcome = outcome_name(&outcome),
+        source_run_id = %candidate.run_id,
+        "claimed candidate resume"
+    );
+    Ok(output(&outcome, Some(&candidate), base_sha))
 }
 
 /// The candidate recorded by the failure handoff of the run the task was last
@@ -235,10 +297,11 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
 
 fn resume<H: RuntimeHost + ?Sized>(
     host: &H,
-    task: &Task,
+    task_id: &str,
     candidate: &Candidate,
     workspace_path: &Path,
     base_sha: &str,
+    claimed: bool,
 ) -> Result<Outcome, OrbitError> {
     if !candidate_available(workspace_path, candidate)? {
         return Ok(Outcome::Fresh(format!(
@@ -308,7 +371,8 @@ fn resume<H: RuntimeHost + ?Sized>(
     // A clean apply of work that never reached `commit` is not an
     // implementation. Owner validation, including an empty command list,
     // must not promote it to `resumed_validated` and skip the implementer.
-    if !implementation_completed(&candidate.failed_step_id) {
+    // A claimed candidate is always committed: its owner keeps none earlier.
+    if !claimed && !implementation_completed(&candidate.failed_step_id) {
         return Ok(Outcome::Repair(json!({
             "trigger": "implementation",
             "failed_step_id": candidate.failed_step_id,
@@ -326,8 +390,22 @@ fn resume<H: RuntimeHost + ?Sized>(
             "failed_step_id": candidate.failed_step_id,
             "output": format!(
                 "The before-PR review refused this candidate in run '{}'. Its verdict and \
-                 findings are in the review settlement comment on task {}.",
-                candidate.run_id, task.id
+                 findings are in the review settlement comment on task {task_id}.",
+                candidate.run_id
+            ),
+        })));
+    }
+    // A claimed implementer always runs; the leaf's own validation judges
+    // what it leaves.
+    if claimed {
+        return Ok(Outcome::Repair(json!({
+            "trigger": "continuation",
+            "failed_step_id": candidate.failed_step_id,
+            "output": format!(
+                "Run '{}' committed this candidate and stopped at step '{}' without delivering \
+                 it. It is applied onto the current base: check it against the task, finish \
+                 what is missing, and keep what is already done.",
+                candidate.run_id, candidate.failed_step_id
             ),
         })));
     }

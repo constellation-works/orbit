@@ -290,6 +290,8 @@ const ACTIVITIES: &[&str] = &[
     "pr_complete",
     "pr_failure_handoff",
     "final_recovery",
+    "claim_validate",
+    "claim_handoff",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -300,6 +302,24 @@ pub(super) fn position(actions: &[String], action: &str) -> usize {
 }
 
 pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
+    run_shipped_job(
+        host,
+        "task_pr_pipeline",
+        json!({
+            "task_ids": ["T-1"],
+            "base_branch": "main",
+            "base_sync": "remote",
+            "completion": "done",
+        }),
+    )
+}
+
+/// Run the shipped job `name` over `input`, every activity scripted.
+pub(super) fn run_shipped_job(
+    host: &ScriptedHost,
+    name: &str,
+    input: Value,
+) -> Result<JobOutcome, DispatchError> {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
     let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
@@ -314,31 +334,19 @@ pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, Di
     let writer = Arc::new(
         V2AuditWriter::new(RUN_ID, "review-fixes-agent", inner).with_envelope_sink(envelope),
     );
-    execute_job_with_resume(
-        &shipped_pipeline(),
-        json!({
-            "task_ids": ["T-1"],
-            "base_branch": "main",
-            "base_sync": "remote",
-            "completion": "done",
-        }),
-        RUN_ID,
-        writer,
-        host,
-        None,
-    )
+    execute_job_with_resume(&shipped_job(name), input, RUN_ID, writer, host, None)
 }
 
-/// The shipped `task_pr_pipeline`, every activity resolved to a scripted
+/// The shipped job `name`, every activity resolved to a scripted
 /// deterministic action named after it. The prefix keeps the engine's own
 /// built-in actions of the same names out of the way.
-fn shipped_pipeline() -> orbit_types::workflow::JobV2 {
+fn shipped_job(name: &str) -> orbit_types::workflow::JobV2 {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml");
-    let shipped = std::fs::read_to_string(root).expect("read the shipped PR pipeline");
+        .join(format!("crates/orbit-core/assets/jobs/{name}.yaml"));
+    let shipped = std::fs::read_to_string(root).expect("read the shipped job");
     let mut job = load_job_asset(&shipped)
-        .expect("the shipped PR pipeline loads")
+        .expect("the shipped job loads")
         .spec;
     let mut catalog = V2ActivityCatalog::new();
     for &name in ACTIVITIES {
@@ -459,6 +467,7 @@ impl ScriptedHost {
                 "reviewed_base_sha": "",
                 "reviewer_fixed": false,
                 "review_fixes": "",
+                "handoff_evidence": null,
             }));
         }
         let attempt = input["admission"]["attempt_id"].clone();
@@ -474,6 +483,7 @@ impl ScriptedHost {
                 "implementation_head_sha": implementation,
                 "reviewer_fixed": false,
                 "review_fixes": "",
+                "handoff_evidence": null,
             })),
             Settlement::AcceptWithFixes => {
                 *head = "reviewer-fixes".to_string();
@@ -486,6 +496,7 @@ impl ScriptedHost {
                     "implementation_head_sha": implementation,
                     "reviewer_fixed": true,
                     "review_fixes": REVIEW_FIXES,
+                    "handoff_evidence": null,
                 }))
             }
             Settlement::Reject | Settlement::Timeout => {
@@ -585,6 +596,13 @@ impl RuntimeHost for ScriptedHost {
                 "human_action": "decide the finding",
             }),
             "pr_failure_handoff" => json!({ "decision": "blocked_review_gate" }),
+            "claim_validate" => json!({
+                "decision": "passed",
+                "tested_head": head,
+                "candidate": { "commit": head },
+                "validation": [],
+            }),
+            "claim_handoff" => json!({ "decision": "handed_off" }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),

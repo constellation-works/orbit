@@ -356,6 +356,7 @@ fn admission(
             complexity: None,
             crew: None,
             context_files: vec![],
+            resume_candidate: None,
         }),
         invalid_candidates: vec![],
         deferred_conflicts: vec![],
