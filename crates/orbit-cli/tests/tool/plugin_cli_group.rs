@@ -599,6 +599,60 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+/// `--grant fs=data --grant fs=cache` used to record `fs=data,cache`. The next
+/// process then refused the row: `cache` is not a path continuation, so the
+/// plugin could not run even though enable had succeeded.
+#[test]
+fn enable_records_bare_fs_roots_that_load_as_the_same_roots() {
+    let fixture = Fixture::new();
+    let source = fixture.source("scoped");
+    write_status_plugin(
+        &source,
+        "scoped",
+        "  permissions:\n    fs:\n      read: [\"{{plugin_state}}\"]\n",
+    );
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args([
+            "plugin", "enable", "scoped", "--grant", "fs=data", "--grant", "fs=cache",
+        ])
+        .assert()
+        .success();
+
+    let shown = fixture
+        .orbit()
+        .args(["plugin", "show", "scoped", "--format", "json"])
+        .output()
+        .expect("show the plugin from a fresh process");
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = stdout_json(&shown);
+    assert_eq!(shown["status"], "active", "{shown}");
+    assert!(shown["diagnostic"].is_null(), "{shown}");
+    assert_eq!(shown["granted"], json!(["fs=data,./cache"]), "{shown}");
+    let permissions = shown["permissions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("permissions: {shown}"));
+    let fs = permissions
+        .iter()
+        .find(|row| row["grant"] == "fs")
+        .unwrap_or_else(|| panic!("fs permission row: {shown}"));
+    assert_eq!(fs["granted"], true, "{fs}");
+    assert_eq!(fs["granted_roots"], json!(["data", "cache"]), "{fs}");
+    let network = permissions
+        .iter()
+        .find(|row| row["grant"] == "network")
+        .unwrap_or_else(|| panic!("network permission row: {shown}"));
+    assert_eq!(
+        network["granted"], false,
+        "the stored row must not gain network: {network}"
+    );
+}
+
 #[test]
 fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
     let fixture = Fixture::new();
