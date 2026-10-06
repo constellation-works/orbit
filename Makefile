@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
 
 # ------------------------------------------------------------
 # Config
@@ -56,7 +56,8 @@ help:
 	@echo "  make audit        Supply-chain audit (cargo-deny: advisories + licenses)"
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
-	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
+	@echo "  make ci-fast      Format and repository guardrails; runs no Rust tests"
+	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
@@ -153,9 +154,14 @@ tree:
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
-# Pre-handoff gate for agents: shared guardrails in fast mode. Full make ci runs on PRs.
+# Format and shared guardrails only: no Rust tests. Full make ci runs on PRs.
 ci-fast:
 	./scripts/ci-guardrails.sh --fast
+
+# Full test targets of changed crates and all reverse workspace dependents.
+# The selector includes committed and working-tree changes against the base.
+ci-test-affected:
+	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" python3 ./scripts/ci-test-affected.py
 
 # Compile-time pre-handoff gate for agents. Keep both passes aligned with
 # scripts/ci-guardrails.sh: production enforces bounded channels, then all

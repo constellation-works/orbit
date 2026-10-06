@@ -35,7 +35,8 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 5. **Run the gates** before opening the PR:
 
    ```bash
-   make ci-fast    # fmt and repository guardrails
+   make ci-fast    # fmt and repository guardrails; no Rust tests
+   make ci-test-affected  # full tests for changed crates and workspace dependents
    make ci-lint    # clippy -D warnings
    make goldens    # CLI help and MCP snapshots
    ```

@@ -246,8 +246,12 @@ timeout and lost-supervisor outcomes also fail.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
-Before task handoff, report `make ci-fast`, `make ci-lint`, and `make goldens`
-as passed, failed, or not run with reasons. Full `make ci` runs on PRs.
+Before task handoff, report `make ci-fast`, `make ci-test-affected`,
+`make ci-lint`, and `make goldens` as passed, failed, or not run with reasons.
+`make ci-fast` runs no Rust tests; the affected-test gate covers complete
+test targets of changed crates and their workspace dependents
+([validation and CI](../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
+runs on PRs.
 
 For a subcommand grammar audit, run
 `python3 scripts/test-qa-full-sweep.py --orbit-bin target/debug/orbit --list-cli-paths`.
