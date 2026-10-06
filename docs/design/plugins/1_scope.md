@@ -504,9 +504,15 @@ set that fails its witness (§3) grants nothing on every surface.
 - `orbit plugin add --grant …` without `--enable` is rejected.
 
 **Upgrade and widening.** On a manifest digest change, `add` and `upgrade` compare filesystem
-roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Unchanged or narrower
-keeps the enable/grant state. Any widening disables the plugin, clears its grants and witness,
-prints the widened requests, and names the full `orbit plugin enable <ns> --grant …` command.
+roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Filesystem roots are
+compared after `{{config.<key>}}` renders against global `[plugins.<ns>]` over that manifest's
+`spec.config.defaults` (a workspace override is not host-wide, so it cannot hide a default
+another workspace would open) and each root is physically resolved the way the sandbox opens
+it. A rendered root that is unchanged, or that lies inside a root the previous manifest already
+opened, is not widening; a parent, a sibling, or any other new directory is. Unchanged or
+narrower keeps the enable/grant state. Any widening disables the plugin, clears its grants and
+witness, prints the widened requests, and names the full `orbit plugin enable <ns> --grant …`
+command.
 `plugin upgrade <ns> <source>` requires an explicit, non-empty source and always prints the
 diff; its own `--grant …` is explicit re-consent. Omitting the source refuses before any
 fetch or install. The recorded `plugins.source` field is informational: a backend with

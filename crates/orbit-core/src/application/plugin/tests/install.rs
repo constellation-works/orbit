@@ -1,8 +1,9 @@
 use std::path::Path;
 
+use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
-use super::super::{PluginAddOptions, install_plugin};
+use super::super::{PluginAddOptions, PluginUpgradeOptions, install_plugin, upgrade_plugin};
 use super::fixture::{PluginFixture, PluginSpecFixture};
 
 #[cfg(unix)]
@@ -153,4 +154,129 @@ fn add_from_a_git_source_excludes_the_clone_metadata() {
         !installed.join("Cargo.lock").exists() && !installed.join(".orbit-plugin").exists(),
         "only the checkout's .orbit-plugin/ contents are installed"
     );
+}
+
+/// A default-only change to a `{{config.*}}` fs root is judged on the directory
+/// the sandbox will open. The template text stays the same, so a raw-string
+/// diff would carry the `fs` grant onto a broader root [ORB-14341].
+#[cfg(unix)]
+#[test]
+fn upgrade_broadens_a_templated_fs_default_only_when_the_resolved_root_grows() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "upgrade_broadens_a_templated_fs_default_only_when_the_resolved_root_grows",
+    ) {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let parent = fixture.sources.join("roots");
+    let child = parent.join("cache");
+    std::fs::create_dir_all(&child).expect("create fs roots");
+    let parent = parent.canonicalize().expect("parent root");
+    let child = child.canonicalize().expect("child root");
+
+    install_enabled(&fixture, "demo", "1.0.0", "v1-broad", &parent);
+    let narrowed = upgrade_enabled(&fixture, "demo", "1.0.1", "v1-narrow", &child);
+    assert!(
+        !narrowed.grants_reset,
+        "a default that resolves inside the previous root keeps the grant: {narrowed:?}"
+    );
+    assert_eq!(narrowed.summary.status, PluginStatus::Active);
+    assert_eq!(narrowed.summary.granted, ["fs".to_string()]);
+
+    let broadened = upgrade_enabled(&fixture, "demo", "1.0.2", "v2-broad", &parent);
+    assert!(
+        broadened.grants_reset,
+        "a broader resolved root must clear grants: {broadened:?}"
+    );
+    assert!(
+        broadened
+            .permission_changes
+            .iter()
+            .any(|change| change.grant.as_str() == "fs" && change.widened),
+        "the fs change is classified as widening: {:?}",
+        broadened.permission_changes
+    );
+    assert_eq!(broadened.summary.status, PluginStatus::Disabled);
+    assert!(broadened.summary.granted.is_empty());
+    assert!(!broadened.summary.host_enabled);
+    let diagnostic = broadened.summary.diagnostic.unwrap_or_default();
+    assert!(
+        diagnostic.contains(&parent.display().to_string()),
+        "the widening report names the broader root: {diagnostic}"
+    );
+    let row = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read row")
+        .expect("installed");
+    assert!(!row.enabled);
+    assert!(row.grants.is_empty());
+
+    // Global config pins the key, so the manifest default is not what a call
+    // opens. Changing that default must not demand re-consent.
+    install_enabled(&fixture, "held", "1.0.0", "held-v1", &child);
+    std::fs::write(
+        fixture.global_root.join("config.toml"),
+        format!("[plugins.held]\nout = \"{}\"\n", child.display()),
+    )
+    .expect("write global plugin config");
+    let pinned = upgrade_enabled(&fixture, "held", "1.1.0", "held-v2", &parent);
+    assert!(
+        !pinned.grants_reset,
+        "a global override keeps the rendered root, so the default change is not widening: {pinned:?}"
+    );
+    assert_eq!(pinned.summary.granted, ["fs".to_string()]);
+    assert_eq!(pinned.summary.status, PluginStatus::Active);
+}
+
+#[cfg(unix)]
+fn templated_write_block(root: &Path) -> String {
+    format!(
+        "  config:\n    defaults:\n      out: \"{}\"\n  permissions:\n    fs:\n      write: [\"{{{{config.out}}}}\"]\n",
+        root.display()
+    )
+}
+
+#[cfg(unix)]
+fn install_enabled(fixture: &PluginFixture, name: &str, version: &str, dir: &str, root: &Path) {
+    let block = templated_write_block(root);
+    let mut spec = PluginSpecFixture::new(dir, name);
+    spec.version = version;
+    spec.permissions = Some(&block);
+    let source = fixture.write_plugin(spec);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("install {name} v{version}: {error}"));
+}
+
+#[cfg(unix)]
+fn upgrade_enabled(
+    fixture: &PluginFixture,
+    name: &str,
+    version: &str,
+    dir: &str,
+    root: &Path,
+) -> super::super::PluginUpgradeResult {
+    let block = templated_write_block(root);
+    let mut spec = PluginSpecFixture::new(dir, name);
+    spec.version = version;
+    spec.permissions = Some(&block);
+    let source = fixture.write_plugin(spec);
+    upgrade_plugin(
+        &fixture.runtime,
+        name,
+        Some(source.to_str().expect("utf8 path")),
+        &PluginUpgradeOptions::default(),
+    )
+    .unwrap_or_else(|error| panic!("upgrade {name} to v{version}: {error}"))
 }
