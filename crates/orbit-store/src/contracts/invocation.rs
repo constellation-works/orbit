@@ -69,12 +69,17 @@ pub struct InvocationRecord {
     pub derived_cost_usd: Option<f64>,
 }
 
-/// Date window for reconciliation-safe invocation accounting reads.
+/// Workspace and date window for reconciliation-safe invocation accounting reads.
 ///
 /// `until` is always exclusive. Callers capture it before loading so rows
 /// arriving during aggregation cannot make one read internally inconsistent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationAccountingQuery {
+    /// Restricts facts to the workspace they were recorded under. `None`
+    /// retains host-wide reads; legacy rows without an attributed workspace
+    /// never match a workspace-scoped read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: DateTime<Utc>,
 }

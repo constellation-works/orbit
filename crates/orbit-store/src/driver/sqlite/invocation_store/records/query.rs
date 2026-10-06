@@ -51,7 +51,7 @@ impl Store {
         Ok(records)
     }
 
-    /// Loads every invocation in the requested half-open window exactly once.
+    /// Loads every invocation in the requested workspace and half-open window exactly once.
     ///
     /// This intentionally bypasses the detailed-list limit and hydrates only
     /// distinct linked task ids, never tool-call rows.
@@ -60,35 +60,28 @@ impl Store {
         query: &InvocationAccountingQuery,
     ) -> Result<Vec<InvocationAccountingFact>, OrbitError> {
         let conn = self.read()?;
-        let (sql, params): (&str, Vec<Box<dyn ToSql>>) = match query.since {
-            Some(since) => (
-                r#"SELECT i.id, i.ts, i.model, i.input_tokens, i.cache_read_tokens,
-                          i.cache_create_tokens, i.cache_create_1h_tokens, i.output_tokens,
-                          i.provider_cost_usd
-                   FROM invocations i
-                   WHERE i.ts >= ?1 AND i.ts < ?2
-                   ORDER BY i.ts ASC, i.id ASC"#,
-                vec![
-                    Box::new(since.to_rfc3339()),
-                    Box::new(query.until.to_rfc3339()),
-                ],
-            ),
-            None => (
-                r#"SELECT i.id, i.ts, i.model, i.input_tokens, i.cache_read_tokens,
-                          i.cache_create_tokens, i.cache_create_1h_tokens, i.output_tokens,
-                          i.provider_cost_usd
-                   FROM invocations i
-                   WHERE i.ts < ?1
-                   ORDER BY i.ts ASC, i.id ASC"#,
-                vec![Box::new(query.until.to_rfc3339())],
-            ),
-        };
-        let param_refs = params
+        let mut filters = InvocationListQuery::default();
+        if let Some(workspace_id) = &query.workspace_id {
+            filters.push_filter("i.workspace_id = ?", workspace_id.clone());
+        }
+        if let Some(since) = query.since {
+            filters.push_filter("i.ts >= ?", since.to_rfc3339());
+        }
+        filters.push_filter("i.ts < ?", query.until.to_rfc3339());
+        let sql = format!(
+            "SELECT i.id, i.ts, i.model, i.input_tokens, i.cache_read_tokens, \
+                    i.cache_create_tokens, i.cache_create_1h_tokens, i.output_tokens, \
+                    i.provider_cost_usd \
+             FROM invocations i {} ORDER BY i.ts ASC, i.id ASC",
+            filters.where_clause()
+        );
+        let param_refs = filters
+            .params
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>();
         let mut stmt = conn
-            .prepare(sql)
+            .prepare(&sql)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         let rows = stmt
             .query_map(param_refs.as_slice(), map_invocation_accounting_fact)

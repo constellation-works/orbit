@@ -285,7 +285,7 @@ impl OrbitRuntime {
         )
     }
 
-    /// Aggregates managed invocation telemetry by canonical task orchestrator.
+    /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.
     ///
     /// The effective window is half-open (`since <= ts < until`). Missing
     /// tasks take precedence over unattributed tasks, which take precedence
@@ -313,6 +313,7 @@ impl OrbitRuntime {
 
         let facts = open_invocation_store(self)?.list_invocation_accounting_facts(
             &InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
                 since,
                 until: effective_until,
             },
