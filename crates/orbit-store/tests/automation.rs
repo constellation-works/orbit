@@ -1,0 +1,355 @@
+//! Automation checkpoints through public composition, a separate store area
+//! from task admission and readiness. Mutable fixtures run in isolated children.
+
+#![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
+
+use std::process::Command;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use orbit_common::{process, test_env};
+use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
+use orbit_types::workflow::automation::recovery::{
+    AutomationStall, CoverageDebt, RecoveryRecord, ResetRecord,
+};
+use orbit_types::workflow::automation::{
+    AutomationState, BatchAttempt, BatchState, BatchWaiver, CoverageBatch, CoverageClass, Delivery,
+    DeliveryTrigger, SourceRevision,
+};
+
+fn isolated(test: &str) -> bool {
+    const MARKER: &str = "ORBIT_TEST_AUTOMATION_STORE_CHILD";
+    if std::env::var(MARKER).as_deref() == Ok(test) {
+        return false;
+    }
+    let home = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(MARKER, test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path());
+    let output = process::run_bounded_capped(&mut command, Duration::from_secs(30), 64 * 1024)
+        .expect("run isolated automation fixture");
+    test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
+    true
+}
+
+fn now() -> DateTime<Utc> {
+    "2026-01-01T00:00:00Z".parse().unwrap()
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Write {
+    Commit,
+    Recover,
+    Stall,
+    Reset,
+    Waive,
+}
+
+fn baseline() -> AutomationState {
+    let revision = SourceRevision {
+        commit: "base".into(),
+        tree: "base-tree".into(),
+    };
+    AutomationState {
+        members: None,
+        consumer: "fixture/legacy".into(),
+        epoch: "epoch".into(),
+        trigger: Some(DeliveryTrigger {
+            owner_machine: None,
+            branch: "fixture-branch".into(),
+            threshold: 1,
+            max_wait_minutes: 10,
+            coverage: CoverageClass::LandedCodeReviewV1,
+            max_items: 1,
+            retries: 0,
+        }),
+        repository: "fixture-repo".into(),
+        branch: "fixture-branch".into(),
+        generation: 0,
+        baseline: revision.clone(),
+        observed: revision.clone(),
+        covered: revision,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        active: None,
+        stall: None,
+    }
+}
+
+fn failed_batch(state: &mut AutomationState) {
+    let after = SourceRevision {
+        commit: "landing".into(),
+        tree: "landing-tree".into(),
+    };
+    let delivery = Delivery {
+        key: "delivery".into(),
+        repository: state.repository.clone(),
+        branch: state.branch.clone(),
+        before: state.baseline.clone(),
+        after: after.clone(),
+        commits: vec![after.commit.clone()],
+        task_ids: vec![],
+        unattributed: None,
+        evidence_reference: "fixture-evidence".into(),
+        evidence_digest: "fixture-digest".into(),
+        landed_at: now(),
+    };
+    state.pending_commits = delivery.commits.clone();
+    state.pending = vec![delivery.clone()];
+    state.observed = after.clone();
+    state.active = Some(BatchAttempt {
+        batch: CoverageBatch {
+            schema_version: 1,
+            id: "batch".into(),
+            consumer: state.consumer.clone(),
+            epoch: state.epoch.clone(),
+            repository: state.repository.clone(),
+            branch: state.branch.clone(),
+            coverage: CoverageClass::LandedCodeReviewV1,
+            from_exclusive: state.baseline.clone(),
+            through_inclusive: after,
+            commits: delivery.commits.clone(),
+            deliveries: vec![delivery],
+            exclusions: vec![],
+            created_at: now(),
+            max_attempts: 1,
+            retry_until: now(),
+        },
+        input_digest: "input-digest".into(),
+        attempt: 1,
+        action_key: "action-key".into(),
+        action_id: Some("action".into()),
+        state: BatchState::Failed,
+        reason: Some("fixture-failure".into()),
+        retry_after: None,
+        reissue: None,
+    });
+}
+
+fn next_state(previous: &AutomationState, write: Write) -> AutomationState {
+    let mut next = previous.clone();
+    next.generation += 1;
+    match write {
+        Write::Recover => next.epoch = "adopted-epoch".into(),
+        Write::Stall => {
+            next.stall = Some(AutomationStall {
+                reason: "fixture-stall".into(),
+                since: now(),
+                escalated_at: None,
+                friction_id: None,
+                divergence: None,
+            });
+        }
+        Write::Waive => {
+            next.active = None;
+            next.waived.append(&mut next.pending);
+        }
+        Write::Commit | Write::Reset => {}
+    }
+    next
+}
+
+fn recovery(previous: &AutomationState, next: &AutomationState, write: Write) -> RecoveryRecord {
+    RecoveryRecord {
+        consumer: previous.consumer.clone(),
+        previous_epoch: previous.epoch.clone(),
+        epoch: next.epoch.clone(),
+        previous_trigger: previous.trigger.clone(),
+        trigger: next.trigger.clone(),
+        adopted_settings: matches!(write, Write::Recover),
+        reissued: None,
+        replayed_history: None,
+        reset: matches!(write, Write::Reset).then(|| ResetRecord {
+            previous_generation: previous.generation,
+            forgotten: CoverageDebt {
+                baseline: previous.baseline.clone(),
+                covered: previous.covered.clone(),
+                observed: previous.observed.clone(),
+                pending_deliveries: previous.pending.len(),
+                pending_commits: previous.pending_commits.len(),
+                unresolved: previous.unresolved.len(),
+                waived: previous.waived.len(),
+                excluded: previous.excluded.len(),
+                receipts: 0,
+            },
+            abandoned_action: None,
+            baseline: previous.baseline.clone(),
+            released_refs: vec![],
+            cleared_stall: previous.stall.clone(),
+        }),
+        friction_id: None,
+        reason: "authorized fixture recovery".into(),
+        by: "fixture-operator".into(),
+        at: now(),
+    }
+}
+
+fn apply(store: &dyn AutomationStoreBackend, previous: &AutomationState, write: Write) -> bool {
+    let next = next_state(previous, write);
+    match write {
+        Write::Commit => store.automation_commit(previous, &next, None),
+        Write::Recover => {
+            store.automation_recover(previous, &next, &recovery(previous, &next, write))
+        }
+        Write::Stall => store.automation_stall(previous, &next),
+        Write::Reset => store.automation_reset(previous, &recovery(previous, previous, write)),
+        Write::Waive => store.automation_waive(
+            previous,
+            &next,
+            &BatchWaiver {
+                batch_id: previous.active.as_ref().unwrap().batch.id.clone(),
+                reason: "authorized fixture waiver".into(),
+                by: "fixture-operator".into(),
+                at: now(),
+            },
+        ),
+    }
+    .unwrap()
+}
+
+#[test]
+fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
+    if isolated("consumer_writes_accept_legacy_json_and_refuse_stale_snapshots") {
+        return;
+    }
+    for missing in [
+        "excluded",
+        "waived",
+        "associations",
+        "trigger.retries",
+        "formatting",
+        "field_order",
+    ] {
+        for write in [
+            Write::Commit,
+            Write::Recover,
+            Write::Stall,
+            Write::Reset,
+            Write::Waive,
+        ] {
+            let base = Store::open_in_memory().unwrap();
+            let store = compose::automation_store(base.clone()).unwrap();
+            let mut expected = baseline();
+            if matches!(write, Write::Waive) {
+                failed_batch(&mut expected);
+            }
+            let mut json = serde_json::to_value(&expected).unwrap();
+            match missing {
+                "trigger.retries" => {
+                    json["trigger"].as_object_mut().unwrap().remove("retries");
+                }
+                "formatting" | "field_order" => {}
+                key => {
+                    json.as_object_mut().unwrap().remove(key);
+                }
+            }
+            // Reverse the stored key order explicitly: the workspace preserves
+            // insertion order in JSON objects. The order-only control uses
+            // compact JSON; the other cases also exercise pretty printing.
+            let object = json.as_object_mut().unwrap();
+            *object = std::mem::take(object).into_iter().rev().collect();
+            let raw = if missing == "field_order" {
+                serde_json::to_string(&json).unwrap()
+            } else {
+                serde_json::to_string_pretty(&json).unwrap()
+            };
+            base.connection()
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO automation_consumers VALUES (?1,?2,?3)",
+                    rusqlite::params![expected.consumer, expected.generation, raw],
+                )
+                .unwrap();
+            let previous = store.automation_state(&expected.consumer).unwrap().unwrap();
+            assert_eq!(previous, expected, "{missing}: legacy snapshot decodes");
+
+            let mut altered = previous.clone();
+            altered.repository = "other-repository".into();
+            assert!(
+                !apply(store.as_ref(), &altered, write),
+                "{missing}/{write:?}: same generation does not authorize an altered snapshot"
+            );
+            assert_eq!(
+                store.automation_state(&previous.consumer).unwrap(),
+                Some(previous.clone())
+            );
+            assert!(
+                store
+                    .automation_recoveries(&previous.consumer, 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                store
+                    .automation_waivers(&previous.consumer, 10)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            assert!(
+                apply(store.as_ref(), &previous, write),
+                "{missing}/{write:?}: legacy checkpoint must advance"
+            );
+            let persisted = store.automation_state(&previous.consumer).unwrap();
+            if matches!(write, Write::Reset) {
+                assert!(persisted.is_none());
+            } else {
+                assert_eq!(persisted, Some(next_state(&previous, write)));
+            }
+            assert!(
+                !apply(store.as_ref(), &previous, write),
+                "{missing}/{write:?}: stale writer must change nothing"
+            );
+            assert_eq!(
+                store.automation_state(&previous.consumer).unwrap(),
+                persisted
+            );
+            let records = store.automation_recoveries(&previous.consumer, 10).unwrap();
+            let waivers = store.automation_waivers(&previous.consumer, 10).unwrap();
+            match write {
+                Write::Recover => assert_eq!(
+                    records,
+                    vec![recovery(&previous, &next_state(&previous, write), write)]
+                ),
+                Write::Reset => {
+                    assert_eq!(records, vec![recovery(&previous, &previous, write)]);
+                    let mut replacement = baseline();
+                    replacement.epoch = "replacement-epoch".into();
+                    assert!(store.automation_initialize(&replacement).unwrap());
+                    assert!(
+                        !apply(store.as_ref(), &previous, write),
+                        "a reset must not delete a new incarnation at the same generation"
+                    );
+                    assert_eq!(
+                        store.automation_state(&previous.consumer).unwrap(),
+                        Some(replacement)
+                    );
+                    assert_eq!(
+                        store.automation_recoveries(&previous.consumer, 10).unwrap(),
+                        records
+                    );
+                }
+                Write::Waive => {
+                    assert_eq!(waivers.len(), 1);
+                    assert_eq!(
+                        waivers[0].batch_id,
+                        previous.active.as_ref().unwrap().batch.id
+                    );
+                }
+                Write::Commit | Write::Stall => assert!(records.is_empty() && waivers.is_empty()),
+            }
+        }
+    }
+}

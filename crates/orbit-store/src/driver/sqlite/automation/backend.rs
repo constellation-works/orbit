@@ -9,7 +9,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::codec::{decode, encode};
 use super::transition::validate_transition;
-use super::{intents, recovery, waivers};
+use super::{checkpoint, intents, recovery, waivers};
 
 impl AutomationStoreBackend for Store {
     fn automation_waive(
@@ -150,8 +150,12 @@ impl AutomationStoreBackend for Store {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn = tx.connection();
 
-            // The generation and the exact prior state both fence the write, so a
-            // concurrent evaluation that already moved the consumer changes nothing.
+            let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+                return Ok(false);
+            };
+
+            // Fence on the stored bytes after matching the decoded snapshot,
+            // so non-canonical JSON does not strand a legacy consumer.
             let changed = conn
                 .execute(
                     "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
@@ -160,7 +164,7 @@ impl AutomationStoreBackend for Store {
                         encode(next)?,
                         previous.consumer,
                         previous.generation,
-                        encode(previous)?
+                        previous_json
                     ],
                 )
                 .map_err(|e| OrbitError::Store(e.to_string()))?;

@@ -275,6 +275,12 @@ action key `(consumer, epoch, batch, attempt)` and return the previously created
 identity on replay. This is a prerequisite change, not a guarantee supplied by
 today's file lock, provenance tag, or routine fire intent.
 
+SQLite consumer writes match the generation and decoded prior snapshot inside
+the write transaction, then use the raw stored JSON as the compare-and-swap
+fence. Commit, waiver, recovery, stall and reset therefore accept legacy rows
+with omitted defaulted fields or different JSON formatting without accepting
+a stale generation or a changed prior snapshot.
+
 Creation must reserve and persist key-to-ID mapping before launch, or recover
 that mapping from an atomically written canonical bundle. Store operations must
 define the recovery order for a crash at every file/SQLite boundary. Merely
