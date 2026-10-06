@@ -9,6 +9,7 @@ mod final_recovery;
 pub(crate) mod pipeline;
 mod resume;
 mod run;
+mod upgrade_resume;
 
 #[cfg(test)]
 mod tests;

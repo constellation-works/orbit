@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631]
-last_validated: 2026-10-05
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
+last_validated: 2026-10-06
 ---
 
 # Upgrade Orbit Safely
@@ -147,7 +147,14 @@ read-compatible or breaking migration beyond them) does not fail at once:
      its run **`interrupted`** with error code `upgrade_quiesce` — not failed — and
      exits. Once the generation settles, the clock tick sweep resumes it
      automatically at most once from that checkpoint (`orbit job resume <run_id>`
-     remains available for manual continuation). A claimed leaf on a follower is the
+     remains available for manual continuation). The clock resumes only runs the
+     current upgrade interrupted — within the last 30 minutes. It skips a run
+     interrupted by an earlier upgrade, a drain (or `workspace_ship_pipeline`
+     wrapper) whose window has elapsed or whose admissions were stopped, and a run
+     superseded by a newer run of the same drain or routine. Each resume and skip
+     is recorded once as a `pipeline.run.upgrade_resume` audit event with its
+     reason, and a run with a recorded decision is not reconsidered.
+     A claimed leaf on a follower is the
      exception: generic resume refuses it, so recover its claim on the owner and let a
      drain re-admit it. A drain coordinator yields between admission passes and admits
      no new leaves meanwhile; its already running leaves yield at their own step boundaries.

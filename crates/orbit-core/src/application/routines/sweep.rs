@@ -385,10 +385,11 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
     // [ORB-14273] After the executable generation settles, the clock resumes each
-    // upgrade-interrupted run at most once.
+    // run the current upgrade interrupted at most once, and audits every run it
+    // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).
     if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
         for (workspace, runtime) in &discovered.entries {
-            match runtime.auto_resume_upgrade_interrupted_runs() {
+            match runtime.auto_resume_upgrade_interrupted_runs(now_utc) {
                 Ok(resumed) => {
                     if !resumed.is_empty() {
                         tracing::info!(
