@@ -22,6 +22,7 @@
 //! | [`RunOutcome::Failed`] | `failed`, `timeout`, `interrupted` | yes |
 //! | [`RunOutcome::Cancelled`] | `cancelled` | no |
 //! | [`RunOutcome::Skipped`] | `skipped` | no |
+//! | [`RunOutcome::Held`] | `held` | no |
 //! | [`RunOutcome::InFlight`] | `pending`, `running`, `retrying` | no |
 //! | [`RunOutcome::Unknown`] | any state this build cannot parse | no |
 //!
@@ -32,7 +33,7 @@
 //! deliberate operator action, so counting it as a failure would make manual
 //! intervention look like breakage. `skipped` never ran.
 //!
-//! Because four of the six outcomes sit outside the denominator,
+//! Because five of the seven outcomes sit outside the denominator,
 //! `succeeded + failed` does **not** equal the run count in general. Callers
 //! render [`OutcomeCounts::settled`] as the `n` and report the excluded
 //! buckets separately; [`OutcomeCounts::total`] is kept so the gap is visible
@@ -127,6 +128,7 @@ pub enum RunOutcome {
     Failed,
     Cancelled,
     Skipped,
+    Held,
     InFlight,
     Unknown,
 }
@@ -146,6 +148,7 @@ impl RunOutcome {
             JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted => Self::Failed,
             JobRunState::Cancelled => Self::Cancelled,
             JobRunState::Skipped => Self::Skipped,
+            JobRunState::Held => Self::Held,
             JobRunState::Pending | JobRunState::Running | JobRunState::Retrying => Self::InFlight,
         }
     }
@@ -160,6 +163,7 @@ pub struct OutcomeCounts {
     pub failed: u64,
     pub cancelled: u64,
     pub skipped: u64,
+    pub held: u64,
     pub in_flight: u64,
     pub unknown: u64,
 }
@@ -172,6 +176,7 @@ impl OutcomeCounts {
             RunOutcome::Failed => self.failed += 1,
             RunOutcome::Cancelled => self.cancelled += 1,
             RunOutcome::Skipped => self.skipped += 1,
+            RunOutcome::Held => self.held += 1,
             RunOutcome::InFlight => self.in_flight += 1,
             RunOutcome::Unknown => self.unknown += 1,
         }
@@ -180,7 +185,7 @@ impl OutcomeCounts {
     /// Runs that reached an outcome the failure rate is defined over.
     ///
     /// This is the rate's `n`. It is smaller than [`OutcomeCounts::total`]
-    /// whenever runs were cancelled, skipped, still in flight, or in a state
+    /// whenever runs were cancelled, skipped, held, still in flight, or in a state
     /// this build cannot parse.
     pub fn settled(&self) -> u64 {
         self.succeeded + self.failed
@@ -188,7 +193,7 @@ impl OutcomeCounts {
 
     /// Runs excluded from the denominator, for the "not counted" disclosure.
     pub fn excluded(&self) -> u64 {
-        self.cancelled + self.skipped + self.in_flight + self.unknown
+        self.cancelled + self.skipped + self.held + self.in_flight + self.unknown
     }
 
     /// Failure rate over settled runs, or `None` when nothing settled.

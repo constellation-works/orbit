@@ -52,7 +52,10 @@ pub fn pipeline_wait_status_is_success(status: &str) -> bool {
 
 pub fn pipeline_wait_status_is_settled(status: &str) -> bool {
     pipeline_wait_status_is_success(status)
-        || matches!(status, "failed" | "timeout" | "cancelled" | "interrupted")
+        || matches!(
+            status,
+            "failed" | "timeout" | "cancelled" | "interrupted" | "held"
+        )
 }
 
 impl OrbitRuntime {

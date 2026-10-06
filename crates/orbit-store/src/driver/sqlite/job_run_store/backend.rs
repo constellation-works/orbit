@@ -706,6 +706,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 JobRunState::Timeout => RunEvent::Timeout,
                 JobRunState::Cancelled => RunEvent::Cancel,
                 JobRunState::Interrupted => RunEvent::Interrupt,
+                JobRunState::Held => RunEvent::Hold,
                 other => {
                     return Err(OrbitError::JobRunStateTransition(format!(
                         "cannot finalize to non-terminal state: {other}"

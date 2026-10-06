@@ -38,7 +38,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Post-v0.24.0 release survey](./runbooks/release-survey-v0.24.0.md) | Post-v0.24.0 release survey and breaking-change handoff. |
 | [Post-v0.18.0 release survey](./runbooks/release-survey.md) | Post-v0.18.0 release survey and breaking-change handoff. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
-| [Operate the Before-PR Review Gate](./runbooks/review-gate.md) | Read a before-PR review's verdict, reviewer commit and findings comment, and decide what to do with a task the gate blocked. |
+| [Operate the Before-PR Review Gate](./runbooks/review-gate.md) | Inspect before-PR review verdicts, findings, and evidence holds, then decide how to resume a task. |
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
 | [Recover Stuck Job Runs](./runbooks/stuck-job-runs.md) | Diagnose, cancel, resume, or replay pending and running Orbit job runs. |
 | [Publish Orbit Tasks to a Dedicated Repository](./runbooks/task-publication.md) | Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository. |

@@ -74,7 +74,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             step_id, outcome, ..
         } => {
             let success = outcome == "success";
-            if success {
+            if success || outcome == "held" {
                 tracing::info!(
                     target: "orbit.job.step_finished",
                     job_run_id = job_run_id,

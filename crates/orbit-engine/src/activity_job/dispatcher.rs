@@ -172,6 +172,11 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` refused: {message}")]
     DeterministicActionRefused { action: String, message: String },
 
+    /// A settled review needs named external evidence. End the delivery run
+    /// without retry, recovery, or the failure handoff; receipt queues review.
+    #[error("review_awaiting_evidence: named external checks are pending")]
+    ReviewEvidenceHold(Box<orbit_types::workflow::ReviewEvidenceHold>),
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -295,6 +300,7 @@ impl DispatchError {
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
+                | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -438,6 +444,7 @@ fn dispatch_v2_activity_inner(
     let outcome_str = match &result {
         Ok(o) if o.success => "success",
         Ok(_) => "failed",
+        Err(DispatchError::ReviewEvidenceHold(_)) => "held",
         Err(_) => "error",
     };
     input.audit.emit_lossy(

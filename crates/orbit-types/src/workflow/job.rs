@@ -100,6 +100,9 @@ pub enum JobRunState {
     /// run's persisted step checkpoints can seed a resumed follow-up run
     /// (ORB-10002).
     Interrupted,
+    /// Delivery ended awaiting external review evidence. Receipt starts a
+    /// fresh review; this run is terminal and must not trigger failure recovery.
+    Held,
 }
 
 /// [ORB-10965] Outcome of applying a `Start` event to a job run.
@@ -159,6 +162,8 @@ pub enum RunEvent {
     Abandon,
     /// Owner process died without finalizing the run (orphan reconciliation).
     Interrupt,
+    /// A settled review is awaiting named external evidence.
+    Hold,
 }
 
 impl Display for RunEvent {
@@ -171,6 +176,7 @@ impl Display for RunEvent {
             RunEvent::Cancel => write!(f, "cancel"),
             RunEvent::Abandon => write!(f, "abandon"),
             RunEvent::Interrupt => write!(f, "interrupt"),
+            RunEvent::Hold => write!(f, "hold"),
         }
     }
 }
@@ -180,7 +186,12 @@ impl JobRunState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Success | Self::Failed | Self::Timeout | Self::Cancelled | Self::Interrupted
+            Self::Success
+                | Self::Failed
+                | Self::Timeout
+                | Self::Cancelled
+                | Self::Interrupted
+                | Self::Held
         )
     }
 
@@ -207,6 +218,7 @@ impl JobRunState {
             (Self::Running, RunEvent::Cancel) => Ok(Self::Cancelled),
             (Self::Running, RunEvent::Abandon) => Ok(Self::Failed),
             (Self::Running, RunEvent::Interrupt) => Ok(Self::Interrupted),
+            (Self::Running, RunEvent::Hold) => Ok(Self::Held),
             _ => Err(format!(
                 "invalid job run state transition: {} + {:?}",
                 self, event
@@ -222,9 +234,10 @@ impl JobRunState {
             | Self::Timeout
             | Self::Skipped
             | Self::Cancelled
-            | Self::Interrupted => Ok(()),
+            | Self::Interrupted
+            | Self::Held => Ok(()),
             other => Err(format!(
-                "invalid step result state: {} (must be success, failed, timeout, skipped, cancelled, or interrupted)",
+                "invalid step result state: {} (must be success, failed, timeout, skipped, cancelled, interrupted, or held)",
                 other
             )),
         }
@@ -243,6 +256,7 @@ impl Display for JobRunState {
             JobRunState::Retrying => write!(f, "retrying"),
             JobRunState::Cancelled => write!(f, "cancelled"),
             JobRunState::Interrupted => write!(f, "interrupted"),
+            JobRunState::Held => write!(f, "held"),
         }
     }
 }
@@ -261,6 +275,7 @@ impl FromStr for JobRunState {
             "retrying" => Ok(JobRunState::Retrying),
             "cancelled" => Ok(JobRunState::Cancelled),
             "interrupted" => Ok(JobRunState::Interrupted),
+            "held" => Ok(JobRunState::Held),
             other => Err(format!("unknown job run state: {other}")),
         }
     }
