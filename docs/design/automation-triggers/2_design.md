@@ -148,7 +148,12 @@ batch; otherwise it enters pending work. Force-push/non-ancestral history pauses
 range advancement with `history_diverged`. The supported replay is an explicit,
 audited recovery: it captures the configured head and consumer generation,
 walks at most 1,000 first-parent commits, and maps each orphan uniquely by its
-exact parent-relative binary patch plus `.orbit` tree. It then obtains ordinary
+exact parent-relative binary patch plus `.orbit` tree. The fetch that resolved
+the head keeps the shared source deadline; the proof runs on a fresh one and
+batches those git reads, so an admitted range is not failed by the fetch's
+leftover time. A deadline or command budget while signing canonical commits is
+returned as that deferral. A canonical commit that simply has no signature is
+still skipped. It then obtains ordinary
 provider associations for inserted commits and reconciles debt by delivery key.
 Missing objects, ambiguous content, unreachable covered/frozen boundaries,
 provider gaps, contract drift, or a changed head/generation fail closed. Never
