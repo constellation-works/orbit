@@ -140,7 +140,9 @@ CLI-only.
 `toggle off` pauses a definition and keeps it listed. `delete` removes it: the
 YAML file, its scheduler cursor, and — for a `deliveries_landed` definition —
 its consumer state. Every delete writes an audit record naming who deleted
-what and the optional `--reason`.
+what and the optional `--reason`. A delete that fails leaves the definition
+and its cursor in place; if it failed releasing a pinned ref, the consumer
+reset before it stays applied, recorded as its own audited reset.
 
 - It refuses while a task minted from the definition is still open and names
   those tasks. Finish or close them, or pass `--force`; a forced delete leaves

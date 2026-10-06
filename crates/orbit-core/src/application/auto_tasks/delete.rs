@@ -10,15 +10,15 @@
 
 use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::compose::auto_task::with_cursor_lock;
+use orbit_store::compose::auto_task::{CursorSession, with_cursor_lock};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::AutoTaskDefinition;
+use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -26,7 +26,7 @@ use crate::application::automation::{
     ConsumerTeardown, consumer_teardown_refusals, tear_down_auto_task_consumer,
 };
 use crate::application::managed_assets::{
-    ManagedAssetLayout, record_managed_asset_opt_out, restore_managed_asset,
+    ManagedAssetLayout, ManagedAssetOptOut, record_managed_asset_opt_out, restore_managed_asset,
 };
 use crate::{AuditEventInsertParams, OrbitRuntime};
 
@@ -77,6 +77,11 @@ impl OrbitRuntime {
     /// Refuses while a task minted from the definition is still open, naming
     /// those tasks, unless `force` is set. A delivery consumer is torn down
     /// through the audited reset, so delete refuses whenever that reset would.
+    ///
+    /// A delete that fails leaves the definition, its cursor and the shipped
+    /// opt-out as they were. The consumer reset runs last because it cannot be
+    /// undone: if releasing a pinned ref fails after it, the reset stays
+    /// applied under its own audit record and the next evaluation re-baselines.
     pub fn auto_task_delete(
         &self,
         params: AutoTaskDeleteParams,
@@ -96,8 +101,9 @@ impl OrbitRuntime {
         // Scheduler admission, including delivery evaluation, and manual mint
         // hold this lock across their definition check and task creation.
         // Check refusals here so a task minted by a preceding pass or an
-        // overlapping manual mint is visible.
-        let (definition, open_tasks, original, cursor_removed) = with_cursor_lock(
+        // overlapping manual mint is visible, and finish the delete under it
+        // so no pass observes a definition that is half removed.
+        let (open_tasks, removed) = with_cursor_lock(
             &cursor_state_path(&self.paths().state_dir),
             |session| {
                 let definition = self.require_validated_auto_task(name)?;
@@ -123,45 +129,26 @@ impl OrbitRuntime {
                         path.display()
                     ))
                 })?;
-                let cursor_removed = session.state.definitions.remove(name).is_some();
-                if cursor_removed {
-                    session
-                        .save()
-                        .map_err(|error| restore_after_failure(&path, &original, error))?;
-                }
-                Ok((definition, open_tasks, original, cursor_removed))
+                let removed = remove_definition_state(
+                    self,
+                    session,
+                    &definition,
+                    reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
+                    params.force,
+                    now,
+                )
+                .map_err(|error| restore_after_failure(&path, &original, error))?;
+                Ok((open_tasks, removed))
             },
         )?;
-
-        let finish = || -> Result<(Option<ConsumerTeardown>, bool), OrbitError> {
-            let consumer = tear_down_auto_task_consumer(
-                self,
-                &definition,
-                reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
-                params.force,
-                now,
-            )?;
-            let shipped = is_shipped_default(name);
-            if shipped {
-                record_managed_asset_opt_out(
-                    &auto_tasks_dir(&self.paths().local_dir),
-                    ASSET_KIND,
-                    ManagedAssetLayout::YamlStem,
-                    name,
-                )?;
-            }
-            Ok((consumer, shipped))
-        };
-        let (consumer, opted_out) =
-            finish().map_err(|error| restore_after_failure(&path, &original, error))?;
 
         let report = AutoTaskDeleteReport {
             name: name.to_string(),
             path,
-            opted_out,
-            cursor_removed,
+            opted_out: removed.opted_out,
+            cursor_removed: removed.cursor_removed,
             open_tasks,
-            consumer,
+            consumer: removed.consumer,
             reason,
             deleted_by: actor,
             deleted_at: now.to_rfc3339(),
@@ -287,6 +274,90 @@ fn is_shipped_default(name: &str) -> bool {
     DEFAULT_AUTO_TASK_FILES
         .iter()
         .any(|(shipped, _)| *shipped == name)
+}
+
+/// The state a delete removed alongside the definition file.
+struct RemovedState {
+    opted_out: bool,
+    cursor_removed: bool,
+    consumer: Option<ConsumerTeardown>,
+}
+
+/// Remove what a deleted definition leaves behind, once its file is gone.
+///
+/// The opt-out and the cursor removal can be undone, so they run first and a
+/// later failure puts both back. The audited consumer reset cannot, so it
+/// runs last; only a ref release failing after it leaves that reset applied.
+fn remove_definition_state(
+    runtime: &OrbitRuntime,
+    session: &mut CursorSession,
+    definition: &AutoTaskDefinition,
+    reason: &str,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<RemovedState, OrbitError> {
+    let name = definition.name.as_str();
+    let opt_out = if is_shipped_default(name) {
+        Some(record_managed_asset_opt_out(
+            &auto_tasks_dir(&runtime.paths().local_dir),
+            ASSET_KIND,
+            ManagedAssetLayout::YamlStem,
+            name,
+        )?)
+    } else {
+        None
+    };
+    let opted_out = opt_out.is_some();
+
+    let cursor = session.state.definitions.remove(name);
+    let cursor_removed = cursor.is_some();
+    if cursor_removed && let Err(error) = session.save() {
+        return Err(revert_opt_out(opt_out, name, error));
+    }
+
+    let consumer =
+        tear_down_auto_task_consumer(runtime, definition, reason, force, now).map_err(|error| {
+            let error = restore_cursor(session, name, cursor, error);
+            revert_opt_out(opt_out, name, error)
+        })?;
+    Ok(RemovedState {
+        opted_out,
+        cursor_removed,
+        consumer,
+    })
+}
+
+/// Put a removed scheduler cursor back after a later step failed.
+fn restore_cursor(
+    session: &mut CursorSession,
+    name: &str,
+    cursor: Option<AutoTaskCursor>,
+    error: OrbitError,
+) -> OrbitError {
+    let Some(cursor) = cursor else {
+        return error;
+    };
+    session.state.definitions.insert(name.to_string(), cursor);
+    match session.save() {
+        Ok(()) => error,
+        Err(restore_error) => OrbitError::Io(format!(
+            "{error}; restoring the scheduler cursor of auto-task '{name}' also failed: {restore_error}"
+        )),
+    }
+}
+
+/// Undo a recorded opt-out after a later step failed.
+fn revert_opt_out(
+    opt_out: Option<ManagedAssetOptOut>,
+    name: &str,
+    error: OrbitError,
+) -> OrbitError {
+    match opt_out.map(ManagedAssetOptOut::revert) {
+        Some(Err(revert_error)) => OrbitError::Io(format!(
+            "{error}; reverting the opt-out of auto-task '{name}' also failed: {revert_error}"
+        )),
+        _ => error,
+    }
 }
 
 /// Put the deleted definition back after a later step failed, so a refused

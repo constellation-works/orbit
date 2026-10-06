@@ -269,13 +269,16 @@ failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
 
 `delete.rs` owns removal (`orbit auto-task delete`; there is no MCP delete).
-Delete refuses while a minted task is open unless forced. It removes the
-definition and its cursor under the cursor lock, tears a delivery consumer down
-through the audited reset, and writes an audit event. Deleting a shipped
+Delete refuses while a minted task is open unless forced. Under the cursor
+lock it removes the definition and its cursor, then tears a delivery consumer
+down through the audited reset, and writes an audit event. Deleting a shipped
 default also records it under `optedOut` in the auto-task managed-asset
 manifest. Reconciliation then leaves it absent and doctor does not report it
 missing. `orbit auto-task restore` writes the shipped content back and clears
-the opt-out.
+the opt-out. The opt-out and cursor removal come before the reset because they
+can be undone: a failed delete puts the definition, cursor and manifest back.
+The reset cannot be, so a ref release failing after it leaves only that
+audited reset applied.
 
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer
