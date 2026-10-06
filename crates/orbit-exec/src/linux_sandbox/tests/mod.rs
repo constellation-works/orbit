@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use super::*;
 use orbit_common::OrbitError;
+#[cfg(target_os = "linux")]
 use orbit_types::policy::ResolvedFsProfile;
 
 #[cfg(target_os = "linux")]

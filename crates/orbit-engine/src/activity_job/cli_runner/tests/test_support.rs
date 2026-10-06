@@ -37,6 +37,7 @@ impl TestHost {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(in crate::activity_job::cli_runner) fn with_sandbox(
         mut self,
         sandbox: ResolvedSandbox,
