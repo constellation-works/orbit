@@ -1137,13 +1137,12 @@ impl<'a> Source<'a> {
 
         let (_, head) = self.head(&batch.branch)?;
 
-        self.git(&[
-            "merge-base",
-            "--is-ancestor",
-            &batch.through_inclusive.commit,
-            &head.commit,
-        ])
-        .map_err(|_| AutomationError::Deferred("history_diverged".into()))?;
+        // A non-ancestor is divergence. Deadline and budget stay deferred:
+        // folding every merge-base failure into `history_diverged` would
+        // settle a closed action during an outage.
+        if !self.is_ancestor(&batch.through_inclusive.commit, &head.commit)? {
+            return Err(AutomationError::Deferred("history_diverged".into()));
+        }
 
         let range = format!(
             "{}..{}",
@@ -1195,6 +1194,16 @@ impl From<std::io::Error> for FetchLockError {
 
 fn is_evidence_unavailable(reason: &str) -> bool {
     reason.starts_with("evidence_unavailable:")
+}
+
+/// Frozen-batch mismatches. Operational failures, including a prefixed
+/// `source_fetch_failed`, are not mismatches: evidence evaluation defers
+/// them instead of rejecting coverage.
+pub(super) fn is_batch_mismatch(error: &AutomationError) -> bool {
+    matches!(
+        deferred_reason(error),
+        Some("source_revision_changed" | "history_diverged" | "source_membership_changed")
+    )
 }
 
 fn deferred_reason(error: &AutomationError) -> Option<&str> {
