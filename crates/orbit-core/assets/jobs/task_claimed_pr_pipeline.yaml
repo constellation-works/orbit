@@ -19,6 +19,11 @@
 # moves. A typed implementer blocker (`task_blocked_by_agent`) stops the leaf
 # before the next step and before final recovery.
 #
+# ORB-14257: a leaf that ends after committing names its candidate in its
+# failure settlement, and the owner keeps it. The task's next claim carries it
+# as `resume_candidate`; the `resume_candidate` step applies it onto the new
+# base so the implementer continues it rather than starting over.
+#
 # ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base
 # synchronization and push. One fresh reviewer, with the claim's captured crew,
@@ -61,6 +66,9 @@ spec:
     allowed_crews: []
     title: null
     body: null
+    # [ORB-14257] The candidate the owner kept from the task's last claim,
+    # set by the claim; `null` implements fresh.
+    resume_candidate: null
 
   steps:
     - id: worktree
@@ -74,6 +82,21 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+
+    # [ORB-14257] Carry the candidate the task's last claim committed onto
+    # this base as uncommitted changes, so the implementer continues it
+    # instead of starting over. The owner already retired one an operator
+    # discarded or whose spec changed. The implementer always runs: the
+    # handoff carries its summary, and `validate` judges the result.
+    - id: resume_candidate
+      target: activity:candidate_resume
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        candidate: "{{ input.resume_candidate }}"
+        claimed: true
 
     - id: implement_bundle
       loop:
@@ -91,6 +114,7 @@ spec:
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
               claimed: true
+              resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
       recovery_activity: step_failure_recovery

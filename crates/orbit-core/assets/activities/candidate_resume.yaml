@@ -26,6 +26,13 @@ spec:
     tool is `resumed_unjudged`: the run's own validation step decides. Every
     outcome with a candidate is written to the task history as a
     `candidate_resume` event naming the source run and SHA.
+    A claimed PR leaf sets `claimed` and passes `candidate`, the reference
+    the owner kept from the task's last claim; the owner has already
+    retired a discarded one or one whose spec changed, so neither check
+    runs here and nothing is written to the task's history. A clean merge
+    is `resumed_repaired` with trigger `continuation` (`review` when the
+    before-PR review refused it): the claimed implementer always runs and
+    the leaf's own validation judges the result.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, base_sha, task_ids]
@@ -43,6 +50,13 @@ spec:
           type: string
       prior_job_run_id:
         type: [string, "null"]
+      claimed:
+        type: boolean
+      candidate:
+        type: [object, "null"]
+        description: >
+          Claimed mode only: the preserved candidate's `branch` and
+          `head_sha`, with `source_run_id` and `failed_step_id`.
   output_schema_json:
     type: object
     required: [phase, outcome, implement]
@@ -60,7 +74,7 @@ spec:
         type: [object, "null"]
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
-          `validation` or `review`) and its `output`, plus `failed_step_id`,
+          `validation`, `review` or `continuation`) and its `output`, plus `failed_step_id`,
           `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]

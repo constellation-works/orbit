@@ -5,14 +5,15 @@ use std::cell::RefCell;
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
-    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimFinalRecovery,
-    ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
-    ProviderUnavailable, PullDestination, SettlementRefusal,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimCandidateRef, ClaimEvidence,
+    ClaimFailure, ClaimFinalRecovery, ClaimMutation, JobRunStoreBackend, LocalPullAdmission,
+    LocalPullMutation, LocalPullPhase, ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
-    BaselineRedHold, FinalRecoveryCheckpoint, FinalRecoveryDecision, JobRunState,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, TaskCancellationPolicy,
-    is_baseline_red_failure, is_provider_unavailable,
+    BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FinalRecoveryDecision, JobRunState,
+    OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER,
+    PipelineState, TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER,
+    is_baseline_red_failure,
 };
 
 use crate::application::distributed::{
@@ -239,18 +240,28 @@ impl PullDrain<'_> {
         if !self.reconcile_pending(destination)? {
             return Ok(());
         }
-        let Some(template) = template()? else {
+        let Some(mut next) = template()? else {
             return Ok(());
         };
-        if self.consecutive_failed_settlements(destination, &template.run_context.run_id)?
+        if self.consecutive_failed_settlements(destination, &next.run_context.run_id)?
             >= CONSECUTIVE_FAILURE_BREAKER
         {
             return Ok(());
         }
-        for _ in 0..ceiling {
+        for slot in 0..ceiling {
             if !admitting()? {
                 break;
             }
+            // [ORB-14257] Each request after the first is built again: a leaf
+            // this pass launched may already have released its claim and
+            // excluded its crew, and must not be pulled straight back.
+            if slot > 0 {
+                let Some(fresh) = template()? else {
+                    break;
+                };
+                next = fresh;
+            }
+            let template = &next;
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes).map_err(|error| {
                 OrbitError::Execution(format!("allocate pull request identity: {error}"))
@@ -617,14 +628,7 @@ impl PullDrain<'_> {
         }
         let record = self.ensure_bound(record)?;
         let state = self.jobs.read_run_state(id)?;
-        let final_recovery = state
-            .as_ref()
-            .and_then(|state| state.final_recovery.as_ref());
-        let cancellation_policy = state
-            .as_ref()
-            .and_then(|state| state.task_cancellation_policy.as_ref());
-        let settlement =
-            leaf_failure_settlement(&record, &run, None, final_recovery, cancellation_policy);
+        let settlement = leaf_failure_settlement(&record, &run, None, state.as_ref());
         self.record_settlement(&record, settlement).map(Some)
     }
 
@@ -903,39 +907,31 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 
 /// The settlement a terminal leaf implies, by how far its admission got: a
 /// leaf that never launched was cancelled while queued, so nothing ran and
-/// its claim is released back to the owner's backlog; a launched one whose
-/// provider could not be used on this host — it could not authenticate, or
-/// its selected model was at capacity [ORB-14149] — is released too, typed so
-/// the drain excludes its crew for the window [ORB-13941]; any other launched
-/// leaf ended without the typed handoff success records, and fails.
+/// its claim is released back to the owner's backlog. A launched leaf ended
+/// without the typed handoff success records, and its settlement carries why
+/// as a typed [`ClaimFailure`] [ORB-14257]: a class that
+/// [blocks](ClaimFailureClass::blocks) — the candidate's, or the task's own —
+/// fails the claim, as does an operator's cancel that asked to block the task
+/// [ORB-14274]; any other (an operator's cancel, a provider this host
+/// could not use [ORB-13941], a missing validation tool, an unreachable
+/// owner, a red base, an inconclusive or interrupted run) releases it, and
+/// the drain excludes the leaf's crew for its window when the class
+/// [says so](ClaimFailureClass::excludes_crew).
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
 /// `diagnostic` is the `(code, message)` the terminalizing caller knows before
-/// its diagnostic step is durable.
+/// its diagnostic step is durable; `state` is the leaf's pipeline state.
 ///
-/// [ORB-13907] `final_recovery` is the leaf's recorded final recovery. Its
-/// decision rides on the settlement for the owner to apply — a follower never
-/// writes its owner's task — unless it was `resume`, whose rerun then failed
-/// on its own.
+/// [ORB-13907] The leaf's recorded final recovery decision rides on a failure
+/// settlement for the owner to apply — a follower never writes its owner's
+/// task — unless it was `resume`, whose rerun then failed on its own.
 pub(crate) fn leaf_failure_settlement(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
-    final_recovery: Option<&FinalRecoveryCheckpoint>,
-    cancellation_policy: Option<&TaskCancellationPolicy>,
+    state: Option<&PipelineState>,
 ) -> ClaimMutation {
-    if run.state == JobRunState::Cancelled
-        && let Some(policy) = cancellation_policy.filter(|policy| !policy.block)
-    {
-        return release_settlement(
-            record,
-            &format!(
-                "operator cancellation returned the task to backlog: {}",
-                policy.note
-            ),
-        );
-    }
     if matches!(
         record.phase,
         LocalPullPhase::Created | LocalPullPhase::Bound
@@ -948,99 +944,141 @@ pub(crate) fn leaf_failure_settlement(
             ),
         );
     }
-    if let Some(unavailable) = provider_unavailable(record, run, diagnostic) {
-        let crew = unavailable.crew.as_deref().unwrap_or("its crew");
-        let mut evidence = release_evidence(
-            record,
-            &format!(
-                "leaf {} could not use the provider of crew `{crew}` on this host ({}); the \
-                 work was not attempted, and this drain runs no more `{crew}` tasks in its window",
-                run.run_id, unavailable.reason
-            ),
-        );
-        evidence.provider_unavailable = Some(unavailable);
+    let final_recovery = state
+        .and_then(|state| state.final_recovery.as_ref())
+        .and_then(|checkpoint| checkpoint.decision.clone())
+        .filter(|decision| !matches!(decision, FinalRecoveryDecision::Resume { .. }));
+    let failure = leaf_failure(record, run, diagnostic, final_recovery.as_ref(), state);
+    // [ORB-14274] An operator who cancelled with `--block` asked for the
+    // legacy outcome: the cancel stays typed but fails the claim.
+    let operator_blocks = run.state == JobRunState::Cancelled
+        && state
+            .and_then(|state| state.task_cancellation_policy.as_ref())
+            .is_some_and(|policy| policy.block);
+    if !failure.class.blocks() && !operator_blocks {
+        // [ORB-14258] A required command the base fails exactly as the
+        // candidate does releases with the typed hold, which the owner
+        // records so its admission waits for the base to move.
+        let hold = (failure.class == ClaimFailureClass::BaselineRed)
+            .then(|| baseline_red(run, diagnostic))
+            .flatten();
+        let mut evidence = match &hold {
+            Some(hold) => baseline_red_release(record, run, hold, &failure),
+            None => release_evidence(record, &release_reason(run, &failure)),
+        };
+        evidence.baseline_red = hold;
+        if failure.class == ClaimFailureClass::Provider {
+            evidence.provider_unavailable = Some(ProviderUnavailable {
+                crew: failure.crew.clone(),
+                reason: failure.reason.clone(),
+            });
+        }
+        evidence.failure = Some(failure);
         return ClaimMutation::Release(evidence);
     }
-    // [ORB-14258] A required command the base fails exactly as the candidate
-    // does is not the work's failure: the claim is released with the typed
-    // hold, which the owner records so the task waits for the base to move.
-    if let Some(hold) = baseline_red(run, diagnostic) {
-        let drain = &record.request.run_context.run_id;
-        let machine = &record.destination.execution_machine_id;
-        let why = format!(
-            "leaf {} found required validation `{}` red on base {} exactly as on its \
-             candidate, which stays in this host's worktree",
-            run.run_id, hold.command, hold.base_sha
-        );
-        let base_ref = if hold.base_ref.is_empty() {
-            "the base".to_string()
-        } else {
-            format!("`{}`", hold.base_ref)
-        };
-        return ClaimMutation::Release(ClaimEvidence {
-            summary: Some(format!("released by follower drain {drain}: {why}")),
-            comment: Some(format!(
-                "Follower drain {drain} on {machine} released this claim: {why}. The task is \
-                 back in the backlog, held until {base_ref} moves to a base where the command \
-                 passes; no pull request was opened."
-            )),
-            baseline_red: Some(hold),
-            ..Default::default()
-        });
-    }
     let mut summary = terminal_failure_summary_with(run, diagnostic);
-    let final_recovery = final_recovery.and_then(|checkpoint| {
-        let decision = checkpoint.decision.clone()?;
-        if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
-            return None;
-        }
+    let final_recovery = final_recovery.map(|decision| {
         summary.push_str(&format!(
             "\nFinal recovery decided `{}`; the owner applies it.",
             decision.kind()
         ));
-        Some(ClaimFinalRecovery {
+        ClaimFinalRecovery {
             run_id: run.run_id.clone(),
             decision,
-        })
+        }
     });
     ClaimMutation::Fail(ClaimEvidence {
         summary: Some(summary),
         final_recovery,
+        failure: Some(failure),
         ..Default::default()
     })
 }
 
-/// Largest provider diagnostic a provider-unavailable release carries.
-const MAX_PROVIDER_REASON_BYTES: usize = 1024;
+/// Largest reason a typed failure carries.
+const MAX_FAILURE_REASON_BYTES: usize = 1024;
 
-/// The provider failure a terminal leaf ended on, when its provider could not
-/// be used on this host: a failed step, or the terminalizing caller's own
-/// diagnostic, carrying the typed provider-unavailable marker the CLI runner
-/// stamps. The crew is the one the leaf resolved at start, else the owner
-/// task's own.
-fn provider_unavailable(
+/// Why a launched leaf ended, typed. An operator's cancel wins; then the
+/// typed marker of the last failed step, of any provider or red-base failure
+/// the run recorded, or of the terminalizing caller's diagnostic; then a
+/// worker that died; then a final recovery that judged the task itself; then
+/// a committed candidate that could not be synchronized onto its base.
+/// Anything else is the candidate's.
+fn leaf_failure(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
-) -> Option<ProviderUnavailable> {
-    let message = run
+    final_recovery: Option<&FinalRecoveryDecision>,
+    state: Option<&PipelineState>,
+) -> ClaimFailure {
+    let last_failed = run
         .steps
         .iter()
         .rev()
-        .find(|step| {
-            is_provider_unavailable(step.error_code.as_deref(), step.error_message.as_deref())
-        })
-        .map(|step| step.error_message.clone().unwrap_or_default())
-        .or_else(|| {
-            diagnostic
-                .filter(|(code, message)| is_provider_unavailable(Some(code), Some(message)))
-                .map(|(_, message)| message.to_string())
-        })?;
-    let message = message
-        .replace(PROVIDER_UNAVAILABLE_MARKER, "")
-        .replace(PROVIDER_CAPACITY_MARKER, "");
-    let message = message.trim();
-    let cut = floor_char_boundary(message, MAX_PROVIDER_REASON_BYTES);
+        .find(|step| step.error_code.is_some() || step.error_message.is_some());
+    let step_class = |step: &orbit_types::workflow::JobRunStep| {
+        ClaimFailureClass::of_step_failure(
+            step.error_code.as_deref(),
+            step.error_message.as_deref(),
+        )
+        .map(|class| (class, step.error_message.clone().unwrap_or_default()))
+    };
+    let typed = if run.state == JobRunState::Cancelled {
+        // The operator's recorded cancel note names who stopped it and why.
+        let reason = state
+            .and_then(|state| state.task_cancellation_policy.as_ref())
+            .map(|policy| policy.note.clone())
+            .or_else(|| diagnostic.map(|(_, message)| message.to_string()))
+            .unwrap_or_else(|| format!("leaf {} was cancelled", run.run_id));
+        Some((ClaimFailureClass::OperatorCancel, reason))
+    } else {
+        last_failed
+            .and_then(step_class)
+            .or_else(|| {
+                run.steps.iter().rev().find_map(|step| {
+                    step_class(step).filter(|(class, _)| {
+                        matches!(
+                            class,
+                            ClaimFailureClass::Provider | ClaimFailureClass::BaselineRed
+                        )
+                    })
+                })
+            })
+            .or_else(|| {
+                diagnostic.and_then(|(code, message)| {
+                    ClaimFailureClass::of_step_failure(Some(code), Some(message))
+                        .map(|class| (class, message.to_string()))
+                })
+            })
+    };
+    let stopped_at = state.and_then(first_incomplete_step);
+    let (class, reason) = typed.unwrap_or_else(|| {
+        let reason = last_failed
+            .and_then(|step| step.error_message.clone())
+            .or_else(|| diagnostic.map(|(_, message)| message.to_string()))
+            .unwrap_or_else(|| format!("leaf {} terminated as {}", run.run_id, run.state));
+        let class = if run.state == JobRunState::Interrupted {
+            ClaimFailureClass::Transient
+        } else if matches!(
+            final_recovery,
+            Some(FinalRecoveryDecision::Reject { .. } | FinalRecoveryDecision::Archive { .. })
+        ) {
+            ClaimFailureClass::TaskInput
+        } else if stopped_at == Some(SYNC_BASE_STEP) {
+            // The committed candidate is intact; only the base moved under
+            // it, and the step's conflict recovery could not carry it over.
+            ClaimFailureClass::BaseConflict
+        } else {
+            ClaimFailureClass::Candidate
+        };
+        (class, reason)
+    });
+    let mut reason = reason;
+    for marker in FAILURE_MARKERS {
+        reason = reason.replace(marker, "");
+    }
+    let reason = reason.trim();
+    let cut = floor_char_boundary(reason, MAX_FAILURE_REASON_BYTES);
     let crew = run
         .resolved_crew
         .clone()
@@ -1052,9 +1090,93 @@ fn provider_unavailable(
                 .and_then(|receipt| receipt.task.as_ref())
                 .and_then(|task| task.crew.clone())
         });
-    Some(ProviderUnavailable {
+    ClaimFailure {
+        class,
+        reason: reason[..cut].to_string(),
         crew,
-        reason: message[..cut].to_string(),
+        candidate: state.and_then(|state| preserved_candidate(run, state)),
+    }
+}
+
+/// Orbit's typed failure markers, which a failure's reason quotes without.
+const FAILURE_MARKERS: [&str; 6] = [
+    PROVIDER_UNAVAILABLE_MARKER,
+    PROVIDER_CAPACITY_MARKER,
+    VALIDATION_ENVIRONMENT_MARKER,
+    OWNER_ROUTE_UNAVAILABLE_MARKER,
+    BASELINE_RED_MARKER,
+    TRANSIENT_FAILURE_MARKER,
+];
+
+/// The claimed PR leaf's base synchronization step.
+const SYNC_BASE_STEP: &str = "sync_base";
+
+/// The claimed leaves' steps in order, from the commit on: a step a leaf's
+/// pipeline state holds no output for did not complete. `review` is absent
+/// because it is skipped when no before-PR review applies.
+const CLAIMED_DELIVERY_STEPS: [&str; 9] = [
+    "commit",
+    "prepare_branch",
+    SYNC_BASE_STEP,
+    "review_gate_admit",
+    "review_gate_settle",
+    "validate",
+    "push",
+    "pr_open",
+    "pin_validation",
+];
+
+/// The first delivery step the leaf did not complete, from its pipeline
+/// state; `None` when it stopped before its commit or after them all.
+fn first_incomplete_step(state: &PipelineState) -> Option<&'static str> {
+    let done = |step: &str| {
+        state
+            .pipeline
+            .get(step)
+            .is_some_and(|output| !output.is_null())
+    };
+    if !done("commit") {
+        return None;
+    }
+    CLAIMED_DELIVERY_STEPS.into_iter().find(|step| !done(step))
+}
+
+/// The committed candidate the leaf ended with, from its pipeline state
+/// [ORB-14257]: the branch it pushed, with the pull request it opened for
+/// it; before its push, the branch it synchronized onto the base, or —
+/// when synchronization itself stopped it — the branch it prepared. `None`
+/// before its commit.
+fn preserved_candidate(
+    run: &orbit_types::workflow::JobRun,
+    state: &PipelineState,
+) -> Option<ClaimCandidateRef> {
+    let text = |step: &str, field: &str| {
+        state
+            .pipeline
+            .get(step)
+            .and_then(|output| output.get(field))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let both =
+        |step: &str, branch: &str, head: &str| Some((text(step, branch)?, text(step, head)?));
+    let (published, (branch, head_sha)) = match both("push", "branch", "local_sha") {
+        Some(pushed) => (true, pushed),
+        None => (
+            false,
+            both(SYNC_BASE_STEP, "head", "head_sha")
+                .or_else(|| both("prepare_branch", "head", "head_sha"))?,
+        ),
+    };
+    Some(ClaimCandidateRef {
+        branch,
+        head_sha,
+        pull_request: text("pr_open", "pr_number"),
+        source_run_id: Some(run.run_id.clone()),
+        failed_step_id: first_incomplete_step(state).map(str::to_string),
+        published,
     })
 }
 
@@ -1086,12 +1208,122 @@ fn baseline_red(
         })
 }
 
+/// [ORB-14258] The release of a leaf whose required command fails on its
+/// base exactly as on its candidate: the owner holds the task until the base
+/// moves to a commit where the command passes.
+fn baseline_red_release(
+    record: &LocalPullAdmission,
+    run: &orbit_types::workflow::JobRun,
+    hold: &BaselineRedHold,
+    failure: &ClaimFailure,
+) -> ClaimEvidence {
+    let drain = &record.request.run_context.run_id;
+    let machine = &record.destination.execution_machine_id;
+    let why = format!(
+        "leaf {} ended on a `{}` failure: required validation `{}` is red on base {} exactly \
+         as on its candidate{}",
+        run.run_id,
+        failure.class.as_str(),
+        hold.command,
+        hold.base_sha,
+        candidate_note(failure)
+    );
+    let base_ref = if hold.base_ref.is_empty() {
+        "the base".to_string()
+    } else {
+        format!("`{}`", hold.base_ref)
+    };
+    ClaimEvidence {
+        summary: Some(format!("released by follower drain {drain}: {why}")),
+        comment: Some(format!(
+            "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
+             in the backlog, held until {base_ref} moves to a base where the command passes; no \
+             pull request was opened."
+        )),
+        ..Default::default()
+    }
+}
+
+/// The release comment's reason for a typed failure.
+fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -> String {
+    let crew = failure.crew.as_deref().unwrap_or("its crew");
+    let mut why = match failure.class {
+        ClaimFailureClass::Provider => format!(
+            "leaf {} ended on a `provider` failure: it could not use the provider of crew \
+             `{crew}` on this host ({}); the work was not attempted",
+            run.run_id, failure.reason
+        ),
+        ClaimFailureClass::OperatorCancel => {
+            format!("its leaf {} was cancelled ({})", run.run_id, failure.reason)
+        }
+        ClaimFailureClass::BaseConflict => format!(
+            "leaf {} ended on a `base_conflict` failure: its committed candidate could not be \
+             synchronized onto a base that moved under it ({})",
+            run.run_id, failure.reason
+        ),
+        class => format!(
+            "leaf {} ended on a `{}` failure that is not the candidate's ({})",
+            run.run_id,
+            class.as_str(),
+            failure.reason
+        ),
+    };
+    if failure.class.suppresses_host() {
+        why.push_str(", and this drain claims no more work on this host in its window");
+    } else if failure.class.excludes_crew() {
+        why.push_str(&format!(
+            ", and this drain runs no more `{crew}` tasks in its window"
+        ));
+    }
+    why.push_str(&candidate_note(failure));
+    why
+}
+
+/// Where the failure's candidate is kept for the next claim, if it has one.
+fn candidate_note(failure: &ClaimFailure) -> String {
+    let Some(candidate) = &failure.candidate else {
+        return String::new();
+    };
+    let mut note = format!(
+        "; its candidate is preserved as `{}` at {}{}, and the task's next claim resumes it",
+        candidate.branch,
+        candidate.head_sha,
+        if candidate.published {
+            ""
+        } else {
+            " on this host"
+        }
+    );
+    if let Some(pull_request) = &candidate.pull_request {
+        note.push_str(&format!(" (pull request #{pull_request})"));
+    }
+    note
+}
+
 /// Hand an unfinished claim back to the owner: the task returns to the
 /// backlog, and the comment names the drain that held it and why it gave it
 /// back. Nothing is recorded as a failure — the work either never ran or was
 /// stopped on purpose.
 pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
     ClaimMutation::Release(release_evidence(record, why))
+}
+
+/// [`release_settlement`] for a launched leaf an operator stopped: typed
+/// [`ClaimFailureClass::OperatorCancel`], so the owner returns the task to
+/// backlog with the cancel reason and counts the release against its budget.
+pub(crate) fn operator_cancel_release(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
+    let mut evidence = release_evidence(record, why);
+    evidence.failure = Some(ClaimFailure {
+        class: ClaimFailureClass::OperatorCancel,
+        reason: why.to_string(),
+        crew: record
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.task.as_ref())
+            .and_then(|task| task.crew.clone()),
+        candidate: None,
+    });
+    ClaimMutation::Release(evidence)
 }
 
 fn release_evidence(record: &LocalPullAdmission, why: &str) -> ClaimEvidence {

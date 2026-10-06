@@ -118,6 +118,139 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
         || message.is_some_and(|message| message.contains(VALIDATION_ENVIRONMENT_MARKER))
 }
 
+/// Token a step failure carries when a claimed leaf could not reach its
+/// task's owner from where the step ran — the worker's owner route is masked
+/// or the owner is unreachable — as opposed to the candidate failing
+/// [ORB-14257]. The worker's owner route stamps it on a transport failure.
+pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
+
+/// The bracketed marker form of [`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`].
+pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
+
+/// Token a step failure carries when its outcome was inconclusive for a
+/// reason that may not recur [ORB-14257]: claimed required validation stamps
+/// it on a command that still could not reach the network after its reruns.
+pub const TRANSIENT_FAILURE_ERROR_CODE: &str = "transient_failure";
+
+/// The bracketed marker form of [`TRANSIENT_FAILURE_ERROR_CODE`].
+pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
+
+/// Why a claimed leaf ended without its typed handoff, as its settlement
+/// carries it to the owner [ORB-14257].
+///
+/// The owner blocks the task only for [`Self::Candidate`] and
+/// [`Self::TaskInput`]: the work or the task itself needs a human. Every
+/// other class is the executing host's, the base's or the moment's, so the
+/// claim is released to the backlog instead, within a per-task release budget
+/// that counts every typed release.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimFailureClass {
+    /// The candidate failed: its implementation, checks or review.
+    Candidate,
+    /// The task should not be done as written, or is obsolete.
+    TaskInput,
+    /// The executing host lacked something the work needs (a validation
+    /// tool, a nested sandbox).
+    Environment,
+    /// Required validation fails on the base as well as on the candidate.
+    BaselineRed,
+    /// An inconclusive outcome that may not recur, or a leaf whose worker died.
+    Transient,
+    /// An operator cancelled the launched leaf.
+    OperatorCancel,
+    /// The leaf could not reach the task's owner from where it ran.
+    OwnerRoute,
+    /// The crew's provider could not be used on the executing host.
+    Provider,
+    /// The leaf's committed candidate could not be synchronized onto a base
+    /// that moved under it, and conflict recovery did not resolve it. The
+    /// candidate is kept for the next claim to carry onto the new base.
+    BaseConflict,
+}
+
+impl ClaimFailureClass {
+    /// The class's wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::TaskInput => "task_input",
+            Self::Environment => "environment",
+            Self::BaselineRed => "baseline_red",
+            Self::Transient => "transient",
+            Self::OperatorCancel => "operator_cancel",
+            Self::OwnerRoute => "owner_route",
+            Self::Provider => "provider",
+            Self::BaseConflict => "base_conflict",
+        }
+    }
+
+    /// Whether the owner blocks the task for it rather than releasing it.
+    #[must_use]
+    pub const fn blocks(self) -> bool {
+        matches!(self, Self::Candidate | Self::TaskInput)
+    }
+
+    /// Whether a release of this class counts against the task's release
+    /// budget. Every typed release counts; the third within the window blocks
+    /// the task until a human decides what should change.
+    #[must_use]
+    pub const fn budgeted(self) -> bool {
+        !self.blocks()
+    }
+
+    /// Whether the executing drain stops running the leaf's crew for the
+    /// rest of its window. An operator's cancel, a red base and a base
+    /// conflict say nothing about the host's crew, so none excludes it.
+    #[must_use]
+    pub const fn excludes_crew(self) -> bool {
+        matches!(
+            self,
+            Self::Environment | Self::Transient | Self::OwnerRoute | Self::Provider
+        )
+    }
+
+    /// Whether the failure is the executing host's whatever crew runs there —
+    /// a validation environment it lacks, an owner it cannot reach — so the
+    /// drain stops claiming work on that host for the rest of its window,
+    /// and the owner admits nothing more to that drain.
+    #[must_use]
+    pub const fn suppresses_host(self) -> bool {
+        matches!(self, Self::Environment | Self::OwnerRoute)
+    }
+
+    /// The class a typed step failure names, or `None` for an untyped one.
+    /// A red base counts only when the failure carries its
+    /// [hold](super::BaselineRedHold), which the owner needs to lift it.
+    #[must_use]
+    pub fn of_step_failure(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        let typed = |code: &str, marker: &str| {
+            error_code == Some(code) || message.is_some_and(|message| message.contains(marker))
+        };
+        if is_provider_unavailable(error_code, message) {
+            Some(Self::Provider)
+        } else if is_validation_environment_failure(error_code, message) {
+            Some(Self::Environment)
+        } else if typed(
+            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+            OWNER_ROUTE_UNAVAILABLE_MARKER,
+        ) {
+            Some(Self::OwnerRoute)
+        } else if super::is_baseline_red_failure(error_code, message)
+            && message
+                .and_then(super::BaselineRedHold::from_text)
+                .is_some()
+        {
+            Some(Self::BaselineRed)
+        } else if typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER) {
+            Some(Self::Transient)
+        } else {
+            None
+        }
+    }
+}
+
 /// Why a follower cannot run a crew for the rest of its pull drain window.
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
@@ -130,6 +263,9 @@ pub enum CrewExclusionSource {
     /// A claimed leaf on this crew failed because the provider could not be
     /// used (an authentication failure, for instance).
     ProviderUnavailable,
+    /// A claimed leaf on this crew was released for a failure class that
+    /// [excludes its crew](ClaimFailureClass::excludes_crew) [ORB-14257].
+    LeafReleased,
 }
 
 /// One crew a follower will not run, and why.

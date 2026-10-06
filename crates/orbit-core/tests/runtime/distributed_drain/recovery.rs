@@ -232,6 +232,10 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
     let carried = &settles[0]["settlement"]["Fail"]["final_recovery"];
     assert_eq!(carried["run_id"], leaf.as_str(), "{settles:?}");
     assert_eq!(carried["decision"]["decision"], "reject", "{settles:?}");
+    assert_eq!(
+        settles[0]["settlement"]["Fail"]["failure"]["class"], "task_input",
+        "a rejected task is the task's own failure: {settles:?}"
+    );
     assert_ne!(
         before["status"], "rejected",
         "the follower wrote nothing to the owner's task"

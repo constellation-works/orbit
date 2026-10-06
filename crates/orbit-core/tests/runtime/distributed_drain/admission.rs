@@ -927,6 +927,10 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
     let released = &settles[0]["settlement"]["Release"]["baseline_red"];
     assert_eq!(released["base_sha"], red.as_str(), "{settles:?}");
     assert_eq!(released["command"], "make ci-lint", "{settles:?}");
+    assert_eq!(
+        settles[0]["settlement"]["Release"]["failure"]["class"], "baseline_red",
+        "[ORB-14257] the release is typed: {settles:?}"
+    );
     let owner_task = pair.owner_task(&task);
     let latest = owner_task["history"]
         .as_array()
