@@ -5,7 +5,7 @@ use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::tracing;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::git_config::enforce_no_persistent_git_config;
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
@@ -65,14 +65,28 @@ impl Tool for ProcSpawnTool {
 
         enforce_no_persistent_git_config("proc.spawn", &program, &args)?;
 
-        let request = spawn_request(ctx, program, args, proc_spawn_timeout_ms(&input));
+        let requested_timeout_ms = input.get("timeout_ms").and_then(Value::as_u64);
+        let timeout_ms = proc_spawn_timeout_ms(&input);
+        let request = spawn_request(ctx, program, args, timeout_ms);
         // A managed CLI worker already runs under Bubblewrap (Linux) or
         // sandbox-exec (macOS). Its children inherit that OS boundary. Adding
         // Landlock here would narrow reads again and refuse macOS outright.
         let exec_result = run_process(&request, &NoSandbox)?;
 
-        serde_json::to_value(exec_result)
-            .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))
+        let mut result = serde_json::to_value(&exec_result)
+            .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))?;
+        result["timeout_ms"] = json!(timeout_ms);
+        result["timeout_clamped"] = json!(requested_timeout_ms.is_some_and(|ms| ms > timeout_ms));
+        if let Some(requested) = requested_timeout_ms {
+            result["requested_timeout_ms"] = json!(requested);
+        }
+        if exec_result.timed_out {
+            result["hint"] = json!({
+                "transport": "native_shell",
+                "message": "For long-running build, test or make validation, use the provider's native shell session or another long-running transport the lane provides. A proc.spawn timeout is not a validation blocker. Preserve sandboxing and build-budget admission.",
+            });
+        }
+        Ok(result)
     }
 }
 

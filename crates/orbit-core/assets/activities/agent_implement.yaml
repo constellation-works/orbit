@@ -174,6 +174,14 @@ spec:
        reproducibility for analysis, or behavior checks for software.
        Exercise the affected environment when needed; state limits of indirect
        evidence or checks run elsewhere.
+       Run build, test, cargo and make validation that can take minutes in the
+       provider's native shell session (for Codex, exec_command/write_stdin),
+       or another long-running transport the lane provides. proc.spawn is for
+       short bounded commands and has a 60-second (60000 ms) ceiling; larger
+       timeout_ms requests are clamped. A proc.spawn timeout on cargo/make is
+       never a validation blocker: rerun through the long-running transport
+       and await completion, including time waiting for shared build-budget
+       admission. Preserve sandboxing and build-budget admission.
        Sandbox/runner denials (e.g. EPERM) prove neither defects nor correctness.
        Try safe in-scope alternatives without bypassing policy; record the
        exact command, denial, and uncertainty. Return success only for a
