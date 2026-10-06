@@ -92,6 +92,7 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
     let context = ValidationContext {
         scope: &certificate.validation_scope,
         obligations: &certificate.retained_obligations,
+        retired: &certificate.retired_validation,
         required_validation_commands: certificate.required_validation_commands.as_deref(),
     };
     if !certificate.validation_complete

@@ -962,6 +962,7 @@ impl TaskCommitBoundary {
                 &evidence.artifacts,
                 actor,
                 Utc::now(),
+                false,
             )?;
             let mut stored = Vec::with_capacity(evidence.artifacts.len() + 1);
             let mut seen_in_request = BTreeSet::new();

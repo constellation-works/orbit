@@ -15,12 +15,20 @@ use orbit_types::workflow::{
 /// or neither. A report that does not parse carries no obligations and adds
 /// no revision; settlement refuses it on its own. A held history this build
 /// cannot read refuses the update rather than being overwritten.
+///
+/// With `refuse_dropped_records`, a report that drops a required record id an
+/// earlier revision of its attempt recorded is refused as well [ORB-14370].
+/// The ordinary update sets it: that is the reviewer's own put, which can
+/// still be corrected. A claimed worker's evidence commit runs after the
+/// reviewer stopped, so it retains the revision and leaves the gap to
+/// settlement rather than discarding the rest of the evidence.
 pub(crate) fn review_report_history(
     bundle_dir: &Path,
     held: &BTreeMap<String, ArtifactManifestFileV2>,
     artifacts: &[TaskArtifact],
     actor: &str,
     now: chrono::DateTime<Utc>,
+    refuse_dropped_records: bool,
 ) -> Result<Option<TaskArtifact>, OrbitError> {
     let Some(report) = artifacts.iter().rev().find(|artifact| {
         normalize_v2_artifact_path(&artifact.path).ok().as_deref() == Some(REVIEW_REPORT_ARTIFACT)
@@ -75,6 +83,13 @@ pub(crate) fn review_report_history(
             history
         }
     };
+    // Name the dropped record while the reviewer can still correct it; at
+    // settlement nobody could.
+    if refuse_dropped_records {
+        history
+            .check_record_continuity(&parsed)
+            .map_err(OrbitError::InvalidInput)?;
+    }
     let recorded = history
         .record(ReviewReportRevision {
             attempt_id: parsed.attempt_id,
@@ -279,7 +294,7 @@ impl TaskV2Store {
             let now = Utc::now();
             let mut artifacts = artifacts.clone();
             if let Some(history) =
-                review_report_history(&bundle_dir, &by_path, &artifacts, &fields.actor, now)?
+                review_report_history(&bundle_dir, &by_path, &artifacts, &fields.actor, now, true)?
             {
                 artifacts.push(history);
             }

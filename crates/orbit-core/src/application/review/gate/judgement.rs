@@ -16,9 +16,9 @@ use orbit_engine::review_gate::{
 use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
-    REVIEW_REPORT_HISTORY_ARTIFACT, RetainedObligation, ReviewAttempt, ReviewCertificate,
-    ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewValidation, ReviewVerdict,
-    ReviewerIdentity, ValidationRole,
+    REVIEW_REPORT_HISTORY_ARTIFACT, RetainedObligation, RetiredValidation, ReviewAttempt,
+    ReviewCertificate, ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewValidation,
+    ReviewVerdict, ReviewerIdentity, ValidationRole,
 };
 
 use super::super::automation_error;
@@ -38,6 +38,8 @@ pub(super) struct Judgement {
     /// Required-check records earlier report revisions of this attempt made
     /// that the final report does not repeat verbatim.
     pub(super) retained_obligations: Vec<RetainedObligation>,
+    /// Retained record ids the final report retired, with their reasons.
+    pub(super) retired_validation: Vec<RetiredValidation>,
     pub(super) escalation: Option<String>,
     summary: String,
     pub(super) task_meaning_digest: String,
@@ -67,6 +69,7 @@ impl Judgement {
                 .as_ref()
                 .and_then(|admission| admission.required_validation_commands.clone()),
             retained_obligations: Vec::new(),
+            retired_validation: Vec::new(),
             escalation: Some(reason.to_string()),
             summary: String::new(),
             task_meaning_digest: task_meaning_digest.clone(),
@@ -136,6 +139,7 @@ impl Judgement {
                 .as_ref()
                 .and_then(|admission| admission.required_validation_commands.clone()),
             retained_obligations,
+            retired_validation: report.retired_validation,
             escalation: report.escalation,
             summary: report.summary,
             task_meaning_digest,
@@ -339,6 +343,7 @@ impl Judgement {
             let context = ValidationContext {
                 scope,
                 obligations: &self.retained_obligations,
+                retired: &self.retired_validation,
                 required_validation_commands: self.required_validation_commands.as_deref(),
             };
             match validation_evidence(&self.validation, &context) {
@@ -393,6 +398,11 @@ fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
         for record in report.validation {
             if !merged.validation.contains(&record) {
                 merged.validation.push(record);
+            }
+        }
+        for retirement in report.retired_validation {
+            if !merged.retired_validation.contains(&retirement) {
+                merged.retired_validation.push(retirement);
             }
         }
         append_distinct(&mut merged.summary, &report.summary, "\n");
@@ -812,7 +822,8 @@ fn limitations_line(records: &[ReviewValidation]) -> String {
     }
 }
 
-/// Earlier report revisions' required checks, with their observed outcomes.
+/// Earlier report revisions' required checks, with their observed outcomes
+/// and, for one the final report retired, the reason it gave.
 fn retained_line(certificate: &ReviewCertificate) -> String {
     if certificate.retained_obligations.is_empty() {
         return "none".to_string();
@@ -821,10 +832,22 @@ fn retained_line(certificate: &ReviewCertificate) -> String {
         .retained_obligations
         .iter()
         .map(|obligation| {
+            let validation = &obligation.validation;
+            let id = validation.record_id();
+            let retired = id.and_then(|id| {
+                certificate
+                    .retired_validation
+                    .iter()
+                    .find(|retired| retired.id.trim() == id)
+            });
             format!(
-                "`{}` {}",
-                one_line(&obligation.validation.command),
-                obligation.validation.outcome.as_str()
+                "{}`{}` {}{}",
+                id.map(|id| format!("{id} ")).unwrap_or_default(),
+                one_line(&validation.command),
+                validation.outcome.as_str(),
+                retired
+                    .map(|retired| format!(" (retired: {})", one_line(&retired.reason)))
+                    .unwrap_or_default()
             )
         })
         .collect::<Vec<_>>()

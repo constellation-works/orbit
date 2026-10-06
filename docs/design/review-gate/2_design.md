@@ -147,8 +147,8 @@ the worktree — any path a fix requires, each listed on the finding it fixes
 — runs validation, and persists `review-report.json` (schema version 1:
 verdict, findings with dispositions, the paths and a `change` description
 for each fix, validation records with `passed` / `failed` / `denied` /
-`not_run`, the `role` each is evidence of, and optional `check` identity,
-escalation). It never runs Git writes, changes task lifecycle, approves, or
+`not_run`, the `role` each is evidence of, a stable record `id` and optional
+`check` identity, `retired_validation` entries, escalation). It never runs Git writes, changes task lifecycle, approves, or
 merges.
 
 The instruction carries the report's exact JSON Schema, and
@@ -215,7 +215,7 @@ Findings:
 - Validation on final candidate: … record(s) […], complete: …
 - Owner-required checks: <captured commands, or none configured>
 - Not established by this review: <failed diagnostics and their sources, or none>
-- Required checks retained from earlier report revisions: <command and outcome, or none>
+- Required checks retained from earlier report revisions: <id, command and outcome, with any retirement reason, or none>
 - Reviewer runtime: …s of … min
 - Escalation: …
 
@@ -322,6 +322,37 @@ the final report does not repeat verbatim are kept on the certificate as
 `retained_obligations` with their report digest and observation time. The
 obligations are only what reports recorded; the gate never infers
 requirements from free-form repository instructions.
+
+Required records carry a stable `id` across revisions [ORB-14370]. Matching
+an earlier record by command text could not converge: reviewers legitimately
+rename, rewrap and concretise commands between revisions, and seven correct
+candidates in one shift settled `incomplete` that way (ORB-14360 recorded the
+prose name "focused CLI reference invocation verification" `not_run`, then
+`python3 .orbit/tmp/verify-reference-examples.py` `passed`; ORB-14260 replaced
+a `<workspace>` placeholder with the absolute path). The reviewer gives each
+`required` record an id such as `V1` when it first files it. An earlier
+required record with an id is accounted for by that id alone, never by
+command text: a later record carrying the id as `required` or `superseded`
+(whose replacing required pass may share the id), or as `excluded` when the
+earlier record never ran, holds the check's current command and outcome. A
+check that no longer applies may instead be retired in the report's
+`retired_validation` list as `{id, reason}`, restated in every later revision;
+a retirement needs a non-empty reason and never clears a record that failed,
+which must be rerun under its id. The artifact store applies the same rule when
+a report is attached, against the attempt's retained revisions under the task
+lock: a revision that omits an earlier id, carries it only as `diagnostic` or
+`expected_failure`, or retires it improperly is refused with the record's id,
+command and outcome named, so the reviewer corrects the report in-session
+instead of the gap surfacing at settlement, when nobody can fix it. The
+refused bytes neither replace the report nor enter the history. A claimed
+worker's evidence commit runs after the reviewer stopped, so it retains such
+a revision instead of discarding the rest of the evidence. Settlement
+reports the same gap as `validation_incomplete: required validation record
+<id> …`. The certificate keeps `retired_validation`, coverage re-derives the
+rule from it, and the verdict comment shows each retained record's id with its
+retirement reason. Records and certificates written without ids keep the
+command-identity rules above unchanged, so they settle and spend exactly as
+they did before.
 
 At least one `required` record must have passed, so a set of controls and
 exclusions alone is never coverage. Every role other than `required` must
@@ -659,6 +690,7 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
 - [ORB-13992] — splits review into the `review.before_pr` switch and the `delivery-code-review` auto-task flag, makes `review.minutes` the wall-clock limit of one review per candidate, and retires `operation.review_policy` and the reviewer-start budget.
 - [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
+- [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

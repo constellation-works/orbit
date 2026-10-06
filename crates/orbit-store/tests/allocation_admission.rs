@@ -1837,6 +1837,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         validation: ["build", "test"]
             .into_iter()
             .map(|command| ReviewValidation {
+                id: None,
                 command: command.into(),
                 outcome: ValidationOutcome::Passed,
                 role: ValidationRole::Required,
@@ -1860,6 +1861,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         budget: ReviewBudget { minutes: 45 },
         escalation: None,
         retained_obligations: vec![],
+        retired_validation: vec![],
         validation_scope: vec![],
         selectors_widened: vec![],
         issued_at: Utc::now(),

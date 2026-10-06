@@ -205,12 +205,22 @@ spec:
          the candidate changes; a failure inside them is the task's own and
          must be `required`. It cannot share its check with a required pass.
 
-       A record you once filed `required` stays an obligation for this
-       attempt: the host keeps every report revision you attach, and a later
-       revision must still record the same check as `required` (rerun) or
-       `superseded` (with its same-identity required replacement), or as `excluded`
-       when it never ran. Dropping it or relabeling it `diagnostic` or
-       `expected_failure` settles `incomplete`.
+       Give every `required` record a stable `id` (`V1`, `V2`, ...) the first
+       time you file it. A record you once filed `required` stays an
+       obligation for this attempt: the host keeps every report revision you
+       attach, and every later revision must carry that `id` forward with the
+       check's current `command` and `outcome` — rename, rewrap or concretise
+       the command freely; the id, not the text, identifies the check. Carry
+       it as `required` (rerun), as `superseded` (beside a passing required
+       record of the same check, which may share the id), or as `excluded`
+       when it never ran. A check that no longer applies and did not fail may
+       instead be retired: list `{"id": "V2", "reason": "..."}` in
+       `retired_validation`, again in every later revision. A failed record
+       cannot be retired; rerun it. The report put refuses a revision that
+       drops, relabels as `diagnostic` or `expected_failure`, or improperly
+       retires an earlier id, naming the record: fix the report and put it
+       again. Records without an `id` fall back to matching by `check` or
+       normalized command, which a renamed command does not satisfy.
 
        At least one `required` record must pass, or the review establishes
        nothing about the candidate.
@@ -240,8 +250,9 @@ spec:
          and unnamed missing checks do not qualify for an evidence hold.
     6. Write the report to a temporary file and attach it with
        `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`).
-       The put validates the report and refuses a malformed one with the
-       offending field named; fix the file and put it again until it is
+       The put validates the report and refuses a malformed one, or one that
+       drops an earlier revision's required record id, with the offending
+       field or record named; fix the file and put it again until it is
        accepted. A report that never attaches settles `incomplete`. The report
        must match this JSON Schema exactly:
 
@@ -274,6 +285,7 @@ spec:
           "validation":{"type":"array","items":{"type":"object",
             "required":["command","outcome"],
             "properties":{
+              "id":{"type":"string","description":"stable record id, e.g. V1; give one to every required record and keep it across revisions"},
               "command":{"type":"string"},
               "outcome":{"enum":["passed","failed","denied","not_run"]},
               "role":{"enum":["required","expected_failure","excluded","superseded","diagnostic"]},
@@ -283,6 +295,11 @@ spec:
               "sources":{"type":"array","items":{"type":"string"},
                          "description":"repository-relative paths the outcome is about; required for expected_failure and a failed diagnostic"},
               "note":{"type":"string","description":"required unless role is required"}}}},
+          "retired_validation":{"type":"array","items":{"type":"object",
+            "required":["id","reason"],
+            "properties":{
+              "id":{"type":"string","description":"an earlier revision's required record id this report no longer carries"},
+              "reason":{"type":"string","description":"why the check no longer applies; a failed record cannot be retired"}}}},
           "escalation":{"type":"string","description":"the decision needed, when not a pass"}}}
 
        Attach the report for every task id in `task_ids`; the gate reads and

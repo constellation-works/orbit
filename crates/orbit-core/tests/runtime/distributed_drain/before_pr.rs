@@ -221,6 +221,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         assurance: ReviewVerdict::AcceptWithFixes.assurance(),
         findings: vec![],
         validation: vec![ReviewValidation {
+            id: None,
             command: "cargo test".into(),
             outcome: ValidationOutcome::Passed,
             role: ValidationRole::Required,
@@ -243,6 +244,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         budget: ReviewBudget::default(),
         escalation: None,
         retained_obligations: vec![],
+        retired_validation: vec![],
         validation_scope: vec![],
         selectors_widened: vec![],
         issued_at: Utc::now(),

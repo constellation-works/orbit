@@ -176,6 +176,7 @@ impl ReviewedLeaf {
                 change: fix.then(|| "Replaced the stub".into()),
             }],
             validation: vec![ReviewValidation {
+                id: None,
                 command: "make ci-fast".into(),
                 outcome: ValidationOutcome::Passed,
                 role: ValidationRole::Required,
@@ -184,6 +185,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
             }],
+            retired_validation: Vec::new(),
             escalation: (verdict == ReviewVerdict::Reject)
                 .then(|| "decide whether the stub may ship".into()),
         };
