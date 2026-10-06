@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
+use orbit_core::OrbitRuntime;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
@@ -199,6 +200,19 @@ impl Fixture {
                 |row| row.get(0),
             )
             .expect("read run state")
+    }
+
+    fn insert_pending_run(&self, run_id: &str) {
+        let workspace_id = self.workspace_id();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                     scheduled_at, created_at)
+                 VALUES (?1, ?2, 'task_pr_pipeline', 1, 'pending', ?3, ?3)",
+                params![run_id, workspace_id, now],
+            )
+            .expect("insert pending leaf run");
     }
 
     fn json(&self, args: &[&str]) -> Value {
@@ -534,6 +548,90 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(cancelled["signal_attempted"], false);
     assert_eq!(cancelled["provider_processes_stopped"], 0);
     assert_eq!(fixture.run_state(run_id), "success");
+}
+
+/// The CLI's default task-leaf cancel requeues with its reason and leaves the
+/// candidate in place; `--block` retains the previous blocked transition.
+#[test]
+fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
+    let fixture = Fixture::init();
+    let candidate = fixture.work.join("src").join("candidate.rs");
+    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+    fs::write(&candidate, "candidate content\n").unwrap();
+
+    for (run_id, block, expected_status) in [
+        ("jrun-20261005-0434-1", false, "backlog"),
+        ("jrun-20261005-0434-2", true, "blocked"),
+    ] {
+        fixture.insert_pending_run(run_id);
+        let created = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            "Cancel candidate",
+            "--description",
+            "Keep the candidate when cancelling the leaf",
+            "--plan",
+            "Resume the candidate after cancellation",
+            "--complexity",
+            "low",
+            "--context",
+            "file:src/candidate.rs",
+            "--json",
+        ]);
+        let task_id = created["id"].as_str().expect("task id").to_string();
+        fixture
+            .orbit()
+            .args([
+                "task",
+                "update",
+                &task_id,
+                "--status",
+                "in-progress",
+                "--job-run-id",
+                run_id,
+                "--json",
+            ])
+            .assert()
+            .success();
+
+        let mut args = vec!["run", "cancel", run_id, "--confirm", "--json"];
+        if block {
+            args.push("--block");
+        }
+        args.extend(["--reason", "preserve this candidate for later"]);
+        let result = fixture.json(&args);
+        assert_eq!(result["outcome"], "cancelled");
+
+        let task = fixture.json(&["task", "show", &task_id, "--json"]);
+        assert_eq!(task["status"], expected_status);
+        assert_eq!(task["plan"], "Resume the candidate after cancellation");
+        assert_eq!(task["context_files"][0], "file:src/candidate.rs");
+        assert_eq!(
+            fs::read_to_string(&candidate).unwrap(),
+            "candidate content\n"
+        );
+
+        let orbit_root = fixture.work.join(".orbit");
+        let runtime = OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &orbit_root)
+            .expect("open fixture runtime");
+        let history = runtime.get_task_history(&task_id).expect("task history");
+        let entry = history.last().expect("cancellation status event");
+        assert!(
+            entry
+                .note
+                .as_deref()
+                .is_some_and(|note| { note.contains("preserve this candidate for later") })
+        );
+        assert_eq!(
+            entry.event,
+            if block {
+                "workflow_run_failed"
+            } else {
+                "workflow_run_cancelled"
+            }
+        );
+    }
 }
 
 /// Capture the pre-change stable timestamp independently of Orbit's probe.

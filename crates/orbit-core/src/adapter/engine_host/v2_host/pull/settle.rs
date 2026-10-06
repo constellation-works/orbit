@@ -51,12 +51,6 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
-use orbit_engine::run_worktree_has_build_output;
-use orbit_store::contracts::{
-    JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
-};
-
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{
     PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
@@ -64,6 +58,11 @@ use super::drain::{
 use crate::OrbitRuntime;
 use crate::application::distributed::{
     PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
+};
+use orbit_common::OrbitError;
+use orbit_engine::run_worktree_has_build_output;
+use orbit_store::contracts::{
+    JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 
 /// Why a settle-only pass releases unlaunched work no live drain carries.
@@ -111,11 +110,20 @@ impl OrbitRuntime {
         if !run.state.is_terminal() {
             return Ok(Some(record));
         }
-        let final_recovery = jobs
-            .read_run_state(run_id)?
-            .and_then(|state| state.final_recovery);
-        let settlement =
-            leaf_failure_settlement(&record, &run, diagnostic, final_recovery.as_ref());
+        let state = jobs.read_run_state(run_id)?;
+        let final_recovery = state
+            .as_ref()
+            .and_then(|state| state.final_recovery.as_ref());
+        let cancellation_policy = state
+            .as_ref()
+            .and_then(|state| state.task_cancellation_policy.as_ref());
+        let settlement = leaf_failure_settlement(
+            &record,
+            &run,
+            diagnostic,
+            final_recovery,
+            cancellation_policy,
+        );
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,

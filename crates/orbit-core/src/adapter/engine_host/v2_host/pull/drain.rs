@@ -10,8 +10,9 @@ use orbit_store::contracts::{
     ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
-    BaselineRedHold, FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_CAPACITY_MARKER,
-    PROVIDER_UNAVAILABLE_MARKER, is_baseline_red_failure, is_provider_unavailable,
+    BaselineRedHold, FinalRecoveryCheckpoint, FinalRecoveryDecision, JobRunState,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, TaskCancellationPolicy,
+    is_baseline_red_failure, is_provider_unavailable,
 };
 
 use crate::application::distributed::{
@@ -615,11 +616,15 @@ impl PullDrain<'_> {
             return Ok(None);
         }
         let record = self.ensure_bound(record)?;
-        let final_recovery = self
-            .jobs
-            .read_run_state(id)?
-            .and_then(|state| state.final_recovery);
-        let settlement = leaf_failure_settlement(&record, &run, None, final_recovery.as_ref());
+        let state = self.jobs.read_run_state(id)?;
+        let final_recovery = state
+            .as_ref()
+            .and_then(|state| state.final_recovery.as_ref());
+        let cancellation_policy = state
+            .as_ref()
+            .and_then(|state| state.task_cancellation_policy.as_ref());
+        let settlement =
+            leaf_failure_settlement(&record, &run, None, final_recovery, cancellation_policy);
         self.record_settlement(&record, settlement).map(Some)
     }
 
@@ -918,7 +923,19 @@ pub(crate) fn leaf_failure_settlement(
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
     final_recovery: Option<&FinalRecoveryCheckpoint>,
+    cancellation_policy: Option<&TaskCancellationPolicy>,
 ) -> ClaimMutation {
+    if run.state == JobRunState::Cancelled
+        && let Some(policy) = cancellation_policy.filter(|policy| !policy.block)
+    {
+        return release_settlement(
+            record,
+            &format!(
+                "operator cancellation returned the task to backlog: {}",
+                policy.note
+            ),
+        );
+    }
     if matches!(
         record.phase,
         LocalPullPhase::Created | LocalPullPhase::Bound

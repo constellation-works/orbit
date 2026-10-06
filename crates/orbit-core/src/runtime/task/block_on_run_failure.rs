@@ -1,8 +1,10 @@
 //! Task coupling-out on run terminalization: when a job run reaches a terminal
-//! *failure* state (`failed`, `timeout`, `cancelled`) or is reconciled
-//! `interrupted`, every task coupled to that run — stamped with its
-//! `job_run_id` during `worktree_setup` — is moved to `blocked` so a
-//! human/orchestrator has to look before anything runs again.
+//! *failure* state (`failed`, `timeout`) or is reconciled `interrupted`, every
+//! task coupled to that run — stamped with its `job_run_id` during
+//! `worktree_setup` — is moved to `blocked` so a human/orchestrator has to look
+//! before anything runs again. Operator cancellation also blocks by default
+//! for older/internal callers; an explicit persisted operator policy can
+//! instead return the task to backlog with its cancellation reason.
 //! A backlog task whose latest status decision is this run's final-recovery
 //! requeue is preserved: recovery already authorized another attempt.
 //!
@@ -47,7 +49,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
-    RuntimeHost, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
+    RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
@@ -58,6 +60,8 @@ use orbit_types::workflow::{
 use crate::OrbitRuntime;
 
 use super::FINAL_RECOVERY_REQUEUED_EVENT;
+
+pub(crate) const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
 
 /// A blocked task whose block was caused by host configuration — its run
 /// failed because dispatch could not find the provider launcher — rather than
@@ -78,8 +82,8 @@ pub struct InfraBlockedTask {
     pub launcher: Option<PathBuf>,
 }
 
-/// Terminal run states that strand a coupled task and therefore trigger the
-/// block transition. `Interrupted` is included [ORB-12969]: the run is
+/// Terminal run states that strand a coupled task and therefore trigger task
+/// cleanup. `Interrupted` is included [ORB-12969]: the run is
 /// resumable from its step checkpoints, but nothing resumes it on its own, so
 /// its task must not keep looking like live work. Resume re-admits the blocked
 /// task, so blocking it does not get in the way of the resume.
@@ -262,6 +266,12 @@ impl OrbitRuntime {
                 }
                 hold
             });
+        let task_cancellation_policy = if state == JobRunState::Cancelled {
+            self.read_run_state(run_id)?
+                .and_then(|state| state.task_cancellation_policy)
+        } else {
+            None
+        };
         let tasks = self.list_run_tasks(run_id)?;
         let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
         for task in tasks {
@@ -333,14 +343,30 @@ impl OrbitRuntime {
                     {
                         return Ok(());
                     }
-                    let update = match &hold {
-                        Some(hold) => baseline_red_hold_update(&run.job_id, hold),
-                        None => blocked_update(
-                            &run.job_id,
-                            run_id,
-                            error_code.as_deref(),
-                            error_message.as_deref(),
-                        ),
+                    let update = if state == JobRunState::Cancelled
+                        && let Some(policy) = task_cancellation_policy
+                            .as_ref()
+                            .filter(|policy| !policy.block)
+                    {
+                        TaskAutomationUpdate {
+                            status: Some(TaskStatus::Backlog),
+                            status_event: Some(WORKFLOW_RUN_CANCELLED_EVENT.to_string()),
+                            status_note: Some(format!(
+                                "workflow run cancelled: job={}, run_id={}; returned to backlog; {}",
+                                run.job_id, run_id, policy.note
+                            )),
+                            ..TaskAutomationUpdate::default()
+                        }
+                    } else {
+                        match &hold {
+                            Some(hold) => baseline_red_hold_update(&run.job_id, hold),
+                            None => blocked_update(
+                                &run.job_id,
+                                run_id,
+                                error_code.as_deref(),
+                                error_message.as_deref(),
+                            ),
+                        }
                     };
                     self.apply_task_automation_update(&task.id, update)
                 });

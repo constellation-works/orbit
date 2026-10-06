@@ -105,11 +105,11 @@ pub use run::{
     PipelineState, PullCrewPreflight, PullSinglePass, RUN_DELIVERY_EVIDENCE_SOURCE,
     RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle, RunDeliveryObservation,
     RunDeliveryStatus, RunIdRole, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
-    TASK_BLOCKED_BY_AGENT_MARKER, VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
-    agent_blocker_from_output, is_baseline_red_failure, is_provider_capacity_exhausted,
-    is_provider_unavailable, is_task_blocked_by_agent, is_validation_environment_failure,
-    run_id_candidate, run_id_minute_stem, run_id_role, task_blocked_by_agent_kind,
-    task_blocked_by_agent_message,
+    TASK_BLOCKED_BY_AGENT_MARKER, TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE,
+    VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, is_baseline_red_failure,
+    is_provider_capacity_exhausted, is_provider_unavailable, is_task_blocked_by_agent,
+    is_validation_environment_failure, run_id_candidate, run_id_minute_stem, run_id_role,
+    task_blocked_by_agent_kind, task_blocked_by_agent_message,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

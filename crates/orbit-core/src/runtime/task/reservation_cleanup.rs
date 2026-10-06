@@ -302,13 +302,13 @@ impl OrbitRuntime {
         }
         if state.is_terminal() {
             self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
-            // Coupling-out: block the run's coupled tasks only on the first
-            // terminalization into a failure or interrupted state. Gating on
+            // Coupling-out: clean up the run's coupled tasks only on the first
+            // terminalization into a failure, cancellation, or interrupted state. Gating on
             // the atomic `Finalized` outcome keeps this idempotent — a replayed
             // terminalization is a no-op and never clobbers a task a human
-            // already moved on. Blocking is best-effort so a status-write
-            // failure never blocks the run from terminalizing or its
-            // reservations/file locks from being released.
+            // already moved on. Cancellation selects backlog versus blocked.
+            // Cleanup is best-effort so a status-write failure never blocks
+            // the run from terminalizing or its reservations/file locks from being released.
             if outcome == JobRunFinalization::Finalized
                 && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
             {
