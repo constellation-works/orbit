@@ -10,8 +10,8 @@ use orbit_store::contracts::{
     ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_CAPACITY_MARKER,
-    PROVIDER_UNAVAILABLE_MARKER, is_provider_unavailable,
+    BaselineRedHold, FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_CAPACITY_MARKER,
+    PROVIDER_UNAVAILABLE_MARKER, is_baseline_red_failure, is_provider_unavailable,
 };
 
 use crate::application::distributed::{
@@ -944,6 +944,33 @@ pub(crate) fn leaf_failure_settlement(
         evidence.provider_unavailable = Some(unavailable);
         return ClaimMutation::Release(evidence);
     }
+    // [ORB-14258] A required command the base fails exactly as the candidate
+    // does is not the work's failure: the claim is released with the typed
+    // hold, which the owner records so the task waits for the base to move.
+    if let Some(hold) = baseline_red(run, diagnostic) {
+        let drain = &record.request.run_context.run_id;
+        let machine = &record.destination.execution_machine_id;
+        let why = format!(
+            "leaf {} found required validation `{}` red on base {} exactly as on its \
+             candidate, which stays in this host's worktree",
+            run.run_id, hold.command, hold.base_sha
+        );
+        let base_ref = if hold.base_ref.is_empty() {
+            "the base".to_string()
+        } else {
+            format!("`{}`", hold.base_ref)
+        };
+        return ClaimMutation::Release(ClaimEvidence {
+            summary: Some(format!("released by follower drain {drain}: {why}")),
+            comment: Some(format!(
+                "Follower drain {drain} on {machine} released this claim: {why}. The task is \
+                 back in the backlog, held until {base_ref} moves to a base where the command \
+                 passes; no pull request was opened."
+            )),
+            baseline_red: Some(hold),
+            ..Default::default()
+        });
+    }
     let mut summary = terminal_failure_summary_with(run, diagnostic);
     let final_recovery = final_recovery.and_then(|checkpoint| {
         let decision = checkpoint.decision.clone()?;
@@ -1012,6 +1039,34 @@ fn provider_unavailable(
         crew,
         reason: message[..cut].to_string(),
     })
+}
+
+/// The baseline hold a terminal leaf failed on: a failed step, or the
+/// terminalizing caller's own diagnostic, carrying the typed
+/// `[baseline_red]` failure `claim_validate` raises.
+fn baseline_red(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> Option<BaselineRedHold> {
+    run.steps
+        .iter()
+        .rev()
+        .find(|step| {
+            is_baseline_red_failure(step.error_code.as_deref(), step.error_message.as_deref())
+        })
+        .and_then(|step| step.error_message.as_deref())
+        .and_then(BaselineRedHold::from_text)
+        .or_else(|| {
+            diagnostic
+                .filter(|(code, message)| is_baseline_red_failure(Some(code), Some(message)))
+                .and_then(|(_, message)| BaselineRedHold::from_text(message))
+        })
+        .map(|mut hold| {
+            if hold.run_id.is_empty() {
+                hold.run_id.clone_from(&run.run_id);
+            }
+            hold
+        })
 }
 
 /// Hand an unfinished claim back to the owner: the task returns to the

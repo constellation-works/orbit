@@ -529,9 +529,17 @@ impl TaskCommitBoundary {
                 state.claim.phase = ExecutionClaimPhase::Revoked;
                 state.landing_invalidated = true;
                 params.status = Some(TaskStatus::Backlog);
-                params.status_note = Some(reason.to_string());
                 release = true;
-                state.last_event = "claim_released".into();
+                // [ORB-14258] A release for a red base is recorded as the
+                // hold itself, so owner admission withholds the task until
+                // the command passes on a new base tip.
+                if let Some(hold) = &value.baseline_red {
+                    params.status_note = Some(hold.text(reason));
+                    state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
+                } else {
+                    params.status_note = Some(reason.to_string());
+                    state.last_event = "claim_released".into();
+                }
             }
             ClaimMutation::Recover { status, reason } => {
                 if !auth.operator {

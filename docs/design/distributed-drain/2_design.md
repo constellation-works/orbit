@@ -177,7 +177,17 @@ no origin or PR credentials.
   validation logs, as `candidate_validate` does on the owner's own delivery path. Commands
   run in the executor's own resolved toolchain environment (`workflow.validation_env`); one that
   fails for lack of a tool is a typed `validation_environment` failure, which no step or final
-  recovery repairs ([ORB-13987]).
+  recovery repairs ([ORB-13987]). Before the claimed PR leaf pushes, `validate` runs the commands
+  with no `pull_request`. That run attaches nothing and returns `publication: "pending"` with the
+  captured results. A failing candidate therefore never publishes a PR. After `pr_open`,
+  `pin_validation` passes the pending result back as `prevalidated`. It re-observes the
+  candidate, now with its PR delivery, and requires the same commit, base and command list. It
+  then attaches the logs without running the commands again. A command that fails the same way on
+  the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
+  `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
+  Owner pull admission defers the task until the held command passes on a new
+  base tip ([ORB-14258];
+  [CONFIG.md](../../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable

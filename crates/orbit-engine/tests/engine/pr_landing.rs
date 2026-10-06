@@ -34,8 +34,9 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, process::run_bounded_capped, test_env};
 use orbit_engine::{
-    ClaimExecutionContext, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
-    TaskActivityUpdate, TaskAutomationUpdate, execute_deterministic_action, review_gate,
+    BaselineHoldStatus, ClaimExecutionContext, ReviewLandingRequest, ReviewReleaseRequest,
+    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status,
+    execute_deterministic_action, review_gate,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
@@ -43,7 +44,9 @@ use orbit_types::task::{
     TaskComment, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
-use orbit_types::workflow::{ReviewTiming, ReviewVerdict};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ReviewTiming, ReviewVerdict, is_baseline_red_failure,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -813,7 +816,9 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-            let format_check = "grep -qx formatted src/feature.txt || \
+            // The base has no src/feature.txt, so it passes: the failure is
+            // the candidate's to repair.
+            let format_check = "test ! -e src/feature.txt || grep -qx formatted src/feature.txt || \
                  { echo 'src/feature.txt: not formatted' >&2; exit 3; }";
             host.require_commands(&["echo suite-ok", format_check]);
             let remote_before = fx.remote_tip(BRANCH);
@@ -828,6 +833,11 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
                     && message.contains("src/feature.txt: not formatted"),
                 "the refusal names the candidate and carries the output: {message}"
             );
+            assert!(
+                !is_baseline_red_failure(None, Some(&message))
+                    && message.contains("passes this command, so the candidate introduced"),
+                "a failure the base does not share stays the candidate's: {message}"
+            );
             let passed = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
             assert_eq!(passed["command"], "echo suite-ok");
             assert_eq!(passed["exit_code"], 0);
@@ -836,6 +846,10 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             assert_eq!(failed["exit_code"], 3);
             assert_eq!(failed["tested_head"], fx.candidate.as_str());
             assert_eq!(failed["base_sha"], fx.base_sha.as_str());
+            assert_eq!(failed["baseline"]["decision"], "passed");
+            let base_log =
+                host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.baseline.json"));
+            assert_eq!(base_log["exit_code"], 0, "the base ran the same command");
             assert_eq!(
                 failed["output"],
                 format!(
@@ -1018,6 +1032,353 @@ fn a_missing_validation_tool_is_an_environment_failure() {
                     .any(|comment| comment.message.contains(&format!("PATH={MINIMAL_PATH}"))),
                 "the block reports the PATH the tool was missing from: {comments:?}"
             );
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A red base and network flakes [ORB-14258]
+// ---------------------------------------------------------------------------
+
+/// The command a red-base fixture requires; its base's `Makefile` fails it.
+const RED_LINT: &str = "make ci-lint";
+
+/// A required command that fails on the synchronized base exactly as on the
+/// candidate is the base's failure. The step fails typed `baseline_red` with
+/// the candidate's and the base's logs. Two candidates over that base share
+/// one base run. The failure handoff holds the task in the backlog: nothing is
+/// pushed, no PR is opened, and the candidate is kept. The hold stands while
+/// the base ref points at the red commit and lifts once it moves to a commit
+/// that passes.
+#[test]
+fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
+    isolated(
+        "a_required_command_red_on_the_base_holds_the_task_without_a_pr",
+        |sandbox| {
+            let runs = sandbox.join("lint-runs");
+            let fx = Fixture::with_red_lint(sandbox, &runs);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_LINT]);
+            let remote_before = fx.remote_tip(BRANCH);
+            let mut input = fx.validate_input();
+            input["base_ref"] = json!(BASE);
+
+            let results = std::thread::scope(|scope| {
+                let first = scope.spawn(|| action(&host, "candidate_validate", &input));
+                let second = scope.spawn(|| action(&host, "candidate_validate", &input));
+                [first.join().unwrap(), second.join().unwrap()]
+            });
+
+            let messages = results
+                .into_iter()
+                .map(|result| result.expect_err("a red base fails validation").to_string())
+                .collect::<Vec<_>>();
+            for message in &messages {
+                assert!(
+                    is_baseline_red_failure(None, Some(message)),
+                    "the failure is typed as the base's: {message}"
+                );
+            }
+            assert_eq!(
+                fs::read_to_string(&runs).unwrap().lines().count(),
+                3,
+                "two candidate runs share one base run"
+            );
+            let hold =
+                BaselineRedHold::from_text(&messages[0]).expect("the failure names its hold");
+            assert_eq!(
+                hold,
+                BaselineRedHold {
+                    base_ref: BASE.to_string(),
+                    base_sha: fx.base_sha.clone(),
+                    command: RED_LINT.to_string(),
+                    run_id: RUN_ID.to_string(),
+                }
+            );
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["exit_code"], 2);
+            assert_eq!(log["failure_kind"], "baseline_red");
+            assert_eq!(log["baseline"]["decision"], "failed");
+            assert_eq!(log["baseline"]["exit_code"], 2);
+            let base_log =
+                host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.baseline.json"));
+            assert_eq!(base_log["base_sha"], fx.base_sha.as_str());
+            assert_eq!(base_log["passed"], false);
+            assert!(
+                base_log["output"]
+                    .as_str()
+                    .is_some_and(|output| output.contains("README.md: lint is red")),
+                "{base_log}"
+            );
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "validate",
+                    "error_code": "baseline_red",
+                    "error_message": messages[0],
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the red base");
+            assert_eq!(handoff["decision"], "held_baseline_red");
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(fx.head(), fx.candidate, "the candidate is kept");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+            let (_, event, note) = host.status_events.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
+            assert_eq!(
+                note.as_deref().and_then(BaselineRedHold::from_text),
+                Some(hold.clone()),
+                "the task history carries the hold admission reads"
+            );
+
+            assert!(
+                matches!(
+                    baseline_hold_status(&host, &fx.repo, &hold),
+                    BaselineHoldStatus::Holding(_)
+                ),
+                "the base ref still points at the red commit"
+            );
+            fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
+            assert!(
+                matches!(
+                    baseline_hold_status(&host, &fx.repo, &hold),
+                    BaselineHoldStatus::Lifted(_)
+                ),
+                "the base moved to a commit where the command passes"
+            );
+        },
+    );
+}
+
+/// A red base discovered while revalidating a rebased, already-published PR
+/// still holds the task. The earlier completion-failure path used to preserve
+/// every PR failure in `review`, bypassing the baseline hold.
+#[test]
+fn a_red_base_during_pr_revalidation_holds_the_task() {
+    isolated(
+        "a_red_base_during_pr_revalidation_holds_the_task",
+        |sandbox| {
+            let runs = sandbox.join("lint-runs");
+            let fx = Fixture::with_red_lint(sandbox, &runs);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_LINT]);
+            host.publish_pr(TASK_ID);
+            host.set_status(TASK_ID, TaskStatus::Review);
+            let remote_before = fx.remote_tip(BRANCH);
+            let hold = BaselineRedHold {
+                base_ref: BASE.to_string(),
+                base_sha: fx.base_sha.clone(),
+                command: RED_LINT.to_string(),
+                run_id: RUN_ID.to_string(),
+            };
+            let diagnostic = hold.text("the rebased candidate shares the base failure");
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "re_review_validate",
+                    "error_code": "baseline_red",
+                    "error_message": diagnostic,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("a red base is held before completion failures preserve review status");
+
+            assert_eq!(handoff["decision"], "held_baseline_red");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+            assert_eq!(
+                fx.remote_tip(BRANCH),
+                remote_before,
+                "the failing head is not pushed"
+            );
+            let (_, event, note) = host.status_events.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
+            assert_eq!(
+                note.as_deref().and_then(BaselineRedHold::from_text),
+                Some(hold.clone()),
+                "the hold retains the base ref needed for automatic lift"
+            );
+            assert!(
+                host.comments(TASK_ID).last().is_some_and(|comment| comment
+                    .message
+                    .contains(&format!("existing PR #{PR_NUMBER} remains"))),
+                "the existing PR is described as preserved at its last published head"
+            );
+
+            fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
+            assert!(matches!(
+                baseline_hold_status(&host, &fx.repo, &hold),
+                BaselineHoldStatus::Lifted(_)
+            ));
+        },
+    );
+}
+
+/// A failure that looks network-inconclusive is rerun after a backoff. One
+/// that clears passes, with the rerun recorded. One that persists stops after
+/// two reruns and is judged as any failure is.
+#[test]
+fn a_network_flake_is_rerun_before_the_candidate_is_judged() {
+    isolated(
+        "a_network_flake_is_rerun_before_the_candidate_is_judged",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let attempts = sandbox.join("attempts");
+            let flaky = format!(
+                "echo try >> '{0}'; [ $(wc -l < '{0}') -gt 1 ] || \
+                 {{ echo 'curl: (6) Could not resolve host: forge.invalid' >&2; exit 6; }}",
+                attempts.display()
+            );
+            host.require_commands(&[&flaky]);
+
+            let validated = action(&host, "candidate_validate", &fx.validate_input())
+                .expect("the rerun passes");
+            assert_eq!(validated["decision"], "passed");
+            assert_eq!(fs::read_to_string(&attempts).unwrap().lines().count(), 2);
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["network_retries"], 1);
+            assert_eq!(log["exit_code"], 0);
+
+            // Only the candidate has src/feature.txt, so the base passes.
+            let offline = sandbox.join("offline");
+            let down = format!(
+                "test ! -e src/feature.txt || {{ echo try >> '{}'; \
+                 echo 'curl: (7) Failed to connect to forge.invalid port 443' >&2; exit 7; }}",
+                offline.display()
+            );
+            host.require_commands(&[&down]);
+            let error = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a persistent failure is still a failure");
+            let message = error.to_string();
+            assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
+            assert_eq!(
+                fs::read_to_string(&offline).unwrap().lines().count(),
+                3,
+                "one run and two reruns"
+            );
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["network_retries"], 2);
+            assert_eq!(log["baseline"]["decision"], "passed");
+        },
+    );
+}
+
+/// A claimed leaf's required command that fails the same way on its base is
+/// typed `baseline_red`. The hold names the claim's base ref, the owner is
+/// sent the candidate's and the base's logs, and nothing is handed off.
+#[test]
+fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
+    isolated(
+        "a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs",
+        |sandbox| {
+            let fx = Fixture::with_red_lint(sandbox, &sandbox.join("lint-runs"));
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_LINT]);
+            let input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+
+            let error = action(&host, "claim_validate", &input).expect_err("a red base fails");
+
+            let message = error.to_string();
+            let hold = BaselineRedHold::from_text(&message).expect("typed baseline_red");
+            assert_eq!(hold.base_ref, BASE);
+            assert_eq!(hold.base_sha, fx.base_sha);
+            assert_eq!(hold.command, RED_LINT);
+            assert_eq!(
+                *host.claim_logs.lock().unwrap(),
+                [
+                    "validation/claim-landing/0.failed.json",
+                    "validation/claim-landing/0.baseline.json"
+                ]
+            );
+            assert!(host.handoffs.lock().unwrap().is_empty());
+        },
+    );
+}
+
+/// A PR-mode claimed leaf validates before it publishes. That run attaches
+/// no log and pins no candidate. After `pr_open`, the pin step attaches the
+/// logs for the published candidate without running a command again, and the
+/// owner's handoff accepts them. A pin for a different commit is refused.
+#[test]
+fn a_pr_claim_validates_before_publication_and_pins_after_it() {
+    isolated(
+        "a_pr_claim_validates_before_publication_and_pins_after_it",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            let runs = sandbox.join("runs");
+            let command = format!("echo ran >> '{}'; echo suite-ok", runs.display());
+            host.require_commands(&[&command]);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+
+            let pending = action(&host, "claim_validate", &input).expect("validate before push");
+            assert_eq!(pending["decision"], "passed");
+            assert_eq!(pending["publication"], "pending");
+            assert_eq!(pending["candidate"], Value::Null);
+            assert_eq!(pending["tested_head"], fx.candidate.as_str());
+            assert!(
+                host.claim_logs.lock().unwrap().is_empty(),
+                "nothing attached"
+            );
+
+            input["pull_request"] = json!(PR_NUMBER);
+            let mut moved = pending.clone();
+            moved["tested_head"] = json!(fx.base_sha);
+            input["prevalidated"] = moved;
+            let refused = action(&host, "claim_validate", &input)
+                .expect_err("a pin for another commit is refused");
+            assert!(
+                refused.to_string().contains("rerun validation"),
+                "{refused}"
+            );
+
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input).expect("pin");
+            assert_eq!(pinned["decision"], "passed");
+            assert_eq!(pinned["validation"].as_array().unwrap().len(), 1);
+            assert_eq!(host.claim_logs.lock().unwrap().len(), 1);
+            assert_eq!(
+                fs::read_to_string(&runs).unwrap().lines().count(),
+                1,
+                "the pin runs no command"
+            );
+
+            let handoff = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+                "pull_request": PR_NUMBER,
+                "candidate": pinned["candidate"],
+                "validation": pinned["validation"],
+            });
+            action(&host, "claim_handoff", &handoff).expect("the owner's handoff accepts the pin");
+            assert_eq!(host.handoffs.lock().unwrap().len(), 1);
         },
     );
 }
@@ -1640,6 +2001,40 @@ impl Fixture {
         }
     }
 
+    /// [`Fixture::new`] whose base carries a `Makefile` with a red `ci-lint`
+    /// target, and whose candidate is rebased onto it. Every run of the target
+    /// appends a line to `runs`.
+    fn with_red_lint(sandbox: &Path, runs: &Path) -> Self {
+        let fixture = Self::new(sandbox);
+        fixture.commit_on_base(
+            "Makefile",
+            &format!(
+                "ci-lint:\n\t@echo ran >> '{}'\n\t@echo 'README.md: lint is red' >&2; exit 2\n",
+                runs.display()
+            ),
+        );
+        git(&fixture.repo, &["rebase", BASE]);
+        git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
+        Self {
+            base_sha: git(&fixture.repo, &["rev-parse", BASE]),
+            candidate: fixture.head(),
+            ..fixture
+        }
+    }
+
+    /// Commit `file` on the base and push it, leaving the candidate checked out.
+    fn commit_on_base(&self, file: &str, contents: &str) {
+        git(&self.repo, &["checkout", BASE]);
+        fs::write(self.repo.join(file), contents).unwrap();
+        git(&self.repo, &["add", file]);
+        git(
+            &self.repo,
+            &["commit", "-m", &format!("base writes {file}")],
+        );
+        git(&self.repo, &["push", "origin", BASE]);
+        git(&self.repo, &["checkout", BRANCH]);
+    }
+
     /// Check states the forge reports, one per status read; the last repeats.
     fn script_checks(&self, states: &[&str]) {
         fs::write(
@@ -1867,9 +2262,15 @@ struct DeliveryHost {
     claim_logs: Mutex<Vec<String>>,
     /// Claimed-leaf handoffs recorded as pending settlements.
     handoffs: Mutex<Vec<TaskHandoff>>,
+    /// The claim's owner-resolved ship mode.
+    ship_mode: Mutex<String>,
+    /// Status history written by automation updates, as (task, event, note).
+    status_events: Mutex<Vec<StatusEvent>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
+/// A status history write, as (task, event, note).
+type StatusEvent = (String, Option<String>, Option<String>);
 
 impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
@@ -1887,6 +2288,8 @@ impl DeliveryHost {
             widenings: Mutex::default(),
             claim_logs: Mutex::default(),
             handoffs: Mutex::default(),
+            ship_mode: Mutex::new("local".to_string()),
+            status_events: Mutex::default(),
         }
     }
 
@@ -2063,6 +2466,11 @@ impl RuntimeHost for DeliveryHost {
         if let Some(status) = update.status {
             task.status = status;
         }
+        self.status_events.lock().unwrap().push((
+            task_id.to_string(),
+            update.status_event,
+            update.status_note,
+        ));
         self.comments
             .lock()
             .unwrap()
@@ -2100,7 +2508,7 @@ impl RuntimeHost for DeliveryHost {
             claim_id: "claim-landing".to_string(),
             machine_id: "hm_follower".to_string(),
             run_id: RUN_ID.to_string(),
-            ship_mode: "local".to_string(),
+            ship_mode: self.ship_mode.lock().unwrap().clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
             required_commands: self.required_validation_commands(),

@@ -34,6 +34,7 @@ use orbit_store::contracts::{
     HandoffObservation, HandoffReviewObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
     JobRunState,
@@ -390,7 +391,30 @@ impl crate::OrbitRuntime {
             &self.paths().repo_root,
             &self.data_root(),
             &admission_holds,
+            &self.baseline_held_tasks()?,
         )
+    }
+
+    /// Each `backlog` task a red base still holds, mapped to why
+    /// [ORB-14258]. Read before the admission lock: the check consults Git
+    /// (and may refresh the base from `origin`), and a hold that lifts a
+    /// moment late only defers the task to the next request.
+    fn baseline_held_tasks(&self) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut held = BTreeMap::new();
+        for task in
+            self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
+        {
+            match self.standing_baseline_hold(&task) {
+                Ok(Some(why)) => {
+                    held.insert(task.id.clone(), why);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+                }
+            }
+        }
+        Ok(held)
     }
 
     /// Each task a live run on this owner holds the delivery slot of, mapped

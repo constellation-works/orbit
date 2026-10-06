@@ -1,6 +1,4 @@
-//! Executable steps of a claimed distributed leaf [ORB-12616], and the
-//! required-validation runner it shares with the owner's own delivery path
-//! [ORB-13915].
+//! Executable steps of a claimed distributed leaf [ORB-12616].
 //!
 //! A claimed leaf never merges and never completes its task. It implements,
 //! commits, publishes where its ship mode requires it, and then stops at a
@@ -11,8 +9,12 @@
 //!   executor's own worktree, refuses a base the candidate does not descend
 //!   from, runs the commands the *owner* requires on that exact candidate, and
 //!   attaches one captured log per command to the owner's copy of the task.
-//!   An empty list runs nothing and records that no required validation
-//!   commands are configured, as [`candidate_validate`] does.
+//!   On the pull-request route the commands run before the candidate is
+//!   pushed, and a second, command-free run of the step pins their results to
+//!   the pull request once it exists [ORB-14258]. An empty list runs nothing
+//!   and records that no required validation commands are configured, as
+//!   [`candidate_validate`](super::candidate_validate::candidate_validate)
+//!   does.
 //! - [`claim_handoff`] re-observes the same identity, builds the typed
 //!   [`TaskHandoff`], and records it as this claim's durable pending
 //!   settlement before anything is sent to the owner.
@@ -22,46 +24,37 @@
 //! from the process worker binding; a payload that disagrees with what Git and
 //! that binding say is a refusal, never an override.
 //!
-//! `workflow.required_validation_commands` is the list of commands a workspace
-//! requires every delivered candidate to pass. [`candidate_validate`] runs it
-//! on the owner's own delivery path, after the candidate is synchronized onto
-//! its base and before it is published or landed: an agent's report that it
-//! ran the commands is not evidence; this step is. Both steps run each command
-//! through [`run_required_command`], so they see the same shell, environment,
-//! timeout, output capture and failure text. That environment is resolved from
-//! the owner's login shell rather than the worker's launcher, and a command
-//! that fails for lack of a tool is reported as the validation environment's
-//! failure rather than the candidate's [ORB-13987]. The owner step fails like any
-//! other deterministic step, so a workflow can attach `step_failure_recovery`
-//! to repair the candidate (for example commit a formatting fix) before the
-//! one post-recovery attempt reruns every command.
+//! Commands run exactly as on the owner's own delivery path: the same shell,
+//! environment, timeout, output capture and failure text
+//! ([`super::required_command`]), the same network reruns and the same
+//! comparison of a failure with the base ([`super::baseline`]).
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
-use orbit_types::task::ContextWideningStep;
-use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
     HandoffReviewEvidence, HandoffValidationLog, TaskHandoff,
 };
+use orbit_types::workflow::{BaselineRedHold, ReviewTiming};
 use serde_json::{Value, json};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
-use crate::executor::automation::input::{input_string_field, required_job_run_id};
+use crate::executor::automation::input::input_string_field;
 
-use super::commit::attribute_candidate_paths;
+use super::baseline::{
+    baseline_red_failure, candidate_failure, compare_with_base, run_validation_command,
+};
 use super::git::{
     BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
-    resolve_worktree_start_point,
+    normalize_base_branch, resolve_worktree_start_point,
 };
-use super::handoff::{completed_task_ids_from_input, reports_failure};
+use super::handoff::reports_failure;
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
-use super::required_command::run_required_command;
+use super::required_command::RequiredCommandRun;
 use super::review_gate::revision;
 
 fn refused(message: impl Into<String>) -> OrbitError {
@@ -253,12 +246,22 @@ fn observe(
     context: &ClaimExecutionContext,
     input: &Value,
 ) -> Result<HandoffCandidate, OrbitError> {
+    observe_with(workspace_path, context, input, delivery(context, input)?)
+}
+
+/// [`observe`] with an explicit delivery.
+fn observe_with(
+    workspace_path: &Path,
+    context: &ClaimExecutionContext,
+    input: &Value,
+    delivery: HandoffDelivery,
+) -> Result<HandoffCandidate, OrbitError> {
     let candidate = observe_candidate(
         workspace_path,
         None,
         &context.base_branch,
         &context.landing_branch,
-        delivery(context, input)?,
+        delivery,
         &context.workspace_id,
         &claimed_base_sync(context, input)?,
     )?;
@@ -512,6 +515,20 @@ fn published_repository(status: &Value) -> Option<String> {
 /// Run the owner's required commands on the exact candidate and attach one
 /// captured log per command to the owner's copy of the task.
 ///
+/// The pull-request route validates before anything is published
+/// [ORB-14258]. With no `pull_request` yet, the step runs the commands and
+/// returns their results as `publication: pending`, attaching nothing: every
+/// log the owner accepts names the delivery, which does not exist yet. After
+/// `pr_open`, the same activity given that output as `prevalidated` runs
+/// nothing. It re-observes the candidate with its pull request, refuses one
+/// that is not the commit and base the commands passed on, and attaches the
+/// logs. A candidate whose validation failed is therefore never published.
+///
+/// A failing command is compared with the base (see [`super::baseline`]):
+/// its log and the base's are attached to the owner's task, and a failure
+/// the base shares fails as a typed `baseline_red`, which the leaf's
+/// settlement turns into a held release rather than a failed claim.
+///
 /// An empty requirement list runs no command: the candidate is still observed
 /// and pinned, and the output records `skipped_no_required_commands` with no
 /// validation references.
@@ -521,19 +538,157 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
-    let candidate = observe(&workspace_path, &context, input)?;
+    if let Some(prevalidated) = input.get("prevalidated").filter(|value| !value.is_null()) {
+        return pin_prevalidated(host, &context, &workspace_path, input, prevalidated);
+    }
+    let pending = context.ship_mode == "pr"
+        && input
+            .get("pull_request")
+            .is_none_or(|value| value.is_null() || value.as_str().is_some_and(str::is_empty));
+    let candidate = if pending {
+        // Observed for its commit and base only; the delivery is pinned by
+        // the `prevalidated` step once the pull request exists.
+        observe_with(
+            &workspace_path,
+            &context,
+            input,
+            HandoffDelivery::LocalCandidate,
+        )?
+    } else {
+        observe(&workspace_path, &context, input)?
+    };
     require_clean_candidate(&workspace_path, &candidate)?;
 
-    let mut logs = Vec::new();
-    let mut commands = Vec::new();
+    let mut results = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in context.required_commands.iter().enumerate() {
-        let run = run_required_command(host, &workspace_path, command)?;
+        let run = run_validation_command(host, &workspace_path, command)?;
         validation_env = run.environment_record();
         if !run.passed {
-            return Err(run.failure(&candidate.candidate.commit));
+            return Err(claim_failure(
+                host,
+                &context,
+                &workspace_path,
+                input,
+                &candidate,
+                index,
+                &run,
+            ));
         }
         require_clean_candidate(&workspace_path, &candidate)?;
+        results.push((run.command, run.output));
+    }
+
+    // A later required command must not invalidate logs from an earlier one.
+    // Publish them only after the whole suite has kept the candidate intact.
+    require_clean_candidate(&workspace_path, &candidate)?;
+    if pending {
+        let mut output = json!({
+            "decision": "passed",
+            "publication": "pending",
+            "candidate": null,
+            "validation": [],
+            "commands": results.iter().map(|(command, _)| command).collect::<Vec<_>>(),
+            "results": results
+                .iter()
+                .map(|(command, output)| json!({ "command": command, "output": output }))
+                .collect::<Vec<_>>(),
+            "tested_head": candidate.candidate.commit,
+            "validated_base": candidate.base.commit,
+            "validation_env": validation_env,
+        });
+        if context.required_commands.is_empty() {
+            output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
+            output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
+        }
+        return Ok(output);
+    }
+    let references = attach_handoff_logs(host, &context, &candidate, &results)?;
+    passed_output(&context, &candidate, &references, results, validation_env)
+}
+
+/// Pin a pre-publication validation onto the published candidate: the
+/// commands already passed on this exact commit and base, so the logs are
+/// built from those results with the pull request as their delivery.
+fn pin_prevalidated<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    workspace_path: &Path,
+    input: &Value,
+    prevalidated: &Value,
+) -> Result<Value, OrbitError> {
+    let candidate = observe(workspace_path, context, input)?;
+    require_clean_candidate(workspace_path, &candidate)?;
+    if input_string_field(prevalidated, "publication").as_deref() != Some("pending") {
+        return Err(OrbitError::InvalidInput(
+            "prevalidated must be the output of a pre-publication claim_validate step".to_string(),
+        ));
+    }
+    let tested_head = input_string_field(prevalidated, "tested_head");
+    let validated_base = input_string_field(prevalidated, "validated_base");
+    if tested_head.as_deref() != Some(candidate.candidate.commit.as_str())
+        || validated_base.as_deref() != Some(candidate.base.commit.as_str())
+    {
+        return Err(refused(format!(
+            "required validation passed on candidate {} over base {}, but the published \
+             candidate is {} over base {}; rerun validation",
+            tested_head.as_deref().unwrap_or("<none>"),
+            validated_base.as_deref().unwrap_or("<none>"),
+            candidate.candidate.commit,
+            candidate.base.commit
+        )));
+    }
+    let results = prevalidated
+        .get("results")
+        .and_then(Value::as_array)
+        .map(|results| {
+            results
+                .iter()
+                .map(|result| {
+                    Some((
+                        result.get("command")?.as_str()?.to_string(),
+                        result.get("output")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .unwrap_or_default()
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "prevalidated results must each carry a command and its output".to_string(),
+            )
+        })?;
+    let required = context
+        .required_commands
+        .iter()
+        .map(|command| command.trim())
+        .collect::<Vec<_>>();
+    if results
+        .iter()
+        .map(|(command, _)| command.as_str())
+        .ne(required)
+    {
+        return Err(refused(
+            "the prevalidated commands are not the owner's required commands; rerun validation",
+        ));
+    }
+    let references = attach_handoff_logs(host, context, &candidate, &results)?;
+    let validation_env = prevalidated
+        .get("validation_env")
+        .cloned()
+        .unwrap_or(Value::Null);
+    passed_output(context, &candidate, &references, results, validation_env)
+}
+
+/// Attach one typed log per passed command to the owner's task.
+fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    candidate: &HandoffCandidate,
+    results: &[(String, String)],
+) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
+    let mut references = Vec::new();
+    for (index, (command, output)) in results.iter().enumerate() {
         let log = HandoffValidationLog {
             schema_version: 1,
             workspace_id: context.workspace_id.clone(),
@@ -543,36 +698,36 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
             run_id: context.run_id.clone(),
             candidate: candidate.clone(),
             tested_head: candidate.candidate.commit.clone(),
-            command: run.command.clone(),
+            command: command.clone(),
             exit_code: 0,
-            output: run.output,
+            output: output.clone(),
         };
         let content = serde_json::to_vec(&log)
             .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         let path = format!("validation/{}/{index}.json", context.claim_id);
-        logs.push((path, content));
-        commands.push(run.command);
-    }
-
-    // A later required command must not invalidate logs from an earlier one.
-    // Publish them only after the whole suite has kept the candidate intact.
-    require_clean_candidate(&workspace_path, &candidate)?;
-    let mut references = Vec::new();
-    for (path, content) in logs {
         host.attach_claim_validation_log(&path, content.clone())?;
         references.push(HandoffArtifactRef {
             path,
             sha256: sha256_hex(&content),
         });
     }
+    Ok(references)
+}
 
+fn passed_output(
+    context: &ClaimExecutionContext,
+    candidate: &HandoffCandidate,
+    references: &[HandoffArtifactRef],
+    results: Vec<(String, String)>,
+    validation_env: Value,
+) -> Result<Value, OrbitError> {
     let mut output = json!({
         "decision": "passed",
-        "candidate": serde_json::to_value(&candidate)
+        "candidate": serde_json::to_value(candidate)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
-        "validation": serde_json::to_value(&references)
+        "validation": serde_json::to_value(references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
-        "commands": commands,
+        "commands": results.into_iter().map(|(command, _)| command).collect::<Vec<_>>(),
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
         "validation_env": validation_env,
@@ -584,12 +739,88 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
+/// The refusal for a claimed command that did not pass. A failure that is not
+/// a missing tool is rerun on the candidate's base, and both logs are
+/// attached to the owner's task before the step fails; a failure the base
+/// shares is typed `baseline_red`.
+fn claim_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    workspace_path: &Path,
+    input: &Value,
+    candidate: &HandoffCandidate,
+    index: usize,
+    run: &RequiredCommandRun,
+) -> OrbitError {
+    let commit = &candidate.candidate.commit;
+    if run.missing_tool.is_some() {
+        return run.failure(commit);
+    }
+    let check = compare_with_base(host, workspace_path, &candidate.base.commit, &run.command);
+    let red = check.reproduces(run);
+    let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
+    let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
+    let log = json!({
+        "schema_version": 1,
+        "role": "candidate",
+        "workspace_id": context.workspace_id,
+        "task_id": context.task_id,
+        "claim_id": context.claim_id,
+        "machine_id": context.machine_id,
+        "run_id": context.run_id,
+        "tested_head": commit,
+        "base_sha": candidate.base.commit,
+        "command": run.command,
+        "exit_code": run.exit_code,
+        "timed_out": run.timed_out,
+        "output": run.output,
+        "validation_env": run.environment_record(),
+        "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
+        "network_retries": run.network_retries,
+        "baseline": check.record(Some(&base_path)),
+    });
+    // The logs are evidence for whoever reads the owner's task; failing to
+    // deliver them must not hide the typed failure itself.
+    for (path, content) in [(&log_path, log), (&base_path, check.log(&context.run_id))] {
+        if let Err(error) = serde_json::to_vec(&content)
+            .map_err(|error| OrbitError::Execution(error.to_string()))
+            .and_then(|bytes| host.attach_claim_validation_log(path, bytes))
+        {
+            tracing::warn!(
+                path,
+                "could not attach a claimed validation failure log: {error}"
+            );
+        }
+    }
+    let evidence = format!("Candidate log: `{log_path}`; base log: `{base_path}`.");
+    if red {
+        let hold = BaselineRedHold {
+            base_ref: claimed_base_ref(context, input),
+            base_sha: check.base_sha.clone(),
+            command: run.command.clone(),
+            run_id: context.run_id.clone(),
+        };
+        return baseline_red_failure(&hold, run, commit, &evidence);
+    }
+    candidate_failure(run, commit, Some(&check), &evidence)
+}
+
+/// The base ref this claim synchronized onto, as the owner names it.
+fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> String {
+    let branch = normalize_base_branch(&context.base_branch)
+        .unwrap_or_else(|_| context.base_branch.trim().to_string());
+    match claimed_base_sync(context, input).as_deref() {
+        Ok("remote") => format!("origin/{branch}"),
+        _ => branch,
+    }
+}
+
 /// The decision a validation step records when the workspace requires no
 /// command, on the owner's delivery path and a claimed leaf alike.
-const SKIPPED_NO_REQUIRED_COMMANDS: &str = "skipped_no_required_commands";
+pub(super) const SKIPPED_NO_REQUIRED_COMMANDS: &str = "skipped_no_required_commands";
 
 /// Why that decision ran nothing, in the step's own output.
-const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
+pub(super) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
      (`workflow.required_validation_commands` is empty); no check ran";
 
 /// Build the typed handoff and record it as this claim's durable settlement.
@@ -830,7 +1061,7 @@ fn bounded_summary(text: &str) -> String {
 /// The tree a validation result describes is the committed HEAD only while
 /// the named branch still points there and no tracked or untracked input
 /// differs from it. Ignored build output is intentionally outside this check.
-fn require_clean_checkout(
+pub(super) fn require_clean_checkout(
     workspace_path: &Path,
     branch: &str,
     commit: &str,
@@ -861,201 +1092,4 @@ fn require_clean_checkout(
         )));
     }
     Ok(())
-}
-
-/// Run the workspace's required commands on the owner's committed candidate
-/// and attach one captured log per command to every task the run delivers.
-///
-/// With `ownership_base_sha` — the implementation head a before-PR reviewer
-/// commit sits on [ORB-13989] — every path the candidate changed since that
-/// commit is first attributed to the delivered tasks, widening their
-/// selectors with review provenance over any path none of them covers,
-/// whatever the requirement list holds.
-///
-/// An empty requirement list runs no command. Otherwise the candidate must be
-/// a clean checkout of a named branch that contains the `base_sha` this run
-/// synchronized onto, and must stay exactly that while the suite runs. A
-/// failing command fails the step with its output after its log — and those
-/// of the commands that passed before it — is attached.
-pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Sized>(
-    host: &H,
-    input: &Value,
-) -> Result<Value, OrbitError> {
-    let owned_paths = match input_string_field(input, "ownership_base_sha") {
-        Some(ownership_base) => Some(attribute_reviewed_paths(host, input, &ownership_base)?),
-        None => None,
-    };
-    let commands = host.required_validation_commands();
-    if commands.is_empty() {
-        let mut output = json!({
-            "phase": "validate",
-            "decision": SKIPPED_NO_REQUIRED_COMMANDS,
-            "note": NO_REQUIRED_COMMANDS_NOTE,
-            "commands": [],
-            "validation": [],
-        });
-        if let Some(owned_paths) = owned_paths {
-            output["owned_paths"] = json!(owned_paths);
-        }
-        return Ok(output);
-    }
-    let run_id = required_job_run_id(input, "candidate_validate")?.to_string();
-    let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
-        OrbitError::InvalidInput(
-            "candidate_validate requires the run's completed_task_ids to attach its logs to"
-                .to_string(),
-        )
-    })?;
-    let workspace_path = input_string_field(input, "workspace_path")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
-
-    let branch = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if branch.trim().is_empty() || branch == "HEAD" {
-        return Err(OrbitError::PolicyDenied(
-            "required validation runs on a named candidate branch; this checkout has a \
-             detached HEAD"
-                .to_string(),
-        ));
-    }
-    let candidate = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
-    let base_sha = input_string_field(input, "base_sha");
-    if let Some(base_sha) = base_sha.as_deref()
-        && !git_command_success(
-            &workspace_path,
-            &[
-                "merge-base",
-                "--is-ancestor",
-                "--end-of-options",
-                base_sha,
-                &candidate,
-            ],
-        )?
-    {
-        return Err(OrbitError::PolicyDenied(format!(
-            "candidate '{candidate}' does not descend from synchronized base '{base_sha}'"
-        )));
-    }
-    require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
-
-    let mut logs = Vec::new();
-    let mut passed = Vec::new();
-    let mut validation_env = Value::Null;
-    for (index, command) in commands.iter().enumerate() {
-        let run = run_required_command(host, &workspace_path, command)?;
-        validation_env = run.environment_record();
-        let content = serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "run_id": run_id,
-            "task_ids": task_ids,
-            "branch": branch,
-            "tested_head": candidate,
-            "base_sha": base_sha,
-            "command": run.command,
-            "exit_code": run.exit_code,
-            "timed_out": run.timed_out,
-            "output": run.output,
-            "validation_env": validation_env,
-            "failure_kind": run.failure_kind(),
-            "missing_tool": run.missing_tool_name(),
-        }))
-        .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
-        logs.push((format!("validation/{run_id}/{index}.json"), content));
-        if !run.passed {
-            // The failing log is the evidence a recovery agent or reader
-            // repairs from, so it is attached before the step fails.
-            attach_logs(host, &task_ids, &run_id, &logs)?;
-            return Err(run.failure(&candidate));
-        }
-        require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
-        passed.push(run.command);
-    }
-
-    let references = attach_logs(host, &task_ids, &run_id, &logs)?;
-    let mut output = json!({
-        "phase": "validate",
-        "decision": "passed",
-        "commands": passed,
-        "branch": branch,
-        "tested_head": candidate,
-        "validation": serde_json::to_value(&references)
-            .map_err(|error| OrbitError::Execution(error.to_string()))?,
-        "validation_env": validation_env,
-    });
-    if let Some(owned_paths) = owned_paths {
-        output["owned_paths"] = json!(owned_paths);
-    }
-    Ok(output)
-}
-
-/// Attribute every path the candidate changed since `ownership_base` to the
-/// delivered tasks. A reviewer may change any path a fix requires: a path
-/// none of the tasks' selectors covers widens the first task's selectors with
-/// review provenance rather than refusing. Shared ownership is accepted: a
-/// reviewer fix may touch a path two batched tasks both declare.
-fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
-    host: &H,
-    input: &Value,
-    ownership_base: &str,
-) -> Result<Vec<String>, OrbitError> {
-    let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
-        OrbitError::InvalidInput(
-            "candidate_validate requires the run's completed_task_ids to attribute ownership"
-                .to_string(),
-        )
-    })?;
-    let workspace_path = input_string_field(input, "workspace_path")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
-    let changed = git_output(
-        &workspace_path,
-        &[
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "--end-of-options",
-            &format!("{ownership_base}..HEAD"),
-        ],
-    )?;
-    let changed = changed
-        .lines()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    let tasks = task_ids
-        .iter()
-        .map(|task_id| host.get_task(task_id))
-        .collect::<Result<Vec<_>, _>>()?;
-    let run_id = required_job_run_id(input, "candidate_validate")?;
-    attribute_candidate_paths(
-        host,
-        run_id,
-        ContextWideningStep::Review,
-        "candidate_validate",
-        &changed,
-        &workspace_path,
-        &tasks,
-        false,
-    );
-    Ok(changed.into_iter().collect())
-}
-
-fn attach_logs<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task_ids: &[String],
-    run_id: &str,
-    logs: &[(String, Vec<u8>)],
-) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
-    let mut references = Vec::new();
-    for (path, content) in logs {
-        for task_id in task_ids {
-            host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
-        }
-        references.push(HandoffArtifactRef {
-            path: path.clone(),
-            sha256: sha256_hex(content),
-        });
-    }
-    Ok(references)
 }

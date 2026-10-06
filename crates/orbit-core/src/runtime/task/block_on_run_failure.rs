@@ -6,6 +6,13 @@
 //! A backlog task whose latest status decision is this run's final-recovery
 //! requeue is preserved: recovery already authorized another attempt.
 //!
+//! [ORB-14258] A run that failed because a required command fails on its
+//! base exactly as on the candidate (`[baseline_red]`) holds its tasks in the
+//! backlog instead (`baseline_red_hold`): nothing about the work is wrong, and
+//! admission releases the hold once the required command passes on a new base.
+//! A task the run's failure
+//! handoff already held is left as it is.
+//!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
 //! `in_progress`). The update comes from the engine's
@@ -40,11 +47,13 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
-    RuntimeHost, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    RuntimeHost, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, is_baseline_red_failure,
+};
 
 use crate::OrbitRuntime;
 
@@ -237,81 +246,104 @@ impl OrbitRuntime {
         } else {
             blocked_workflow_failure_update
         };
+        // [ORB-14258] A run that failed because a required command is red on
+        // its base holds its tasks in the backlog instead of blocking them.
+        let hold = (state == JobRunState::Failed)
+            .then(|| {
+                error_message
+                    .as_deref()
+                    .filter(|message| is_baseline_red_failure(error_code.as_deref(), Some(message)))
+                    .and_then(BaselineRedHold::from_text)
+            })
+            .flatten()
+            .map(|mut hold| {
+                if hold.run_id.is_empty() {
+                    hold.run_id = run_id.to_string();
+                }
+                hold
+            });
         let tasks = self.list_run_tasks(run_id)?;
         let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
         for task in tasks {
             // Recovery and cleanup serialize the decision with the status
             // write. Re-read the binding too: another run may have admitted
             // this task since list_run_tasks took its snapshot.
-            let result =
-                self.stores()
-                    .tasks()
-                    .with_task_write_lock(&task.id, &mut || {
-                        let current = self.get_task(&task.id)?;
-                        if current.job_run_id.as_deref() != Some(run_id)
-                            || !task_is_blockable_on_run_failure(current.status)
-                        {
-                            return Ok(());
-                        }
-                        // The task event, written with the requeue, survives even
-                        // when recording its run-state outcome failed. An older
-                        // requeue or another run's decision grants no exemption.
-                        if current.status == TaskStatus::Backlog
-                            && self
-                                .get_task_history(&task.id)?
-                                .iter()
-                                .rev()
-                                .find(|entry| {
-                                    entry.to_status.is_some()
-                                        || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                })
-                                .is_some_and(|entry| {
-                                    entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                        && entry.note.as_deref().is_some_and(|note| {
-                                            note.starts_with(&requeue_note_prefix)
-                                        })
-                                })
-                        {
-                            return Ok(());
-                        }
-                        // A review timeout has already requeued a continuation;
-                        // an external-evidence hold has a named resumption condition.
-                        // Do not turn either decision into an operator-only block.
-                        if self
+            let result = self
+                .stores()
+                .tasks()
+                .with_task_write_lock(&task.id, &mut || {
+                    let current = self.get_task(&task.id)?;
+                    if current.job_run_id.as_deref() != Some(run_id)
+                        || !task_is_blockable_on_run_failure(current.status)
+                    {
+                        return Ok(());
+                    }
+                    // The task event, written with the requeue or the
+                    // failure handoff's baseline hold, survives even when
+                    // recording its run-state outcome failed. An older
+                    // decision or another run's grants no exemption.
+                    if current.status == TaskStatus::Backlog
+                        && self
                             .get_task_history(&task.id)?
                             .iter()
                             .rev()
                             .find(|entry| {
                                 entry.to_status.is_some()
-                                    || matches!(
-                                        entry.event.as_str(),
-                                        "review_timeout_incomplete"
-                                            | "review_awaiting_evidence"
-                                            | "review_evidence_received"
-                                    )
+                                    || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                    || entry.event == BASELINE_RED_HOLD_EVENT
                             })
                             .is_some_and(|entry| {
-                                matches!(
+                                let note = entry.note.as_deref().unwrap_or_default();
+                                (entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                    && note.starts_with(&requeue_note_prefix))
+                                    || (entry.event == BASELINE_RED_HOLD_EVENT
+                                        && BaselineRedHold::from_text(note)
+                                            .is_some_and(|held| held.run_id == run_id))
+                            })
+                    {
+                        return Ok(());
+                    }
+                    // A review timeout has already requeued a continuation;
+                    // an external-evidence hold has a named resumption condition.
+                    // Do not turn either decision into an operator-only block.
+                    if self
+                        .get_task_history(&task.id)?
+                        .iter()
+                        .rev()
+                        .find(|entry| {
+                            entry.to_status.is_some()
+                                || matches!(
                                     entry.event.as_str(),
                                     "review_timeout_incomplete"
                                         | "review_awaiting_evidence"
                                         | "review_evidence_received"
-                                ) && entry.note.as_deref().is_some_and(|note| {
-                                    note.contains(&format!("run={run_id},"))
-                                        || note.starts_with(&format!("run={run_id};"))
-                                })
+                                )
+                        })
+                        .is_some_and(|entry| {
+                            matches!(
+                                entry.event.as_str(),
+                                "review_timeout_incomplete"
+                                    | "review_awaiting_evidence"
+                                    | "review_evidence_received"
+                            ) && entry.note.as_deref().is_some_and(|note| {
+                                note.contains(&format!("run={run_id},"))
+                                    || note.starts_with(&format!("run={run_id};"))
                             })
-                        {
-                            return Ok(());
-                        }
-                        let update = blocked_update(
+                        })
+                    {
+                        return Ok(());
+                    }
+                    let update = match &hold {
+                        Some(hold) => baseline_red_hold_update(&run.job_id, hold),
+                        None => blocked_update(
                             &run.job_id,
                             run_id,
                             error_code.as_deref(),
                             error_message.as_deref(),
-                        );
-                        self.apply_task_automation_update(&task.id, update)
-                    });
+                        ),
+                    };
+                    self.apply_task_automation_update(&task.id, update)
+                });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.
             if let Err(error) = result {

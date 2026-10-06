@@ -1,12 +1,13 @@
 //! Sibling tests for `block_on_run_failure.rs`: a coupled task is moved
 //! to `blocked` when its `task_pr_pipeline` run terminalizes as a failure or is
 //! interrupted, the transition is idempotent, and it leaves `review`/`done`
-//! tasks (and the workflow-admission allowlist) untouched.
+//! tasks (and the workflow-admission allowlist) untouched. A run that failed
+//! on a red base holds its task in the backlog instead.
 
 use chrono::Utc;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_store::{JobRunStepParams, TaskCreateParams, TaskReservationReleaseReason};
-use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
 use tempfile::tempdir;
 
@@ -32,6 +33,16 @@ fn create_backlog_task(
     _repo_root: &std::path::Path,
     id_hint: &str,
 ) -> String {
+    create_task(runtime, id_hint, None, Vec::new())
+}
+
+/// A backlog task, with `complexity` when admission needs one assessed.
+fn create_task(
+    runtime: &OrbitRuntime,
+    id_hint: &str,
+    complexity: Option<TaskComplexity>,
+    context_files: Vec<String>,
+) -> String {
     runtime
         .stores()
         .task_records()
@@ -47,14 +58,14 @@ fn create_backlog_task(
             required_tools: Vec::new(),
             plan: String::new(),
             execution_summary: String::new(),
-            context_files: Vec::new(),
+            context_files,
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,
             implemented_by: None,
             status: TaskStatus::Backlog,
             priority: TaskPriority::Medium,
-            complexity: None,
+            complexity,
             task_type: TaskType::Chore,
             external_refs: Vec::new(),
             source_task_id: None,
@@ -222,4 +233,136 @@ fn failure_cleanup_leaves_a_newer_human_withdrawal_alone() {
             "{withdrawn_to} must not be annotated as a workflow failure"
         );
     }
+}
+
+fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "-c",
+            "user.name=Orbit Test",
+            "-c",
+            "user.email=test@orbit.invalid",
+        ])
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_string()
+}
+
+/// [ORB-14258] A run whose required validation failed on its base exactly as
+/// on the candidate holds its task in the backlog instead of blocking it. The
+/// backlog snapshot withholds the task while the base still points at the red
+/// commit and after it moves to another failing tip, then admits it only after
+/// the command passes on a new base tip.
+#[test]
+fn a_red_base_failure_holds_the_task_until_the_command_passes() {
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::write(repo_root.join(".gitignore"), "/.orbit/\n").expect("ignore");
+    std::fs::write(
+        repo_root.join("Makefile"),
+        "ci-lint:\n\t@echo lint is red >&2; exit 2\n",
+    )
+    .expect("write red-base command");
+    git(&repo_root, &["init", "-q", "-b", "main"]);
+    git(&repo_root, &["add", "-A"]);
+    git(&repo_root, &["commit", "-q", "-m", "red base"]);
+    let hold = orbit_types::workflow::BaselineRedHold {
+        base_ref: "main".to_string(),
+        base_sha: git(&repo_root, &["rev-parse", "HEAD"]),
+        command: "make ci-lint".to_string(),
+        run_id: String::new(),
+    };
+    let task_id = create_task(
+        &runtime,
+        "red-base",
+        Some(TaskComplexity::Low),
+        vec!["file:.gitignore".to_string()],
+    );
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    record_failing_step_with_message(
+        &runtime,
+        &run.run_id,
+        &hold.text("required validation 'make ci-lint' fails on the base too"),
+    );
+
+    assert!(finalize_failed(&runtime, &run.run_id));
+
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert!(
+        failure_history_entries(&runtime, &task_id).is_empty(),
+        "not blocked"
+    );
+    let latest = runtime
+        .get_task_history(&task_id)
+        .expect("history")
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())
+        .expect("a status decision");
+    assert_eq!(latest.event, orbit_types::workflow::BASELINE_RED_HOLD_EVENT);
+    let recorded = latest
+        .note
+        .as_deref()
+        .and_then(orbit_types::workflow::BaselineRedHold::from_text)
+        .expect("the note carries the hold");
+    assert_eq!(recorded.run_id, run.run_id);
+    assert_eq!(recorded.base_sha, hold.base_sha);
+
+    let backlog = |runtime: &OrbitRuntime| {
+        runtime
+            .run_deterministic(
+                "list_backlog_tasks",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                orbit_tools::ToolContext::default(),
+            )
+            .expect("list backlog tasks")
+    };
+    let held = backlog(&runtime);
+    assert_eq!(held["task_ids"], serde_json::json!([]), "{held}");
+    assert!(
+        held["excluded"].as_array().is_some_and(|excluded| {
+            excluded.iter().any(|entry| {
+                entry["id"] == task_id.as_str() && entry["reason"] == "baseline_red_hold"
+            })
+        }),
+        "{held}"
+    );
+
+    std::fs::write(
+        repo_root.join("Makefile"),
+        "ci-lint:\n\t@echo lint is still red >&2; exit 2\n",
+    )
+    .expect("write still-red base command");
+    git(&repo_root, &["add", "Makefile"]);
+    git(&repo_root, &["commit", "-q", "-m", "still red"]);
+    let still_held = backlog(&runtime);
+    assert_eq!(
+        still_held["task_ids"],
+        serde_json::json!([]),
+        "{still_held}"
+    );
+    assert!(
+        still_held["excluded"].as_array().is_some_and(|excluded| {
+            excluded.iter().any(|entry| {
+                entry["id"] == task_id.as_str() && entry["reason"] == "baseline_red_hold"
+            })
+        }),
+        "a moved but still-red base keeps the task held: {still_held}"
+    );
+
+    std::fs::write(repo_root.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n")
+        .expect("write passing-base command");
+    git(&repo_root, &["add", "Makefile"]);
+    git(&repo_root, &["commit", "-q", "-m", "fix lint"]);
+    let lifted = backlog(&runtime);
+    assert_eq!(lifted["task_ids"], serde_json::json!([task_id]), "{lifted}");
 }

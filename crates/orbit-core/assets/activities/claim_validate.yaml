@@ -8,11 +8,21 @@ spec:
     Independently resolve the candidate and its base from the executor's
     worktree, refuse a candidate that does not descend from that base, run the
     commands this owner requires on that exact candidate, and attach one
-    captured log per command to the owner's copy of the task. An empty
-    requirement list runs nothing and records `skipped_no_required_commands`
-    with no validation references. Task, claim,
-    execution machine and bound run come from the trusted worker binding; a
-    step input that disagrees is refused rather than preferred.
+    captured log per command to the owner's copy of the task. On the
+    pull-request route the step runs before publication: with no
+    `pull_request` it runs the commands and returns their results as
+    `publication: pending` without attaching logs, and a later run given that
+    output as `prevalidated` runs nothing, pins the results to the published
+    candidate and attaches the logs. A network-inconclusive failure (curl
+    status 000, DNS, TLS timeout) is rerun up to twice with backoff; a failure
+    that survives is rerun on the candidate's base in a clean detached
+    worktree (cached per host, base and command), both logs are attached, and
+    a failure the base shares fails as a typed `baseline_red` that releases
+    the claim with a hold instead of failing it. An empty requirement list
+    runs nothing and records `skipped_no_required_commands` with no
+    validation references. Task, claim, execution machine and bound run come
+    from the trusted worker binding; a step input that disagrees is refused
+    rather than preferred.
   input_schema_json:
     type: object
     required: [workspace_path]
@@ -37,6 +47,12 @@ spec:
       # so the live value is a string. Integers remain accepted.
       pull_request:
         type: [string, integer, "null"]
+      # The output of this activity's pre-publication run on the same
+      # candidate. When set, no command runs: the passed results are pinned
+      # to the candidate as published, which must be the commit and base they
+      # passed on.
+      prevalidated:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [candidate, validation]
@@ -47,11 +63,22 @@ spec:
       note:
         type: string
         description: Why no command ran, when the requirement list is empty.
+      publication:
+        type: string
+        enum: [pending]
+        description: >
+          Set when the commands ran before publication; the logs are attached
+          by the run given this output as `prevalidated`.
+      results:
+        type: array
+        description: Each passed command and its captured output, when publication is pending.
+        items:
+          type: object
       candidate:
-        type: object
+        type: [object, "null"]
         description: >
           Repository, branches, candidate and base revisions, and the delivery
-          variant this claim produced.
+          variant this claim produced; null while publication is pending.
       validation:
         type: array
         description: Digest-pinned owner artifact references, one per command.

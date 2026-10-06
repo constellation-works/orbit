@@ -86,6 +86,11 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-14258] Nor can it fix a required command the base itself fails;
+    // the task is held until the command passes on a new base instead.
+    if orbit_types::workflow::is_baseline_red_failure(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
         return failure.into_result();
     };
@@ -632,6 +637,9 @@ pub(super) fn attempt_failure_activity(
             ) =>
         {
             orbit_types::workflow::VALIDATION_ENVIRONMENT_ERROR_CODE
+        }
+        error if orbit_types::workflow::is_baseline_red_failure(None, Some(&error.to_string())) => {
+            orbit_types::workflow::BASELINE_RED_ERROR_CODE
         }
         _ => "pipeline_step_failed",
     };

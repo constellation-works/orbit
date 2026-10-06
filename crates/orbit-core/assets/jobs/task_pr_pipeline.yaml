@@ -14,7 +14,10 @@
 #   there, stop delivery through the failure handoff with the findings on the
 #   task. Nothing goes back to the implementer and there is no second review.
 # - When the run itself terminalizes before PR completion, its recoverable
-#   candidate is published and the task is blocked for reconciliation. Once a
+#   candidate is published and the task is blocked for reconciliation. A
+#   required command its base fails the same way (`baseline_red`) is the
+#   exception: the candidate is kept unpublished and the task is held in the
+#   backlog until the required command passes on a new base tip. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
 #
@@ -174,6 +177,11 @@ spec:
     # whole suite on the new head. It precedes the review gate so such a
     # repair is reviewed and pinned like any other candidate change. An empty
     # list is a no-op.
+    # ORB-14258: a network-inconclusive failure is rerun first, and one that
+    # survives is rerun on `base_sha`. A failure the base shares fails as a
+    # typed `baseline_red`: no recovery runs, and the failure handoff keeps
+    # the candidate without a PR and holds the task in the backlog until
+    # `base_ref` moves to a commit where the command passes.
     - id: validate
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
@@ -183,6 +191,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
 
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and
@@ -263,6 +272,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
         ownership_base_sha: "{{ steps.review_gate_settle.output.implementation_head_sha }}"
 
     - id: push
@@ -414,8 +424,9 @@ spec:
         admission: "{{ steps.re_review_gate_admit.output }}"
 
     # ORB-13989: a reviewer commit on the rebased head is revalidated exactly
-    # like `review_validate` before it is republished; a failure keeps the
-    # published PR and the task in review.
+    # like `review_validate` before it is republished. A baseline-red failure
+    # holds the task in backlog with the old published PR unchanged; the
+    # failing rebased head is not pushed.
     - id: re_review_validate
       when: "{{ steps.re_review_gate_settle.output.reviewer_fixed }} == true"
       target: activity:candidate_validate
@@ -424,6 +435,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.complete_pr.output.rebased.base_sha }}"
+        base_ref: "{{ steps.complete_pr.output.rebased.base_ref }}"
         ownership_base_sha: "{{ steps.re_review_gate_settle.output.implementation_head_sha }}"
 
     - id: re_push

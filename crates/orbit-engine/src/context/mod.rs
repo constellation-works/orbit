@@ -24,6 +24,6 @@ pub use hosts::{
     WorktreeGcTaskLookup,
 };
 pub use outcome::{
-    WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };

@@ -2,6 +2,7 @@
 
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
+use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::*;
 
@@ -855,6 +856,118 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
             .as_ref()
             .is_some_and(|runnable| !runnable.iter().any(|crew| crew == "sol")),
         "{window:#?}"
+    );
+}
+
+/// [ORB-14258] A claimed leaf whose required validation failed on its base
+/// exactly as on the candidate releases its claim with the hold. The owner's
+/// task returns to the backlog under that hold, and the failure breaker does
+/// not count it. The owner's admission withholds the task while the base still
+/// points at the red commit and after it moves to another failing tip, then
+/// offers it once the required command passes on the new base.
+#[test]
+fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
+    if !isolated(
+        module_path!(),
+        "a_red_base_failure_releases_the_claim_until_the_command_passes",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let repo = &pair.owner_repo;
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is red >&2; exit 2\n",
+    )
+    .unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "red base"]);
+    let red = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: red.clone(),
+        command: "make ci-lint".into(),
+        run_id: String::new(),
+    };
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(
+        &leaf,
+        &hold.text(&format!(
+            "required validation 'make ci-lint' fails on base {red} exactly as on the candidate"
+        )),
+    );
+
+    let pass = pair.pass(&drain);
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    assert_eq!(pass["consecutive_failures"], 0, "{pass}");
+    assert_eq!(
+        pass["admitted"], 0,
+        "the held task is not pulled back: {pass}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    let released = &settles[0]["settlement"]["Release"]["baseline_red"];
+    assert_eq!(released["base_sha"], red.as_str(), "{settles:?}");
+    assert_eq!(released["command"], "make ci-lint", "{settles:?}");
+    let owner_task = pair.owner_task(&task);
+    let latest = owner_task["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|entry| !entry["to_status"].is_null())
+        .cloned()
+        .unwrap();
+    assert_eq!(latest["event"], BASELINE_RED_HOLD_EVENT, "{owner_task:#}");
+    assert_eq!(
+        latest["note"].as_str().and_then(BaselineRedHold::from_text),
+        Some(BaselineRedHold {
+            run_id: leaf.clone(),
+            ..hold.clone()
+        }),
+        "{owner_task:#}"
+    );
+    assert!(
+        comments_of(&owner_task).contains("no pull request was opened"),
+        "{owner_task:#}"
+    );
+
+    let leaves = pair.leaf_runs();
+    let still_red = pair.pass(&drain);
+    assert_eq!(still_red["admitted"], 0, "{still_red}");
+    assert_eq!(
+        pair.leaf_runs(),
+        leaves,
+        "no leaf is created for the held task"
+    );
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is still red >&2; exit 2\n",
+    )
+    .unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "still red"]);
+    let moved_red = pair.pass(&drain);
+    assert_eq!(
+        moved_red["admitted"], 0,
+        "the new tip is still red: {moved_red}"
+    );
+    assert_eq!(pair.leaf_runs(), leaves, "a still-red base is not pulled");
+
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "fix lint"]);
+    let next = pair.queued_leaf(&drain, 1);
+    assert_eq!(
+        pair.claimed_task(&next),
+        task,
+        "the required command passes on the new base, so the task is offered again"
     );
 }
 

@@ -83,6 +83,12 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// `backlog` until the switch is turned off or delivery uses the PR route.
     /// `detail` names the deciding config layer and the remedy [ORB-14168].
     LocalRouteBeforePr,
+    /// The task's last delivery failed a required command its base fails the
+    /// same way, and the base has not moved to a commit that may pass it
+    /// [ORB-14258]. The task stays in `backlog`; the hold lifts by itself once
+    /// the command passes on a new base tip, and `detail` names the base and
+    /// command.
+    BaselineRedHold,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -504,6 +510,27 @@ fn backlog_snapshot_in_mode(
         };
         excluded.push(exclusion);
         false
+    });
+    // [ORB-14258] A task held for a red base waits until the command passes
+    // on a new base tip;
+    // dispatching it would only fail the same command again. A hold that
+    // cannot be read is not one: the delivery's own validation decides.
+    backlog.retain(|task| match runtime.standing_baseline_hold(task) {
+        Ok(None) => true,
+        Ok(Some(why)) => {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::BaselineRedHold,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(why),
+            });
+            false
+        }
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+            true
+        }
     });
     // [ORB-14168] A task that cleared the per-task gates would still fail
     // closed at local-route admission while `review.before_pr` is on. Hold it
