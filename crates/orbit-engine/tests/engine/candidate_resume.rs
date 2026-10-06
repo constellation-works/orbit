@@ -13,7 +13,9 @@
 
 use serde_json::{Value, json};
 
-use crate::review_fixes::{Revalidation, ScriptedHost, Settlement, position, run_shipped_pipeline};
+use crate::review_fixes::{
+    Revalidation, ScriptedHost, Settlement, position, run_shipped_job, run_shipped_pipeline,
+};
 
 /// A resumed candidate that validated runs no implementation step; the
 /// pipeline commits, validates, reviews and delivers what is in the checkout.
@@ -78,6 +80,62 @@ fn a_repair_hands_the_implementer_the_candidate_trigger() {
     let implement = fresh.inputs("agent_implement");
     assert_eq!(implement.len(), 1);
     assert_eq!(implement[0]["resume_candidate"], Value::Null);
+}
+
+/// [ORB-14257] A claimed PR leaf hands the candidate its claim carries to
+/// `candidate_resume` in claimed mode, and the repair it decides to the
+/// claimed implementer; a claim without one hands it nothing.
+#[test]
+fn a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_implementer() {
+    let kept = json!({
+        "branch": "orbit/T-1-kept",
+        "head_sha": "kept-sha",
+        "source_run_id": "jrun-earlier-claim",
+        "failed_step_id": "sync_base",
+    });
+    let repair = json!({
+        "trigger": "continuation",
+        "failed_step_id": "sync_base",
+        "output": "continue the kept candidate",
+    });
+    let input = |candidate: Value| {
+        json!({
+            "task_ids": ["T-1"],
+            "base_branch": "main",
+            "base_sync": "remote",
+            "resume_candidate": candidate,
+        })
+    };
+    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes).resuming(resumed(
+        "resumed_repaired",
+        true,
+        repair.clone(),
+    ));
+    let result = run_shipped_job(&host, "task_claimed_pr_pipeline", input(kept.clone()));
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let resume = host.inputs("candidate_resume");
+    assert_eq!(resume.len(), 1, "{:?}", host.actions());
+    assert_eq!(resume[0]["claimed"], true);
+    assert_eq!(resume[0]["candidate"], kept);
+    let implement = host.inputs("agent_implement");
+    assert_eq!(implement.len(), 1);
+    assert_eq!(implement[0]["claimed"], true);
+    assert_eq!(implement[0]["resume_candidate"], repair);
+
+    let fresh = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
+    run_shipped_job(&fresh, "task_claimed_pr_pipeline", input(Value::Null))
+        .expect("a fresh claimed leaf delivers");
+    assert_eq!(
+        fresh.inputs("candidate_resume")[0]["candidate"],
+        Value::Null
+    );
+    assert_eq!(
+        fresh.inputs("agent_implement")[0]["resume_candidate"],
+        Value::Null
+    );
 }
 
 fn resumed(outcome: &str, implement: bool, repair: Value) -> Value {

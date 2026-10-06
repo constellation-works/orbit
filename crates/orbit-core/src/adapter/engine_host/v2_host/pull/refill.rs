@@ -378,16 +378,26 @@ pub(crate) fn pull_refill(
             "pull drain pass did not complete; retrying next iteration",
         );
     }
-    let no_runnable_crew = if crews
+    let host_suppressed = crews
+        .as_ref()
+        .and_then(|window| window.host_suppressed.as_deref());
+    let no_runnable_crew = if let Some(reason) = host_suppressed {
+        format!(
+            "host_suppressed: this drain claims no more work on this host for its window \
+             because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
+        )
+    } else if crews
         .as_ref()
         .is_some_and(|window| window.allowed.is_some())
     {
         "no_runnable_crew: no crew this drain's --allow-crew permits can run on this host for \
          this window; see `crews.allowed` and `crews.excluded`, then start a new drain with \
          crews that run here"
+            .to_string()
     } else {
         "no_runnable_crew: every configured crew is excluded on this host for this window; see \
          `crews.excluded`, fix the providers, and start a new drain"
+            .to_string()
     };
     let refusal = refusal
         .or_else(|| {
@@ -409,7 +419,7 @@ pub(crate) fn pull_refill(
                 )
             })
         })
-        .or_else(|| runs_nothing.then(|| no_runnable_crew.to_string()));
+        .or_else(|| runs_nothing.then_some(no_runnable_crew));
     let health = runtime
         .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref(), None)
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;

@@ -1141,6 +1141,95 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
     );
 }
 
+/// [ORB-14257] A claimed PR leaf resumes the candidate its owner kept from
+/// the task's last claim, handed in as `candidate`: applied onto the new
+/// base for the implementer to continue, never validated here and never
+/// written to a task history that lives on the owner. Without one, or when
+/// its changes conflict with the base, the usual outcomes apply.
+#[test]
+fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
+    isolated(
+        "a_claimed_leaf_continues_the_candidate_its_owner_kept",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            // Would refuse the candidate if validation ran here.
+            preserved.host.set_required_commands(&["exit 99"]);
+            preserved.host.clear_history(RESUME_TASK);
+            let claimed = |setup: &Value, candidate: Value| {
+                action(
+                    &preserved.host,
+                    "candidate_resume",
+                    &json!({
+                        "job_run_id": NEXT_RUN,
+                        "task_ids": [RESUME_TASK],
+                        "workspace_path": setup["workspace_path"],
+                        "base_sha": setup["base_sha"],
+                        "claimed": true,
+                        "candidate": candidate,
+                    }),
+                )
+                .expect("candidate_resume")
+            };
+            let kept = |failed_step_id: &str| {
+                json!({
+                    "branch": preserved.branch,
+                    "head_sha": preserved.candidate,
+                    "source_run_id": "jrun-earlier-claim",
+                    "failed_step_id": failed_step_id,
+                })
+            };
+
+            let setup = preserved.next_setup();
+            let resumed = claimed(&setup, kept("sync_base"));
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+            assert_eq!(resumed["repair"]["failed_step_id"], "sync_base");
+            assert_eq!(resumed["source_run_id"], "jrun-earlier-claim");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt",
+                "the kept candidate is applied as uncommitted work"
+            );
+            assert!(
+                preserved
+                    .host
+                    .history(RESUME_TASK)
+                    .iter()
+                    .all(|entry| entry.event != "candidate_resume"),
+                "a claimed leaf writes no task history"
+            );
+
+            let review = {
+                preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+                preserved.next_setup_for("jrun-claimed-review")
+            };
+            let refused = claimed(&review, kept("review_gate_settle"));
+            assert_eq!(refused["repair"]["trigger"], "review", "{refused}");
+
+            let fresh = {
+                preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+                preserved.next_setup_for("jrun-claimed-fresh")
+            };
+            let none = claimed(&fresh, Value::Null);
+            assert_eq!(none["outcome"], "fresh", "{none}");
+            assert_eq!(none["implement"], true);
+            assert!(
+                git(
+                    &Checkout::from_setup(&fresh).path,
+                    &["status", "--porcelain"]
+                )
+                .is_empty(),
+                "nothing is applied without a candidate"
+            );
+        },
+    );
+}
+
 const RESUME_TASK: &str = "T-RESUME";
 const FAILED_RUN: &str = "jrun-failed";
 const NEXT_RUN: &str = "jrun-next";

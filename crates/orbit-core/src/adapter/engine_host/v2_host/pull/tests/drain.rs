@@ -98,6 +98,7 @@ impl PullPeer for Peer {
                     complexity: None,
                     crew: None,
                     context_files: vec!["file:src.rs".into()],
+                    resume_candidate: None,
                 }),
                 invalid_candidates: vec![],
                 deferred_conflicts: vec![],

@@ -473,6 +473,47 @@ owns delivery:
   for the window. Neither step recovery nor its post-recovery attempt reruns the same model, and
   final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
   provider evidence.
+- *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a
+  `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
+  `candidate` (the default: the candidate's implementation, checks or review failed) and
+  `task_input` (final recovery decided `reject` or `archive`) settle as `Fail` and block the task.
+  Every other class settles as `Release` and returns it to `backlog`: `operator_cancel` (an
+  operator cancelled the launched leaf, with the cancel's reason), `provider` (the
+  `provider_unavailable` case above), `environment` (`[validation_environment]`, a required
+  command that lacked a tool), `owner_route` (`[owner_route_unavailable]`, which the worker
+  route stamps on a call to the owner that never reached it — unreachable, owner unavailable,
+  stale route or failed negotiation), `baseline_red` (the `[baseline_red]` failure with its hold,
+  from `claim_validate`), `transient` (`[transient_failure]`, which `claim_validate` raises for a
+  required command still network-inconclusive after its reruns on a base that is not red, or a
+  leaf whose worker died and was reconciled `interrupted`) and `base_conflict` (a committed
+  candidate that `sync_base` and its conflict recovery could not carry onto a base that moved).
+  The class is read from the last failed step's typed marker, then any provider or red-base
+  failure the run recorded, then the terminalizing diagnostic, then the leaf's progress.
+  `transient` and `provider` exclude the leaf's crew for the rest of the drain's window (source
+  `leaf_released`, or `provider_unavailable` for a provider). `environment` and `owner_route`
+  are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
+  so the drain requests nothing more whatever crew a task names, and the owner holds every task
+  from that drain run. For any excluding class the owner's admission also holds the released
+  task itself from that drain run (`crew_unavailable`), so a release that reaches the owner after
+  the follower built its next request is not pulled straight back. `baseline_red` releases with
+  its hold, and the owner's admission withholds the task until the base moves to a commit where
+  the command passes. The owner bounds the releases: a task released twice within 24 hours for a
+  budgeted class (anything but `operator_cancel`) is blocked by its third, with one comment
+  listing every counted reason; releases before such a block no longer count. A `Release` naming
+  a class that blocks is applied as a block. `orbit run show <leaf>` prints the class on its
+  `Claim:` line (`pull_claim.failure_class`).
+- *Candidate continuation* ([ORB-14257]). When the leaf had committed a candidate, its failure
+  names it (`failure.candidate`): the branch and head it pushed, with the pull request it opened,
+  or before the push the branch it synchronized or prepared, kept on the follower that made it
+  (`published: false`), with the source run and the step it stopped at. The owner keeps that
+  reference with the task's spec digest, on a `Fail` as on a `Release`. Admission attaches the
+  latest one to the claim (`task.resume_candidate`) unless the task's description, acceptance
+  criteria or selectors changed or an operator discarded the candidate since, and the follower
+  passes it to the claimed PR leaf. Its `resume_candidate` step (`candidate_resume` in claimed
+  mode) squash-applies the candidate onto the new base and hands the implementer a `continuation`
+  repair (`review` when the before-PR review refused it, `conflict` when it no longer applies
+  cleanly); the implementer always runs, and the leaf's own validation judges the result. A
+  candidate the follower cannot fetch (unpublished, on another host) implements fresh.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -956,5 +997,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
 - [ORB-13894] — attributed handoff landings to their owner tasks in `deliveries_landed` batches.
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
+- [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; the next claim continues a kept candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

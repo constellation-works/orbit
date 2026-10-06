@@ -154,7 +154,12 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
    status and reservations alone would hand it out a second time [ORB-13918]. Skip a candidate
    whose crew the request's `crews` says the executor cannot run and record it in
    `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
-   Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
+   Also skip, into `crew_unavailable`, a task the requesting machine's same drain run
+   (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
+   failure, and every task when that run released one for an `environment` or `owner_route`
+   failure — the host itself is suppressed for the window; another drain may take them
+   [ORB-14257]. An admitted task carries `resume_candidate`, the candidate the owner kept from
+   the task's last claim, unless its spec changed or an operator discarded it since. Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
    (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
@@ -263,8 +268,8 @@ store schema are implementation choices; their atomic behavior is required:
 | Accept handoff | Persist candidate/base SHAs, validation evidence, the typed review disposition the claim's contract requires (`not_required`, or verified before-PR evidence whose certificate the owner records), and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
-| Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
-| Release | Executor gives back unfinished work it did not fail — never launched, stopped on purpose, or its provider was unusable (`provider_unavailable`, including a model at capacity); revoke the claim, return the task to `backlog`, release only this reservation atomically |
+| Fail | Persist failure evidence and its typed `candidate` or `task_input` class, keep the failure's committed candidate for the next claim, block the task, invalidate execution authority, release only this reservation atomically |
+| Release | Executor gives back unfinished work it did not fail: never launched, or a launched leaf whose typed failure class does not block (`operator_cancel`, `provider` including a model at capacity, `environment`, `owner_route`, `baseline_red`, `transient`, `base_conflict`). Revoke the claim, return the task to `backlog`, release only this reservation atomically. A blocking class, or a budgeted class (any but `operator_cancel`) after two such releases of the task within 24 hours, blocks the task instead, with one comment listing every counted reason |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to

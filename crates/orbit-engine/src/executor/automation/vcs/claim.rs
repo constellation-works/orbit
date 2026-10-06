@@ -39,7 +39,7 @@ use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
     HandoffReviewEvidence, HandoffValidationLog, TaskHandoff,
 };
-use orbit_types::workflow::{BaselineRedHold, ReviewTiming};
+use orbit_types::workflow::{BaselineRedHold, ReviewTiming, TRANSIENT_FAILURE_MARKER};
 use serde_json::{Value, json};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
@@ -742,7 +742,8 @@ fn passed_output(
 /// The refusal for a claimed command that did not pass. A failure that is not
 /// a missing tool is rerun on the candidate's base, and both logs are
 /// attached to the owner's task before the step fails; a failure the base
-/// shares is typed `baseline_red`.
+/// shares is typed `baseline_red`, and one that still could not reach the
+/// network after its retries is typed `transient`.
 fn claim_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
@@ -775,7 +776,13 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "timed_out": run.timed_out,
         "output": run.output,
         "validation_env": run.environment_record(),
-        "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
+        "failure_kind": if red {
+            json!("baseline_red")
+        } else if run.network_evidence.is_some() {
+            json!("transient")
+        } else {
+            run.failure_kind()
+        },
         "network_retries": run.network_retries,
         "baseline": check.record(Some(&base_path)),
     });
@@ -801,6 +808,16 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             run_id: context.run_id.clone(),
         };
         return baseline_red_failure(&hold, run, commit, &evidence);
+    }
+    // Still unable to reach the network after its retries, the command said
+    // nothing about the candidate [ORB-14257].
+    if let Some(network) = &run.network_evidence {
+        return OrbitError::Execution(format!(
+            "{TRANSIENT_FAILURE_MARKER} required validation '{}' could not reach the network on \
+             candidate {commit} after {} retries ({network}); the candidate was not judged. \
+             {evidence}",
+            run.command, run.network_retries
+        ));
     }
     candidate_failure(run, commit, Some(&check), &evidence)
 }

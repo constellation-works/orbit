@@ -20,12 +20,14 @@ pub use delivery::{
 };
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use state::{
-    ActivityCrewDraw, ActivityCrewPoolMember, CrewExclusion, CrewExclusionSource,
-    DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest,
-    DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
-    FinalRecoveryKey, FinalRecoveryObservedTask, PROVIDER_CAPACITY_ERROR_CODE,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle,
+    ActivityCrewDraw, ActivityCrewPoolMember, ClaimFailureClass, CrewExclusion,
+    CrewExclusionSource, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
+    DrainCancelRequest, DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint,
+    FinalRecoveryCheckpoint, FinalRecoveryKey, FinalRecoveryObservedTask,
+    OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,
+    PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE,
+    PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight, PullSinglePass,
+    ResourcePressure, ResourceThrottle, TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER,
     VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
     is_provider_capacity_exhausted, is_provider_unavailable, is_validation_environment_failure,
 };

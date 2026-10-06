@@ -457,33 +457,55 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   anything the leaf could not, and a drain pass also reconciles a launched
   leaf whose worker died so its settlement is recorded and delivered. A leaf
   that was cancelled before it launched releases its claim instead: the task
-  goes back to `backlog` on the owner with a comment naming the drain. A leaf
-  that fails before its handoff moves its task to `blocked` on
-  the owner with a summary naming the leaf run, its failed step and that
-  step's error. The exception is a leaf whose provider could not be used, such
-  as a CLI that failed authentication. Its claim is released instead: the
-  task goes back to `backlog` on the owner with a comment naming the crew and
-  the provider's error. The failure breaker does not count it, and the drain
-  stops offering that crew for the rest of its window, so the task is not
-  pulled straight back. The full diagnostic stays in the follower's run
+  goes back to `backlog` on the owner with a comment naming the drain. A
+  launched leaf that ends without its handoff settles with a typed failure
+  class. Only `candidate` (the work failed) and `task_input` (final recovery
+  rejected or archived the task) move the task to `blocked` on the owner, with
+  a summary naming the leaf run, its failed step and that step's error. Every
+  other class releases the claim: the task goes back to `backlog` with a
+  comment naming the class and the reason. These classes are
+  `operator_cancel` (`orbit run cancel <leaf-run>` or the dashboard's cancel,
+  with its reason), `provider` (the CLI failed authentication or its model was
+  at capacity), `environment` (validation lacked a tool), `owner_route` (the
+  leaf could not reach the owner), `baseline_red` (required validation fails
+  on the base exactly as on the candidate; the owner holds the task until the
+  base passes), `transient` (validation could not reach the network after its
+  reruns, or the leaf's worker died) and `base_conflict` (the committed
+  candidate could not be synchronized onto a base that moved). The failure
+  breaker does not count a release. After `provider` or `transient`, the
+  drain stops offering that crew for the rest of its window. After
+  `environment` or `owner_route` — failures of the host itself — it requests
+  no more work at all for its window (`host_suppressed:` refusal,
+  `crews.host_suppressed`); fix the host and start a new drain. In either
+  case the owner does not hand the released task back to that drain, so it is
+  not pulled straight back; another drain may still take it. When the leaf had
+  committed a candidate, the release or block names it, and the task's next
+  claim continues it rather than starting over, unless the task's spec
+  changed or `orbit task update --discard-candidate` discarded it since. A
+  candidate that was never pushed is only on the follower that made it. A task released twice within 24
+  hours for anything but an operator's cancel is blocked by the next such
+  failure, with one comment listing every reason; unblock it once the cause
+  is fixed. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
   on the follower). That run page carries a `Claim:` line (`pull_claim` in
-  `--json`): the owner task, claim, owner selector and admitting drain, and
-  whether the leaf's outcome has reached the owner.
+  `--json`): the owner task, claim, owner selector and admitting drain,
+  whether the leaf's outcome has reached the owner, and its `failure_class`.
 - `orbit run show <drain-run>` lists the crew window as `Crews:` lines
   (`crew_window` in `--json`; the dashboard's run detail shows the same
   panel). The first line names the runnable crews. Each excluded crew is
   listed with its source and the reason: `preflight` (disabled, executor
-  unresolved, or CLI not found) or `provider_unavailable` (a claimed leaf's
+  unresolved, or CLI not found), `provider_unavailable` (a claimed leaf's
   provider could not authenticate or reported its selected model at
-  capacity, with the task and error). Each iteration's output carries
+  capacity, with the task and error) or `leaf_released` (a claimed leaf was
+  released for a `transient` failure, with the task, class and reason). Each iteration's output carries
   the same window as `crews`. To use an excluded crew again, fix the provider
   on this host (for example, sign the CLI in) or wait for model capacity,
   then start a new drain.
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,
-  re-backlog them deliberately, and start a new drain.
+  re-backlog them deliberately, and start a new drain. Released claims are
+  not failures and never open the breaker.
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off, and a later drain for the same owner
   carries anything an earlier drain left behind.

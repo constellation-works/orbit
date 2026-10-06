@@ -23,6 +23,13 @@ const CLAIM: &str = "distributed-execution-claim-v1";
 const STATE: &str = "distributed-claim-lifecycle-v1";
 const RECEIPT: &str = "distributed-claim-mutation-v1";
 
+/// Budgeted failure releases a task takes within
+/// [`RELEASE_BUDGET_WINDOW_HOURS`] before its next one blocks it instead
+/// [ORB-14257]. A release is never the candidate's fault, but one that keeps
+/// recurring unattended needs a human anyway.
+const RELEASE_BUDGET: usize = 2;
+const RELEASE_BUDGET_WINDOW_HOURS: i64 = 24;
+
 pub(super) fn invalid(message: &str) -> OrbitError {
     OrbitError::InvalidInput(message.into())
 }
@@ -130,6 +137,8 @@ impl TaskCommitBoundary {
                     age_seconds: None,
                     unresolved_merge_intent: None,
                     landing_invalidated: false,
+                    release: None,
+                    preserved_candidate: None,
                 }
             }
         };
@@ -505,6 +514,7 @@ impl TaskCommitBoundary {
                     params.status = Some(TaskStatus::Blocked);
                     release = true;
                     state.last_event = "claim_failed".into();
+                    state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                 }
             }
             ClaimMutation::Release(value) => {
@@ -519,26 +529,70 @@ impl TaskCommitBoundary {
                 let Some(reason) = value.summary.as_deref().filter(|s| !s.trim().is_empty()) else {
                     return Err(invalid("claim release requires a reason"));
                 };
-                // The task goes back to the backlog untouched: its execution
-                // summary stays whatever the last real attempt left, and the
-                // reason travels as the status note and the comment.
-                evidence = ClaimEvidence {
-                    comment: value.comment.clone(),
-                    ..ClaimEvidence::default()
+                let released_at = Utc::now();
+                // [ORB-14257] A typed failure releases only when its class
+                // does not block and the task's release budget allows it.
+                let blocked = match &value.failure {
+                    Some(failure) if failure.class.blocks() => Some(None),
+                    Some(failure) if failure.class.budgeted() => {
+                        let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
+                        (earlier.len() >= RELEASE_BUDGET)
+                            .then(|| Some(release_budget_comment(&earlier, failure, &released_at)))
+                    }
+                    _ => None,
                 };
-                state.claim.phase = ExecutionClaimPhase::Revoked;
+                state.release = value.failure.as_ref().map(|failure| ClaimReleaseRecord {
+                    class: failure.class,
+                    reason: failure.reason.clone(),
+                    released_at: released_at.to_rfc3339(),
+                    budget_exhausted: matches!(blocked, Some(Some(_))),
+                });
+                state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                 state.landing_invalidated = true;
-                params.status = Some(TaskStatus::Backlog);
                 release = true;
-                // [ORB-14258] A release for a red base is recorded as the
-                // hold itself, so owner admission withholds the task until
-                // the command passes on a new base tip.
-                if let Some(hold) = &value.baseline_red {
-                    params.status_note = Some(hold.text(reason));
-                    state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
+                if let Some(budget_comment) = blocked {
+                    let exhausted = budget_comment.is_some();
+                    evidence = ClaimEvidence {
+                        comment: budget_comment.or_else(|| value.comment.clone()),
+                        ..ClaimEvidence::default()
+                    };
+                    state.claim.phase = ExecutionClaimPhase::Failed;
+                    params.status = Some(TaskStatus::Blocked);
+                    params.status_note = Some(if exhausted {
+                        format!(
+                            "release budget exhausted ({RELEASE_BUDGET} in \
+                             {RELEASE_BUDGET_WINDOW_HOURS}h): {reason}"
+                        )
+                    } else {
+                        reason.to_string()
+                    });
+                    state.last_event = if exhausted {
+                        "claim_release_budget_exhausted"
+                    } else {
+                        "claim_failed"
+                    }
+                    .into();
                 } else {
-                    params.status_note = Some(reason.to_string());
-                    state.last_event = "claim_released".into();
+                    // The task goes back to the backlog untouched: its
+                    // execution summary stays whatever the last real attempt
+                    // left, and the reason travels as the status note and the
+                    // comment.
+                    evidence = ClaimEvidence {
+                        comment: value.comment.clone(),
+                        ..ClaimEvidence::default()
+                    };
+                    state.claim.phase = ExecutionClaimPhase::Revoked;
+                    params.status = Some(TaskStatus::Backlog);
+                    // [ORB-14258] A release for a red base is recorded as the
+                    // hold itself, so owner admission withholds the task until
+                    // the command passes on a new base tip.
+                    if let Some(hold) = &value.baseline_red {
+                        params.status_note = Some(hold.text(reason));
+                        state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
+                    } else {
+                        params.status_note = Some(reason.to_string());
+                        state.last_event = "claim_released".into();
+                    }
                 }
             }
             ClaimMutation::Recover { status, reason } => {
@@ -679,6 +733,146 @@ impl TaskCommitBoundary {
             }
             _ => Err(invalid("stale_claim")),
         }
+    }
+
+    /// What a drain run on `machine_id` already gave back for failures that
+    /// blame its host [ORB-14257]. Admission keeps each such task from that
+    /// drain for the rest of its window — the follower excludes the leaf's
+    /// crew too, but a release its worker delivered after the follower built
+    /// its next request must not be pulled straight back — and keeps every
+    /// task from it once one release blames the host whatever crew runs
+    /// there.
+    pub(super) fn drain_releases(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+    ) -> Result<DrainReleases, OrbitError> {
+        let mut released = DrainReleases::default();
+        for row in self.coordination_rows(STATE)? {
+            let state: ClaimInspection = decode(&row.payload_json)?;
+            if state.claim.executed_on.machine_id != machine_id
+                || state.claim.run_context.run_id != run_id
+            {
+                continue;
+            }
+            let Some(record) = state.release.filter(|record| record.class.excludes_crew()) else {
+                continue;
+            };
+            if record.class.suppresses_host() && released.host.is_none() {
+                released.host = Some(record.clone());
+            }
+            released.tasks.insert(state.claim.task_id, record);
+        }
+        Ok(released)
+    }
+
+    /// The candidate a claim's failure or release preserved, with the spec
+    /// it answered to; `None` when the leaf ended without one.
+    fn preserve_candidate(
+        &self,
+        task_id: &str,
+        evidence: &ClaimEvidence,
+    ) -> Result<Option<PreservedClaimCandidate>, OrbitError> {
+        let Some(candidate) = evidence
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.candidate.clone())
+        else {
+            return Ok(None);
+        };
+        Ok(Some(PreservedClaimCandidate {
+            candidate,
+            task_spec_digest: self.full_task(task_id)?.spec_digest(),
+            recorded_at: Utc::now().to_rfc3339(),
+        }))
+    }
+
+    /// The candidate the task's latest claim settlement preserved, while it
+    /// still answers to the task: no operator discarded it since, and the
+    /// task's spec is unchanged [ORB-14257]. Admission hands it to the next
+    /// claim's leaf to resume.
+    pub(super) fn resumable_candidate(
+        &self,
+        task: &orbit_types::task::Task,
+    ) -> Result<Option<ClaimCandidateRef>, OrbitError> {
+        let mut latest: Option<(
+            chrono::DateTime<chrono::FixedOffset>,
+            PreservedClaimCandidate,
+        )> = None;
+        for row in self.coordination_rows(STATE)? {
+            let state: ClaimInspection = decode(&row.payload_json)?;
+            if state.claim.task_id != task.id {
+                continue;
+            }
+            let Some(preserved) = state.preserved_candidate else {
+                continue;
+            };
+            let recorded = chrono::DateTime::parse_from_rfc3339(&preserved.recorded_at)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            if latest.as_ref().is_none_or(|(at, _)| *at < recorded) {
+                latest = Some((recorded, preserved));
+            }
+        }
+        let Some((recorded, preserved)) = latest else {
+            return Ok(None);
+        };
+        if preserved.task_spec_digest != task.spec_digest() {
+            return Ok(None);
+        }
+        let discarded = self
+            .bundle_store
+            .read_bundle_lightweight(&task.id)?
+            .events
+            .iter()
+            .any(|event| {
+                event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && event.at >= recorded
+            });
+        Ok((!discarded).then_some(preserved.candidate))
+    }
+
+    fn full_task(&self, task_id: &str) -> Result<orbit_types::task::Task, OrbitError> {
+        crate::repository::task::v2::TaskV2Store::new(
+            self.registry.clone(),
+            self.workspace_id.clone(),
+        )
+        .task_from_bundle(self.bundle_store.read_bundle(task_id)?)
+    }
+
+    /// The typed failure releases of `task_id` that count against its
+    /// release budget at `now`, oldest first: those inside the window and
+    /// after the last release that exhausted the budget, which a human has
+    /// since answered by unblocking the task.
+    fn budgeted_releases(
+        &self,
+        task_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
+        let at = |record: &ClaimReleaseRecord| {
+            chrono::DateTime::parse_from_rfc3339(&record.released_at)
+                .map(|at| at.with_timezone(&Utc))
+                .map_err(|e| OrbitError::Store(e.to_string()))
+        };
+        let mut releases = Vec::new();
+        for row in self.coordination_rows(STATE)? {
+            let state: ClaimInspection = decode(&row.payload_json)?;
+            if state.claim.task_id != task_id {
+                continue;
+            }
+            if let Some(record) = state.release.filter(|record| record.class.budgeted()) {
+                releases.push((at(&record)?, record));
+            }
+        }
+        let window_start = now - chrono::Duration::hours(RELEASE_BUDGET_WINDOW_HOURS);
+        let since = releases
+            .iter()
+            .filter(|(_, record)| record.budget_exhausted)
+            .map(|(at, _)| *at)
+            .max()
+            .map_or(window_start, |exhausted| exhausted.max(window_start));
+        releases.retain(|(at, record)| !record.budget_exhausted && *at > since);
+        releases.sort_by_key(|(at, _)| *at);
+        Ok(releases.into_iter().map(|(_, record)| record).collect())
     }
 
     fn with_friction_result(
@@ -917,4 +1111,47 @@ impl TaskCommitBoundary {
         }
         Ok(())
     }
+}
+
+/// The releases one drain run made for failures that blame its host.
+#[derive(Debug, Default)]
+pub(super) struct DrainReleases {
+    /// Each task released for a class that excludes the leaf's crew.
+    pub(super) tasks: BTreeMap<String, ClaimReleaseRecord>,
+    /// The first release whose class suppresses the whole host.
+    pub(super) host: Option<ClaimReleaseRecord>,
+}
+
+/// The one comment a task blocked by its release budget carries: every
+/// release the budget counted, and the failure that exceeded it.
+fn release_budget_comment(
+    earlier: &[ClaimReleaseRecord],
+    failure: &ClaimFailure,
+    released_at: &chrono::DateTime<Utc>,
+) -> String {
+    let mut comment = format!(
+        "Blocked: follower drains released this claim {} times within {RELEASE_BUDGET_WINDOW_HOURS}h \
+         for failures that were not the candidate's, and it failed again. A human has to \
+         decide what changes before it is pulled again. Every reason:",
+        earlier.len()
+    );
+    let now = released_at.to_rfc3339();
+    let reasons = earlier
+        .iter()
+        .map(|record| {
+            (
+                record.released_at.as_str(),
+                record.class,
+                record.reason.as_str(),
+            )
+        })
+        .chain(std::iter::once((
+            now.as_str(),
+            failure.class,
+            failure.reason.as_str(),
+        )));
+    for (at, class, reason) in reasons {
+        comment.push_str(&format!("\n- {at} {}: {reason}", class.as_str()));
+    }
+    comment
 }
