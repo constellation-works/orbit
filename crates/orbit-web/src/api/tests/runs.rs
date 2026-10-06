@@ -4,6 +4,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::JobRunState;
+use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -123,4 +127,94 @@ async fn force_cancel_exposes_stopped_and_unstopped_local_children() {
             .to_string(),
         "running"
     );
+}
+
+#[tokio::test]
+async fn dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_state() {
+    use super::test_support::{body_json, enter_isolated_child, seed_run};
+
+    if !enter_isolated_child(
+        module_path!(),
+        "dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_state",
+    ) {
+        return;
+    }
+    for (run_id, block, expected_status) in [
+        ("jrun-web-cancel-backlog", false, TaskStatus::Backlog),
+        ("jrun-web-cancel-blocked", true, TaskStatus::Blocked),
+    ] {
+        let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+        let run = seed_run(&runtime, run_id, "task_pr_pipeline", JobRunState::Pending);
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "dashboard cancelled task".into(),
+                description: "candidate should remain available".into(),
+                plan: "Resume the candidate after cancellation".into(),
+                context_files: vec!["file:src/candidate.rs".into()],
+                status: Some(TaskStatus::Backlog),
+                priority: TaskPriority::Medium,
+                complexity: TaskComplexity::Low,
+                task_type: Some(TaskType::Bug),
+                ..TaskAddParams::default()
+            })
+            .expect("create task");
+        runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    job_run_id: Some(Some(run.run_id.clone())),
+                    ..TaskUpdateParams::default()
+                },
+                "test operator".into(),
+            )
+            .expect("couple task to run");
+
+        let body = if block {
+            json!({
+                "reason": "preserve this candidate for later",
+                "block": true,
+            })
+        } else {
+            json!({"reason": "preserve this candidate for later"})
+        };
+        let response = router()
+            .with_state(crate::state::DashboardState::single(runtime.clone()))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{}/cancel", run.run_id))
+                    .header(header::HOST, "localhost:7878")
+                    .header(header::ORIGIN, "http://localhost:7878")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = body_json(response).await;
+        assert_eq!(response["outcome"], "cancelled");
+        let task_after_cancel = runtime.get_task(&task.id).expect("task after cancel");
+        assert_eq!(task_after_cancel.status, expected_status);
+        assert_eq!(
+            task_after_cancel.plan,
+            "Resume the candidate after cancellation"
+        );
+        assert_eq!(
+            task_after_cancel.context_files,
+            vec!["file:src/candidate.rs".to_string()]
+        );
+        if !block {
+            let history = runtime.get_task_history(&task.id).expect("task history");
+            let entry = history.last().expect("cancellation history");
+            assert_eq!(entry.event, "workflow_run_cancelled");
+            assert!(
+                entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| { note.contains("preserve this candidate for later") })
+            );
+        }
+    }
 }

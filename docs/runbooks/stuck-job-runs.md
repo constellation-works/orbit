@@ -165,12 +165,14 @@ persists only the selectors; `orbit run show` resolves the holder from the live 
 when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
 off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
 
-A run that failed, timed out, was cancelled or was interrupted leaves its task `blocked`, which
-automation skips. `orbit task show <task-id>` prints a `Next:` line for such a task: the exact
-`orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`, `interrupted`), and
-the `orbit task update <task-id> --status backlog` that re-queues it for a fresh run (the only
-option for a cancelled run). `--json` carries the same in `next_step`; it is absent for a task
-that is not blocked by a run.
+A failed, timed-out, or interrupted run leaves its task `blocked`, which automation skips.
+An operator cancellation returns its task to `backlog` with the cancellation reason, preserving
+the candidate for a later resume. Pass `--block` to `orbit run cancel` when the existing manual
+recovery flow is preferred; the dashboard cancel uses the backlog default. `orbit task show
+<task-id>` prints a `Next:` line for a blocked task: the exact `orbit job resume <run-id>` when
+that run is resumable (`failed`, `timeout`, `interrupted`), or the `orbit task update <task-id>
+--status backlog` command for other blocks. `--json` carries the same in `next_step`; it is
+absent for a task that is not blocked by a run.
 
 ## Cancel a conclusively stuck run
 
@@ -178,7 +180,11 @@ After verifying that the owner is gone or that the run should no longer continue
 
 ```sh
 orbit run cancel <run_id> --confirm --reason "operator stopped this delivery"
+orbit run cancel <run_id> --confirm --block --reason "hold for diagnosis"
 ```
+
+Use `--block` only when the task should wait for manual recovery instead of
+returning to the backlog with its candidate preserved.
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.

@@ -2,6 +2,55 @@
 
 use super::*;
 
+/// An operator cancellation of a launched claimed leaf reaches its owner as a
+/// release, so the task keeps its candidate in backlog with the cancel reason.
+#[test]
+fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
+    if !isolated(
+        module_path!(),
+        "operator_cancelled_claimed_leaf_returns_to_backlog_with_reason",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    // Keep this fixture from signalling the test process used as the fake
+    // worker. The run is still a launched claim and exercises final settlement.
+    let mut run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
+    run.pid = None;
+    run.pid_start_time = None;
+    pair.follower
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&pair.follower.workspace_id().unwrap(), &run, None)
+        .unwrap();
+
+    let cancelled = pair
+        .follower
+        .cancel_job_run_with_options_and_policy(
+            &leaf,
+            "operator",
+            "cli",
+            Some("preserve this candidate for later"),
+            false,
+            false,
+        )
+        .expect("cancel claimed leaf");
+    assert_eq!(cancelled.outcome, "cancelled");
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
+    assert_eq!(pair.owner_status(&task), "backlog");
+    assert!(
+        comments_of(&pair.owner_task(&task)).contains("preserve this candidate for later"),
+        "{}",
+        pair.owner_task(&task)
+    );
+    let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim.settlement_phase, "settled");
+}
+
 /// A lost pull reply and then a lost bind reply are both retried under the
 /// identity the owner already committed: one request, one claim, one leaf,
 /// bound and launched once. A drain that gave up on the unanswered request

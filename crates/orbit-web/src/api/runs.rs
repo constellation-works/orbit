@@ -393,6 +393,9 @@ pub(super) struct CancelRunBody {
     /// Stop a drain's in-flight leaves instead of waiting for them.
     #[serde(default)]
     force: bool,
+    /// Keep a cancelled task leaf blocked instead of returning it to backlog.
+    #[serde(default)]
+    block: bool,
 }
 
 pub(super) async fn cancel_run_action(
@@ -405,12 +408,13 @@ pub(super) async fn cancel_run_action(
         Err(message) => return bad_request(message),
     };
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_options(
+        Ok(runtime.cancel_job_run_with_options_and_policy(
             &id,
             "dashboard",
             "web",
             body.reason.as_deref(),
             body.force,
+            body.block,
         ))
     })
     .await

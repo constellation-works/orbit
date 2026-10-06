@@ -157,6 +157,18 @@ pub struct DrainCancelRequest {
     pub requested_at: DateTime<Utc>,
 }
 
+/// Task disposition chosen by an operator cancellation. Kept in the run's
+/// durable state before the owner is signalled so whichever process wins run
+/// finalization applies the same task outcome and preserves the cancel note.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskCancellationPolicy {
+    /// `true` preserves the legacy `blocked` transition; `false` returns the
+    /// task to `backlog` so its candidate can be resumed later.
+    pub block: bool,
+    /// Actor and optional reason captured for the task history entry.
+    pub note: String,
+}
+
 /// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].
 ///
 /// The ceiling a drain was submitted with lives in its immutable
@@ -482,6 +494,10 @@ pub struct PipelineState {
     /// waits for its launched leaves, and kept once it ends `cancelled`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_cancel: Option<DrainCancelRequest>,
+    /// Operator-selected task disposition for this run's cancellation. Missing
+    /// on older or non-operator terminalizations, which retain failure blocking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_cancellation_policy: Option<TaskCancellationPolicy>,
     /// The provider preflight a pull drain took when its window opened.
     /// Survives terminalization: it is how `run show` reports which crews
     /// the drain could not run.
@@ -558,6 +574,7 @@ impl PipelineState {
             drain_worker_limit: None,
             drain_admissions_stop: None,
             drain_cancel: None,
+            task_cancellation_policy: None,
             pull_crew_preflight: None,
             pull_single_pass: None,
             drain_last_pass: None,
