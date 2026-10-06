@@ -315,6 +315,8 @@ pub enum OrbitError {
     SqliteContention(Box<SqliteContention>),
     #[error("invalid task status transition: {0}")]
     TaskStatusTransition(String),
+    #[error("cannot drop system identity tag '{tag}'; pass --allow-drop-system-tags to override")]
+    SystemIdentityTagDropped { tag: String },
     /// A workflow run was refused because a dependency that reached `done` has
     /// not been delivered into the base the run would be cut from
     /// [ORB-10464]. Distinct from [`Self::TaskStatusTransition`]: the
@@ -470,6 +472,13 @@ impl OrbitError {
         }
     }
 
+    pub fn dropped_system_tag(&self) -> Option<&str> {
+        match self {
+            Self::SystemIdentityTagDropped { tag } => Some(tag),
+            _ => None,
+        }
+    }
+
     pub fn artifact_origin(&self) -> Option<&ArtifactOrigin> {
         match self {
             Self::RemoteArtifactUnavailable {
@@ -617,6 +626,7 @@ impl From<TaskError> for OrbitError {
         match error {
             TaskError::Invalid(message) => Self::InvalidInput(message),
             TaskError::StatusTransition(message) => Self::TaskStatusTransition(message),
+            TaskError::SystemIdentityTagDropped { tag } => Self::SystemIdentityTagDropped { tag },
         }
     }
 }

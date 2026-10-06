@@ -102,6 +102,13 @@ pub struct TaskUpdateArgs {
     /// change is recorded in task history as `forced`.
     #[arg(long, requires = "status")]
     pub force: bool,
+    /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
+    #[arg(
+        long = "allow-drop-system-tags",
+        alias = "allow-drop-system-tag",
+        alias = "allow-dropping-system-tags"
+    )]
+    pub allow_drop_system_tags: bool,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -113,7 +120,7 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 21] = [
+const APPROVE_CONFLICTS: [&str; 22] = [
     "force",
     "title",
     "description",
@@ -135,6 +142,7 @@ const APPROVE_CONFLICTS: [&str; 21] = [
     "context_files",
     "artifacts",
     "discard_candidate",
+    "allow_drop_system_tags",
 ];
 
 impl Execute for TaskUpdateArgs {
@@ -167,6 +175,7 @@ impl Execute for TaskUpdateArgs {
             note,
             force,
             discard_candidate,
+            allow_drop_system_tags,
             json: _,
         } = self;
 
@@ -291,6 +300,7 @@ impl Execute for TaskUpdateArgs {
             context_creation,
             upsert_artifacts,
             discard_candidate,
+            allow_drop_system_tags,
             ..Default::default()
         };
         let task = if force {

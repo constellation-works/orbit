@@ -385,6 +385,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
         OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact(&m)),
+        OrbitError::SystemIdentityTagDropped { tag } => {
+            OrbitError::SystemIdentityTagDropped { tag: redact(&tag) }
+        }
         OrbitError::DependencyNotDelivered(diagnostic) => {
             OrbitError::DependencyNotDelivered(redact_dependency_not_delivered(*diagnostic, redact))
         }

@@ -70,7 +70,7 @@ const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 /// Provenance tag: every task this step files carries it.
 pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 /// Prefix of the dedupe tag, completed by the failure key.
-pub(crate) const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is
 /// identifiable in a backlog listing without reading its tags.
 pub(super) const CI_FAILURE_SWEEP_TITLE_PREFIX: &str = "[ci-failure-sweep] ";

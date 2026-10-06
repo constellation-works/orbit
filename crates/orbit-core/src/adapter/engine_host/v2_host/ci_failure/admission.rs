@@ -14,7 +14,7 @@ use crate::adapter::engine_host::v2_host::task_pilot::{
 };
 
 const CI_FAILURE_TAG: &str = "ci-failure-sweep";
-const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 
 pub(in crate::adapter::engine_host::v2_host) fn assess(
     action: &str,

@@ -107,6 +107,145 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
     );
 }
 
+#[test]
+fn task_update_refuses_dropping_system_identity_tag_without_override() {
+    let workspace = TestWorkspace::new();
+    let task = workspace.add_task(
+        "CI failure task",
+        &["ci-failure:8002487a4e972736", "ci-failure-sweep"],
+    );
+    let task_id = task["id"].as_str().expect("task id");
+
+    // 1. Refusal with --json: fails, stderr has structured error with code and tag
+    let rejected_json = workspace.run_raw(&[
+        "task",
+        "update",
+        task_id,
+        "--tag",
+        "ci-failure-sweep",
+        "--tag",
+        "github-actions",
+        "--json",
+    ]);
+    assert!(
+        !rejected_json.status.success(),
+        "dropping ci-failure tag without override must fail"
+    );
+    let err_val: Value = serde_json::from_slice(&rejected_json.stderr).expect("stderr JSON");
+    assert_eq!(err_val["code"], "system_identity_tag_dropped");
+    assert_eq!(err_val["tag"], "ci-failure:8002487a4e972736");
+    assert!(
+        err_val["error"]
+            .as_str()
+            .expect("error string")
+            .contains("ci-failure:8002487a4e972736")
+    );
+
+    // 2. Refusal without --json: fails, stderr names the tag and override flag
+    let rejected_plain = workspace.run_raw(&[
+        "task",
+        "update",
+        task_id,
+        "--tag",
+        "ci-failure-sweep",
+        "--tag",
+        "github-actions",
+    ]);
+    assert!(!rejected_plain.status.success());
+    let stderr = String::from_utf8_lossy(&rejected_plain.stderr);
+    assert!(
+        stderr.contains("ci-failure:8002487a4e972736"),
+        "stderr must name the tag: {stderr}"
+    );
+    assert!(
+        stderr.contains("allow-drop-system-tags"),
+        "stderr must mention override flag: {stderr}"
+    );
+
+    // 3. Success with --allow-drop-system-tags
+    let allowed = workspace.run(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "ci-failure-sweep",
+            "--tag",
+            "github-actions",
+            "--allow-drop-system-tags",
+            "--json",
+        ],
+        None,
+        "update tags with override flag",
+    );
+    let updated: Value = serde_json::from_slice(&allowed.stdout).expect("update JSON");
+    assert_eq!(
+        updated["tags"],
+        json!(["ci-failure-sweep", "github-actions"])
+    );
+
+    // 4. Keeping the system identity tag does not require the flag
+    let kept = workspace.run(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "ci-failure:8002487a4e972736",
+            "--tag",
+            "other-tag",
+            "--json",
+        ],
+        None,
+        "update tags retaining system identity tag",
+    );
+    let kept_updated: Value = serde_json::from_slice(&kept.stdout).expect("update JSON");
+    assert_eq!(
+        kept_updated["tags"],
+        json!(["ci-failure:8002487a4e972736", "other-tag"])
+    );
+}
+
+#[test]
+fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
+    let workspace = TestWorkspace::new();
+    let task = workspace.add_task("Tool CI failure task", &["ci-failure:testkey123", "docs"]);
+    let task_id = task["id"].as_str().expect("task id");
+
+    // 1. Tool update dropping system tag without override fails
+    let tool_reject = json!({
+        "id": task_id,
+        "tags": ["docs", "perf"]
+    })
+    .to_string();
+    let rejected =
+        workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &tool_reject]);
+    assert!(
+        !rejected.status.success(),
+        "tool run dropping ci-failure tag without override must fail"
+    );
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("ci-failure:testkey123"),
+        "stderr must name the tag: {stderr}"
+    );
+
+    // 2. Tool update with allow_drop_system_tags: true succeeds
+    let tool_allow = json!({
+        "id": task_id,
+        "tags": ["docs", "perf"],
+        "allow_drop_system_tags": true
+    })
+    .to_string();
+    let allowed = workspace.run(
+        &["tool", "run", "orbit.task.update", "--input", &tool_allow],
+        None,
+        "tool run dropping ci-failure tag with override",
+    );
+    let updated: Value = serde_json::from_slice(&allowed.stdout).expect("tool output JSON");
+    assert_eq!(updated["tags"], json!(["docs", "perf"]));
+}
+
 fn assert_task_titles(output: &Output, expected: &[&str]) {
     let value: Value = serde_json::from_slice(&output.stdout).expect("task array JSON");
     let tasks = value.as_array().expect("task array");
@@ -200,6 +339,10 @@ impl TestWorkspace {
             String::from_utf8_lossy(&output.stderr)
         );
         output
+    }
+
+    fn run_raw(&self, args: &[&str]) -> Output {
+        run_orbit(&self.work, &self.home, args, None)
     }
 }
 

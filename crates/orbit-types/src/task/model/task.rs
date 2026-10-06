@@ -244,6 +244,16 @@ pub fn task_matches_tags(task: &Task, required_tags: &[String]) -> bool {
         .all(|tag| available.contains(tag.as_str()))
 }
 
+/// Prefix of system identity tags assigned to CI failure tracking tasks.
+pub const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+
+/// Whether a tag is a system identity tag that tracks automated system provenance.
+pub fn is_system_identity_tag(tag: &str) -> bool {
+    tag.trim()
+        .to_ascii_lowercase()
+        .starts_with(CI_FAILURE_KEY_TAG_PREFIX)
+}
+
 /// Tag prefix a task uses to select the job that delivers it when shipped.
 ///
 /// `delivery:<job>` names a catalog job that declares `spec.task_delivery`

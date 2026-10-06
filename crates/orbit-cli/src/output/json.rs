@@ -53,6 +53,11 @@ pub fn error_payload(error: &OrbitError) -> Value {
         object.insert("workspace_id".to_string(), json!(details.workspace_id));
         object.insert("found_in".to_string(), json!(details.found_in));
     }
+    if let Some(tag) = error.dropped_system_tag()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("tag".to_string(), json!(tag));
+    }
     payload
 }
 
@@ -124,6 +129,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
+        OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
         // New OrbitError variants must remain JSON-serializable before this
         // boundary assigns them a dedicated stable code.
         _ => "internal_error",
