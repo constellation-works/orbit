@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::DispatchError;
 use orbit_engine::review_gate::{candidate_identity_at, committed_paths, uncommitted_paths};
+use orbit_engine::{DispatchError, RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate, ReviewSettlement};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
@@ -33,7 +33,8 @@ use super::judgement::{
 /// With the reviewer's fixes committed it also reports `reviewer_fixed`, so
 /// the pipeline reruns owner validation and the ownership check on that head
 /// before publishing, and the PR body's "Review fixes" section [ORB-13989].
-/// Any other verdict refuses the step — a settled verdict is not retried and
+/// An evidence-only verdict holds delivery without recovery. Other verdicts
+/// refuse the step — a settled verdict is not retried and
 /// never goes back to the implementer — so the pipeline's failure handoff
 /// preserves the candidate and blocks the task with the escalation.
 pub(crate) fn review_gate_settle(
@@ -90,7 +91,12 @@ pub(crate) fn review_gate_settle(
     );
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
-        Ok(Settled::Blocked { certificate, .. }) => (
+        Ok(Settled::AwaitingEvidence(hold)) => (
+            AuditEventStatus::Success,
+            json!({"gate": "awaiting_evidence", "evidence_hold": hold}),
+            None,
+        ),
+        Ok(Settled::Blocked(certificate)) => (
             AuditEventStatus::Success,
             json!({
                 "verdict": certificate.verdict.as_str(),
@@ -124,19 +130,12 @@ pub(crate) fn review_gate_settle(
 
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
-        Ok(Settled::Blocked {
-            certificate,
-            awaiting_evidence,
-        }) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::AwaitingEvidence(hold)) => Err(DispatchError::ReviewEvidenceHold(hold)),
+        Ok(Settled::Blocked(certificate)) => Err(DispatchError::DeterministicActionRefused {
             action: action.to_string(),
             message: format!(
-                "{}: verdict {} ({}); {} finding(s) recorded; the candidate \
+                "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; the candidate \
                  stays unpublished until a recorded decision resumes delivery",
-                if awaiting_evidence {
-                    "review_awaiting_evidence"
-                } else {
-                    "review_gate_blocked"
-                },
                 certificate.verdict.as_str(),
                 certificate
                     .escalation
@@ -151,10 +150,8 @@ pub(crate) fn review_gate_settle(
 
 enum Settled {
     Passed(Value),
-    Blocked {
-        certificate: Box<ReviewCertificate>,
-        awaiting_evidence: bool,
-    },
+    AwaitingEvidence(Box<orbit_types::workflow::ReviewEvidenceHold>),
+    Blocked(Box<ReviewCertificate>),
 }
 
 fn settle(
@@ -517,21 +514,30 @@ fn settled_outcome(
     certificate: ReviewCertificate,
 ) -> Result<Settled, OrbitError> {
     if !certificate.verdict.passed() {
-        let mut awaiting_evidence = false;
         for task_id in &context.task_ids {
-            awaiting_evidence |= super::super::evidence::evidence_hold(runtime, task_id)?
-                .is_some_and(|hold| {
+            if let Some(hold) =
+                super::super::evidence::evidence_hold(runtime, task_id)?.filter(|hold| {
                     hold.schema_version == 1
                         && super::super::evidence::evidence_only(&certificate, &hold.requirements)
                         && hold.attempt_id == certificate.attempt_id
                         && hold.candidate == certificate.final_candidate
                         && hold.task_meaning_digest == certificate.task_meaning_digest
-                });
+                })
+            {
+                runtime.apply_task_automation_update(task_id, TaskAutomationUpdate {
+                    expected_status: Some(orbit_types::task::TaskStatus::InProgress),
+                    status: Some(orbit_types::task::TaskStatus::InProgress),
+                    status_event: Some("review_awaiting_evidence".into()),
+                    status_note: Some(format!(
+                        "run={}; candidate={}; awaiting named external checks; receipt queues a fresh review",
+                        context.run_id, hold.candidate.commit,
+                    )),
+                    ..Default::default()
+                })?;
+                return Ok(Settled::AwaitingEvidence(Box::new(hold)));
+            }
         }
-        return Ok(Settled::Blocked {
-            awaiting_evidence,
-            certificate: Box::new(certificate),
-        });
+        return Ok(Settled::Blocked(Box::new(certificate)));
     }
     let mut output = passed_output(&certificate);
     if context.claimed {

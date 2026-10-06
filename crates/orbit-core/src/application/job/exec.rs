@@ -36,6 +36,8 @@ pub struct V2JobRunResult {
     pub run_id: String,
     pub job_name: String,
     pub success: bool,
+    /// Named external evidence that stopped delivery without a failure.
+    pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
     pub pipeline: Value,
     pub message: Option<String>,
     pub events_emitted: u64,
@@ -354,6 +356,7 @@ impl OrbitRuntime {
                 });
 
         let (outcome_str, error_message) = match &outcome_res {
+            Ok(o) if o.evidence_hold.is_some() => ("held", None),
             Ok(o) if o.success => ("success", None),
             Ok(o) => ("failed", o.message.clone()),
             Err(err) => ("error", Some(err.to_string())),
@@ -374,6 +377,7 @@ impl OrbitRuntime {
                 run_id,
                 job_name: asset.name,
                 success: o.success,
+                evidence_hold: o.evidence_hold,
                 pipeline: o.pipeline,
                 message: o.message,
                 events_emitted: events_count,
@@ -455,6 +459,18 @@ impl OrbitRuntime {
                 .max(0) as u64,
         );
         let final_state = match outcome {
+            Ok(result) if result.evidence_hold.is_some() => {
+                self.persist_v2_run_state(run, input, result, JobRunState::Held, options)?;
+                self.record_pipeline_diagnostic_step(
+                    run,
+                    started_at,
+                    finished_at,
+                    Some("review_awaiting_evidence"),
+                    "Delivery awaits named external evidence; receipt queues a fresh review.",
+                    JobRunState::Held,
+                )?;
+                JobRunState::Held
+            }
             Ok(result) if result.success => {
                 self.persist_v2_run_state(run, input, result, JobRunState::Success, options)?;
                 if options.record_synthetic_success_step {
@@ -670,6 +686,7 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
         Some("skipped") => JobRunState::Skipped,
         Some("cancelled") => JobRunState::Cancelled,
         Some("interrupted") => JobRunState::Interrupted,
+        Some("held") => JobRunState::Held,
         _ => JobRunState::Success,
     }
 }

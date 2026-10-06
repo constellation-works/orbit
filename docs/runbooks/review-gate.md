@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194"]
-last_validated: 2026-10-04
+last_validated: 2026-10-06
 ---
 
 # Operate the Before-PR Review Gate
@@ -27,10 +27,26 @@ task in review as `review_gate_stale`.
 | `accept` | the implementation commit(s) only | the PR opens on that head |
 | `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` (or `incomplete`) | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
+| Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` |
 
 The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
 records `accept_with_fixes`.
+
+An evidence hold applies only when every remaining requirement is a named
+unavailable external check and the report contains no open defect or failed
+required check. `review-evidence-hold.json` pins the attempt, candidate,
+task meaning, and each required artifact. Attach a passing `ReviewExternalEvidence`
+result at each named path and its nonempty log artifact. Each result must match
+the held attempt, candidate, kind, name, and command. Unrelated, stale, failed,
+or incomplete evidence leaves the hold in place.
+
+Receipt of all matching evidence queues the task in `backlog` with
+`review_evidence_received` for a fresh review. It does not approve the candidate
+or resume the terminal held run. An operator status decision or changed task
+meaning prevents automatic receipt from overriding that decision. Held runs
+are settled outcomes for pipeline waits and are excluded from reliability's
+success/failure denominator.
 
 ## 2. Inspect
 

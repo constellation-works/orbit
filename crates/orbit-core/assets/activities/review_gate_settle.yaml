@@ -15,9 +15,11 @@ spec:
     return the reviewed head and base the PR steps recheck; with fixes,
     `reviewer_fixed` asks the pipeline to revalidate the new head and
     `review_fixes` carries the PR body sections for fixes, raw validation
-    records, and any failed out-of-scope diagnostics the review does not cover. `reject` and `incomplete`
-    fail the step so the failure handoff preserves the candidate without
-    publishing a PR.
+    records, and any failed out-of-scope diagnostics the review does not cover.
+    A verdict needing only named external evidence ends the run as `held`,
+    preserves `review_awaiting_evidence` on the task, and bypasses recovery and
+    the failure handoff. Other `reject` and `incomplete` verdicts fail the step
+    so the failure handoff preserves the candidate without publishing a PR.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path, admission]

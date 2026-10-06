@@ -57,7 +57,8 @@ impl OrbitRuntime {
                 | JobRunState::Failed
                 | JobRunState::Timeout
                 | JobRunState::Cancelled
-                | JobRunState::Interrupted => return Ok(()),
+                | JobRunState::Interrupted
+                | JobRunState::Held => return Ok(()),
                 other => {
                     return Err(OrbitError::Execution(format!(
                         "pipeline worker cannot execute run '{}' from state '{}'",

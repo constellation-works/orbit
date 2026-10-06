@@ -38,6 +38,54 @@ fn interrupted_report(fixture: &Fixture) -> Value {
     })
 }
 
+/// Run admission and settlement in the persisted worker, with every recovery
+/// hook configured. Reports still arrive through the reviewer's artifact tool.
+fn run_review_pipeline(fixture: &Fixture) {
+    // Shipped job names resolve from the fixture's global catalog.
+    let resources = fixture.runtime.paths().global_dir.join("resources");
+    std::fs::create_dir_all(resources.join("jobs")).unwrap();
+    std::fs::create_dir_all(resources.join("activities")).unwrap();
+    std::fs::write(resources.join("activities/unexpected_recovery.yaml"), json!({
+        "schemaVersion": 2, "kind": "Activity", "metadata": {"name": "unexpected_recovery"},
+        "spec": {"type": "deterministic", "description": "Record any unexpected recovery or publication",
+            "input_schema_json": {}, "output_schema_json": {},
+            "action": "orbit_tool_call", "config": {
+            "tool_name": "orbit.task.update",
+            "args": {"id": fixture.task_id, "model": "codex", "comment": "Unexpected recovery ran"},
+        }},
+    }).to_string()).unwrap();
+    let mut settle_input = fixture.input.clone();
+    settle_input["admission"] = json!("{{ steps.review_gate_admit.output }}");
+    std::fs::write(
+        resources.join("jobs/task_pr_pipeline.yaml"),
+        json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"},
+            "spec": {
+                "state": "enabled", "kind": "workflow",
+                "failure_activity": "unexpected_recovery",
+                "final_recovery_activity": "unexpected_recovery",
+                "steps": [{
+                    "id": "review_gate_admit", "default_input": fixture.input,
+                    "spec": {"type": "deterministic", "action": "review_gate_admit", "config": {}},
+                }, {
+                    "id": "review_gate_settle", "default_input": settle_input,
+                    "retry": {"max_attempts": 3, "initial_backoff_ms": 1, "backoff_cap_ms": 1},
+                    "recovery_activity": "unexpected_recovery",
+                    "spec": {"type": "deterministic", "action": "review_gate_settle", "config": {}},
+                }, {
+                    "id": "publish", "target": "activity:unexpected_recovery",
+                }],
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fixture
+        .runtime
+        .execute_pipeline_run_worker(fixture.input["job_run_id"].as_str().unwrap())
+        .unwrap();
+}
+
 #[test]
 fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     if !super::dispatch_admission::isolated(
@@ -179,13 +227,6 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
         let mut fixture =
             Fixture::new_with_required_commands(&["hosted windows", "native macos", "codeql"]);
         fixture.admit();
-        RuntimeHost::mark_job_run_running(
-            &fixture.runtime,
-            fixture.input["job_run_id"].as_str().unwrap(),
-            Utc::now(),
-            std::process::id(),
-        )
-        .unwrap();
         let mut report = interrupted_report(&fixture);
         let requirements = json!([
             {"kind": "hosted_ci", "name": "Windows CI job", "command": "hosted windows", "artifact": "evidence/windows.json"},
@@ -200,11 +241,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             }));
         }
         fixture.put_report(&report);
-        let refused = fixture.settle().unwrap_err();
-        assert!(
-            refused.to_string().contains("review_awaiting_evidence:"),
-            "{refused}"
-        );
+        run_review_pipeline(&fixture);
         let hold: ReviewEvidenceHold = serde_json::from_slice(
             &fixture
                 .runtime
@@ -214,25 +251,76 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                 .content,
         )
         .unwrap();
-        RuntimeHost::apply_task_automation_update(
-            &fixture.runtime,
-            &fixture.task_id,
-            TaskAutomationUpdate {
-                status: Some(TaskStatus::InProgress),
-                status_event: Some("review_awaiting_evidence".into()),
-                status_note: Some(format!("run={}, awaiting external checks", hold.run_id)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        RuntimeHost::finalize_job_run(
-            &fixture.runtime,
-            &hold.run_id,
-            JobRunState::Failed,
-            Utc::now(),
-            None,
-        )
-        .unwrap();
+        let run = fixture.runtime.show_job_run(&hold.run_id).unwrap();
+        assert_eq!(
+            run.state,
+            JobRunState::Held,
+            "ORB-14313: evidence holds must not fail delivery"
+        );
+        assert!(run.finished_at.is_some());
+        let wait = fixture
+            .runtime
+            .wait_pipeline_runs(std::slice::from_ref(&hold.run_id), 1, 1, None)
+            .unwrap();
+        assert_eq!(wait.results[0].status, "held");
+        assert!(wait.results[0].error.is_none());
+        let reliability = fixture
+            .runtime
+            .pipeline_reliability(
+                &orbit_core::metrics::reliability::ReliabilityWindow::ending_at(
+                    "fixture",
+                    Utc::now() + chrono::Duration::seconds(1),
+                    chrono::Duration::minutes(10),
+                ),
+            )
+            .unwrap();
+        assert_eq!(reliability.job_runs.overall.held, 1);
+        assert_eq!(reliability.job_runs.overall.failed, 0);
+        assert_eq!(reliability.job_runs.overall.excluded(), 1);
+        assert!(
+            run.steps
+                .iter()
+                .all(|step| step.state != JobRunState::Failed)
+        );
+        let events = fixture
+            .runtime
+            .collect_run_audit_events(&hold.run_id)
+            .unwrap();
+        assert!(
+            !events.iter().any(|event| matches!(
+                event.body_kind.as_deref(),
+                Some("step_retry" | "step_recovery_attempted" | "final_recovery_attempted")
+            )),
+            "ORB-14313: evidence holds must bypass retry and both recovery stages"
+        );
+        let steps = fixture
+            .runtime
+            .collect_run_audit_steps(&hold.run_id)
+            .unwrap();
+        assert_eq!(
+            steps.len(),
+            2,
+            "hold must stop before publication and failure handoff"
+        );
+        assert_eq!(steps[1].state.as_deref(), Some("held"));
+        assert_eq!(
+            fixture
+                .runtime
+                .get_task_history(&fixture.task_id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .event,
+            "review_awaiting_evidence"
+        );
+        fixture
+            .runtime
+            .execute_pipeline_run_worker(&hold.run_id)
+            .unwrap();
+        assert_eq!(
+            fixture.runtime.show_job_run(&hold.run_id).unwrap().state,
+            JobRunState::Held
+        );
         assert_eq!(
             fixture.runtime.get_task(&fixture.task_id).unwrap().status,
             TaskStatus::InProgress
@@ -304,6 +392,53 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                 .unwrap()
                 .event,
             "review_evidence_received"
+        );
+        // A new delivery run reviews the candidate afresh. Evidence receipt
+        // itself neither approves it nor rewrites the incomplete certificate.
+        let previous_run = fixture.runtime.show_job_run(&hold.run_id).unwrap();
+        let next = fixture
+            .runtime
+            .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous_run.input, None)
+            .unwrap();
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    job_run_id: Some(Some(next.run_id.clone())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        fixture.input["job_run_id"] = json!(next.run_id);
+        fixture.admit();
+        assert_ne!(fixture.input["admission"]["attempt_id"], hold.attempt_id);
+        let mut accepted = interrupted_report(&fixture);
+        accepted["verdict"] = json!("accept");
+        accepted["escalation"] = Value::Null;
+        for requirement in &hold.requirements {
+            accepted["validation"].as_array_mut().unwrap().push(json!({
+                "command": requirement.command, "outcome": "passed", "role": "required",
+                "log_artifact": requirement.artifact,
+            }));
+        }
+        fixture.put_report(&accepted);
+        run_review_pipeline(&fixture);
+        assert_eq!(
+            fixture.runtime.show_job_run(&next.run_id).unwrap().state,
+            JobRunState::Success
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .read_run_state(&next.run_id)
+                .unwrap()
+                .unwrap()
+                .pipeline["review_gate_settle"]["gate"],
+            "passed"
         );
     }
 }

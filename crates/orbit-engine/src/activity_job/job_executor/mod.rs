@@ -87,6 +87,8 @@ pub use self::validate::{validate_job, validate_job_deterministic_actions};
 #[derive(Debug, Clone)]
 pub struct JobOutcome {
     pub success: bool,
+    /// A settled review awaiting external evidence, without a delivery failure.
+    pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
     pub pipeline: Value,
     pub message: Option<String>,
     /// [ORB-00414] Number of audit-write failures observed during the run.
@@ -201,6 +203,7 @@ pub fn execute_job_with_resume(
     let mut rerunning = false;
     let mut overall_ok = true;
     let mut overall_message = None;
+    let mut evidence_hold = None;
     let mut index = 0;
     while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
@@ -236,6 +239,19 @@ pub fn execute_job_with_resume(
         };
         let mut outcome = match failure {
             Ok(outcome) => outcome,
+            Err((DispatchError::ReviewEvidenceHold(hold), _)) => {
+                record_pipeline(
+                    &ctx,
+                    &step.id,
+                    serde_json::json!({
+                        "gate": "awaiting_evidence",
+                        "evidence_hold": hold,
+                    }),
+                );
+                overall_ok = false;
+                evidence_hold = Some(*hold);
+                break;
+            }
             Err((error, unsuccessful)) => {
                 let verdict = attempt_final_recovery(
                     job,
@@ -282,6 +298,7 @@ pub fn execute_job_with_resume(
 
     Ok(JobOutcome {
         success: overall_ok,
+        evidence_hold,
         pipeline: ctx.pipeline_value(),
         message: (!overall_ok).then_some(overall_message).flatten(),
         audit_failures: audit.audit_failure_count(),

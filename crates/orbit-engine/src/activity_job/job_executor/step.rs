@@ -39,6 +39,7 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
     let (outcome_str, error_message) = match &result {
         Ok(StepOutcome { success: true, .. }) => ("success", None),
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
+        Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
         Err(err) => ("error", Some(err.to_string())),
     };
     emit_job_event_lossy(
