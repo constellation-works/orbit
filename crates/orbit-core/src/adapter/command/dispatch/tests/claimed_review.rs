@@ -589,8 +589,8 @@ fn the_reviewer_reads_the_prior_evidence_the_owners_hold_names() {
     assert_eq!(read("evidence/ci.log").unwrap(), "ci passed");
     named("evidence/unnamed.json");
 
-    // A result for another candidate does not name its log.
-    let foreign = result.replace(&"a".repeat(40), &"e".repeat(40));
+    // A result for another tree does not name its log; commits are provenance.
+    let foreign = result.replace(&"b".repeat(40), &"e".repeat(40));
     fixture.owner.hold("evidence/ci.json", foreign.as_bytes());
     named("evidence/ci.log");
 
