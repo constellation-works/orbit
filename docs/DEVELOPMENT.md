@@ -8,6 +8,68 @@ last_validated: 2026-09-23
 
 The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the section that matches what you are touching.
 
+## Validation and CI
+
+Before implementation handoff or before-PR review, run these repository gates:
+
+```bash
+make ci-fast           # formatting and script guardrails; runs no Rust tests
+make ci-test-affected  # complete test targets of changed crates and workspace dependents
+make ci-lint           # clippy for production and all targets
+make goldens           # CLI/MCP, CI logs and sandbox profile goldens
+```
+
+`make ci-fast` runs no Rust tests. Its script fixtures and static guardrails
+do not establish that the Rust test suite passes. Focused test filters help
+investigate a change, but do not replace `make ci-test-affected`: an existing
+test can encode behavior the candidate changes even when its new tests pass.
+Hosted CI continues to run the full `make ci` on every PR.
+
+The affected-test gate reads Cargo workspace metadata without compiling. It
+selects each crate with changed paths, then all transitive reverse workspace
+dependencies, including dev, build, renamed, optional and target-specific
+dependencies. For example, changing `crates/orbit-core/` selects `orbit-core`,
+`orbit-cmd`, `orbit-web` and `orbit-cli`. It runs their complete library,
+binary and integration test targets with nextest (or Cargo when nextest is
+unavailable), followed by Cargo doctests. Compilation and execution retain
+the shared [build-budget admission](runbooks/build-budget.md).
+When the temporary directory is inside the checkout, the runner adds that
+directory to `GIT_CEILING_DIRECTORIES` for test execution. This prevents
+non-Git fixtures from discovering the managed checkout above them; existing
+caller boundaries and sandbox permissions are preserved.
+
+By default the comparison base is the merge base of `HEAD` with
+`origin/agent-main`, or local `agent-main` when the remote ref is absent.
+The diff includes committed, staged, unstaged and non-ignored untracked
+paths; moves include both source and destination crates. A reviewer with a
+pinned delivery base must use `CI_TEST_BASE=<base.commit> make ci-test-affected`.
+The same variable accepts an exact revision for manual runs. An unavailable
+base fails the gate rather than silently selecting nothing.
+
+Changes to shared build inputs (`Cargo.toml`, `Cargo.lock`, `.cargo/`,
+`.config/` or the Rust toolchain files), or a removed crate absent from
+current metadata, select every workspace crate. A docs-only diff selects
+nothing and passes without compiling or running Rust tests. Inspect the
+selection with `python3 scripts/ci-test-affected.py --list` (and optionally
+`--base <commit>`).
+
+The owner workspace must include `make ci-test-affected` in
+[`workflow.required_validation_commands`](CONFIG.md). This list
+lives in ignored, per-user `.orbit/config.toml`, not in the source diff.
+Once the owner and execution checkouts have the target, append the command
+to the existing list, preserving every other requirement. For a workspace
+whose only existing command is `make ci-fast`, the resulting setting is:
+
+```toml
+[workflow]
+required_validation_commands = ["make ci-fast", "make ci-test-affected"]
+```
+
+The deterministic candidate-validation step and before-PR review then
+require a passing affected-test record. Distributed review contracts freeze
+the owner's list at admission; existing claims need a fresh admission after
+a policy change.
+
 ## MCP Apps compatibility prototype
 
 See [the isolated reproduction and native desktop probe](mcp-apps-probe.md)

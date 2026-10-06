@@ -660,7 +660,10 @@ older binaries must not reinterpret schema v2 as time-only work.
 Implement tests at the shared domain/store boundaries using existing sibling
 test layouts and fake clocks/providers; add no generic harness. Include end-to-end
 fixtures exercising actual job/task creation and crash recovery, not only due math.
-Required repository gates remain `make ci-fast` and `make ci-lint`; full `make ci`
+Required repository gates are `make ci-fast`, `make ci-test-affected`,
+`make ci-lint` and `make goldens`; `make ci-fast` runs no Rust tests, while
+the affected-test gate covers changed crates and their workspace dependents
+([validation and CI](../../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
 is the PR merge gate. Documentation validation checks metadata, source/relative
 links, index generation, YAML consistency and timeline invariants.
 

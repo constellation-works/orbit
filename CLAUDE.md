@@ -20,7 +20,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 ## Gates
 
-`make ci-fast`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
+`make ci-fast`, `make ci-test-affected`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make ci-fast` checks formatting and repository guardrails; it runs no Rust tests. `make ci-test-affected` runs full test targets for changed crates and their transitive workspace dependents; focused test filters do not replace it. See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci) for base selection and the required-command policy. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
 
 ## Code
 
