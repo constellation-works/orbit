@@ -8,9 +8,11 @@ spec:
     Fulfils one review evidence hold on a Linux owner. The hold must still be
     the in-progress task's latest decision, with only `codeql` requirements
     whose command is `scripts/codeql-rust-local.sh` with its own options and
-    one query selector, and no result yet. The scratch filesystem must have
-    `min_free_mib` free (default 30 GiB). It runs each command, without a
-    shell, at the held commit in a detached checkout it removes again, and
+    one query selector, and no result yet. The Linux owner must have working
+    Bubblewrap namespaces, and the scratch filesystem must have `min_free_mib`
+    free (default 30 GiB). It runs each command, without a shell, at the held
+    commit in a detached checkout confined by Bubblewrap, then removes the
+    checkout. The checkout is the only writable task-controlled path. It
     attaches every run's log. Only when every run completed its analysis with
     no findings does it also attach the `codeql` results, which queues a
     fresh review; it never approves a candidate. Otherwise `reason` names the
@@ -40,8 +42,8 @@ spec:
         type: string
       fulfilled:
         type: boolean
-      # hold_not_current, command_not_allowed,
-      # host_not_linux, disk_insufficient, candidate_unreachable,
+      # hold_not_current, command_not_allowed, not_owner,
+      # host_not_linux, sandbox_unavailable, disk_insufficient, candidate_unreachable,
       # tool_missing, platform_refused, analysis_incomplete, command_failed,
       # timed_out, results_unreadable or findings_reported; null when
       # fulfilled.

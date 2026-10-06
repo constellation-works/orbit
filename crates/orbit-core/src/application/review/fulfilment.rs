@@ -17,8 +17,8 @@
 //! - every requirement is kind `codeql` and names the local CodeQL script
 //!   with nothing but its own options and one query selector, so a hold can
 //!   never make the owner run another command;
-//! - the host is Linux, and the filesystem holding the scratch checkout has
-//!   at least the run's `min_free_mib` free;
+//! - the host is Linux with working Bubblewrap namespaces, and the filesystem
+//!   holding the scratch checkout has at least the run's `min_free_mib` free;
 //! - the held commit, fetched from `origin` when the owner lacks it, has the
 //!   held tree.
 //!
@@ -31,13 +31,18 @@
 //! without an outcome, up to [`MAX_FULFILMENT_ATTEMPTS`].
 
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::{Child, Stdio};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::text::ceil_char_boundary;
 use orbit_engine::DispatchError;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+#[cfg(target_os = "linux")]
+use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process};
 use orbit_store::contracts::JobRunQuery;
+#[cfg(target_os = "linux")]
+use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -94,8 +99,12 @@ pub(crate) enum FulfilmentRefusal {
     HoldNotCurrent,
     /// A requirement names a command other than the CodeQL script's.
     CommandNotAllowed,
+    /// This process is not the task owner that should fulfil its evidence.
+    NotOwner,
     /// This host is not Linux, so no run here can be complete.
     HostNotLinux,
+    /// Bubblewrap is unavailable or cannot create its required namespaces.
+    SandboxUnavailable,
     /// The scratch filesystem has less free space than the run requires.
     DiskInsufficient,
     /// The held commit could not be fetched, or its tree differs.
@@ -122,7 +131,9 @@ impl FulfilmentRefusal {
         match self {
             Self::HoldNotCurrent => "hold_not_current",
             Self::CommandNotAllowed => "command_not_allowed",
+            Self::NotOwner => "not_owner",
             Self::HostNotLinux => "host_not_linux",
+            Self::SandboxUnavailable => "sandbox_unavailable",
             Self::DiskInsufficient => "disk_insufficient",
             Self::CandidateUnreachable => "candidate_unreachable",
             Self::ToolMissing => "tool_missing",
@@ -162,23 +173,172 @@ struct CodeqlRun {
     detail: String,
 }
 
+/// Bubblewrap confines candidate-controlled CodeQL scripts to the disposable
+/// recovery checkout. The checkout is the only writable task-controlled path;
+/// Cargo's ambient download caches are remounted read-only because this script
+/// uses a run-local `CARGO_HOME`.
+#[cfg(target_os = "linux")]
+struct EvidenceCodeqlSandbox {
+    checkout: PathBuf,
+    profile: ResolvedFsProfile,
+}
+
+#[cfg(target_os = "linux")]
+impl EvidenceCodeqlSandbox {
+    fn new(checkout: &Path) -> Self {
+        let checkout = checkout.to_path_buf();
+        let mut modify = vec![checkout.display().to_string()];
+        for cargo_home in cargo_home_candidates() {
+            for relative in ["registry", "git"] {
+                let path = cargo_home.join(relative);
+                if path.exists() {
+                    modify.push(format!("!{}/**", path.display()));
+                }
+            }
+            for relative in [".package-cache", ".package-cache-mutate"] {
+                let path = cargo_home.join(relative);
+                if path.exists() {
+                    modify.push(format!("!{}", path.display()));
+                }
+            }
+        }
+        Self {
+            profile: ResolvedFsProfile {
+                name: "review-evidence-fulfilment".to_string(),
+                read: Vec::new(),
+                modify,
+            },
+            checkout,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cargo_home_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("CARGO_HOME").filter(|home| !home.is_empty()) {
+        candidates.push(PathBuf::from(home));
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        candidates.push(PathBuf::from(home).join(".cargo"));
+    }
+    let current_dir = std::env::current_dir().ok();
+    let mut canonical = std::collections::BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter_map(|path| {
+            let absolute = if path.is_absolute() {
+                path
+            } else {
+                current_dir.as_ref()?.join(path)
+            };
+            let path = absolute.canonicalize().ok()?;
+            path.is_dir().then_some(path)
+        })
+        .filter(|path| canonical.insert(path.clone()))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+impl Sandbox for EvidenceCodeqlSandbox {
+    fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
+        if request.current_dir.as_deref() != Some(self.checkout.to_string_lossy().as_ref()) {
+            return Err(OrbitError::PolicyDenied(
+                "CodeQL must run from its detached evidence checkout".to_string(),
+            ));
+        }
+        if request.program != self.checkout.join(CODEQL_SCRIPT).to_string_lossy().as_ref() {
+            return Err(OrbitError::PolicyDenied(
+                "CodeQL program must be the admitted checkout script".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn spawn(&self, request: &ExecRequest) -> Result<Child, OrbitError> {
+        let environment = match &request.environment_mode {
+            EnvironmentMode::ClearAndSet(environment) => environment.clone(),
+            EnvironmentMode::Inherit => {
+                return Err(OrbitError::PolicyDenied(
+                    "CodeQL sandbox requires an explicit environment".to_string(),
+                ));
+            }
+        };
+        let stdin = match &request.stdin_mode {
+            StdinMode::Inherit => Stdio::inherit(),
+            StdinMode::Null => Stdio::null(),
+            StdinMode::Bytes(_) => Stdio::piped(),
+        };
+        let mut plan = orbit_exec::compile_linux_bwrap_argv(
+            &self.profile,
+            &request.program,
+            &request.args,
+            Some(&self.checkout),
+            true,
+        )?;
+        if !plan.dropped_grants.is_empty() {
+            return Err(OrbitError::PolicyDenied(format!(
+                "CodeQL sandbox could not enforce writable checkout grants: {:?}",
+                plan.dropped_grants
+            )));
+        }
+        if let Some(guard) = plan.take_post_run_guard() {
+            // This profile has only exact subtree rules whose writable roots
+            // exist, so no post-run check is expected. Refuse instead of
+            // silently dropping a future policy boundary.
+            return Err(OrbitError::PolicyDenied(format!(
+                "CodeQL sandbox unexpectedly needs a post-run guard: {guard:?}"
+            )));
+        }
+        let child = orbit_exec::spawn_under_linux_bwrap(orbit_exec::LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &environment,
+            cwd: Some(&self.checkout),
+            stdin,
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        })?;
+        Ok(child)
+    }
+}
+
 impl OrbitRuntime {
     /// Why this runtime fulfils no evidence hold, if it does not: a claimed
     /// worker, a replica checkout, or a host other than Linux.
     pub fn review_evidence_fulfilment_disabled_reason(&self) -> Option<String> {
+        self.fulfilment_disabled_refusal().map(|(_, reason)| reason)
+    }
+
+    fn fulfilment_disabled_refusal(&self) -> Option<(FulfilmentRefusal, String)> {
         if self.worker_invocation().is_some() {
-            return Some("a claimed worker never fulfils evidence; its owner does".to_string());
+            return Some((
+                FulfilmentRefusal::NotOwner,
+                "a claimed worker never fulfils evidence; its owner does".to_string(),
+            ));
         }
         if let Some(owner) = self.coordination_write_owner() {
-            return Some(format!(
-                "this replica checkout does not own its task records; machine '{owner}' \
-                 fulfils their evidence"
+            return Some((
+                FulfilmentRefusal::NotOwner,
+                format!(
+                    "this replica checkout does not own its task records; machine '{owner}' \
+                     fulfils their evidence"
+                ),
             ));
         }
         if std::env::consts::OS != "linux" {
-            return Some(format!(
-                "host platform {} cannot run a complete Rust CodeQL extraction",
-                std::env::consts::OS
+            return Some((
+                FulfilmentRefusal::HostNotLinux,
+                format!(
+                    "host platform {} cannot run a complete Rust CodeQL extraction",
+                    std::env::consts::OS
+                ),
+            ));
+        }
+        let bwrap = orbit_exec::probe_bwrap();
+        if !bwrap.available {
+            return Some((
+                FulfilmentRefusal::SandboxUnavailable,
+                format!("Bubblewrap is unavailable: {}", bwrap.detail),
             ));
         }
         None
@@ -402,8 +562,8 @@ impl OrbitRuntime {
         run_id: &str,
         min_free_mib: u64,
     ) -> Result<Vec<CodeqlRun>, (FulfilmentRefusal, String)> {
-        if let Some(reason) = self.review_evidence_fulfilment_disabled_reason() {
-            return Err((FulfilmentRefusal::HostNotLinux, reason));
+        if let Some((refusal, reason)) = self.fulfilment_disabled_refusal() {
+            return Err((refusal, reason));
         }
         let free = free_mib(&self.paths().state_dir)
             .map_err(|error| (FulfilmentRefusal::DiskInsufficient, error.to_string()))?;
@@ -484,8 +644,9 @@ impl OrbitRuntime {
             "ORBIT_SCRATCH_DIR".to_string(),
             scratch.to_string_lossy().into_owned(),
         ));
-        let outcome = run_process(
-            &ExecRequest {
+        #[cfg(target_os = "linux")]
+        let outcome = {
+            let request = ExecRequest {
                 program: checkout.join(CODEQL_SCRIPT).to_string_lossy().into_owned(),
                 args,
                 current_dir: Some(checkout.to_string_lossy().into_owned()),
@@ -493,9 +654,16 @@ impl OrbitRuntime {
                 stdin_mode: StdinMode::Null,
                 environment_mode: EnvironmentMode::ClearAndSet(env),
                 debug: false,
-            },
-            &NoSandbox,
-        );
+            };
+            run_process(&request, &EvidenceCodeqlSandbox::new(checkout))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let outcome: Result<orbit_types::tool::ExecutionResult, OrbitError> = {
+            let _ = (args, env);
+            Err(OrbitError::PolicyDenied(
+                "CodeQL fulfilment requires Linux Bubblewrap".to_string(),
+            ))
+        };
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {

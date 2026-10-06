@@ -676,7 +676,7 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     std::fs::write(
         &script,
         "#!/usr/bin/env bash\nset -euo pipefail\n\
-         echo \"$(git rev-parse HEAD)\" >>\"$(git rev-parse --path-format=absolute --git-common-dir)/codeql-stub-runs\"\n\
+         echo \"ORBIT_CODEQL_STUB_RUN: $(git rev-parse HEAD)\"\n\
          run_dir=\"$(mktemp -d \"$ORBIT_SCRATCH_DIR/codeql-rust-local.XXXXXX\")\"\n\
          echo \"codeql-rust-local: run directory: $run_dir\" >&2\n\
          printf '{\"runs\":[{\"results\":[]}]}' >\"$run_dir/results.sarif\"\n\
@@ -755,7 +755,8 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
         include_str!("../../../assets/activities/fulfil_review_evidence.yaml"),
     )
     .unwrap();
-    // Any host can run the stub; only the default disk gate is lowered.
+    // Lower only the default disk gate; the owner still requires a working
+    // Bubblewrap namespace before it runs the candidate's stub script.
     std::fs::write(
         resources.join("jobs/review_evidence_fulfilment_pipeline.yaml"),
         include_str!("../../../assets/jobs/review_evidence_fulfilment_pipeline.yaml")
@@ -773,15 +774,55 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     let tick = owner
         .run_review_evidence_fulfilment_tick(Utc::now())
         .unwrap();
+    if !orbit_exec::probe_bwrap().available {
+        assert!(tick.dispatched.is_empty(), "{tick:?}");
+        assert!(
+            tick.skipped
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Bubblewrap")),
+            "the owner defers until Bubblewrap namespaces work: {tick:?}"
+        );
+        assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+        assert_eq!(
+            leaf.pair
+                .wire
+                .owner
+                .get_task_history(&leaf.task)
+                .unwrap()
+                .last()
+                .unwrap()
+                .event,
+            "review_awaiting_evidence"
+        );
+        return;
+    }
     assert_eq!(tick.dispatched.len(), 1, "{tick:?}");
     let executed = owner.execute_pipeline_run_worker(&tick.dispatched[0].1);
     std::fs::write(&released, "").unwrap();
     executed.unwrap();
 
-    assert_eq!(
-        std::fs::read_to_string(owner_repo.join(".git/codeql-stub-runs")).unwrap(),
-        format!("{}\n", hold.candidate.commit),
-        "the owner ran the check once, at the fetched held commit"
+    let evidence = hold
+        .requirements
+        .first()
+        .expect("the held CodeQL requirement");
+    let log_path = format!(
+        "{}.log.json",
+        evidence
+            .artifact
+            .strip_suffix(".json")
+            .expect("the evidence artifact is JSON")
+    );
+    let log = owner
+        .get_task_artifact(&leaf.task, &log_path)
+        .unwrap()
+        .expect("the owner's run log is attached");
+    let log: serde_json::Value = serde_json::from_slice(&log.content).unwrap();
+    assert_eq!(log["tested_head"], hold.candidate.commit);
+    assert!(
+        log["stdout"].as_str().is_some_and(|stdout| stdout
+            .lines()
+            .any(|line| { line == format!("ORBIT_CODEQL_STUB_RUN: {}", hold.candidate.commit) })),
+        "the owner ran the check once at the fetched held commit: {log}"
     );
     assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
     assert_eq!(

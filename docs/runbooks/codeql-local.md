@@ -14,8 +14,11 @@ semantic analysis; a clean query against that database is invalid evidence.
 
 ## Prerequisites
 
-Use an existing CodeQL bundle (CLI plus Rust query packs), `rustup`, and Cargo
-proxies on `PATH`. The script does not install CodeQL or global toolchains.
+Use an existing CodeQL bundle (CLI plus Rust query packs), `rustup`, Cargo
+proxies on `PATH`, and a working Bubblewrap installation that can create its
+Linux namespaces. The owner-side fulfilment runs candidate-controlled scripts
+inside Bubblewrap, with the detached evidence checkout as the only writable
+task-controlled path. The script does not install CodeQL or global toolchains.
 Rust downloads and any Cargo dependency fetches use only the executor's granted
 network access. Start in the checkout being validated.
 
@@ -150,7 +153,11 @@ yet, one run at a time. A claimed leaf's hold reaches the owner too: the leaf
 pushes the held candidate to `orbit-evidence/<branch>` on `origin`, and its
 settlement keeps the owner's task in progress under the hold.
 
-The run takes these steps:
+The owner run requires working Bubblewrap namespaces. Its sweep defers when
+Bubblewrap is unavailable, so the hold does not spend an attempt. Within the
+Bubblewrap namespace, the host filesystem is read-only and the detached
+evidence checkout is the only writable task-controlled path. The run takes
+these steps:
 
 1. It re-checks that the hold is current.
 2. It admits only this script, with nothing but `--ram`, `--toolchain` and one
@@ -159,9 +166,10 @@ The run takes these steps:
 3. It defers while the state directory's filesystem has less than the job's
    `min_free_mib` free (30 GiB by default).
 4. It fetches the held commit from `origin` when needed and checks its tree.
-5. It runs the script without a shell, in a detached checkout of the held
-   commit, with `ORBIT_SCRATCH_DIR` inside that checkout. The checkout is
-   removed afterwards, run directory included.
+5. It runs the script without a shell, through Bubblewrap in a detached
+   checkout of the held commit, with `ORBIT_SCRATCH_DIR` inside that checkout.
+   Host Cargo download caches are read-only because the script uses a run-local
+   `CARGO_HOME`. The checkout is removed afterwards, run directory included.
 
 The result is `passed` only when the script exits zero, reports completed
 analysis, and its `results.sarif` has runs and no results. The run then
@@ -184,6 +192,8 @@ reason:
 | `command_not_allowed` | The command is not this script with admitted options. |
 | `candidate_unreachable` | The held commit could not be fetched, or its tree differs. |
 | `disk_insufficient` | The free space is below `min_free_mib`. |
+| `sandbox_unavailable` | Bubblewrap could not provide the required Linux namespace. |
+| `not_owner` | This process is a claimed worker or replica, not the task owner. |
 | `hold_not_current` | The hold was superseded before the run. |
 
 `disk_insufficient` and `candidate_unreachable` are retried on later ticks, as

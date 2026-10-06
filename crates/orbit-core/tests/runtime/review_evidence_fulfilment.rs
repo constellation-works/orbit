@@ -4,7 +4,7 @@
 //!
 //! The candidate carries a stub `scripts/codeql-rust-local.sh` that speaks
 //! the real script's output contract and records each run's `HEAD` and
-//! arguments in the fixture repository's Git directory.
+//! arguments in its captured output.
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -59,7 +59,7 @@ echo "codeql-rust-local: analysis completed; inspect rule and affected locations
     format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
-echo "$(git rev-parse HEAD) $*" >>"$(git rev-parse --path-format=absolute --git-common-dir)/codeql-stub-runs"
+echo "ORBIT_CODEQL_STUB_RUN: $(git rev-parse HEAD) $*"
 run_dir="$(mktemp -d "${{ORBIT_SCRATCH_DIR:?}}/codeql-rust-local.XXXXXX")"
 echo "codeql-rust-local: run directory: $run_dir" >&2
 {outcome}
@@ -183,9 +183,17 @@ fn fulfil_once(fixture: &Fixture) -> (String, Value) {
 }
 
 fn stub_runs(fixture: &Fixture) -> Vec<String> {
-    std::fs::read_to_string(fixture.repo.join(".git/codeql-stub-runs"))
-        .map(|runs| runs.lines().map(str::to_string).collect())
-        .unwrap_or_default()
+    artifact(fixture, EVIDENCE_LOG)
+        .and_then(|log| log["stdout"].as_str().map(str::to_string))
+        .into_iter()
+        .flat_map(|stdout| {
+            stdout
+                .lines()
+                .filter_map(|line| line.strip_prefix("ORBIT_CODEQL_STUB_RUN: "))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn artifact(fixture: &Fixture, path: &str) -> Option<Value> {
@@ -255,6 +263,23 @@ fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() 
     }
     let (fixture, hold) = held(Stub::Clean, CODEQL);
     configure_job(&fixture, 1, None);
+
+    if !orbit_exec::probe_bwrap().available {
+        let deferred = fixture
+            .runtime
+            .run_review_evidence_fulfilment_tick(Utc::now())
+            .unwrap();
+        assert!(deferred.dispatched.is_empty(), "{deferred:?}");
+        assert!(
+            deferred
+                .skipped
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Bubblewrap")),
+            "the owner must defer until Bubblewrap namespaces work: {deferred:?}"
+        );
+        assert_still_held(&fixture, "sandbox unavailable");
+        return;
+    }
 
     let tick = fixture
         .runtime
@@ -344,6 +369,9 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
     ) {
         return;
     }
+    if !orbit_exec::probe_bwrap().available {
+        return;
+    }
     let unadmitted = "scripts/codeql-rust-local.sh codeql/rust-queries:x;touch owned";
     for (stub, command, reason, ran) in [
         (Stub::Incomplete, CODEQL, "analysis_incomplete", true),
@@ -382,6 +410,9 @@ fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_time
     if !super::dispatch_admission::isolated(
         "review_evidence_fulfilment::fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times",
     ) {
+        return;
+    }
+    if !orbit_exec::probe_bwrap().available {
         return;
     }
     let (fixture, _) = held(Stub::Clean, CODEQL);

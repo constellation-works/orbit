@@ -5,8 +5,8 @@
 # Trigger
 # - A Linux owner's sweep tick submits one run per in-progress task whose
 #   latest decision is an evidence hold with only `codeql` requirements and
-#   no matching result yet. Followers, worker processes and other platforms
-#   never submit.
+#   no matching result yet. It defers when Bubblewrap namespaces are
+#   unavailable. Followers, worker processes and other platforms never submit.
 # - Admission is keyed by `attempt_key` (the hold's attempt, candidate and
 #   attempt number), and at most one run is active at once. A hold gets one
 #   run, plus up to two more only after a refusal that can clear on its own
@@ -16,10 +16,11 @@
 # Step
 # - `fulfil` re-checks the hold, the host and free disk, fetches the held
 #   commit from origin when needed, and runs each named command at it in a
-#   detached checkout it removes again. It attaches each run's log, and the
-#   `codeql` results only when every run completed with no findings; receipt
-#   of every result queues a fresh review. A refusal leaves the hold in place
-#   with a typed reason. Every attempt is audited as
+#   detached checkout confined by Bubblewrap. The host filesystem is
+#   read-only and the checkout is the only writable task-controlled path. It
+#   attaches each run's log, and the `codeql` results only when every run
+#   completed with no findings; receipt of every result queues a fresh review.
+#   A refusal leaves the hold in place with a typed reason. Every attempt is audited as
 #   `review.evidence_fulfilment` and commented on the task.
 #
 # Disk: `min_free_mib` is the free space the state directory's filesystem
