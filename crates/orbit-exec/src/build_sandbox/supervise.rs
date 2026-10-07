@@ -243,21 +243,25 @@ fn exit_end(status: std::process::ExitStatus) -> BuildPhaseEnd {
 }
 
 /// Whether the apparent size of everything under `root` exceeds `cap`,
-/// without following links. Stops counting once the cap is passed.
+/// without following links. Stops counting once the cap is passed, and
+/// treats traversal errors as exceeding the cap because the size is unknown.
 pub(super) fn tree_exceeds(root: &Path, cap: u64) -> bool {
     let mut total: u64 = 0;
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+            return true;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return true;
+            };
             // Do not follow a symlink out of the build directory (or back to
             // an ancestor). Besides reading host metadata, a self-referential
             // directory link would make this traversal loop forever and
             // defeat the phase timeout.
             let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
-                continue;
+                return true;
             };
             let file_type = metadata.file_type();
             if file_type.is_dir() {

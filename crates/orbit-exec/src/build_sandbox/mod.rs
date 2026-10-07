@@ -94,7 +94,8 @@ pub enum BuildPhaseEnd {
     Signaled(i32),
     /// The phase outlived its timeout and its process group was killed.
     TimedOut,
-    /// The build directory outgrew its cap and the process group was killed.
+    /// The build directory exceeded its cap or could not be fully measured;
+    /// the phase's process group was killed.
     BuildDirCapExceeded,
 }
 
