@@ -251,6 +251,9 @@ impl OwnerLocal {
         )
         .expect("owner bound to a local-mode workspace")
         .with_automation_machine_identity(Some(OWNER.into()));
+        // No provider runs here, but the drain's window preflight still
+        // refuses a host whose crews have no launchable provider.
+        launchable_providers(&owner);
         let wire = Arc::new(Wire {
             owner: owner.clone(),
             caller: OWNER.to_string(),

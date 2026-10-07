@@ -550,15 +550,7 @@ impl Pair {
             follower.sqlite_store().unwrap(),
             follower.workspace_id().unwrap(),
         );
-        let providers = follower
-            .configured_crew_registry_projection()
-            .crews
-            .into_iter()
-            .map(|crew| crew.provider)
-            .collect::<BTreeSet<_>>();
-        for provider in providers {
-            follower_cli(&follower, &provider, "sh");
-        }
+        launchable_providers(&follower);
         Self {
             _root: root,
             wire,
@@ -823,7 +815,21 @@ impl Pair {
     }
 }
 
-/// Register `provider`'s executor on `runtime` as launching `command`.
+/// Give each configured crew provider a local shell stand-in so fixture
+/// preflight does not depend on provider CLIs installed on the host.
+fn launchable_providers(runtime: &OrbitRuntime) {
+    let providers = runtime
+        .configured_crew_registry_projection()
+        .crews
+        .into_iter()
+        .map(|crew| crew.provider)
+        .collect::<BTreeSet<_>>();
+    for provider in providers {
+        follower_cli(runtime, &provider, "sh");
+    }
+}
+
+/// Point `provider` at `command`, as an operator's executor definition does.
 fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
     runtime
         .upsert_executor_def(&ExecutorDef {
