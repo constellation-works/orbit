@@ -18,7 +18,7 @@ template:
     - Use the registered Orbit tool surface. List area reviews already in flight with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["full-code-review","no-diff-expected"],"model":"<agent-family>"}'`.
       File an area review with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"required_tools":["orbit.search","orbit.task.add"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `full-code-review` and `no-diff-expected`.
       Never tag one `code-review`: completed `code-review` chores are the
@@ -108,6 +108,9 @@ template:
   tags:
   - full-code-review
   - no-diff-expected
+  required_tools:
+  - orbit.task.add
+  - orbit.task.list
   priority: medium
   complexity: medium
   # The portable system lane is seeded per machine and compatibility-aliased
