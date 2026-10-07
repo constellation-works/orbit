@@ -46,6 +46,17 @@ pinned delivery base must use `CI_TEST_BASE=<base.commit> make ci-test-affected`
 The same variable accepts an exact revision for manual runs. An unavailable
 base fails the gate rather than silently selecting nothing.
 
+Cargo metadata cannot see files a test reads from outside its own crate. Those
+edges are declared in `FILE_READERS` in `scripts/ci-test-affected.py` as a path
+prefix and the crates whose tests read it; a changed path under the prefix
+selects those crates and their reverse dependents. Today this covers
+`crates/orbit-core/assets/jobs/` and `assets/activities/` (read by
+`orbit-engine` and `orbit-cli` tests, though `orbit-core` depends on
+`orbit-engine`, not the reverse), `plugin/hooks/` and the root `server.json`
+(read by `orbit-cli` tests). When a test starts reading another crate's or a
+repository-root file, add its prefix there; the entry is not detected
+automatically. A declared crate absent from current metadata fails the gate.
+
 Changes to shared build inputs (`Cargo.toml`, `Cargo.lock`, `.cargo/`,
 `.config/` or the Rust toolchain files), or a removed crate absent from
 current metadata, select every workspace crate. A docs-only diff selects

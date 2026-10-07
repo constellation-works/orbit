@@ -33,9 +33,10 @@ class AffectedTestGateTests(unittest.TestCase):
             self.env.pop(name, None)
         packages = []
         # Renamed, build and dev edges must all contribute to the transitive
-        # reverse closure: core -> cmd -> web -> cli; tools stays independent.
+        # reverse closure: engine -> core -> cmd -> web -> cli; tools stays independent.
         dependencies = {
-            "orbit-core": [],
+            "orbit-engine": [],
+            "orbit-core": [("orbit-engine", None, None)],
             "orbit-cmd": [("orbit-core", None, "renamed_core")],
             "orbit-web": [("orbit-cmd", "build", None)],
             "orbit-cli": [("orbit-web", "dev", None)],
@@ -58,6 +59,11 @@ class AffectedTestGateTests(unittest.TestCase):
         (self.root / ".gitignore").write_text("bin/\ncargo.log\nmetadata.json\n.scratch/\n")
         (self.root / "docs").mkdir()
         (self.root / "docs/guide.md").write_text("Fixture docs\n")
+        for path in ("crates/orbit-core/assets/jobs/pipeline.yaml",
+                     "crates/orbit-core/assets/activities/examples/reference.yaml",
+                     "plugin/hooks/check.sh", "server.json"):
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_text("fixture\n")
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, subprocess, sys
 arguments = sys.argv[1:]
@@ -144,9 +150,38 @@ os.execvp(sys.argv[2], sys.argv[2:])
         (self.root / "crates/orbit-core/src/lib.rs").unlink()
         self.assertEqual(self.selected(), self.core_dependents)
 
+    def test_cross_crate_asset_reads_select_the_reading_crate_and_its_dependents(self):
+        # orbit-engine's tests read orbit-core's assets, though core depends on engine.
+        engine_dependents = ["orbit-cli", "orbit-cmd", "orbit-core", "orbit-engine", "orbit-web"]
+        for path in ("crates/orbit-core/assets/jobs/pipeline.yaml",
+                     "crates/orbit-core/assets/activities/examples/reference.yaml"):
+            with self.subTest(path=path):
+                (self.root / path).write_text("changed\n")
+                self.assertEqual(self.selected(), engine_dependents)
+                self.git("checkout", "--", path)
+        self.assertEqual(self.selected(), [])
+
+    def test_repository_root_file_reads_select_the_reading_crate(self):
+        for path in ("plugin/hooks/check.sh", "server.json"):
+            with self.subTest(path=path):
+                (self.root / path).write_text("changed\n")
+                self.assertEqual(self.selected(), ["orbit-cli"])
+                self.git("checkout", "--", path)
+
+    def test_unknown_declared_reader_fails_closed(self):
+        metadata = json.loads(self.metadata.read_text())
+        metadata["packages"] = [package for package in metadata["packages"]
+                                if package["name"] != "orbit-engine"]
+        metadata["workspace_members"].remove("orbit-engine")
+        self.metadata.write_text(json.dumps(metadata))
+        (self.root / "server.json").write_text("changed\n")
+        self.assertEqual(self.selected(), ["orbit-cli"])
+        (self.root / "crates/orbit-core/assets/jobs/pipeline.yaml").write_text("changed\n")
+        self.assertNotEqual(self.gate("--list").returncode, 0)
+
     def test_move_between_crates_selects_both_sides(self):
         self.git("mv", "crates/orbit-tools/src/lib.rs", "crates/orbit-core/src/moved.rs")
-        self.assertEqual(self.selected(), self.names)
+        self.assertEqual(self.selected(), sorted({*self.core_dependents, "orbit-tools"}))
 
     def test_shared_build_inputs_and_removed_members_select_the_workspace(self):
         for path in ("Cargo.toml", ".cargo/config.toml", "crates/removed/src/lib.rs"):
