@@ -815,9 +815,8 @@ impl Pair {
     }
 }
 
-/// Register `provider`'s executor on `runtime` as launching `command`.
-/// Make every provider `runtime` configures launchable, so its window
-/// preflight runs every crew whether or not the host has the provider CLIs.
+/// Give each configured crew provider a local shell stand-in so fixture
+/// preflight does not depend on provider CLIs installed on the host.
 fn launchable_providers(runtime: &OrbitRuntime) {
     let providers = runtime
         .configured_crew_registry_projection()
@@ -830,6 +829,7 @@ fn launchable_providers(runtime: &OrbitRuntime) {
     }
 }
 
+/// Point `provider` at `command`, as an operator's executor definition does.
 fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
     runtime
         .upsert_executor_def(&ExecutorDef {
