@@ -11,14 +11,14 @@ doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-config/src/registry/settings.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11009, ORB-14448, ORB-14449]
+related_artifacts: [ORB-11009, ORB-14448, ORB-14449, ORB-14451]
 ---
 
 # Host Registry — Overview
 
 The live host-registry feature is a machine-local identity and workspace catalog. It tells an Orbit process who the accepting machine is, which logical workspaces this installation knows, and which local checkout may be opened for each workspace.
 
-It is not a fleet router. Two operator-facing additions are specified but not yet implemented. First, the operator registers remote hosts with `orbit host add` into a CLI-owned host file that stores only identity the host cannot change ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Second, task ids route to the host their prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
+It is not a fleet router. Two operator-facing additions are specified but not yet implemented. First, the operator registers remote hosts with `orbit host add` into a CLI-owned host file that stores only identity the host cannot change. The dashboard's Settings › Hosts view manages the same file ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448], [ORB-14451]). Second, task ids route to the host their prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
 
 ## Ownership
 

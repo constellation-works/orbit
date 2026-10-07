@@ -1,6 +1,6 @@
 ---
 type: design
-summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, live identity probe, migration from mcp-destinations.toml"
+summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, migration from mcp-destinations.toml"
 last_validated: 2026-10-07
 title: Spec — Host commands
 owner: opus
@@ -8,7 +8,7 @@ status: Draft
 feature: host-registry
 tags: [host-registry, federated-mcp, distributed-drain, spec]
 related_features: [host-registry, federated-mcp, distributed-drain]
-related_artifacts: [ORB-14448, ORB-14449, ORB-14447, ORB-14261, ORB-12725]
+related_artifacts: [ORB-14448, ORB-14449, ORB-14451, ORB-14447, ORB-14261, ORB-12725]
 ---
 
 # Spec: Host commands
@@ -19,7 +19,9 @@ replica worktree GC and task-prefix routing ([host-routing](./host-routing.md)) 
 An entry stores the operator's name for the host, its SSH target, and two facts that never
 change on that host: `machine_id` and `task_prefix`. Anything that can change, such as
 reachability, Orbit version, pull protocol or workspaces, is read live from the host when
-asked and never persisted. Status: specified; implementation is [ORB-14448].
+asked and never persisted. Operators manage entries from the CLI or from the dashboard's
+Settings › Hosts view. Status: specified; implementation is [ORB-14448] (CLI) and
+[ORB-14451] (dashboard).
 
 ## Why This Exists
 
@@ -168,6 +170,55 @@ running `orbit run auto --pull` drain targets it. The error lists the dependents
 removes the entry anyway and prints which dependents will lose their route. Removing the
 local host is `host_is_local`.
 
+## Dashboard
+
+Orbit Web manages the serving host's host file with the same operations as the CLI.
+Status: specified; implementation is [ORB-14451], which depends on [ORB-14448].
+
+### API
+
+| Route | Effect |
+|---|---|
+| `GET /api/hosts[?probe=false]` | Same rows and JSON shape as `orbit host list --json` |
+| `GET /api/hosts/:host` | `orbit host show --json`, dependents included |
+| `POST /api/hosts` with `{ssh, name?}` | `orbit host add` |
+| `PATCH /api/hosts/:host` with `{name}` | `orbit host rename` |
+| `DELETE /api/hosts/:host[?force=true]` | `orbit host remove [--force]` |
+
+- Each route calls the orbit-registry operation the CLI calls. There is no second
+  implementation of validation, migration or writes, and the typed errors are the CLI's.
+- Mutating routes pass the existing origin guard (`api/origin.rs`) like every other dashboard
+  mutation. The guard mitigates CSRF and DNS rebinding. Access control remains the loopback
+  bind plus the SSH tunnel.
+- The `ssh` value is checked by the host-file `ssh` validator before any process starts: a
+  leading `-`, whitespace and shell metacharacters are refused. The target is passed after
+  `--`. No route accepts a command or extra ssh options.
+- Probes run off the async runtime, each within the federated probe budget, so one
+  unreachable host never stalls other panels.
+
+### View
+
+The view is Settings › Hosts (`#config/hosts`).
+
+- It shows the local host first, labelled as the host this dashboard edits, followed by every
+  entry. Each row has reachability, version, protocol, the skew flag and workspace roles. An
+  unreachable host shows its error class and is never hidden.
+- Adding is an inline form (SSH target, optional name), and renaming is an inline editor.
+  Removing asks for confirmation inline. The dashboard has no modal dialogs.
+- A remove refused with `host_in_use` lists the dependents and offers an explicit force
+  confirmation.
+- Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
+
+### Freshness
+
+The dashboard rereads the host file when it changes, using the generation-swap rule of the
+registry snapshot ([2_design.md](../2_design.md) §6). A host added from the CLI appears on the
+next refresh without a restart. A host file that fails to load shows an error banner on the
+view, and the last valid snapshot stays in use, as the registry snapshot does.
+
+A dashboard reached through `orbit web connect <host>` edits that host's host file, not the
+caller's.
+
 ## Consumers
 
 - **Federated serve.** The destinations are the host file's entries (`ssh`, `machine_id`)
@@ -233,4 +284,4 @@ unrelated to this file.
 ## Agent Signature
 
 Specified by opus during on-call ORB-14441 at Daniel's direction (2026-10-07), for
-implementation in [ORB-14448].
+implementation in [ORB-14448] and [ORB-14451] (dashboard).
