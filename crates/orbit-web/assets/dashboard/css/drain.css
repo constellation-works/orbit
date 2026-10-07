@@ -30,6 +30,8 @@
 .global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: var(--radius); background: var(--bg); color: var(--state-running); padding: 5px 8px; cursor: pointer; font: 600 12px var(--font-sans); }
 .global-drain-state[hidden] { display: none; }
 .global-drain-state[data-drain-state="winding_down"] { color: var(--priority-medium); border-color: var(--priority-medium); }
+.global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); }
+.dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
 .global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #auto-drain-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
 

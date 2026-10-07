@@ -10,6 +10,9 @@ let metricsError = false;
 let marker = 'first';
 let taskPaging = false;
 let terminalRunFixture = false;
+let liveDrain = false;
+let readinessReads = 0;
+let crewReads = 0;
 let summaryReads = 0;
 let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
@@ -43,6 +46,22 @@ function fixture(url) {
         next_cursor: page < 2 ? `page-${page + 1}` : null,
       };
     }
+    case '/api/tasks/all': return list([{
+      id: 'AGGREGATE-1', title: 'Aggregate crew fixture', status: 'in-progress', priority: 'medium',
+      crew: 'opus', resolved_crew: 'opus', workspace_id: 'one', workspace_name: 'one',
+    }]);
+    case '/api/crews': return { default_crew: 'opus', crews: [{ name: 'opus' }] };
+    case '/api/workflows/auto/readiness': return {
+      capacity: {
+        active_leaf_runs: liveDrain ? 1 : 0, max_active_leaf_runs: 4, free_slots: liveDrain ? 3 : 4,
+        drain_run_id: liveDrain ? 'jrun-live-fixture' : null,
+        drain_phase: liveDrain ? 'draining' : 'idle',
+        drain_status_run_id: liveDrain ? 'jrun-live-fixture' : null,
+        ends_at: liveDrain ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null,
+        running_admitted_workers: liveDrain ? 1 : 0, admitted_workers: liveDrain ? 1 : 0,
+      },
+      tasks: [],
+    };
     case '/api/job-runs': {
       runQueries.push(url.searchParams.get('state'));
       if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
@@ -75,6 +94,8 @@ function fixture(url) {
 }
 globalThis.fetch = async path => {
   const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/workflows/auto/readiness') readinessReads += 1;
+  if (url.pathname === '/api/crews') crewReads += 1;
   if (networkDown) throw new TypeError('Fixture network unavailable');
   if (metricsError && url.pathname === '/api/diagnostics/metrics') return response({ error: 'Metrics fixture failure' }, 500);
   const payload = fixture(url);
@@ -83,7 +104,7 @@ globalThis.fetch = async path => {
 };
 await import('./app.js');
 await settle();
-const { setWorkspace } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace } = await import('./js/common.js');
 const { setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -98,6 +119,38 @@ check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty')
 for (const request of pendingReads.splice(0)) release(request, list([]));
 await settle();
 check(text('tasks-body').includes('No tasks'), 'successful empty Tasks produces empty state');
+
+// The aggregate list carries each task's crew, but there is no single
+// workspace crew registry to validate it against or edit through.
+heldPath = null;
+liveDrain = true;
+refresh();
+await settle();
+check(node('global-drain-state').textContent.includes('Draining'), 'a live workspace drain appears before switching to aggregate view');
+const selectedWorkspaceReadinessReads = readinessReads;
+const selectedWorkspaceCrewReads = crewReads;
+setWorkspace(null);
+persistScopeToUrl();
+check(new URL(window.location.href).searchParams.get('workspace') === 'all', 'aggregate scenario is represented by workspace=all');
+setActiveTab('tasks');
+await settle();
+refresh();
+await settle();
+const aggregateCrewRow = node('tasks-body').querySelector('[data-key="task-AGGREGATE-1"]');
+const aggregateCrewCell = aggregateCrewRow?.querySelector('.crew-cell');
+check(aggregateCrewCell?.textContent === 'opus', `aggregate crew remains visible without a missing label: ${aggregateCrewCell?.textContent}`);
+check(!aggregateCrewCell.querySelector('.task-crew-select'), 'aggregate crew cell does not offer a workspace-scoped edit');
+const aggregateDrainIndicator = node('global-drain-state');
+check(!aggregateDrainIndicator.hidden && aggregateDrainIndicator.textContent.includes('Per-workspace drain status'), 'aggregate header explains that drain status is workspace-scoped');
+check(aggregateDrainIndicator.getAttribute('aria-label').includes('Select a workspace'), 'aggregate drain indicator explains how to inspect live status');
+check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
+check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
+liveDrain = false;
+setWorkspace('one');
+persistScopeToUrl();
+await settle();
+refresh();
+await settle();
 
 const surfaces = [
   { route: 'tasks', body: 'tasks-body', path: '/api/tasks', empty: list([]), emptyText: 'No tasks' },
