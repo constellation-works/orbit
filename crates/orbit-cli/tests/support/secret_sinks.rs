@@ -6,7 +6,9 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use crate::child_guard::ChildGuard;
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
@@ -297,7 +299,7 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
     test_env::clear_inherited_authority(|name| {
         server_cmd.env_remove(name);
     });
-    let mut server = Process(
+    let mut server = ChildGuard::new(
         server_cmd
             .current_dir(&fixture.work)
             .env("HOME", &fixture.home)
@@ -311,7 +313,7 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while TcpStream::connect(("127.0.0.1", port)).is_err() {
         assert!(
-            server.0.try_wait().unwrap().is_none(),
+            server.try_wait().unwrap().is_none(),
             "dashboard exited before readiness"
         );
         assert!(
@@ -394,14 +396,6 @@ fn scan_files(sink: &str, root: &Path, leaks: &mut Vec<String>) -> usize {
         }
     }
     files
-}
-
-struct Process(Child);
-impl Drop for Process {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 fn get(port: u16, path: &str) -> Value {

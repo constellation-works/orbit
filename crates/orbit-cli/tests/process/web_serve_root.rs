@@ -19,6 +19,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+
+use crate::child_guard::ChildGuard;
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
@@ -154,7 +156,7 @@ fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
     );
 
     for host in ["127.0.0.1", "::1"] {
-        let mut server = DashboardProcess(
+        let mut server = ChildGuard::new(
             base_command(temp.path(), &home)
                 .args(["web", "serve", "--host", host, "--port", "0", "--no-open"])
                 .stdout(Stdio::piped())
@@ -162,7 +164,7 @@ fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
                 .spawn()
                 .expect("spawn orbit web serve"),
         );
-        let stdout = server.0.stdout.take().expect("piped stdout");
+        let stdout = server.stdout.take().expect("piped stdout");
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let reader = std::thread::spawn(move || {
             let mut announcement = String::new();
@@ -246,15 +248,6 @@ fn web_serve_rejects_hosts_outside_the_host_gate() {
 
 // ── fixture helpers ───────────────────────────────────────────────────────
 
-/// Reap the dashboard even when an announcement or HTTP assertion fails.
-struct DashboardProcess(Child);
-
-impl Drop for DashboardProcess {
-    fn drop(&mut self) {
-        stop(&mut self.0);
-    }
-}
-
 fn base_command(cwd: &Path, home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
     // The dashboard serves whichever registry it resolves; an inherited
@@ -300,7 +293,7 @@ fn init_git_repo(repo: &Path) {
     }
 }
 
-fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>, port: u16) -> Child {
+fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>, port: u16) -> ChildGuard {
     let mut command = base_command(cwd, home);
     if let Some(root) = root {
         command.args(["--root", root]);
@@ -310,6 +303,7 @@ fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>, port: u16) -> Ch
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn orbit web serve")
 }
 

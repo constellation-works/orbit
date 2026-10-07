@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/child_guard.rs"]
+mod child_guard;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "../support/generation_fixture.rs"]
 mod generation_fixture;

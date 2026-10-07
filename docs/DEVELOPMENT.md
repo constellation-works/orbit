@@ -452,6 +452,18 @@ constraint, and the test either returns early or asserts the fail-safe
 branch, logging `reason` so the choice is attributable from the log. Never
 weaken the assertion taken when the probe *is* available.
 
+### Long-lived CLI fixture cleanup
+
+Every dashboard and persistent MCP child in `crates/orbit-cli/tests` must be
+owned immediately after spawn by `tests/support/child_guard.rs`, before pipe
+extraction or readiness assertions. The shared `ChildGuard` sends SIGTERM on
+Unix, allows two seconds for exit, then force-kills and reaps the child. It
+also reaps on assertion unwinds and retains the original child PID across
+executable handover. Explicit shutdown tests can still signal and wait on the
+child; dropping an already-reaped guard does not signal that PID again.
+The process integration suite forces assertion failures against listening
+and handed-over dashboards, then verifies PID exit and port closure.
+
 ### Process fixture readiness
 
 Process fixtures wait for observable readiness with a generous startup ceiling;

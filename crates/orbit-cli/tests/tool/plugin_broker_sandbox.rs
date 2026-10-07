@@ -336,7 +336,9 @@ mod authority {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::process::{Child, ChildStdin, Output, Stdio};
+    use std::process::{ChildStdin, Output, Stdio};
+
+    use crate::child_guard::ChildGuard;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -1000,7 +1002,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
 
     /// `orbit mcp serve` for one test, killed and reaped on drop.
     struct McpServer {
-        child: Child,
+        _child: ChildGuard,
         stdin: ChildStdin,
         lines: mpsc::Receiver<String>,
         next_id: u64,
@@ -1024,6 +1026,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
+                .map(ChildGuard::new)
                 .expect("start the MCP server");
             let stdin = child.stdin.take().expect("server stdin");
             let stdout = child.stdout.take().expect("server stdout");
@@ -1036,7 +1039,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
                 }
             });
             let mut server = Self {
-                child,
+                _child: child,
                 stdin,
                 lines,
                 next_id: 0,
@@ -1082,13 +1085,6 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
 
         fn call(&mut self, tool: &str) -> Value {
             self.request("tools/call", json!({ "name": tool, "arguments": {} }))
-        }
-    }
-
-    impl Drop for McpServer {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
         }
     }
 }
