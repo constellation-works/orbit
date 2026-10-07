@@ -39,6 +39,9 @@ pub struct TaskCreateParams {
     pub external_refs: Vec<ExternalRef>,
     pub source_task_id: Option<String>,
     pub crew: Option<String>,
+    /// Trusted assignment provenance, absent on legacy creation contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     pub orchestrator: Option<String>,
     pub comments: Vec<TaskComment>,
     /// Exact canonical `context_files` selectors an operator surface accepted
@@ -80,6 +83,8 @@ pub struct TaskDocumentUpdateParams {
     /// Trusted link location supplied with the run binding, never tool input.
     pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
+    /// Assignment provenance updated with the selected crew.
+    pub crew_source: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
     /// Exact canonical selectors of the replacement `context_files` an
     /// operator surface newly authorized for creation. The task's creation
@@ -116,6 +121,12 @@ pub struct AtomicTaskMutationParams {
     pub expected_context_files: Vec<String>,
     pub expected_status: TaskStatus,
     pub expected_complexity: Option<TaskComplexity>,
+    /// Crew observed under the application task lock, guarded at publication.
+    pub expected_crew: Option<String>,
+    pub expected_crew_source: Option<String>,
+    /// Replacement selection, committed with the complexity and history.
+    pub crew: Option<String>,
+    pub crew_source: Option<String>,
     /// Identity of the creation grant the caller validated against
     /// (`ContextCreationState::identity`); a different grant at the write
     /// boundary makes the mutation stale.
@@ -624,6 +635,8 @@ pub struct DesktopTaskMutationParams {
     pub payload_digest: String,
     pub expected_revision: String,
     pub fields: orbit_types::desktop::DesktopTaskFields,
+    /// Trusted assignment provenance from application validation.
+    pub crew_source: Option<Option<String>>,
     pub comment: Option<String>,
     pub status: Option<TaskStatus>,
 }

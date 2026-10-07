@@ -184,6 +184,8 @@ pub(super) fn apply_task(
                 .operator_requirements(&current, &snapshot.validation_tool_warnings);
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
+            let crew_redraw_history =
+                runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
             let operator_hold = (!requirements.is_empty()).then(|| {
                 crate::application::task::OperatorValidationHold::new(&assessed, requirements)
@@ -194,6 +196,10 @@ pub(super) fn apply_task(
                 expected_context_files: snapshot.context_files.clone(),
                 expected_status: snapshot.status,
                 expected_complexity: snapshot.complexity,
+                expected_crew: current.crew.clone(),
+                expected_crew_source: current.crew_source.clone(),
+                crew: assessed.crew.clone(),
+                crew_source: assessed.crew_source.clone(),
                 expected_context_creation: snapshot.context_creation_identity.clone(),
                 context_files: task.after.clone(),
                 status: target_status,
@@ -205,6 +211,7 @@ pub(super) fn apply_task(
                     .as_ref()
                     .map(|hold| hold.history(&task.operation_id))
                     .into_iter()
+                    .chain(crew_redraw_history)
                     .collect(),
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
@@ -645,7 +652,11 @@ pub(super) fn superseded_task(
             entry.by != "task-pilot"
                 && matches!(
                     entry.event.as_str(),
-                    "updated" | "renamed" | "crew_assigned" | "context_creation_authorized"
+                    "updated"
+                        | "renamed"
+                        | "crew_assigned"
+                        | "crew_redrawn"
+                        | "context_creation_authorized"
                 )
         });
     let structural_drift = current.context_files != snapshot.context_files

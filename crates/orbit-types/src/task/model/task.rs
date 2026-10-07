@@ -54,6 +54,10 @@ pub struct Task {
     pub job_run_machine: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
+    /// Absent on legacy records; assignment history can recover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     /// Explicit named crew that owns orchestration of this task. This is
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +146,7 @@ impl Task {
             relations: envelope.relations,
             job_run_id: envelope.job_run_id,
             crew: envelope.crew,
+            crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,

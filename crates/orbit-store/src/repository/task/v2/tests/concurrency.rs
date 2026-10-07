@@ -167,6 +167,7 @@ fn desktop_concurrent_status_receipts_are_atomic_and_durable() {
         payload_digest: "a".repeat(64),
         expected_revision: revision,
         fields: Default::default(),
+        crew_source: None,
         comment: None,
         status: Some(TaskStatus::Backlog),
     };

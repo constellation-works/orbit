@@ -152,6 +152,10 @@ impl TaskV2Store {
             }
             if let Some(v) = &p.fields.crew {
                 b.envelope.crew = (!v.is_empty()).then(|| v.clone());
+                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| "explicit".to_string());
+            }
+            if let Some(source) = &p.crew_source {
+                b.envelope.crew_source = source.clone();
             }
             if let Some(v) = p.status {
                 b.envelope.status = v;

@@ -38,6 +38,8 @@ impl TaskV2Store {
             if bundle.envelope.context_files != fields.expected_context_files
                 || bundle.envelope.status != fields.expected_status
                 || bundle.envelope.complexity != fields.expected_complexity
+                || bundle.envelope.crew != fields.expected_crew
+                || bundle.envelope.crew_source != fields.expected_crew_source
                 || creation_state(&bundle).identity() != fields.expected_context_creation
             {
                 return Ok(AtomicTaskMutationOutcome::Stale);
@@ -94,6 +96,8 @@ impl TaskV2Store {
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
+            bundle.envelope.crew = fields.crew.clone();
+            bundle.envelope.crew_source = fields.crew_source.clone();
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();
@@ -236,6 +240,12 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.crew {
                 bundle.envelope.crew = value.clone();
+                // A crew replacement without provenance is an explicit pin.
+                bundle.envelope.crew_source = value.as_ref().map(|_| "explicit".to_string());
+                envelope_changed = true;
+            }
+            if let Some(value) = &fields.crew_source {
+                bundle.envelope.crew_source = value.clone();
                 envelope_changed = true;
             }
             if let Some(value) = &fields.orchestrator {
@@ -309,6 +319,7 @@ impl TaskV2Store {
             let mut prior_unrecorded_envelope = original_envelope.clone();
             prior_unrecorded_envelope.title = bundle.envelope.title.clone();
             prior_unrecorded_envelope.crew = bundle.envelope.crew.clone();
+            prior_unrecorded_envelope.crew_source = bundle.envelope.crew_source.clone();
             if fields.source_task_id.is_some() && fields.relations.is_none() {
                 prior_unrecorded_envelope
                     .relations

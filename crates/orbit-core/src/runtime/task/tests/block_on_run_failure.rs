@@ -70,6 +70,7 @@ fn create_task(
             external_refs: Vec::new(),
             source_task_id: None,
             crew: None,
+            crew_source: None,
             orchestrator: None,
             comments: Vec::new(),
             context_creation: Vec::new(),

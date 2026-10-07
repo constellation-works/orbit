@@ -26,6 +26,7 @@ use tempfile::TempDir;
 mod admission;
 mod ci_sweep_races;
 mod creation;
+mod crew_selection;
 mod races;
 mod source_moves;
 

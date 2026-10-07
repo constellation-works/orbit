@@ -28,6 +28,7 @@ fn task(id: &str, title: &str) -> Task {
         job_run_id: None,
         job_run_machine: None,
         crew: None,
+        crew_source: None,
         orchestrator: None,
         created_at: at,
         updated_at: at,

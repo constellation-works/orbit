@@ -63,6 +63,7 @@ pub(crate) fn task_to_json(
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
         "updated_at": task.updated_at.to_rfc3339(),

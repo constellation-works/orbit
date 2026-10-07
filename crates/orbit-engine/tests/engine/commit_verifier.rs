@@ -150,6 +150,7 @@ fn fixture_task() -> Task {
         relations: Vec::new(),
         job_run_id: Some(RUN_ID.to_string()),
         crew: None,
+        crew_source: None,
         orchestrator: None,
         created_at: now,
         updated_at: now,
