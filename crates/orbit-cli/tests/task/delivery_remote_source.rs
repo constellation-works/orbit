@@ -142,26 +142,46 @@ fn baselined_remote_consumer(fixture: &Fixture) -> orbit_core::OrbitRuntime {
 /// the GitHub URL. The local branch is the baseline commit. `retries` is the
 /// trigger's retry budget (`max_attempts` is one more).
 fn baselined_remote_consumer_retries(fixture: &Fixture, retries: u32) -> orbit_core::OrbitRuntime {
+    baseline_named_consumer(fixture, retries, CONSUMER)
+}
+
+fn baseline_named_consumer(
+    fixture: &Fixture,
+    retries: u32,
+    name: &str,
+) -> orbit_core::OrbitRuntime {
     git(fixture, &["checkout", "-b", BRANCH]);
     fs::write(fixture.repo.join("fixture.txt"), "baseline\n").unwrap();
     git(fixture, &["add", "fixture.txt"]);
     git(fixture, &["commit", "-m", "Disposable baseline"]);
     add_github_origin(fixture);
     publish_origin_if_configured(fixture);
-    fixture.json(&[
-        "auto-task",
-        "add",
-        "--name",
-        CONSUMER,
-        "--deliveries-landed",
-        &trigger_with_retries(60, retries).to_string(),
-        "--title",
-        "Review remote deliveries",
-        "--json",
-    ]);
-    fixture.json(&["auto-task", "toggle", CONSUMER, "on", "--json"]);
+    if name == REVIEW_CONSUMER {
+        enable_review_crew(fixture);
+        fixture.json(&[
+            "auto-task",
+            "update",
+            name,
+            "--deliveries-landed",
+            &trigger_with_retries(60, retries).to_string(),
+            "--json",
+        ]);
+    } else {
+        fixture.json(&[
+            "auto-task",
+            "add",
+            "--name",
+            name,
+            "--deliveries-landed",
+            &trigger_with_retries(60, retries).to_string(),
+            "--title",
+            "Review remote deliveries",
+            "--json",
+        ]);
+    }
+    fixture.json(&["auto-task", "toggle", name, "on", "--json"]);
     let runtime = open_runtime(fixture);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = runtime.auto_task_show(name).unwrap().unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).expect("baseline");
     runtime
 }
@@ -406,8 +426,12 @@ fn force_pushed_remote_history_defers_as_history_diverged() {
 }
 
 fn consumer_state(runtime: &orbit_core::OrbitRuntime) -> AutomationState {
+    named_consumer_state(runtime, CONSUMER)
+}
+
+fn named_consumer_state(runtime: &orbit_core::OrbitRuntime, name: &str) -> AutomationState {
     let consumer =
-        orbit_core::application::automation::consumer_key(runtime, "auto-task", CONSUMER).unwrap();
+        orbit_core::application::automation::consumer_key(runtime, "auto-task", name).unwrap();
     runtime
         .automation_store()
         .unwrap()
@@ -433,9 +457,14 @@ fn break_origin(fixture: &Fixture) {
     let bare = fixture.repo.with_file_name("origin.git");
     let key = format!("url.{}.insteadOf", bare.display());
     git(fixture, &["config", "--unset", &key]);
+    // Keep repository identity stable while making the transport unreachable.
     git(
         fixture,
-        &["remote", "set-url", "origin", "/no/such/remote.git"],
+        &[
+            "config",
+            "url./no/such/remote.git.insteadOf",
+            &format!("https://github.com/{REPOSITORY}.git"),
+        ],
     );
 }
 
@@ -471,13 +500,7 @@ fn force_push_unrelated_history(fixture: &Fixture) {
 }
 
 fn automation_consumers_message(fixture: &Fixture) -> String {
-    let output = fixture.command(&["doctor", "--json"]).output().unwrap();
-    let rows: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "doctor json: {error}; stderr {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
+    let rows = inspect_without_fetch(fixture, &["doctor", "--json"]);
     rows.as_array()
         .and_then(|rows| {
             rows.iter()
@@ -487,14 +510,54 @@ fn automation_consumers_message(fixture: &Fixture) -> String {
         .unwrap_or_else(|| panic!("no automation-consumers message: {rows}"))
 }
 
+/// Inspect real git invocations, including failed fetch attempts, rather than
+/// inferring read-only behavior from refs a failed fetch leaves untouched.
+fn inspect_without_fetch(fixture: &Fixture, args: &[&str]) -> Value {
+    let trace = fixture._temp.path().join("inspection-trace.jsonl");
+    fs::write(&trace, "").unwrap();
+    let output = fixture
+        .command(args)
+        .env("GIT_TRACE2_EVENT", &trace)
+        .output()
+        .unwrap();
+    let events = fs::read_to_string(&trace).unwrap();
+    let starts = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event"] == "start")
+        .collect::<Vec<_>>();
+    assert!(
+        !starts.is_empty(),
+        "inspection did not trace any git commands"
+    );
+    assert!(
+        starts.iter().all(|event| {
+            !event["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "fetch")
+        }),
+        "inspection fetched origin: {events}"
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "inspection json: {error}; stderr {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
 /// Lands one remote commit, admits its batch, attaches coverage from that
 /// batch's executor run, and rejects the review task. `retries` is the
 /// trigger budget, so a spent retry is visible when it is at least 1.
 fn stopped_action_with_coverage(
     fixture: &Fixture,
     retries: u32,
+    name: &str,
+    examination_complete: bool,
 ) -> (orbit_core::OrbitRuntime, BatchAttempt) {
-    let runtime = baselined_remote_consumer_retries(fixture, retries);
+    let runtime = baseline_named_consumer(fixture, retries, name);
     let publisher = publisher(fixture);
     fs::write(publisher.join("fixture.txt"), "landed on the remote only\n").unwrap();
     git_at(
@@ -510,10 +573,14 @@ fn stopped_action_with_coverage(
     );
     install_pull(fixture, &remote_sha, 42);
     with_pull_lookup(fixture, || {
-        evaluate_consumer(&runtime).expect("admit the remote delivery");
+        let definition = runtime.auto_task_show(name).unwrap().unwrap();
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+            .expect("admit the remote delivery");
     });
 
-    let attempt = consumer_state(&runtime).active.expect("admitted batch");
+    let attempt = named_consumer_state(&runtime, name)
+        .active
+        .expect("admitted batch");
     assert_eq!(attempt.attempt, 1);
     assert_eq!(attempt.state, BatchState::Admitted);
     let action_id = attempt.action_id.clone().expect("admitted action");
@@ -538,7 +605,7 @@ fn stopped_action_with_coverage(
     .expect("bind the executor run");
 
     let mut evidence = orbit_types::workflow::automation::evidence_template(&attempt);
-    evidence.examination_complete = true;
+    evidence.examination_complete = examination_complete;
     evidence.checks = vec![ExaminationCheck {
         subject: "frozen range".into(),
         method: "review".into(),
@@ -575,9 +642,10 @@ fn stopped_action_with_coverage(
     (runtime, attempt)
 }
 
-/// Evidence verification fetches origin. A fetch failure while a stopped
+/// Evaluation's evidence verification fetches origin. A fetch failure while a stopped
 /// action holds coverage defers the pass: the attempt and covered cursor stay
-/// put, and doctor does not report the action as wedged.
+/// put. Doctor verifies the valid evidence against the existing tracking ref
+/// without fetching and does not report the action as wedged.
 #[test]
 fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() {
     const TEST: &str = "delivery_remote_source::fetch_failure_during_evidence_verification_defers_without_spending_a_retry";
@@ -586,7 +654,7 @@ fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() 
     }
 
     let fixture = Fixture::new();
-    let (runtime, _) = stopped_action_with_coverage(&fixture, 1);
+    let (runtime, _) = stopped_action_with_coverage(&fixture, 1, CONSUMER, true);
     let before = consumer_state(&runtime);
     break_origin(&fixture);
 
@@ -608,6 +676,74 @@ fn fetch_failure_during_evidence_verification_defers_without_spending_a_retry() 
     assert_eq!(still.active, before.active);
 }
 
+/// Stopped invalid coverage stays visible online and offline. Both doctor's
+/// health paths and adoption-refusal inspection must avoid even a failed fetch.
+#[test]
+fn doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching() {
+    const TEST: &str = "delivery_remote_source::doctor_reports_wedged_coverage_and_inspects_adoption_without_fetching";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, _) = stopped_action_with_coverage(&fixture, 1, REVIEW_CONSUMER, false);
+    let before = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    let remote_ref = format!("refs/remotes/origin/{BRANCH}");
+    let remote = git(&fixture, &["rev-parse", &remote_ref]);
+    assert_ne!(
+        local_branch(&fixture),
+        remote,
+        "the local branch lacks the batch"
+    );
+
+    for offline in [false, true] {
+        if offline {
+            break_origin(&fixture);
+        }
+        let message = automation_consumers_message(&fixture);
+        assert!(message.contains("wedged"), "offline={offline}: {message}");
+        let row = doctor_review(&fixture);
+        assert_eq!(row["status"], "error", "{row}");
+        assert!(row["message"].as_str().unwrap().contains("wedged"), "{row}");
+        assert_eq!(git(&fixture, &["rev-parse", &remote_ref]), remote);
+        let after = named_consumer_state(&runtime, REVIEW_CONSUMER);
+        assert_eq!(after.generation, before.generation);
+        assert_eq!(after.active, before.active);
+    }
+
+    // A compatible edit forces inspection to prove action_terminal for adoption.
+    retarget_review(&fixture, 30);
+    let preview =
+        inspect_without_fetch(&fixture, &["auto-task", "show", REVIEW_CONSUMER, "--json"]);
+    assert_eq!(
+        preview["automation"]["reason"], "batch_pending",
+        "{preview}"
+    );
+    let row = doctor_review(&fixture);
+    let message = row["message"].as_str().unwrap();
+    assert!(message.contains("wedged"), "{row}");
+    assert!(!message.contains("active_execution"), "{row}");
+
+    // An unfetched origin cannot be replaced by the checkout's local branch.
+    git(&fixture, &["update-ref", "-d", &remote_ref]);
+    let preview =
+        inspect_without_fetch(&fixture, &["auto-task", "show", REVIEW_CONSUMER, "--json"]);
+    assert_eq!(
+        preview["automation"]["refusals"],
+        json!(["active_execution"]),
+        "{preview}"
+    );
+    let message = automation_consumers_message(&fixture);
+    assert!(
+        !message.contains("wedged"),
+        "unknown coverage was rejected: {message}"
+    );
+    let after = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(after.active, before.active);
+    assert_eq!(after.covered, before.covered);
+}
+
 /// A force-push is a real batch mismatch, so evidence is rejected and one
 /// retry is spent. Observation then sees the same divergence and may stall.
 /// The stall write only moves the marker, so the settled attempt remains.
@@ -620,7 +756,7 @@ fn diverged_history_rejects_stopped_evidence_as_source_unverifiable() {
     }
 
     let fixture = Fixture::new();
-    let (runtime, _) = stopped_action_with_coverage(&fixture, 1);
+    let (runtime, _) = stopped_action_with_coverage(&fixture, 1, CONSUMER, true);
     let before = consumer_state(&runtime);
     force_push_unrelated_history(&fixture);
 
@@ -670,8 +806,7 @@ fn retarget_review(fixture: &Fixture, max_wait_minutes: u32) {
 }
 
 fn doctor_review(fixture: &Fixture) -> Value {
-    let output = fixture.command(&["doctor", "--json"]).output().unwrap();
-    let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rows = inspect_without_fetch(fixture, &["doctor", "--json"]);
     rows.as_array()
         .unwrap()
         .iter()

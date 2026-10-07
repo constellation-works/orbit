@@ -71,6 +71,7 @@ pub(crate) struct Source<'a> {
     started: Instant,
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,
+    fetch_origin: bool,
 }
 
 impl<'a> Source<'a> {
@@ -84,6 +85,16 @@ impl<'a> Source<'a> {
             started: Instant::now(),
             cache: None,
             now,
+            fetch_origin: true,
+        }
+    }
+
+    /// Inspect evidence against existing refs without fetching origin. Missing
+    /// tracking refs stay deferred; the local branch is not a substitute.
+    pub(super) fn read_only(root: &'a Path) -> Self {
+        Self {
+            fetch_origin: false,
+            ..Self::new(root)
         }
     }
 
@@ -394,7 +405,8 @@ impl<'a> Source<'a> {
     /// `refs/remotes/origin/<branch>` and resolves the fetched object. The
     /// worktree, index and local branch stay untouched. A failed fetch defers
     /// as [`SOURCE_FETCH_FAILED`] and does not fall back to the local ref.
-    /// With no remote, the head is `refs/heads/<branch>`.
+    /// With no remote, the head is `refs/heads/<branch>`. A read-only source
+    /// resolves the existing remote-tracking ref without fetching.
     pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.git(&["check-ref-format", "--branch", branch])?;
         let repository = self.repository()?;
@@ -412,7 +424,9 @@ impl<'a> Source<'a> {
 
     fn fetched_head(&self, branch: &str) -> Result<SourceRevision, AutomationError> {
         if self.origin_url()?.is_some() {
-            self.fetch_origin_branch(branch)?;
+            if self.fetch_origin {
+                self.fetch_origin_branch(branch)?;
+            }
             self.revision(&format!("refs/remotes/origin/{branch}"))
                 .map_err(fetch_failure_from)
         } else {

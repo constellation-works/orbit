@@ -732,4 +732,6 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 
 After-landing review is not a config key: it is the `delivery-code-review` auto-task's own `enabled` flag (`orbit auto-task toggle delivery-code-review on|off`). `orbit config show`, `orbit doctor` (the `review` check), the dashboard Config tab and `orbit.drain.probe` all report both switches with their sources: before-PR on/off and minutes, and after-landing enabled with the next batch due. The review check also names the observed commit against `origin/<branch>` and is not ok when the oldest unobserved first-parent commit has waited at least the batch's `max_wait_minutes`, even if the remote-tracking tip is recent.
 
+Doctor and auto-task inspection verify active coverage against the existing `origin/<branch>` tracking ref without fetching, including when reporting a wedged consumer or an adoption refusal. With no origin, they use the local branch. A missing tracking ref leaves evidence verification unknown; inspection does not fall back to the local branch. Delivery evaluation still fetches origin and defers on fetch failure without spending a coverage retry.
+
 Start with a minimal workspace file that holds only genuine overrides.
