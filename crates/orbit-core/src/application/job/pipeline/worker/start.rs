@@ -179,7 +179,7 @@ impl OrbitRuntime {
             .spawn(run_id, actor)
     }
 
-    pub(in crate::application::job::pipeline) fn finalize_pipeline_worker_startup_failure(
+    pub(in crate::application::job) fn finalize_pipeline_worker_startup_failure(
         &self,
         run: &JobRun,
         message: &str,

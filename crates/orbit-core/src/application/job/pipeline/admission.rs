@@ -135,6 +135,7 @@ impl OrbitRuntime {
 
             let submitted_at = Utc::now();
             let mut existing_automation_run = false;
+            let mut seed_after_insert = false;
             let run = if let Some(admission) = admission {
                 match self
                     .stores()
@@ -182,7 +183,7 @@ impl OrbitRuntime {
                         input: input.clone(),
                     })? {
                     KeyedJobRunAdmission::Admitted(run) => {
-                        self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                        seed_after_insert = true;
                         *run
                     }
                     KeyedJobRunAdmission::Existing(run) => {
@@ -225,7 +226,7 @@ impl OrbitRuntime {
                         replay_source_run_id.map(ToOwned::to_owned),
                     )?,
                 };
-                self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                seed_after_insert = true;
                 run
             };
 
@@ -234,19 +235,91 @@ impl OrbitRuntime {
             } else {
                 trigger
             };
-            // The transaction's outcome, rather than the run's pending/running
-            // state, decides initialization. A retry may resolve a pending run
-            // whose worker has already started writing checkpoints or controls.
-            if !existing_automation_run {
-                self.record_run_trigger(&run.run_id, &trigger)?;
-            }
+            // [ORB-14524] The run row is committed. A failure from here to the
+            // worker handoff would otherwise strand a pending run with no
+            // worker, holding its concurrency slot and retry/resume key until
+            // the unclaimed-run grace expires, so it is terminalized before the
+            // error is returned. A reused automation run belongs to its original
+            // admission and keeps its state.
+            let delivered = (|| -> Result<ChildSubmission, OrbitError> {
+                if seed_after_insert {
+                    self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                }
+                // The transaction's outcome, rather than the run's
+                // pending/running state, decides initialization. A retry may
+                // resolve a pending run whose worker has already started
+                // writing checkpoints or controls.
+                if !existing_automation_run {
+                    self.record_run_trigger(&run.run_id, &trigger)?;
+                }
 
-            // Pin the definition before the worker can exist. A direct-path
-            // submission must not depend on the source file surviving
-            // unchanged until the detached worker gets around to reading it.
-            if let SubmittedDefinition::Snapshot { yaml, .. } = &definition
-                && let Err(error) = self.write_run_definition_snapshot(&run.run_id, yaml)
+                // Pin the definition before the worker can exist. A direct-path
+                // submission must not depend on the source file surviving
+                // unchanged until the detached worker gets around to reading it.
+                if let SubmittedDefinition::Snapshot { yaml, .. } = &definition {
+                    self.write_run_definition_snapshot(&run.run_id, yaml)?;
+                }
+
+                // Reaping other orphaned runs of the job does not concern this
+                // submission; its failure must not fail an admitted run.
+                log_best_effort(
+                    "reconcile stale job runs",
+                    &run.run_id,
+                    self.reconcile_stale_job_runs(Some(job_name)),
+                );
+                let active_runs = self
+                    .stores()
+                    .jobs()
+                    .list_pending_or_running_job_runs(job_name)?;
+                let queue_position =
+                    pipeline_run_queue_position(&active_runs, &run.run_id, spec.max_active_runs);
+                let queued = queue_position.is_some();
+
+                // A repeated automation admission resolves the original run.
+                // Only pending runs need delivery; the existing Start CAS
+                // fences workers.
+                if (action_key.is_none() || run.state == JobRunState::Pending)
+                    && let Err(error) = self.spawn_pipeline_worker(
+                        &run.run_id,
+                        actor,
+                        input["__worker_containment_strict"] == true,
+                    )
+                {
+                    let log_note =
+                        match pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id) {
+                            Ok(worker_log) => format!("; worker log: '{}'", worker_log.display()),
+                            Err(_) => String::new(),
+                        };
+                    let message = format!(
+                        "pipeline worker for run '{}' could not start from registered \
+                         workspace '{}': {error}{log_note}",
+                        run.run_id,
+                        self.paths().repo_root.display(),
+                    );
+                    let error_code =
+                        matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
+                            .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
+                    log_best_effort(
+                        "finalize startup failure",
+                        &run.run_id,
+                        self.finalize_pipeline_worker_startup_failure(
+                            &run, &message, error_code, actor,
+                        ),
+                    );
+                    return Err(error);
+                }
+                Ok(ChildSubmission::Submitted(PipelineInvokeResult {
+                    run_id: run.run_id.clone(),
+                    job_name: job_name.to_string(),
+                    submitted_at: submitted_at.to_rfc3339(),
+                    queued,
+                    queue_position,
+                }))
+            })();
+            if let Err(error) = &delivered
+                && !existing_automation_run
             {
+                // A no-op when the spawn branch already terminalized the run.
                 log_best_effort(
                     "finalize startup failure",
                     &run.run_id,
@@ -257,53 +330,8 @@ impl OrbitRuntime {
                         actor,
                     ),
                 );
-                return Err(error);
             }
-
-            self.reconcile_stale_job_runs(Some(job_name))?;
-            let active_runs = self
-                .stores()
-                .jobs()
-                .list_pending_or_running_job_runs(job_name)?;
-            let queue_position =
-                pipeline_run_queue_position(&active_runs, &run.run_id, spec.max_active_runs);
-            let queued = queue_position.is_some();
-
-            // A repeated automation admission resolves the original run. Only
-            // pending runs need delivery; the existing Start CAS fences workers.
-            if (action_key.is_none() || run.state == JobRunState::Pending)
-                && let Err(error) = self.spawn_pipeline_worker(
-                    &run.run_id,
-                    actor,
-                    input["__worker_containment_strict"] == true,
-                )
-            {
-                let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
-                let message = format!(
-                    "pipeline worker for run '{}' could not start from registered workspace '{}': \
-                     {error}; worker log: '{}'",
-                    run.run_id,
-                    self.paths().repo_root.display(),
-                    worker_log.display(),
-                );
-                let error_code = matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
-                    .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
-                log_best_effort(
-                    "finalize startup failure",
-                    &run.run_id,
-                    self.finalize_pipeline_worker_startup_failure(
-                        &run, &message, error_code, actor,
-                    ),
-                );
-                return Err(error);
-            }
-            Ok(ChildSubmission::Submitted(PipelineInvokeResult {
-                run_id: run.run_id,
-                job_name: job_name.to_string(),
-                submitted_at: submitted_at.to_rfc3339(),
-                queued,
-                queue_position,
-            }))
+            delivered
         })();
 
         if let Some(plan) = resume {

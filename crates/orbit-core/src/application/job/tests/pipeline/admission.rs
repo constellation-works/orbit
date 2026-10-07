@@ -398,3 +398,99 @@ fn repeated_automation_admission_preserves_pending_running_and_terminal_state() 
     }
     assert_eq!(jobs.list_job_runs("snapshot_fixture").unwrap().len(), 2);
 }
+
+/// SQLite trigger fault injection fails the first pipeline-state write after
+/// the run row is committed, on every post-insert submission surface
+/// (unit admission criterion 2: fault injection at a crate-private seam).
+/// A failed submission must leave no pending run without a worker.
+#[cfg(unix)]
+#[test]
+fn failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic,
+    )) {
+        return;
+    }
+    use orbit_common::OrbitError;
+    use orbit_types::workflow::{JobRunState, JobRunTrigger};
+    use serde_json::json;
+
+    let (_root, runtime) = test_runtime();
+    let jobs_dir = runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let job_path = jobs_dir.join("snapshot_fixture.yaml");
+    std::fs::write(&job_path, SNAPSHOT_YAML).unwrap();
+    crate::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_post_insert_state BEFORE UPDATE OF pipeline_state_json ON job_runs \
+             WHEN json_extract(OLD.input_json, '$.fail_after_insert') = 1 AND NEW.state = 'pending' \
+             BEGIN SELECT RAISE(ABORT, 'injected post-insert failure'); END;",
+        )
+        .unwrap();
+    let input = json!({"fail_after_insert": true});
+    let jobs = runtime.stores().jobs();
+
+    let assert_terminalized = |entry: &str, error: OrbitError| {
+        assert!(
+            error.to_string().contains("injected post-insert failure"),
+            "{entry}: the original error must be returned: {error}"
+        );
+        let runs = jobs.list_job_runs("snapshot_fixture").unwrap();
+        assert_eq!(runs.len(), 1, "{entry}: exactly the one inserted run");
+        let run = jobs.get_job_run(&runs[0].run_id).unwrap().unwrap();
+        assert_eq!(
+            run.state,
+            JobRunState::Interrupted,
+            "{entry}: the inserted run must not stay pending without a worker"
+        );
+        assert!(
+            run.steps.iter().any(|step| step
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("injected post-insert failure"))),
+            "{entry}: the terminal run must carry a startup-failure diagnostic: {:?}",
+            run.steps
+        );
+        reset_runs(&runtime, &run.run_id);
+    };
+    // Each entry observes only its own run.
+    fn reset_runs(runtime: &OrbitRuntime, run_id: &str) {
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM job_runs WHERE run_id = ?1", [run_id])
+            .unwrap();
+    }
+
+    // Seed failure on the plain detached insert.
+    let error = runtime
+        .submit_pipeline_run("snapshot_fixture", input.clone(), None, Some("operator"))
+        .expect_err("seed failure must fail the submission");
+    assert_terminalized("detached", error);
+
+    // Trigger-recording failure on a freshly admitted automation run.
+    let error = runtime
+        .submit_automation_pipeline_run(
+            "snapshot_fixture",
+            input.clone(),
+            "fail-action",
+            JobRunTrigger::cli(),
+        )
+        .expect_err("trigger recording failure must fail the submission");
+    assert_terminalized("automation", error);
+
+    // The foreground path inserts and seeds in this process, with no worker.
+    let error = runtime
+        .run_job_v2_from_yaml(&job_path, input)
+        .expect_err("seed failure must fail the foreground run");
+    assert_terminalized("foreground", error);
+}
