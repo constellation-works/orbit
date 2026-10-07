@@ -7,6 +7,7 @@ mod plugin_broker;
 mod recovery;
 mod review;
 mod runtime_host;
+mod scratch_gc;
 mod task_update;
 mod worktree_gc;
 
@@ -23,5 +24,6 @@ pub use recovery::{
 };
 pub use review::{ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest};
 pub use runtime_host::RuntimeHost;
+pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
 pub use worktree_gc::WorktreeGcTaskLookup;

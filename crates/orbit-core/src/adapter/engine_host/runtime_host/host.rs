@@ -559,6 +559,13 @@ impl RuntimeHost for OrbitRuntime {
         self.worktree_gc_settled_claim(run_id)
     }
 
+    fn gc_scratch(
+        &self,
+        retention_hours: u64,
+    ) -> Result<Option<orbit_engine::ScratchGcReport>, OrbitError> {
+        self.gc_scratch_by_age(retention_hours).map(Some)
+    }
+
     fn data_root(&self) -> &std::path::Path {
         self.context.data_root()
     }

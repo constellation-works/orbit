@@ -87,7 +87,7 @@ impl OrbitRuntime {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod filesystem {
+pub(super) mod filesystem {
     use std::ffi::{CStr, CString};
     use std::io;
     use std::mem::MaybeUninit;
@@ -96,6 +96,15 @@ mod filesystem {
     use std::path::Path;
 
     use super::{OrbitError, TmpGcReport, TmpGcResult};
+
+    /// What one no-follow walk of an entry saw.
+    #[derive(Clone, Copy, Default)]
+    pub(in crate::application::gc) struct Tally {
+        pub bytes: u64,
+        /// Newest `(seconds, nanoseconds)` mtime of the entry or anything
+        /// beneath it, read from the link itself for a symlink.
+        pub newest: (i64, i64),
+    }
 
     pub(super) fn collect(
         checkout: &Path,
@@ -127,7 +136,7 @@ mod filesystem {
         names.sort();
         // Finish the entire no-follow measurement before removing anything.
         for name in &names {
-            let bytes = walk(&tmp, name, false)?;
+            let bytes = walk(&tmp, name, false)?.bytes;
             result.bytes_reclaimable = result.bytes_reclaimable.saturating_add(bytes);
             result.reports.push(TmpGcReport {
                 path: result
@@ -143,7 +152,7 @@ mod filesystem {
             // before deletion. Never reconcile or cancel a run to make room.
             check_runs()?;
             for (name, report) in names.iter().zip(&mut result.reports) {
-                report.bytes_reclaimed = walk(&tmp, name, true)?;
+                report.bytes_reclaimed = walk(&tmp, name, true)?.bytes;
                 report.action = "removed";
                 result.entries_removed += 1;
                 result.bytes_reclaimed = result
@@ -154,7 +163,10 @@ mod filesystem {
         Ok(())
     }
 
-    fn open_directory(parent: libc::c_int, name: &CStr) -> io::Result<OwnedFd> {
+    pub(in crate::application::gc) fn open_directory(
+        parent: libc::c_int,
+        name: &CStr,
+    ) -> io::Result<OwnedFd> {
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         // SAFETY: name is NUL-terminated, and parent is AT_FDCWD or a live fd.
         let fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
@@ -175,7 +187,7 @@ mod filesystem {
         }
     }
 
-    fn names(directory: &OwnedFd) -> io::Result<Vec<CString>> {
+    pub(in crate::application::gc) fn names(directory: &OwnedFd) -> io::Result<Vec<CString>> {
         // Opening `.` gives the stream its own offset, so subsequent walks
         // enumerate independently of earlier preview/measurement walks.
         let fd = open_directory(directory.as_raw_fd(), c".")?;
@@ -222,7 +234,11 @@ mod filesystem {
         }
     }
 
-    fn walk(parent: &OwnedFd, name: &CStr, delete: bool) -> io::Result<u64> {
+    pub(in crate::application::gc) fn walk(
+        parent: &OwnedFd,
+        name: &CStr,
+        delete: bool,
+    ) -> io::Result<Tally> {
         let mut metadata = MaybeUninit::<libc::stat>::uninit();
         // SAFETY: parent is live, name is NUL-terminated, and fstatat writes
         // the stat only on success. AT_SYMLINK_NOFOLLOW measures the link itself.
@@ -240,17 +256,26 @@ mod filesystem {
         // SAFETY: fstatat succeeded and initialized metadata.
         let metadata = unsafe { metadata.assume_init() };
         let is_directory = metadata.st_mode & libc::S_IFMT == libc::S_IFDIR;
-        let mut bytes = 0;
+        // The stat time fields are `i64` on 64-bit targets and narrower on
+        // 32-bit ones; widen them without a cast either way.
+        #[allow(clippy::useless_conversion)]
+        let newest = (
+            i64::from(metadata.st_mtime),
+            i64::from(metadata.st_mtime_nsec),
+        );
+        let mut tally = Tally { bytes: 0, newest };
         if is_directory {
             let directory = open_directory(parent.as_raw_fd(), name)?;
             for child in names(&directory)? {
-                bytes = u64::saturating_add(bytes, walk(&directory, &child, delete)?);
+                let child = walk(&directory, &child, delete)?;
+                tally.bytes = tally.bytes.saturating_add(child.bytes);
+                tally.newest = tally.newest.max(child.newest);
             }
         } else if matches!(
             metadata.st_mode & libc::S_IFMT,
             libc::S_IFREG | libc::S_IFLNK
         ) {
-            bytes = u64::try_from(metadata.st_size).unwrap_or(0);
+            tally.bytes = u64::try_from(metadata.st_size).unwrap_or(0);
         }
         if delete {
             let flags = if is_directory { libc::AT_REMOVEDIR } else { 0 };
@@ -261,6 +286,6 @@ mod filesystem {
                 return Err(io::Error::last_os_error());
             }
         }
-        Ok(bytes)
+        Ok(tally)
     }
 }

@@ -7,11 +7,19 @@ spec:
   description: >
     Reap worktrees whose associated task has settled to rejected, archived,
     or done. A run that is not yet terminal, has no resolvable associated
-    task, or still has a dirty tree is always retained and reported.
+    task, or still has a dirty tree is always retained and reported. When
+    `scratch_older_than_hours` is set, also prune the checkout's `.orbit/tmp`
+    scratch directory of top-level entries untouched for that long, skipping
+    any a live process holds open or an active run names.
   input_schema_json:
     type: object
     properties:
       older_than_hours:
+        type: integer
+        minimum: 0
+      # Omit to leave `.orbit/tmp` alone. Ignored when `target_run_id` scopes
+      # the sweep to one run.
+      scratch_older_than_hours:
         type: integer
         minimum: 0
       # Named `target_run_id`, not `run_id`: the engine's step dispatcher
@@ -36,5 +44,29 @@ spec:
           type: object
           required:
             [path, run_id, run_state, task_id, task_status, action, bytes_reclaimed]
+      # Present when `scratch_older_than_hours` was set. Carries `error`
+      # instead of the figures when the scratch sweep itself failed.
+      scratch:
+        type: object
+        properties:
+          path:
+            type: string
+          retention_hours:
+            type: integer
+          bytes_reclaimed:
+            type: integer
+          entries_removed:
+            type: integer
+          entries_skipped:
+            type: integer
+          entries_kept:
+            type: integer
+          entries:
+            type: array
+            items:
+              type: object
+              required: [path, action, bytes_reclaimed]
+          error:
+            type: string
   action: worktree_gc
   config: {}

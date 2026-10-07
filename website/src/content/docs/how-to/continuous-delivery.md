@@ -301,6 +301,12 @@ task status from the owner machine. `--target-only` deletes only
 checkout stays available for rescue. To limit it by age or to one run, see
 the [CLI reference](../../reference/cli/).
 
+The scheduled `worktree_gc_pipeline` run also prunes the checkout's
+`.orbit/tmp` scratch directory: a top-level entry goes once nothing inside it
+has changed for 24 hours. Pass `--input scratch_older_than_hours=<hours>` to
+`orbit run job worktree_gc_pipeline` to change the window for a run. Entries a
+live process holds open or an active run names are skipped and reported.
+
 ## 8. Keep the task record durable
 
 A delivery window changes a lot of task state. To snapshot it somewhere you

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{DeterministicAction, EngineDeterministicAction};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Default)]
 pub struct StateExecutionContext {
@@ -95,20 +95,13 @@ pub(crate) fn execute_engine_action<
                 None => None,
                 Some(Value::Null) => None,
                 Some(val) => {
-                    if val.as_i64().is_some_and(|n| n < 0) {
-                        return Err(OrbitError::InvalidInput(
-                            "older_than_hours must be non-negative".to_string(),
-                        ));
-                    }
-                    let hours = val.as_u64().ok_or_else(|| {
-                        OrbitError::InvalidInput("older_than_hours is too large".to_string())
-                    })?;
-                    let hours = i64::try_from(hours).map_err(|_| {
-                        OrbitError::InvalidInput("older_than_hours is too large".to_string())
-                    })?;
-                    let duration = chrono::Duration::try_hours(hours).ok_or_else(|| {
-                        OrbitError::InvalidInput("older_than_hours is too large".to_string())
-                    })?;
+                    let hours = hours_input("older_than_hours", val)?;
+                    let duration = i64::try_from(hours)
+                        .ok()
+                        .and_then(chrono::Duration::try_hours)
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput("older_than_hours is too large".to_string())
+                        })?;
                     Some(
                         chrono::Utc::now()
                             .checked_sub_signed(duration)
@@ -119,6 +112,17 @@ pub(crate) fn execute_engine_action<
                             })?,
                     )
                 }
+            };
+            let target_run_id = input
+                .get("target_run_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            // The scratch window is validated before anything is deleted. A
+            // sweep scoped to one run leaves the shared scratch alone.
+            let scratch_retention_hours = match input.get("scratch_older_than_hours") {
+                None | Some(Value::Null) => None,
+                Some(_) if target_run_id.is_some() => None,
+                Some(val) => Some(hours_input("scratch_older_than_hours", val)?),
             };
             let runs = host.list_job_runs_for_gc()?;
             let repo_root = host.repo_root()?;
@@ -135,18 +139,34 @@ pub(crate) fn execute_engine_action<
                     // would scope every real job/routine dispatch to itself,
                     // a run with no worktree of its own, and silently reap
                     // nothing on every invocation.
-                    run_id: input
-                        .get("target_run_id")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
+                    run_id: target_run_id,
                     older_than,
                     estimate_bytes: false,
                     target_only: false,
                 },
             )?;
-            serde_json::to_value(result).map_err(|error| {
+            let mut output = serde_json::to_value(result).map_err(|error| {
                 OrbitError::Execution(format!("failed to serialize worktree GC result: {error}"))
-            })
+            })?;
+            if let Some(hours) = scratch_retention_hours {
+                // A scratch failure must not discard the worktree figures the
+                // sweep above already reclaimed; report it beside them.
+                let scratch = match host.gc_scratch(hours) {
+                    Ok(report) => serde_json::to_value(report).map_err(|error| {
+                        OrbitError::Execution(format!(
+                            "failed to serialize scratch GC report: {error}"
+                        ))
+                    })?,
+                    Err(error) => {
+                        tracing::warn!(%error, "workspace scratch GC failed");
+                        json!({ "error": error.to_string() })
+                    }
+                };
+                if let Some(object) = output.as_object_mut() {
+                    object.insert("scratch".to_string(), scratch);
+                }
+            }
+            Ok(output)
         }
         EngineDeterministicAction::PrOpen => vcs::pr_open(host, input),
         EngineDeterministicAction::PrPrepare => vcs::prepare_pr_handoff(host, input),
@@ -154,6 +174,19 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::HandoffLand => vcs::handoff_land(host, input),
         EngineDeterministicAction::PrComplete => vcs::pr_complete(host, input),
     }
+}
+
+/// A non-negative whole number of hours from an activity input field.
+fn hours_input(field: &str, value: &Value) -> Result<u64, OrbitError> {
+    if value.as_i64().is_some_and(|n| n < 0) {
+        return Err(OrbitError::InvalidInput(format!(
+            "{field} must be non-negative"
+        )));
+    }
+    value
+        .as_u64()
+        .filter(|hours| i64::try_from(*hours).is_ok())
+        .ok_or_else(|| OrbitError::InvalidInput(format!("{field} is too large")))
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ use super::{
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
     PluginBrokerHandle, PluginBrokerRun, PrConfig, RebaseRecoveryAttemptScope,
     ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    ScratchGcReport, StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
@@ -485,6 +485,12 @@ pub trait RuntimeHost: Send + Sync {
     /// default host pulls no work and holds no claims.
     fn settled_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
         None
+    }
+    /// Prune this checkout's `.orbit/tmp` of top-level entries untouched for
+    /// `retention_hours`. `None` means the host keeps no scratch directory to
+    /// sweep.
+    fn gc_scratch(&self, _retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError> {
+        Ok(None)
     }
     fn data_root(&self) -> &Path {
         Path::new("")

@@ -352,6 +352,11 @@ The embedded GC job keeps the hourly routine as a backstop, with
 one-hour threshold bounds the exceptional lifetime after a cleanup/reporting
 failure without making scheduled GC the delivery path.
 
+The same job prunes the owning checkout's `.orbit/tmp` by age through the
+`scratch_older_than_hours` input (default 24). That scratch is not tied to a
+run's lifetime, so an age window rather than a delivery hook decides when an
+entry is disposable.
+
 ---
 
 ## 2. Discovery and Registration
