@@ -292,3 +292,12 @@ pub(super) fn apply_audit_machine_name_columns(conn: &Connection) -> Result<(), 
     }
     Ok(())
 }
+
+/// Index the invocation population before grouping tool-call aggregates.
+pub(super) fn apply_audit_tool_call_index(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_command_subcommand_timestamp
+         ON audit_events(command, subcommand, timestamp);",
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}

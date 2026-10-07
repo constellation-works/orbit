@@ -6,7 +6,8 @@
 //! memos use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its row limit), and
-//! `/api/diagnostics/friction` (keyed by month and row limit).
+//! `/api/diagnostics/friction` (keyed by month and row limit), and
+//! `/api/scoreboard` (keyed by the canonical window).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -19,6 +20,9 @@ use serde_json::Value;
 /// Freshness bound for a cached audit summary. Short enough that header tiles
 /// still move, long enough that overlapping dashboard polls collapse.
 pub(crate) const AUDIT_SUMMARY_TTL: Duration = Duration::from_secs(15);
+
+/// Freshness bound for scoreboard summaries and their joined incident scans.
+pub(crate) const SCOREBOARD_TTL: Duration = Duration::from_secs(15);
 
 /// Freshness bound for a cached diagnostics error list. The Errors tab polls
 /// every 30s and each miss scans up to 50k audit rows plus stderr blobs, so

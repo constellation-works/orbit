@@ -67,6 +67,32 @@ default, the session has only the `agent` capability; a server started with `--o
 grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
 not.
 
+## Scoreboard and incident reads
+
+`GET /api/scoreboard` builds a read-only summary and joins incident and metrics
+counts. It does not create or replace `state/scoreboard/summary.json`; explicit
+runtime summary generation still persists that document. Each dashboard server
+shares one computation per live workspace runtime and canonical window for 15
+seconds, including concurrent requests. Omitted `window` and `window=all` share
+an entry. A rebuilt workspace runtime starts a fresh cache namespace.
+
+Cross-run incident grouping tokenizes messages once and incrementally refreshes
+only citations affected by a fold. It preserves the existing fold order,
+same-class/earlier-root checks, 60-second cascade window, and ambiguous run-ID
+handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
+Tool-call aggregates use the command/subcommand/timestamp index added by the
+store migration, while retaining their existing host-global scope.
+
+Run the capped-population timing benchmark explicitly in release mode:
+
+```sh
+scripts/build-budget.py -- cargo test -p orbit-store --release --test incident_performance -- --ignored --nocapture
+```
+
+It groups 10,000 events with 1,200 cross-run citations and asserts a 500 ms
+bound. It is excluded from ordinary test runs so debug compilation and competing
+CI tests do not turn a wall-clock measurement into a flaky correctness check.
+
 ## Find recent failures and causes
 
 The dashboard's **Tool call failures by tool** table retains the raw failed,

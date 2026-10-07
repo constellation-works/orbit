@@ -252,6 +252,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0036".to_string(),
                 "invocation_workspace_scope".to_string()
             ),
+            (
+                "migration.v0037".to_string(),
+                "audit_tool_call_index".to_string()
+            ),
         ]
     );
 }
