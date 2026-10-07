@@ -201,15 +201,13 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Every task that changes Rust sources must run
-       `scripts/codeql-rust-local.sh` before handoff, following
-       `docs/runbooks/codeql-local.md`. This is required for every Rust change,
-       not only CodeQL repairs; do not defer it to review. On a non-Linux host,
-       record the run as not run and arrange the Linux evidence described by
-       the runbook rather than claiming it passed.
-       Run the workspace's required validation commands from a supplied
+       Run every check required by the workspace's AGENTS.md and required
+       validation commands before handoff; do not defer a workspace-required
+       check to review. Read required validation commands from a supplied
        delivery manifest's `required_validation_commands` or
-       `workflow.required_validation_commands`, following its own AGENTS.md.
+       `workflow.required_validation_commands`. If workspace guidance requires
+       a check on another platform, record it as not run and arrange the
+       evidence that guidance specifies rather than claiming it passed.
        When the workspace requires an affected-test gate, run full test
        targets of changed crates and their transitive workspace dependents;
        a formatting/guardrail pass and focused test filters do not replace it.
