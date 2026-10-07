@@ -326,6 +326,22 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::record_handoff_landing(self, update)
     }
 
+    fn local_machine_id(&self) -> Option<String> {
+        self.automation_machine_identity().map(str::to_string)
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+        // Without an identity this host is no machine a candidate lives on,
+        // so only a durable one is offered.
+        self.stores().tasks().kept_claim_candidate(
+            task_id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )
+    }
+
     fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
         let leaf = self.current_claimed_leaf()?;
         let ship = &leaf.admission.request.ship;

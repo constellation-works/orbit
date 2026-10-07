@@ -120,6 +120,8 @@ spec:
     # a changed spec or a bundle implements fresh. ORB-14450: a candidate held
     # on named evidence whose receipt arrived resumes as `resumed_held`,
     # skipping `implement_bundle`; selector edits keep any candidate.
+    # ORB-14603: after a failed claim, the candidate the owner kept from it
+    # is continued, never a local run that shares the leaf's id.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -128,6 +130,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
         prior_job_run_id: "{{ steps.worktree.output.prior_job_run_id }}"
+        prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
       when: "{{ steps.resume_candidate.output.implement }} == true"

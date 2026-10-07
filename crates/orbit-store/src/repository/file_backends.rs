@@ -48,6 +48,17 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_attempts()
     }
 
+    fn kept_claim_candidate(
+        &self,
+        task_id: &str,
+        machine_id: &str,
+    ) -> Result<Option<crate::contracts::KeptClaimCandidate>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.kept_claim_candidate(task_id, machine_id),
+            None => Ok(None),
+        }
+    }
+
     fn mutate_execution_claim(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,

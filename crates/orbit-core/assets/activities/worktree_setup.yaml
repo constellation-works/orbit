@@ -79,6 +79,15 @@ spec:
         type: [string, "null"]
         description: >
           For a single-task run, the run the task was linked to before this
-          one, where `candidate_resume` looks for a preserved candidate.
+          one, where `candidate_resume` looks for a preserved candidate. Null
+          when another machine executed that run: run ids are unique only per
+          machine.
+      prior_foreign_run:
+        type: [object, "null"]
+        description: >
+          For a single-task run whose prior run another machine executed (a
+          claim's leaf), that run's `run_id` and the `machine_id` that
+          executed it. `candidate_resume` then continues the candidate the
+          owner kept from the task's last claim.
   action: worktree_setup
   config: {}

@@ -55,6 +55,19 @@
 //! (or `review` when the before-PR review refused it), and the leaf's own
 //! validation judges the result.
 //!
+//! [ORB-14603] When the task's prior run is one another machine executed — a
+//! claim's leaf, handed in as `prior_foreign_run` with that machine — its id
+//! is never looked up in this machine's run store, where it may name
+//! unrelated work. An owner-local run continues the candidate the owner kept
+//! from the task's last claim instead, as a claimed leaf would: the owner
+//! offers it under the same discard, spec and fetchability checks, a refusal
+//! is `fresh` with that typed reason, and every outcome is written to the
+//! task's history naming the claim and the machine that committed it. A
+//! claim candidate was always committed, so its implementer runs as a
+//! claimed leaf's does. A prior run on this machine that recorded no
+//! failure handoff — a claim's leaf this machine executed — falls back to
+//! the candidate the owner kept from that run's claim.
+//!
 //! A repair claim's leaf passes `claim_repair` instead [ORB-14261]: the
 //! candidate an owner's landing stopped on a base conflict or stale base.
 //! It is squash-merged the same way and the implementer always runs — on a
@@ -65,6 +78,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT, Task, TaskHistoryEntry, TaskStatus,
 };
@@ -155,6 +169,32 @@ struct Candidate {
     /// [ORB-14450] The candidate an evidence hold kept, whose evidence
     /// arrived: resumed without the implementer or owner validation.
     held: bool,
+    /// [ORB-14603] The claim whose settlement the owner kept it from, and
+    /// the machine that claim executed on, for an owner-local run's resume.
+    claim: Option<ClaimSource>,
+}
+
+impl Candidate {
+    /// The run that produced it, with the machine that executed it when that
+    /// was a claim's leaf: its id alone names no run on this machine.
+    fn source(&self) -> String {
+        match &self.claim {
+            Some(claim) => format!("Run '{}' on machine '{}'", self.run_id, claim.machine_id),
+            None => format!("Run '{}'", self.run_id),
+        }
+    }
+}
+
+/// The claim a kept candidate came from.
+struct ClaimSource {
+    claim_id: String,
+    machine_id: String,
+}
+
+/// [ORB-14603] The task's prior run, executed on another machine.
+struct ForeignRun {
+    run_id: String,
+    machine_id: String,
 }
 
 /// What the task's last run left to resume.
@@ -228,18 +268,31 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         return claimed_resume(host, input, task_id, &workspace_path, &base_sha);
     }
     let task = host.get_task(task_id)?;
-    let prior_run_id = input_string_field(input, "prior_job_run_id");
-    let (candidate, outcome) = match preserved_candidate(host, &task, prior_run_id)? {
+    let foreign = input.get("prior_foreign_run").and_then(|run| {
+        Some(ForeignRun {
+            run_id: input_string_field(run, "run_id")?,
+            machine_id: input_string_field(run, "machine_id")?,
+        })
+    });
+    let preserved = match &foreign {
+        Some(foreign) => foreign_candidate(host, &task, foreign)?,
+        None => {
+            let prior_run_id = input_string_field(input, "prior_job_run_id");
+            preserved_candidate(host, &task, prior_run_id)?
+        }
+    };
+    let (candidate, outcome) = match preserved {
         Preserved::None(reason) => return Ok(output(&Outcome::Fresh(reason), None, &base_sha)),
         Preserved::Refused(candidate, reason) => (candidate, Outcome::Fresh(reason)),
         Preserved::Usable(candidate) => {
+            let from_claim = candidate.claim.is_some();
             let outcome = resume(
                 host,
                 &task.id,
                 &candidate,
                 &workspace_path,
                 &base_sha,
-                false,
+                from_claim,
             )?;
             (candidate, outcome)
         }
@@ -257,11 +310,10 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
     base_sha: &str,
 ) -> Result<Value, OrbitError> {
-    let preserved = input.get("candidate").filter(|value| !value.is_null());
-    let (Some(branch), Some(head_sha)) = (
-        preserved.and_then(|value| input_string_field(value, "branch")),
-        preserved.and_then(|value| input_string_field(value, "head_sha")),
-    ) else {
+    let Some(candidate) = input
+        .get("candidate")
+        .and_then(|preserved| claim_candidate(preserved, None))
+    else {
         return Ok(output(
             &Outcome::Fresh(Fresh::new(
                 "no_candidate",
@@ -271,12 +323,26 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
             base_sha,
         ));
     };
-    let preserved = preserved.unwrap_or(&Value::Null);
+    let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
+    tracing::info!(
+        task_id,
+        outcome = outcome_name(&outcome),
+        source_run_id = %candidate.run_id,
+        "claimed candidate resume"
+    );
+    Ok(output(&outcome, Some(&candidate), base_sha))
+}
+
+/// The candidate a claim's leaf committed, from its kept reference (a
+/// `ClaimCandidateRef`); `None` without a branch and head.
+fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Candidate> {
+    let branch = input_string_field(preserved, "branch")?;
+    let head_sha = input_string_field(preserved, "head_sha")?;
     // A leaf that stopped after its last delivery step names none; its
     // candidate is complete.
     let failed_step_id =
         input_string_field(preserved, "failed_step_id").unwrap_or_else(|| "handoff".to_string());
-    let candidate = Candidate {
+    Some(Candidate {
         run_id: input_string_field(preserved, "source_run_id")
             .unwrap_or_else(|| "an earlier claim".to_string()),
         branch,
@@ -286,15 +352,8 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
         needs_review_repair: failed_step_id == REVIEW_VERDICT_STEP,
         failed_step_id,
         held: false,
-    };
-    let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
-    tracing::info!(
-        task_id,
-        outcome = outcome_name(&outcome),
-        source_run_id = %candidate.run_id,
-        "claimed candidate resume"
-    );
-    Ok(output(&outcome, Some(&candidate), base_sha))
+        claim,
+    })
 }
 
 /// The candidate recorded by the failure handoff of the run the task was last
@@ -323,7 +382,11 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
                 .is_some_and(|decision| PRESERVING_DECISIONS.contains(&decision))
             && checkpoint.output.get("task_id").and_then(Value::as_str) == Some(task.id.as_str())
     }) else {
-        return held_candidate(host, task, &prior_run_id);
+        return match held_candidate(host, task, &prior_run_id)? {
+            Preserved::None(reason) => Ok(local_claim_candidate(host, task, &prior_run_id)?
+                .unwrap_or(Preserved::None(reason))),
+            preserved => Ok(preserved),
+        };
     };
     let evidence = &checkpoint.output;
     let (Some(branch), Some(head_sha)) = (
@@ -343,6 +406,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         failed_step_id: checkpoint.failed_step_id,
         needs_review_repair: evidence["decision"] == "blocked_review_gate",
         held: false,
+        claim: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -399,12 +463,92 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         failed_step_id: REVIEW_VERDICT_STEP.to_string(),
         needs_review_repair: false,
         held: true,
+        claim: None,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
     // it is now.
     let recorded = hold.task_spec_digest.as_deref().map(Some);
     refuse_stale(host, task, candidate, recorded)
+}
+
+/// [ORB-14603] What an owner-local run resumes when the task's prior run
+/// executed on another machine: the candidate the owner kept from the task's
+/// last claim, never anything this machine's run store holds under that
+/// run's id.
+fn foreign_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    foreign: &ForeignRun,
+) -> Result<Preserved, OrbitError> {
+    Ok(match host.kept_claim_candidate(&task.id)? {
+        Some(kept) => kept_candidate(kept)?,
+        None => Preserved::None(Fresh::new(
+            "no_candidate",
+            format!(
+                "run '{}' on machine '{}' preserved no candidate the owner kept for the task",
+                foreign.run_id, foreign.machine_id
+            ),
+        )),
+    })
+}
+
+/// [ORB-14603] The candidate the owner kept from the claim whose leaf was
+/// this machine's run `prior_run_id`, when that leaf left no failure handoff.
+fn local_claim_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    prior_run_id: &str,
+) -> Result<Option<Preserved>, OrbitError> {
+    let local = host.local_machine_id();
+    host.kept_claim_candidate(&task.id)?
+        .filter(|kept| {
+            local.as_deref() == Some(kept.machine_id.as_str())
+                && kept.candidate.source_run_id.as_deref() == Some(prior_run_id)
+        })
+        .map(kept_candidate)
+        .transpose()
+}
+
+/// A candidate the owner kept from a claim, or why it refused it.
+fn kept_candidate(kept: KeptClaimCandidate) -> Result<Preserved, OrbitError> {
+    let KeptClaimCandidate {
+        claim_id,
+        machine_id,
+        candidate,
+        fresh,
+    } = kept;
+    let source = format!("claim '{claim_id}' on machine '{machine_id}'");
+    let reference = serde_json::to_value(&candidate).map_err(|error| {
+        OrbitError::Execution(format!(
+            "candidate_resume: candidate kept from {source} is unreadable: {error}"
+        ))
+    })?;
+    let Some(candidate) = claim_candidate(
+        &reference,
+        Some(ClaimSource {
+            claim_id,
+            machine_id,
+        }),
+    ) else {
+        return Ok(Preserved::None(Fresh::new(
+            "no_candidate",
+            format!("{source} kept no candidate branch and head"),
+        )));
+    };
+    let Some((reason, detail)) = fresh else {
+        return Ok(Preserved::Usable(candidate));
+    };
+    let code = match reason {
+        CandidateFreshReason::NotDurable => "not_durable",
+        CandidateFreshReason::SpecChanged => "spec_changed",
+        CandidateFreshReason::Discarded => "candidate_discarded",
+    };
+    let reason = Fresh::new(
+        code,
+        format!("candidate {} from {source}: {detail}", candidate.head_sha),
+    );
+    Ok(Preserved::Refused(candidate, reason))
 }
 
 /// Whether the latest status decision in `history` is the evidence receipt
@@ -502,6 +646,7 @@ fn claim_repair_resume(
         failed_step_id: "landing".to_string(),
         needs_review_repair: false,
         held: false,
+        claim: None,
     };
     let outcome = match apply(&candidate, workspace_path, base_sha)? {
         Applied::Refused(reason) => {
@@ -633,6 +778,9 @@ fn apply(
     Ok(Applied::Clean)
 }
 
+/// Apply `candidate` and judge it. `claimed` is a candidate a claim's leaf
+/// committed, resumed by a claimed leaf or by the owner's own run
+/// [ORB-14603].
 fn resume<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
@@ -698,23 +846,24 @@ fn resume<H: RuntimeHost + ?Sized>(
             "trigger": "review",
             "failed_step_id": candidate.failed_step_id,
             "output": format!(
-                "The before-PR review refused this candidate in run '{}'. Its verdict and \
-                 findings are in the review settlement comment on task {task_id}.",
-                candidate.run_id
+                "The before-PR review refused this candidate ({}). Its verdict and findings are \
+                 in the review settlement comment on task {task_id}.",
+                candidate.source()
             ),
         })));
     }
-    // A claimed implementer always runs; the leaf's own validation judges
+    // A claimed implementer always runs; the run's own validation judges
     // what it leaves.
     if claimed {
         return Ok(Outcome::Repair(json!({
             "trigger": "continuation",
             "failed_step_id": candidate.failed_step_id,
             "output": format!(
-                "Run '{}' committed this candidate and stopped at step '{}' without delivering \
-                 it. It is applied onto the current base: check it against the task, finish \
-                 what is missing, and keep what is already done.",
-                candidate.run_id, candidate.failed_step_id
+                "{} committed this candidate and stopped at step '{}' without delivering it. It \
+                 is applied onto the current base: check it against the task, finish what is \
+                 missing, and keep what is already done.",
+                candidate.source(),
+                candidate.failed_step_id
             ),
         })));
     }
@@ -791,8 +940,11 @@ fn record<H: RuntimeHost + ?Sized>(
         ),
         Outcome::Validated | Outcome::Held => String::new(),
     };
+    let claim = candidate.claim.as_ref().map_or_else(String::new, |claim| {
+        format!("claim={}, machine={}, ", claim.claim_id, claim.machine_id)
+    });
     let note = format!(
-        "{}: run={run_id}, source_run={}, source_branch={}, source_sha={}{detail}",
+        "{}: run={run_id}, {claim}source_run={}, source_branch={}, source_sha={}{detail}",
         outcome_name(outcome),
         candidate.run_id,
         candidate.branch,
@@ -835,6 +987,9 @@ fn output(outcome: &Outcome, candidate: Option<&Candidate>, base_sha: &str) -> V
         "reason_code": reason_code,
         "repair": repair,
         "source_run_id": candidate.map(|candidate| candidate.run_id.as_str()),
+        "source_machine_id": candidate
+            .and_then(|candidate| candidate.claim.as_ref())
+            .map(|claim| claim.machine_id.as_str()),
         "source_branch": candidate.map(|candidate| candidate.branch.as_str()),
         "source_sha": candidate.map(|candidate| candidate.head_sha.as_str()),
         "base_sha": base_sha,

@@ -584,6 +584,25 @@ owns delivery:
   judges the result. A candidate that is not on `origin` or in the executing host's object store
   is implemented fresh with the reason in the step's output. Carried refs are not deleted by
   Orbit; the runbook covers pruning them.
+- *Owner-local continuation after a failed claim* ([ORB-14603]). A task whose claim failed with
+  a kept candidate may next run on the owner itself, an owner-local `task_pr_pipeline` or
+  `task_local_pipeline` (on-call returns a task tagged `os:linux` to the backlog after a
+  follower's review failure, for instance). The task's `job_run_id` then names the follower's
+  leaf, and run ids are unique only per machine, so `worktree_setup` never resolves it locally:
+  when `job_run_machine` is not this machine it outputs `prior_foreign_run` (run and machine)
+  instead of `prior_job_run_id`. `candidate_resume` then asks the owner's coordination store for
+  the same offer admission makes (`kept_claim_candidate`): the latest kept candidate, under the
+  same spec, discard and fetchability checks against the owner's machine. A usable candidate is
+  fetched and squash-applied as on a claimed leaf and resumes as `resumed_repaired` with trigger
+  `continuation` (`review` when the before-PR review refused it, `conflict` when it no longer
+  applies); the implementer always runs, because the follower's summary did not reach the task,
+  and the run's own validation and review judge the result. A refused one implements fresh with
+  its typed `reason_code` (`spec_changed`, `candidate_discarded`, `not_durable`). Either way the
+  run writes a `candidate_resume` event naming the claim, the machine that committed the
+  candidate and its source run, and the step output carries `source_machine_id`. With no kept
+  candidate the fresh reason names the foreign run's machine; a local run that happens to share
+  the leaf's id is never read. A prior run on the owner that left no failure handoff — a claim's
+  leaf the owner executed itself — falls back to the candidate kept from that leaf's claim.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -878,7 +897,7 @@ audit label, and absent historical identity reads as *unknown*, never as "the ow
 | Job run | `executed_on` | the runtime that inserts the run | immutable; steps inherit; nullable |
 | Task | `job_run_machine` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; run ids are unique per machine, so run-keyed task lookups match both fields; the legacy `job_run_host` name is still read |
 | Task history | `pulled_by` event | `orbit.task.pull` | request and claim identity |
-| Task history | `candidate_resume` event | owner admission | a kept candidate the claim implements fresh instead: claim, machine, source candidate, typed reason |
+| Task history | `candidate_resume` event | owner admission; an owner-local run's `candidate_resume` step | a kept candidate the claim implements fresh instead, or an owner-local run's outcome for the candidate kept from the last claim: claim, machine, source candidate, typed reason |
 | Task artifact | `origin` | the owner, at put time | from trusted invocation context; remote labels alone leave it unknown |
 
 Until federated run inspection ([3_vision.md](./3_vision.md#1-open-questions)) exists, these
@@ -1092,5 +1111,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; a claimed PR leaf continues a kept candidate it can fetch.
 - [ORB-14338] — carried an unpublished claimed candidate to a durable ref on `origin` so any host resumes it, gave claimed-local leaves candidate continuation, and recorded a typed reason in task history when a kept candidate is set aside.
 - [ORB-14261] — added one automatic repair of a handoff whose landing stopped on its base.
+- [ORB-14603] — made an owner-local run after a failed claim continue the kept candidate, and stopped resolving a follower's run id in the owner's own run store.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

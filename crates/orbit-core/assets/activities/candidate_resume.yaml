@@ -46,6 +46,17 @@ spec:
     is `resumed_repaired` with trigger `continuation` (`review` when the
     before-PR review refused it): the claimed implementer always runs and
     the leaf's own validation judges the result.
+    When the task's prior run executed on another machine
+    (`prior_foreign_run`, a claim's leaf), its id is never looked up in this
+    machine's run store. An owner-local run continues the candidate the
+    owner kept from the task's last claim instead, under the same discard,
+    spec and fetchability checks as a claim's admission: a refusal is
+    `fresh` with that typed reason, and a clean merge is `resumed_repaired`
+    with trigger `continuation` (`review` when the before-PR review refused
+    it). The outcome is written to the task history naming the claim and
+    the machine that committed the candidate. A prior run on this machine
+    that recorded no failure handoff falls back to the candidate the owner
+    kept from that run's claim.
     A repair claim's leaf instead passes `claim_repair`, the candidate an
     owner's landing stopped on a base conflict or stale base. It is
     squash-merged the same way and is always `resumed_repaired`: trigger
@@ -70,6 +81,11 @@ spec:
           type: string
       prior_job_run_id:
         type: [string, "null"]
+      prior_foreign_run:
+        type: [object, "null"]
+        description: >
+          The task's prior run when another machine executed it: `run_id`
+          and `machine_id`. Takes precedence over `prior_job_run_id`.
       claimed:
         type: boolean
       candidate:
@@ -103,7 +119,8 @@ spec:
         description: >
           Set when `outcome` is `fresh`: `bundle`, `no_prior_run`,
           `no_candidate`, `candidate_discarded`, `spec_unrecorded`,
-          `spec_changed`, `candidate_missing` or `already_on_base`.
+          `spec_changed`, `not_durable`, `candidate_missing` or
+          `already_on_base`.
       repair:
         type: [object, "null"]
         description: >
@@ -112,6 +129,11 @@ spec:
           `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]
+      source_machine_id:
+        type: [string, "null"]
+        description: >
+          The machine that executed `source_run_id`, when the candidate came
+          from a claim's leaf the owner kept it from.
       source_branch:
         type: [string, "null"]
       source_sha:

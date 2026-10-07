@@ -3,7 +3,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_store::contracts::JobRunStepParams;
-use orbit_store::contracts::{InvocationQuery, InvocationRecord};
+use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
@@ -333,6 +333,25 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
+
+    /// The machine this runtime executes on, as the
+    /// [`orbit_types::task::ExecutionLocation`] of its own runs names it. Run
+    /// ids are unique only per machine [ORB-13649], so a task bound to a run
+    /// on any other machine — or on any machine, when this host has no
+    /// identity — names a run this store does not hold.
+    fn local_machine_id(&self) -> Option<String> {
+        None
+    }
+
+    /// [ORB-14603] The candidate the task's latest claim settlement kept, as
+    /// offered to this machine's own run of the task, or why that run
+    /// implements afresh. Hosts that keep no claims kept none.
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        Ok(None)
+    }
 
     /// The trusted claim this process is executing under. Hosts with no worker
     /// binding have no claimed execution and refuse: a claimed leaf activity

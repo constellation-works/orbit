@@ -13,7 +13,7 @@ mod mutate;
 mod releases;
 
 pub(super) use codec::{CLAIM, STATE, decode, encode, invalid, row};
-pub(super) use releases::CandidateOffer;
+pub(super) use releases::fresh_offer_history;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MutationReceipt {
