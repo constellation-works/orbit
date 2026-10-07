@@ -264,6 +264,136 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
 }
 
 #[test]
+fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
+    const TEST: &str = "claimed_delivery_recovery::unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    for status in ["archived", "rejected", "done", "deleted"] {
+        let (fixture, runtime, legacy, action_id) = claimed(false);
+        let store = runtime.automation_store().unwrap();
+        let receipts = store.automation_receipts(&legacy.consumer, 100).unwrap();
+        if matches!(status, "archived" | "deleted") {
+            fixture
+                .command(&["task", "archive", &action_id])
+                .assert()
+                .success();
+        } else {
+            fixture.json(&[
+                "task", "update", &action_id, "--status", status, "--force", "--json",
+            ]);
+        }
+        let closed = runtime.get_task(&action_id).unwrap();
+        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let before = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+            .unwrap()
+            .state
+            .unwrap();
+        assert_debt_unchanged(&legacy, &before);
+        let active = before.active.as_ref().unwrap();
+        assert_eq!(active.attempt, 2);
+        assert_eq!(active.state, BatchState::Claimed);
+        assert!(active.action_id.is_none());
+        assert!(active.retry_after.is_some());
+        assert_eq!(
+            active.reason.as_deref(),
+            Some("task_closed_without_accepted_evidence")
+        );
+        if status == "deleted" {
+            runtime.delete_task(&action_id).unwrap();
+        }
+
+        // [ORB-14579] The old task belongs to attempt 1. A later definition
+        // edit must not mistake its unminted retry for executing work.
+        retune(&fixture, 30);
+        let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
+        if status == "deleted" {
+            assert_eq!(preview["refusals"], json!(["active_execution"]));
+            assert_eq!(
+                preview["action"]["reissuable"], false,
+                "a backoff without a resolvable predecessor is not terminal proof"
+            );
+            fixture
+                .command(&[
+                    "auto-task",
+                    "recover",
+                    CONSUMER,
+                    "--adopt-settings",
+                    "--reason",
+                    "must retain unknown liveness",
+                ])
+                .assert()
+                .failure();
+            assert_eq!(
+                store.automation_state(&before.consumer).unwrap().unwrap(),
+                before
+            );
+            assert_eq!(
+                store.automation_receipts(&before.consumer, 100).unwrap(),
+                receipts
+            );
+            continue;
+        }
+        assert_eq!(
+            preview["refusals"],
+            json!([]),
+            "unminted retry after {status}: {preview}"
+        );
+        assert_eq!(preview["action"]["reissuable"], true);
+        assert_eq!(
+            store.automation_state(&before.consumer).unwrap().unwrap(),
+            before
+        );
+        fixture.json(&[
+            "auto-task",
+            "recover",
+            CONSUMER,
+            "--adopt-settings",
+            "--reason",
+            "retain the legacy retry debt",
+            "--json",
+        ]);
+        let adopted = store.automation_state(&before.consumer).unwrap().unwrap();
+        assert_ne!(adopted.epoch, before.epoch);
+        assert_eq!(adopted.active, before.active);
+        assert_debt_unchanged(&before, &adopted);
+        assert_eq!(doctor_row(&fixture).0["status"], "ok");
+
+        // Explicit reissue is audited and retains the entire frozen batch,
+        // even though this retry never minted an action of its own.
+        let reissued = fixture.json(&[
+            "auto-task",
+            "recover",
+            CONSUMER,
+            "--reissue-action",
+            "--reason",
+            "authorize another examination",
+            "--json",
+        ]);
+        assert_eq!(reissued["applied"], json!(["reissued_action"]));
+        assert_eq!(
+            reissued["action"]["reissuable"], false,
+            "a fresh operator claim has no settled action of its own"
+        );
+        let after = store.automation_state(&before.consumer).unwrap().unwrap();
+        assert_eq!(after.active.as_ref().unwrap().attempt, 3);
+        assert_debt_unchanged(&before, &after);
+        assert_eq!(
+            store.automation_receipts(&before.consumer, 100).unwrap(),
+            receipts
+        );
+        assert_eq!(runtime.get_task(&action_id).unwrap(), closed);
+        assert_eq!(
+            store
+                .automation_recoveries(&before.consumer, 10)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+}
+
+#[test]
 fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
     const TEST: &str = "claimed_delivery_recovery::scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks";
     if !in_isolated_child(TEST) {
@@ -329,13 +459,29 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
             receipts
         );
         assert_eq!(runtime.get_task(&action_id).unwrap(), archived);
+        // Another edit on a later tick must retain the same terminal proof;
+        // retry_scheduled is only true during the original settlement pass.
+        retune(&fixture, 45);
+        let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
+        assert_eq!(preview["refusals"], json!([]));
+        assert_eq!(preview["action"]["reissuable"], true);
         let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
         let resumed =
             evaluate_auto_task(&runtime, &definition, false, now + Duration::minutes(6)).unwrap();
-        let new_id = resumed.state.unwrap().active.unwrap().action_id.unwrap();
+        let resumed_state = resumed.state.unwrap();
+        assert_ne!(resumed_state.epoch, after.epoch);
+        assert_debt_unchanged(&before, &resumed_state);
+        let new_id = resumed_state.active.unwrap().action_id.unwrap();
         assert_ne!(
             new_id, action_id,
             "review resumes after the retained retry backoff"
+        );
+        retune(&fixture, 60);
+        let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
+        assert_eq!(preview["refusals"], json!(["active_execution"]));
+        assert_eq!(
+            preview["action"]["reissuable"], false,
+            "a live retry overrides its predecessor's failure"
         );
     }
 }
