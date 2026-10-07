@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Vision
 owner: codex
-last_updated: 2026-08-30
-last_validated: 2026-09-19
+last_updated: 2026-09-24
+last_validated: 2026-10-06
 status: Draft
 feature: task-publication
 doc_role: vision
