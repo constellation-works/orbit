@@ -186,7 +186,7 @@ pub fn resolve_installed_executable(executable: &Path) -> PathBuf {
     executable.to_path_buf()
 }
 
-/// Ask `executable` what version it is, within [`probe_timeout`].
+/// Ask `executable` what version it is, within `probe_timeout()`.
 pub fn probe_version(executable: &Path) -> Result<String, OrbitError> {
     let output = run_probe(Command::new(executable).arg("--version")).map_err(|error| {
         OrbitError::Execution(format!(
