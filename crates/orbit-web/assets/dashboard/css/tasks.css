@@ -491,7 +491,7 @@ main.tasks-layout {
   grid-template-columns: minmax(0, 1fr) var(--dock-w, clamp(336px, 32%, 720px));
 }
 @media (max-width: 1250px) {
-  main.tasks-layout {
+  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
     grid-template-columns: minmax(0, 2fr) var(--dock-w, minmax(280px, 1.15fr)) !important;
   }
 }
@@ -502,7 +502,7 @@ main.tasks-layout {
    log panel follows underneath rather than both being squeezed into
    slivers side by side. */
 @media (max-width: 900px) {
-  main.tasks-layout {
+  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
     grid-template-columns: 1fr !important;
   }
 
@@ -539,4 +539,3 @@ main.tasks-layout {
     z-index: 5;
   }
 }
-
