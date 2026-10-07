@@ -69,7 +69,7 @@ copy. Run `orbit routine list` to see their names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived. |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |

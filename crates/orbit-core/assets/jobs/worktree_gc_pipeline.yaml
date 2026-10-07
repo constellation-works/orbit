@@ -12,8 +12,14 @@ spec:
     # the bounded backstop for a cleanup report that could not be persisted or
     # an interrupted delivery path; this is no longer the normal lifetime.
     older_than_hours: 1
+    # The owning checkout's `.orbit/tmp` (operator and artifact staging) is
+    # pruned in the same sweep: a top-level entry goes once nothing inside it
+    # has changed for this many hours. Override per run with
+    # `--input scratch_older_than_hours=<hours>`.
+    scratch_older_than_hours: 24
   steps:
     - id: reap
       target: activity:worktree_gc
       default_input:
         older_than_hours: "{{ input.older_than_hours }}"
+        scratch_older_than_hours: "{{ input.scratch_older_than_hours }}"

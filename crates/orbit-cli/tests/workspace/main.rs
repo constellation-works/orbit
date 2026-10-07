@@ -22,6 +22,8 @@ mod init_minted_prefix;
 mod replica_routines;
 mod routine_root;
 mod routine_state_seed;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod scratch_gc;
 mod ship_sweep_root;
 mod sweep_root;
 mod sweep_workspace;

@@ -26,6 +26,39 @@ is never a candidate. Run the report a few times before automating it, then
 enable the `worktree-gc` routine for hourly reclamation —
 [automation.md](automation.md).
 
+### Workspace scratch
+
+The same `worktree_gc_pipeline` run also prunes the checkout's own
+`.orbit/tmp` (`ORBIT_SCRATCH_DIR`), where operators and
+`orbit.task.artifact.put` callers stage evidence, build output and CodeQL
+databases. Artifacts are copied into the task store, so staged files are
+disposable once attached. A top-level entry is removed when its **newest mtime
+anywhere inside it** is older than `scratch_older_than_hours` (default `24`);
+newer entries are kept, so a file staged moments ago is never at risk.
+Override the window for one run:
+
+```bash
+orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=72
+orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=0   # everything not in use
+```
+
+Set the default for a workspace by editing `scratch_older_than_hours` in the
+seeded job under `~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`. A run
+scoped to one run id (`target_run_id`) leaves scratch alone.
+
+Symlinks are removed as links and never followed out of `.orbit/tmp`. GC skips,
+and reports with a reason, any entry that a live process holds open, uses as its
+working directory or executes (read from `/proc` on Linux and `lsof` on macOS —
+best effort, so another user's processes are not visible), or whose path an
+active run's record or state names. When it cannot tell, it skips. A failure
+removing an entry skips that entry and the sweep continues.
+
+`orbit run show <run> --json` carries the figures under the `reap` step's
+`scratch` object, beside the worktree figures: `bytes_reclaimed`,
+`entries_removed`, `entries_skipped` (each listed in `entries` with its
+`reason`) and `entries_kept`. To empty the directory by hand regardless of age,
+use `orbit gc tmp`.
+
 On a replica checkout (one that pulls work from an owner on another machine),
 task records live on the owner. A claimed leaf whose claim this follower has
 settled with the owner needs no task answer: the owner holds its delivery, so

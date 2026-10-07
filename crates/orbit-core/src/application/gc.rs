@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::{OrbitError, OrbitRuntime};
 
+mod scratch;
 mod tmp;
 pub use tmp::{TmpGcReport, TmpGcResult};
 

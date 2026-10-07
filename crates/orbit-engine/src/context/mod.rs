@@ -18,8 +18,8 @@ pub use hosts::{
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry,
+    ScratchGcReport, StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate,
     WorktreeGcTaskLookup,
 };
