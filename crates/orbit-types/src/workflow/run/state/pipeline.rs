@@ -151,6 +151,11 @@ pub struct PipelineState {
     /// seeded from a held run reads it to keep the lineage's `held_since`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge_hold: Option<crate::workflow::ForgeUnavailableHold>,
+    /// When the clock finished expiring this run's forge hold. A recorded
+    /// expiry stops later ticks from acting again; manual resume retains the
+    /// hold and checkpoints, but clears this run-local acknowledgement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge_hold_expired_at: Option<DateTime<Utc>>,
     /// How this run was submitted [ORB-12255]. Absent on runs recorded before
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +194,7 @@ impl PipelineState {
             activity_crew_draws: BTreeMap::new(),
             final_recovery: None,
             forge_hold: None,
+            forge_hold_expired_at: None,
             trigger: None,
             updated_at: Utc::now(),
         }

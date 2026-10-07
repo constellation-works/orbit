@@ -783,12 +783,13 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
 }
 
 /// [ORB-10002] Re-key a source run's checkpoint state onto the resumed run.
-/// The step records are the source's; only the identity and timestamp change,
-/// so the resumed run owns its own durable state from its first write.
+/// The step records are the source's; the identity and timestamp belong to
+/// the resumed run. Forge-hold expiry is run-local and starts unacknowledged.
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
     seeded.job_id = run.job_id.clone();
+    seeded.forge_hold_expired_at = None;
     seeded.updated_at = chrono::Utc::now();
     seeded
 }

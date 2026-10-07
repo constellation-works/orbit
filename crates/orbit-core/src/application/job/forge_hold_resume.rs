@@ -9,9 +9,10 @@
 //! refuses holds again, keeping the lineage's first hold time.
 //!
 //! The retry is bounded by [`FORGE_HOLD_RETRY_WINDOW`] from that first hold.
-//! Past it the clock stops retrying and blocks the run's in-progress tasks
+//! Past it the clock stops retrying and blocks the run's coupled in-progress tasks
 //! with [`FORGE_UNAVAILABLE_EXPIRED_EVENT`], naming the held run so that
-//! resuming it by hand re-admits them.
+//! resuming it by hand re-admits them. The recorded expiry makes later ticks
+//! leave this hold alone, including tasks an operator has since re-queued.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
@@ -24,6 +25,7 @@ use orbit_types::workflow::{
 
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::runtime::task::resumed_task_run_id;
 
 use super::resume::task_ids_from_input;
 
@@ -57,10 +59,13 @@ impl OrbitRuntime {
             ..JobRunQuery::default()
         })?;
         for run in held {
-            let Some(hold) = self
-                .read_run_state(&run.run_id)?
-                .and_then(|state| state.forge_hold)
-            else {
+            let Some(state) = self.read_run_state(&run.run_id)? else {
+                continue;
+            };
+            if state.forge_hold_expired_at.is_some() {
+                continue;
+            }
+            let Some(hold) = state.forge_hold else {
                 continue;
             };
             // A retry already resumed this run; that retry is the lineage's
@@ -77,7 +82,8 @@ impl OrbitRuntime {
                 continue;
             }
             if now.signed_duration_since(hold.held_since) > FORGE_HOLD_RETRY_WINDOW {
-                tick.expired.extend(self.expire_forge_hold(&run, &hold)?);
+                tick.expired
+                    .extend(self.expire_forge_hold(&run, &hold, now)?);
                 continue;
             }
             match self.submit_resume_run(&run.run_id, Some(CLOCK_ACTOR), None) {
@@ -109,6 +115,7 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
         hold: &ForgeUnavailableHold,
+        now: DateTime<Utc>,
     ) -> Result<Vec<String>, OrbitError> {
         let mut blocked = Vec::new();
         let task_ids = run
@@ -117,9 +124,6 @@ impl OrbitRuntime {
             .and_then(task_ids_from_input)
             .unwrap_or_default();
         for task_id in task_ids {
-            if self.get_task(&task_id)?.status != TaskStatus::InProgress {
-                continue;
-            }
             let note = format!(
                 "{FORGE_UNAVAILABLE_EXPIRED_EVENT}: run={}; the forge has refused the push of {} \
                  to {} since {}, longer than the clock retries; the candidate and its worktree \
@@ -137,26 +141,68 @@ impl OrbitRuntime {
                 status_note: Some(note),
                 ..TaskAutomationUpdate::default()
             };
-            match self.apply_task_automation_update(&task_id, update) {
-                Ok(()) => {
-                    tracing::warn!(
-                        target: "orbit.core.sweep",
-                        run_id = %run.run_id,
-                        task_id = %task_id,
-                        held_since = %hold.held_since,
-                        "blocked a task whose push the forge refused past the retry window",
-                    );
-                    blocked.push(task_id);
-                }
-                Err(error) => tracing::warn!(
+            // The admission binding can change after the run list was read.
+            // Keep the ownership decision and block under the same task lock,
+            // including a resume that retained its checkpoint's batch id.
+            let mut changed = false;
+            self.stores()
+                .tasks()
+                .with_task_write_lock(&task_id, &mut || {
+                    let current = self.get_task(&task_id)?;
+                    if current.status != TaskStatus::InProgress
+                        || current.job_run_machine.as_ref().is_some_and(|bound| {
+                            run.executed_on
+                                .as_ref()
+                                .is_none_or(|local| local.machine_id != bound.machine_id)
+                        })
+                    {
+                        return Ok(());
+                    }
+                    let history = self.get_task_history(&task_id)?;
+                    let coupled_run = current
+                        .job_run_id
+                        .as_deref()
+                        .map(|owner| resumed_task_run_id(&history, owner).unwrap_or(owner));
+                    if coupled_run != Some(run.run_id.as_str()) {
+                        return Ok(());
+                    }
+                    // Task history also protects an already-applied expiry if
+                    // recording the run acknowledgement failed or was interrupted.
+                    let expired_note_prefix =
+                        format!("{FORGE_UNAVAILABLE_EXPIRED_EVENT}: run={};", run.run_id);
+                    if history.iter().any(|entry| {
+                        entry.event == FORGE_UNAVAILABLE_EXPIRED_EVENT
+                            && entry
+                                .note
+                                .as_deref()
+                                .is_some_and(|note| note.starts_with(&expired_note_prefix))
+                    }) {
+                        return Ok(());
+                    }
+                    self.apply_task_automation_update(&task_id, update.clone())?;
+                    changed = true;
+                    Ok(())
+                })?;
+            if changed {
+                tracing::warn!(
                     target: "orbit.core.sweep",
                     run_id = %run.run_id,
                     task_id = %task_id,
-                    error = %error,
-                    "could not block a task whose forge hold expired",
-                ),
+                    held_since = %hold.held_since,
+                    "blocked a task whose push the forge refused past the retry window",
+                );
+                blocked.push(task_id);
             }
         }
+        // Preserve the hold so `orbit job resume` remains available. Mark it
+        // only after task decisions succeeded; partial expiry can retry safely
+        // using the per-task history above, without blocking or logging twice.
+        self.stores()
+            .jobs()
+            .update_run_state(&run.run_id, &mut |_, state| {
+                state.forge_hold_expired_at = Some(now);
+                Ok(())
+            })?;
         Ok(blocked)
     }
 }
