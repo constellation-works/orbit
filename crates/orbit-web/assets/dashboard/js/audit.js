@@ -311,8 +311,6 @@ function fetchAndRenderAudit(ctx) {
   sp.set("limit", String(AUDIT_LIMIT));
   if (auditFilter.eventIds.length > 0) {
     sp.set("ids", auditFilter.eventIds.join(","));
-    const workspace = getWorkspace();
-    if (workspace) sp.set("workspace_id", workspace);
   } else {
     const since = effectiveAuditWindow();
     if (since) sp.set("since", since);
@@ -331,11 +329,10 @@ function fetchAndRenderAudit(ctx) {
         const batch = new URLSearchParams();
         batch.set("limit", String(AUDIT_LIMIT));
         batch.set("ids", eventIds.slice(start, start + INCIDENT_ID_BATCH_SIZE).join(","));
-        const workspace = getWorkspace();
-        if (workspace) batch.set("workspace_id", workspace);
         events.push(...await fetchJson(`/api/audit?${batch.toString()}`));
       }
-      return events;
+      // Each batch is newest-first; restore that order across batches.
+      return events.sort((a, b) => b.id - a.id);
     }
     : () => fetchJson(path);
   // A slower search or the previous workspace must not paint over the visit
