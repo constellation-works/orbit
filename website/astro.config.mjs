@@ -28,6 +28,53 @@ function addClasses(node, ctx, ...classNames) {
   ctx.setProperty(node, 'className', list);
 }
 
+function addConfigKeyBreaks(node, ctx) {
+  const children = (node.children || []).flatMap((child) => {
+    if (child.type !== 'text' || !/[._]/.test(child.value)) return [child];
+
+    const parts = child.value.split(/([._])/);
+    return parts.flatMap((part) => {
+      if (!part) return [];
+      const text = { type: 'text', value: part };
+      return /[._]/.test(part)
+        ? [text, { type: 'element', tagName: 'wbr', properties: {}, children: [] }]
+        : [text];
+    });
+  });
+  ctx.setProperty(node, 'children', children);
+}
+
+function addConfigKeyBreaksInCell(node, ctx) {
+  if (node.tagName === 'code') {
+    addConfigKeyBreaks(node, ctx);
+    return;
+  }
+  if (node.tagName === 'pre') return;
+  for (const child of node.children || []) {
+    if (child.type === 'element') {
+      addConfigKeyBreaksInCell(child, ctx);
+    }
+  }
+}
+
+function addConfigKeyBreaksToTable(table, ctx) {
+  function visit(node) {
+    if (node.tagName === 'tr') {
+      const keyCell = node.children?.find((child) => child.tagName === 'td');
+      if (keyCell) {
+        addClasses(keyCell, ctx, 'orbit-config-key-cell');
+        addConfigKeyBreaksInCell(keyCell, ctx);
+      }
+      return;
+    }
+    for (const child of node.children || []) {
+      if (child.tagName) visit(child);
+    }
+  }
+
+  visit(table);
+}
+
 function visibleTextLength(html) {
   let length = 0;
   let index = 0;
@@ -125,6 +172,7 @@ const inlineCodePlugin = defineHastPlugin({
           ctx.textContent(headers[1]).trim() === 'Type, default and purpose'
         ) {
           addClasses(node, ctx, 'orbit-config-keys');
+          addConfigKeyBreaksToTable(node, ctx);
         }
       }
     },

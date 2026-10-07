@@ -158,18 +158,45 @@ body {
 }
 
 .sl-markdown-content table.orbit-config-keys {
+  display: table;
   width: 100%;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--sl-color-hairline-light);
   table-layout: fixed;
 }
 
 .sl-markdown-content table.orbit-config-keys th:first-child,
 .sl-markdown-content table.orbit-config-keys td:first-child {
-  width: 38%;
+  width: 45%;
 }
 
-.sl-markdown-content table.orbit-config-keys code:not(pre code) {
+.sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code:not(pre code) {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.sl-markdown-content table.orbit-config-keys td:nth-child(2) code:not(pre code, .is-long) {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+@media (min-width: 1024px) {
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    width: 66%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code:not(pre code) {
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code wbr {
+    display: none;
+  }
 }
 
 .sl-markdown-content table.sl-table-options th:first-child,
