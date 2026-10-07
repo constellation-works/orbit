@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -282,7 +282,7 @@ function runDetailContext() {
     toggleExpandedStepIndex,
     // callbacks the run-detail renderers invoke (Gantt click handler etc.)
     setRunDetailSubtab,
-    // formatters (stay in app.js until common.js extraction)
+    // formatters (the shared clock lives in common.js)
     fmtTimestamp,
     fmtDuration,
     fmtRelative,
@@ -398,26 +398,6 @@ function shortRunId(runId) {
   const text = String(runId || "");
   const match = /^jrun-\d{8}-(.+)$/.exec(text);
   return match ? `…${match[1]}` : text;
-}
-
-function fmtTimestamp(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const now = Date.now();
-  const diff = (now - d.getTime()) / 1000;
-  if (diff < 60) return `${Math.floor(diff)}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
-
-function fmtAbsTime(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function fmtDuration(ms) {
@@ -1688,7 +1668,7 @@ async function refreshDashboard() {
   for (const error of errors) console.error(error);
   $("conn-status").className = `status-dot ${offline ? "red" : "green"}`;
   const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
-  $("meta-text").textContent = `${label} · ${new Date().toLocaleTimeString()}`;
+  $("meta-text").textContent = `${label} · ${formatClock(new Date())}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
   return errors.length === 0;
 }
@@ -1743,7 +1723,7 @@ setScopeChangeListener(() => {
   }
   refreshDashboard();
 });
-initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab, formatAbsoluteTime: fmtAbsTime });
+initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());

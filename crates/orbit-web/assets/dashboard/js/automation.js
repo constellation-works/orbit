@@ -1,5 +1,5 @@
 // Persisted delivery observations and accepted coverage, shared by both consumers.
-import { captureWorkspaceVisit, detailsPanel, el, fetchJson, onWorkspaceChange, withWorkspace } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, fetchJson, formatDateTime, onWorkspaceChange, withWorkspace } from './common.js';
 
 const field = (label, value) => el('div', { class: 'operation-field' }, [
   el('span', { class: 'operation-field-label', text: label }),
@@ -50,7 +50,7 @@ export function renderAutomation(diagnostic, key, consumer) {
     const active = members.active;
     if (active) {
       const batch = (active.members?.length ? active.members : [active.member]).map(member => member.key).join(', ');
-      panel.appendChild(el('p', { text: `Batch ${batch} · attempt ${active.attempt}/${active.max_attempts} · deadline ${active.deadline} · action ${active.action_id || 'awaiting acknowledgement'}` }));
+      panel.appendChild(el('p', { text: `Batch ${batch} · attempt ${active.attempt}/${active.max_attempts} · deadline ${formatDateTime(active.deadline)} · action ${active.action_id || 'awaiting acknowledgement'}` }));
     }
     const withheld = Object.entries(members.withheld || {}).slice(0, 20);
     if (withheld.length) panel.appendChild(el('pre', { text: withheld.map(([key, reason]) => `${key}: ${reason}`).join('\n') }));
@@ -78,7 +78,7 @@ export function renderAutomation(diagnostic, key, consumer) {
   for (const excluded of state.excluded || []) panel.appendChild(el('p', { text: `Excluded ${excluded.delivery.key}: certificate ${excluded.exclusion.attempt_id} (${excluded.exclusion.assurance}); examined as context, not an obligation.` }));
   for (const waiver of diagnostic.waivers || []) panel.appendChild(el('p', { text: `Waived ${waiver.batch_id} by ${waiver.by}: ${waiver.reason}. Coverage did not advance.` }));
   for (const receipt of diagnostic.receipts || []) {
-    const row = el('p', { text: `Accepted ${receipt.accepted_at} · ${receipt.evidence_digest} · ${receipt.submitted_by} ` });
+    const row = el('p', { text: `Accepted ${formatDateTime(receipt.accepted_at)} · ${receipt.evidence_digest} · ${receipt.submitted_by} ` });
     const parts = state.consumer.split('/');
     const kind = parts[parts.length - 2];
     const name = parts[parts.length - 1];

@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -69,12 +69,6 @@ function feedback(id, kind, message) {
   node.textContent = message || "";
 }
 
-function timezoneName(date) {
-  return new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
-    .formatToParts(date)
-    .find((part) => part.type === "timeZoneName")?.value || "UTC";
-}
-
 function looksLikeDuration(value) {
   const text = String(value).trim();
   return /\d+\s*(?:h|hr|hrs|hour|hours|min|mins|minute|minutes|s|sec|secs|seconds)\b/i.test(text)
@@ -84,14 +78,7 @@ function looksLikeDuration(value) {
 function time(value) {
   if (!value) return "Not observed";
   if (looksLikeDuration(value)) return `Duration ${value}`;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  const formatted = String(context.formatAbsoluteTime(value));
-  const tz = timezoneName(parsed);
-  if (formatted.includes(tz) || /\bUTC\b/.test(formatted) || /[+-]\d{2}:\d{2}$/.test(formatted)) {
-    return formatted;
-  }
-  return `${formatted} ${tz}`;
+  return formatDateTime(value);
 }
 
 function cadenceText(seconds) {
@@ -185,10 +172,10 @@ function operationIdentity(name, state) {
   ]);
 }
 
-function operationFact(label, value) {
+function operationFact(label, value, title) {
   return el("div", { class: "operation-fact" }, [
     el("span", { class: "operation-fact-label", text: label }),
-    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value) }),
+    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value), title: title || "" }),
   ]);
 }
 
@@ -304,10 +291,10 @@ function durationText(ms) {
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-function clockHm(value) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// Local wall-clock time with its zone, so a next-fire time is never read as
+// the UTC of the cron trigger beside it.
+function clockHm(value, { zone = true } = {}) {
+  return formatClock(value, { seconds: false, zone });
 }
 
 const CRON_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -527,7 +514,7 @@ function routineTimeline(routines, now = Date.now()) {
   const active = routines.filter((routine) => routineState(routine) === "active").length;
   strip.appendChild(el("div", { class: "operation-timeline-head" }, [
     el("strong", { text: "Next hour" }),
-    el("span", { class: "operation-timeline-range mono", text: `${clockHm(now)} → ${clockHm(now + horizon)}` }),
+    el("span", { class: "operation-timeline-range mono", text: `${clockHm(now, { zone: false })} → ${clockHm(now + horizon)}` }),
     el("span", { class: "operation-timeline-summary", text: due.length
       ? `${fires} fire${fires === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}`
       : "nothing is due in the next hour" }),
@@ -781,7 +768,7 @@ function renderClock(payload) {
       ]),
       el("div", { class: "operation-row-facts operation-clock-facts" }, [
         operationFact("Cadence", cadenceLabel),
-        operationFact("Last tick", clock.last_tick_at ? (relativeTime(clock.last_tick_at) || time(clock.last_tick_at)) : unavailable ? "Unknown" : "Not exposed"),
+        operationFact("Last tick", clock.last_tick_at ? (relativeTime(clock.last_tick_at) || time(clock.last_tick_at)) : unavailable ? "Unknown" : "Not exposed", clock.last_tick_at ? time(clock.last_tick_at) : ""),
         operationFact("Next tick", clockTickText(clock.next_tick_at, clock)),
       ]),
       actions,
@@ -927,7 +914,8 @@ function autoTaskRow(payload, definition, workspaceId) {
       ].filter(Boolean)),
       el("span", { class: `operation-cell-sub${definition.open_duplicate ? " warn" : ""}`, text: definition.open_duplicate
         ? "still open · scheduler will skip"
-        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · ") }),
+        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
+      title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
   const next = definition.next_evaluation;
@@ -1196,7 +1184,7 @@ function jobRow(job, workspace) {
         ? el("ul", { class: "operation-recent-runs" }, recent.map((run) => el("li", {}, [
           outcomeDot(run.state),
           runLink(run.run_id, workspace?.id),
-          el("span", { class: "muted", text: `${run.state} · ${relativeTime(run.finished_at || run.started_at || run.created_at) || ""}${durationText(run.duration_ms) ? ` · ${durationText(run.duration_ms)}` : ""}` }),
+          el("span", { class: "muted", text: `${run.state} · ${relativeTime(run.finished_at || run.started_at || run.created_at) || ""}${durationText(run.duration_ms) ? ` · ${durationText(run.duration_ms)}` : ""}`, title: time(run.finished_at || run.started_at || run.created_at) }),
         ])))
         : null,
     ]),

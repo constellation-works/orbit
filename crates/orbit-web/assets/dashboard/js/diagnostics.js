@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +48,12 @@ function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
 }
 
+// A relative age names its absolute instant in the cell's title.
+function relativeCell(ctx, v, td) {
+  if (td && v) td.title = formatDateTime(v);
+  return fmtRelativeValue(ctx, v);
+}
+
 function fmtRelativeValue(ctx, v) {
   return hasCtx(ctx, "fmtRelative") ? ctx.fmtRelative(v) : (v || "-");
 }
@@ -73,7 +79,7 @@ function actorIdentityLabel(v) {
 
 function getDiagMetricsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
     { key: "step", label: "step", num: false },
     {
       key: "actor_identity",
@@ -106,7 +112,7 @@ function errorRunLabel(row) {
 
 function getDiagErrorsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
     { key: "source", label: "source", num: false },
     {
       key: "job_run",
@@ -420,7 +426,7 @@ function incidentRowNode(incident, ctx) {
       title: `${asCount(incident.event_count)} raw audit events collapsed into this incident`,
       text: eventCountLabel(incident.event_count),
     }),
-    el("span", { class: "incident-when", text: fmtRelativeValue(ctx, incident.last_ts) }),
+    el("span", { class: "incident-when", text: fmtRelativeValue(ctx, incident.last_ts), title: formatDateTime(incident.last_ts) }),
   ]);
   header.type = "button";
   header.setAttribute("aria-expanded", expanded ? "true" : "false");

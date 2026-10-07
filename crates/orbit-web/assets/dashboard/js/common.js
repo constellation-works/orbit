@@ -775,3 +775,83 @@ export function isHttpUrl(url) {
   const scheme = String(url || "").trimStart().toLowerCase();
   return scheme.startsWith("http://") || scheme.startsWith("https://");
 }
+
+// ---------------------------------------------------------------------------
+// Timestamps. The dashboard reads one clock: an absolute instant renders as
+// 24-hour local time with the zone abbreviation, a relative age carries that
+// absolute instant in its title, and UTC appears only for values defined in
+// UTC (cron schedules, the UTC-aligned Reliability window), always labelled.
+
+function toDate(value) {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function dateParts(date, utc) {
+  return utc
+    ? { y: date.getUTCFullYear(), mo: date.getUTCMonth() + 1, d: date.getUTCDate(), h: date.getUTCHours(), mi: date.getUTCMinutes(), s: date.getUTCSeconds() }
+    : { y: date.getFullYear(), mo: date.getMonth() + 1, d: date.getDate(), h: date.getHours(), mi: date.getMinutes(), s: date.getSeconds() };
+}
+
+function clockText(p, seconds) {
+  return `${pad2(p.h)}:${pad2(p.mi)}${seconds ? `:${pad2(p.s)}` : ""}`;
+}
+
+function dateTimeText(p, seconds) {
+  return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${clockText(p, seconds)}`;
+}
+
+/// The browser's zone abbreviation at `value` ("PDT", "UTC", or "GMT+2"
+/// where the locale has no abbreviation), so daylight saving is reflected.
+export function zoneName(value = new Date()) {
+  const date = toDate(value) || new Date();
+  return new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value || "UTC";
+}
+
+/// "2026-10-06 23:31 PDT". Unparseable input is returned as given, empty as "-".
+export function formatDateTime(value, { seconds = false } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
+}
+
+/// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for
+/// dense columns whose title or header carries it.
+export function formatClock(value, { seconds = true, zone = true } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "" : String(value);
+  const text = clockText(dateParts(date, false), seconds);
+  return zone ? `${text} ${zoneName(date)}` : text;
+}
+
+/// "2026-10-07 06:33 UTC", for values whose meaning is defined in UTC.
+export function formatUtcDateTime(value, { seconds = false } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  return `${dateTimeText(dateParts(date, true), seconds)} UTC`;
+}
+
+/// "2026-10-06 06:33 → 2026-10-07 06:33 UTC"; "" when either end is unreadable.
+export function formatUtcRange(since, until) {
+  const start = toDate(since);
+  const end = toDate(until);
+  if (!start || !end) return "";
+  return `${dateTimeText(dateParts(start, true), false)} → ${dateTimeText(dateParts(end, true), false)} UTC`;
+}
+
+/// A compact age ("42s", "5m", "3h", "2d"); pair it with `formatDateTime` in
+/// the element's title.
+export function formatAge(value, now = Date.now()) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const diff = Math.max(0, (now - date.getTime()) / 1000);
+  if (diff < 60) return `${Math.floor(diff)}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
+}

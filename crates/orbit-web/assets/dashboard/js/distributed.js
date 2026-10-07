@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -196,12 +196,12 @@ function enumLabel(map, value) {
   return Object.prototype.hasOwnProperty.call(map, value) ? map[value] : humanize(value);
 }
 
-/// Times go through the caller's formatter (the task detail's own) so a claim
-/// reads in the same zone and shape as every other timestamp on the page. A
-/// missing value is `null`, never the string "undefined".
+/// Times go through the caller's formatter (the task detail's own), else the
+/// dashboard clock, so a claim reads in the same zone and shape as every other
+/// timestamp on the page. A missing value is `null`, never "undefined".
 function formatWhen(options, value) {
   if (!value) return null;
-  return options && typeof options.formatTime === "function" ? options.formatTime(value) : String(value);
+  return options && typeof options.formatTime === "function" ? options.formatTime(value) : formatDateTime(value);
 }
 
 // --- claim panel ------------------------------------------------------------

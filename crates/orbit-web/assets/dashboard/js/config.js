@@ -10,7 +10,7 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 
-import { captureFocus, el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
@@ -959,9 +959,7 @@ function openEditor(row, payload) {
 }
 
 function describePressure(pressure) {
-  const since = new Date(pressure.since);
-  const when = Number.isNaN(since.getTime()) ? pressure.since : `${since.toISOString().slice(0, 16).replace("T", " ")}Z`;
-  return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${when}`;
+  return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${formatDateTime(pressure.since)}`;
 }
 
 function systemResource(resource, rows, payload, host) {

@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router's `#auto-drain` redirect.
 
-import { el, fetchJson } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -379,15 +379,14 @@ function wireDockModeToggle() {
 function updateLogStatusBar(ev) {
   const bar = $("log-statusbar");
   if (!bar || !ev) return;
-  let timeStr = ev.ts || "";
-  if (timeStr && timeStr.includes("T")) {
-    const d = new Date(timeStr);
-    if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString("en-US", { hour12: false });
-  }
+  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
   const t = $("log-statusbar-time");
   const ag = $("log-statusbar-source");
   const m = $("log-statusbar-message");
-  if (t) t.textContent = timeStr;
+  if (t) {
+    t.textContent = timeStr;
+    t.title = timeTitle;
+  }
   if (ag) {
     ag.textContent = ev.source || "";
     ag.title = ev.target || ev.source || "";
@@ -407,6 +406,16 @@ function wireLogPanelResize() {
   wireDockResize();
 }
 
+// The dock and status bar are too narrow for a zone on every line, so the
+// wall-clock time carries its full date and zone in the title.
+function logTime(ts) {
+  const raw = ts || "";
+  if (!raw.includes("T")) return { text: raw, title: "" };
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return { text: raw, title: "" };
+  return { text: formatClock(d, { zone: false }), title: formatDateTime(d, { seconds: true }) };
+}
+
 function getLogClass(level, code) {
   if (code === "DENY") return "deny";
   if (code === "OK") return "ok";
@@ -421,15 +430,8 @@ function renderLogEvent(ev, isFresh) {
   row.dataset.level = ev.level || "info";
   row.dataset.agentStdout = String(ev.agent_stdout === true);
 
-  let timeStr = ev.ts || "";
-  if (timeStr && timeStr.includes("T")) {
-    const d = new Date(timeStr);
-    if (!isNaN(d.getTime())) {
-      timeStr = d.toLocaleTimeString("en-US", {hour12: false});
-    }
-  }
-
-  const tSpan = el("span", { class: "t", text: timeStr });
+  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
+  const tSpan = el("span", { class: "t", text: timeStr, title: timeTitle });
   const agSpan = el("span", { class: "ag", text: ev.source || "", title: ev.target || ev.source || "" });
   const lvClass = getLogClass(ev.level, ev.code);
   // ORB-10972: the dock is 336px, so the level is carried by a coloured

@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1010,7 +1010,7 @@ export function renderRuns(runs) {
       attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
       el("span", { class: "id", text: r.job_id, title: r.job_id }),
       runIdCell,
-      el("span", { class: "when", text: fmtTimestampValue(ts) }),
+      el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
       runCountCell(friction.denials, "denials"),
       runCountCell(friction.toolFails, "tool-fails"),
       runDurationCell(r),

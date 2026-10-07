@@ -19,7 +19,7 @@
 // still in flight, so the summary spells out the excluded bucket rather than
 // letting the two visible numbers imply they add up.
 
-import { el, syncNodes, fetchJson, requestPanel, getWindow, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors } from './common.js';
+import { el, syncNodes, fetchJson, requestPanel, getWindow, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -83,15 +83,13 @@ function rateCell(rate, extraClass = "") {
   return node;
 }
 
-function fmtWindowRange(window) {
+/// The window's range as UTC instants: the server cuts the window and its
+/// buckets in UTC, so the label, the bar titles and the axis all read UTC.
+export function fmtWindowRange(window) {
   if (!window) return "";
-  const since = new Date(window.since);
-  const until = new Date(window.until);
-  if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime())) return "";
-  const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
-  return `${since.toLocaleString(undefined, opts)} → ${until.toLocaleString(undefined, opts)} UTC${
-    window.bucket ? ` · ${window.bucket} buckets` : ""
-  }`;
+  const range = formatUtcRange(window.since, window.until);
+  if (!range) return "";
+  return `${range}${window.bucket ? ` · ${window.bucket} buckets` : ""}`;
 }
 
 function statTile(label, value, hint) {
@@ -344,8 +342,8 @@ function renderOverTime(payload) {
     bar.appendChild(fill);
     bar.title =
       rate == null
-        ? `${new Date(point.bucket_start).toLocaleString()} — no settled runs (n=0)`
-        : `${new Date(point.bucket_start).toLocaleString()} — ${pctFormatter.format(rate)} failed` +
+        ? `${formatUtcDateTime(point.bucket_start)} — no settled runs (n=0)`
+        : `${formatUtcDateTime(point.bucket_start)} — ${pctFormatter.format(rate)} failed` +
           ` (${point.failed}/${settled} settled${lowSample ? ", n too small to be confident" : ""})`;
     bar.dataset.key = `bucket-${point.bucket_start}`;
     bar.dataset.hash = `${point.failed}-${settled}`;
@@ -355,9 +353,7 @@ function renderOverTime(payload) {
   syncNodes(host, bars);
   const axis = $("reliability-over-time-axis");
   if (axis && series.length > 0) {
-    axis.textContent = `${new Date(series[0].bucket_start).toLocaleString()} → ${new Date(
-      series[series.length - 1].bucket_start,
-    ).toLocaleString()}`;
+    axis.textContent = formatUtcRange(series[0].bucket_start, series[series.length - 1].bucket_start);
   }
 }
 

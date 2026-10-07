@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -803,6 +803,7 @@ function buildTopCauses(rows, ctx) {
     tr.appendChild(el("td", {
       class: "muted mono",
       text: row.latest_ts ? fmtRelativeValue(ctx, row.latest_ts) : "-",
+      title: row.latest_ts ? formatDateTime(row.latest_ts) : "",
     }));
     tbody.appendChild(tr);
   }
@@ -829,6 +830,7 @@ function buildRecentDenials(rows, ctx) {
     tr.appendChild(el("td", {
       class: "muted mono",
       text: row.timestamp ? fmtRelativeValue(ctx, row.timestamp) : "-",
+      title: row.timestamp ? formatDateTime(row.timestamp) : "",
     }));
     tr.appendChild(el("td", {
       class: "value-name",
@@ -1026,7 +1028,7 @@ function renderAudit(events, ctx) {
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
     tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
-    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp) }));
+    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp), title: fmtAbsTimeValue(ctx, ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
