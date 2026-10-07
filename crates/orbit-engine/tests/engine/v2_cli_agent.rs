@@ -840,6 +840,79 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// The real CLI supervisor must keep high-volume stdout/stderr out of the
+/// operational feed. A child owns the global subscriber and disposable state.
+#[cfg(unix)]
+#[test]
+fn agent_relay_uses_an_independent_persistent_feed() {
+    use orbit_common::{observability::logging, test_env};
+    const NAME: &str = "v2_cli_agent::agent_relay_uses_an_independent_persistent_feed";
+    if std::env::var("ORBIT_RELAY_TEST_CHILD").as_deref() != Ok(NAME) {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", NAME, "--nocapture"])
+            .env("ORBIT_RELAY_TEST_CHILD", NAME)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env_remove("RUST_LOG");
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            Duration::from_secs(45),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(NAME, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+    logging::init_subscriber_with_file_filter("warn", "info");
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _) = build_writer(audit.path(), "relay-volume").unwrap();
+    let payload = "x".repeat(256);
+    let fake = fake_cli("claude", &format!(
+        "#!/bin/sh\ncat > /dev/null\ni=0\nwhile [ \"$i\" -lt 5000 ]; do\nprintf '%s\\n' '{payload}'\nprintf '%s\\n' '{payload}' >&2\ni=$((i + 1))\ndone\nprintf '%s\\n' '{{\"type\":\"result\",\"is_error\":false,\"result\":\"{{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{{}},\\\"error\\\":null}}\"}}'\n"
+    )).unwrap();
+    let host = ScriptHost::new(fake.cli_path());
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "relay_volume",
+        spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+        fs_profile: None,
+        input: serde_json::json!({"prompt":"test"}),
+        audit: writer,
+        run_id: "relay-volume",
+        host: Some(&host),
+    })
+    .unwrap();
+    assert!(outcome.success, "fake agent must complete: {outcome:?}");
+    logging::shutdown_jsonl_writer();
+    let operational = logging::global_jsonl_log_path().unwrap();
+    let agent = logging::agent_jsonl_log_path(&operational).unwrap();
+    let bytes = fs::read_to_string(agent).unwrap();
+    let records: Vec<Value> = bytes
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records.len(),
+        10_001,
+        "all fake agent lines must remain readable"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|event| event["fields"]["stream"] == "stderr")
+            .count(),
+        5000
+    );
+    assert!(
+        fs::metadata(operational).unwrap().len() * 100 < (10_000 * (payload.len() + 1)) as u64,
+        "operational overhead must stay below 1% of agent bytes"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

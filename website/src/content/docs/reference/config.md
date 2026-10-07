@@ -209,14 +209,18 @@ crew or the workspace default.
 | `execution.codex.approval_policy` | string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
 | `execution.proc_spawn_max_timeout_minutes` | integer · **Default:** `45`<br>Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
 | `plugin.legacy_callback_identity` | bool · **Default:** `false`<br>Deprecated; removed in the next release. Also accept the environment token and process ancestry as a plugin callback credential. |
-| `runtime.log_max_file_mb` | integer · **Default:** `100`<br>Roll the active JSONL log past this size. At least 1 and at most `runtime.log_max_total_mb`. |
-| `runtime.log_max_total_mb` | integer · **Default:** `500`<br>Total size budget for JSONL log archives; the oldest are pruned first. |
-| `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete JSONL log archives older than this. |
+| `runtime.log_max_file_mb` | integer · **Default:** `100`<br>Roll the operational `orbit.jsonl` past this size (MiB). At least 1 and at most `runtime.log_max_total_mb`. |
+| `runtime.log_max_total_mb` | integer · **Default:** `500`<br>Operational `orbit.jsonl` archive budget in MiB; the oldest are pruned first. |
+| `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete archives in both operational and agent feeds older than this. |
 | `security_alert_sweep.min_severity` | string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
 | `review.before_pr` | bool · **Default:** `false`<br>Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. |
 | `operation.review_crew` | string · **Default:** Unset<br>Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
+
+Agent stdout/stderr relay uses `~/.orbit/state/logs/orbit-agent.jsonl` with a separate 200 MiB archive budget and 50 MiB file limit. Its output cannot evict operational events from `orbit.jsonl`. The dashboard log dock, `/api/log`, `/api/log/stream`, and `orbit log tail` merge the two active feeds; per-run captures remain available separately. `runtime.log_retention_days` applies to both feeds. Size limits still take precedence over age when either feed's own budget is exhausted; seven days of operational history requires its non-relay volume to fit the operational budget.
+
+Log snapshots retain the numeric operational `offset` and add `agent_offset`. Resume SSE with `from` and `agent_from`; split-feed event IDs carry both byte cursors as `operational:agent`. Custom log paths with a filename other than `orbit.jsonl` read that file alone.
 
 Notes:
 

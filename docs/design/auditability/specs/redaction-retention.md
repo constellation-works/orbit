@@ -31,7 +31,7 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
 - Shared pattern redaction covers structural OpenSSH fingerprints, public-key comments, and connection hosts without applying a general hostname or high-entropy-string heuristic.
 - CLI argv redaction uses HTTP defaults plus bare `sk-...` token scrubbing when argv-shaped data is being persisted.
 - Orbit artifact write tools use the action-keyed field policy in [artifact-redaction.md](./artifact-redaction.md) before YAML/markdown/JSON persistence.
-- Default tracing output redacts string field values, `Debug`-formatted field values, and unstructured `message` fields before writing stderr or `~/.orbit/state/logs/orbit.jsonl`.
+- Default tracing output redacts string field values, `Debug`-formatted field values, and unstructured `message` fields before writing stderr or either global JSONL feed.
 - Sensitive environment values are matched as live text and, when different, as the JSON-string body and the Rust `Debug` body of that text. A multi-line private key or a value containing quotes or backslashes therefore does not survive serialization into an audit blob or a tracing `?` field.
 - Readers should not need to apply the standard redactor again for normal stored blobs.
 
@@ -58,7 +58,7 @@ Invocation metrics:
 
 Global process tracing:
 
-- Uses `~/.orbit/state/logs/orbit.jsonl` as the active file.
+- Uses `~/.orbit/state/logs/orbit.jsonl` for operational events and separately budgeted `orbit-agent.jsonl` beside it for agent stdout/stderr. Readers merge the active feeds; both use the same redaction and age limit.
 - Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned from long-lived processes and when the active file exceeds its size budget.
 - Is an operational log stream, not the canonical workflow envelope.
 - Carries policy-denial path/resource strings, so default tracing redaction is part of its durability boundary.

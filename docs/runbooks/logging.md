@@ -16,13 +16,18 @@ process and routine-sweep logs remain bounded.
 ## Global process log
 
 All Orbit processes—the CLI, `orbit web serve`, and the MCP server—append structured tracing
-events to one global JSONL sink:
+events to two global JSONL feeds with independent byte budgets:
 
 ```text
-~/.orbit/state/logs/orbit.jsonl        # default writer and reader path
+~/.orbit/state/logs/orbit.jsonl        # operational events
+~/.orbit/state/logs/orbit-agent.jsonl  # agent stdout/stderr relay
 ```
 
-`orbit log tail` can read another sink with `--path` or `$ORBIT_LOG_PATH`.
+`orbit log tail` and the dashboard merge both active feeds. `orbit log tail` can
+read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
+`orbit.jsonl` read a single file. Relay targets and `RUST_LOG` filters retain
+their existing behavior; the reserved `agent_output` tracing field routes
+stdout/stderr records to the independent feed.
 
 One JSON object is written per line:
 `{"timestamp", "level", "target", "fields": {..., "message"}}`. Secret-looking values
@@ -95,7 +100,13 @@ JSONL write and rotate it only if it exceeds the per-file cap. The active file i
 `orbit.jsonl.<UTC-timestamp>`. Archives older than the retention window are deleted, then
 the oldest archives are deleted until the total-size cap holds.
 
-Defaults are **100 MB per file, 500 MB total, and 7 days retention**. Override them in
+Operational defaults are **100 MiB per file, 500 MiB of archives, and 7 days
+retention**. Agent relay has its own **50 MiB per file and 200 MiB of archives**,
+so transcript volume cannot evict operational events. The same age limit applies
+to both feeds; either feed can be pruned sooner when its own size budget fills.
+Writers recheck size and reopen after each MiB written, so long-lived producers
+also enforce the cap. Relay archives use `orbit-agent.jsonl.<UTC-timestamp>`.
+Override the operational size limits and shared age limit in
 `~/.orbit/config.toml`:
 
 ```toml
@@ -104,6 +115,14 @@ log_retention_days = 7
 log_max_total_mb = 500
 log_max_file_mb = 100
 ```
+
+Log snapshots return `offset` for operations and `agent_offset` for relay.
+Resume `/api/log/stream` with `from` and `agent_from`; SSE `Last-Event-ID`
+overrides them and uses `operational:agent` cursors for split feeds. Legacy
+numeric IDs still resume the operational cursor.
+
+Plugin-inactive auto-task skips warn once per workspace, definition, and seeded
+plugin version in each process; repeat scheduler passes log the skip at DEBUG.
 
 Rotation is implemented in `crates/orbit-common/src/observability/log_rotation.rs`.
 

@@ -41,7 +41,7 @@ data-handling review:
 | Task bundles (titles, descriptions, plans, review threads, status) | `~/.orbit/tasks/workspaces/<ws-id>/<task-id>/` | Authoritative. Plain files on disk; may contain whatever you or an agent wrote into a task. |
 | Audit events, job runs, step checkpoints, routine state | `~/.orbit/orbit.db` (SQLite) | Authoritative history of what each agent invocation did. |
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
-| Process logs | `~/.orbit/state/logs/orbit.jsonl` | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
+| Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |

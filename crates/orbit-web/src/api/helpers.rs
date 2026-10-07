@@ -121,6 +121,9 @@ pub(super) struct LogQuery {
     /// Overridden by `Last-Event-ID` when both are present.
     #[serde(default)]
     pub(super) from: Option<u64>,
+    /// Companion agent-feed byte cursor from the snapshot or SSE event ID.
+    #[serde(default)]
+    pub(super) agent_from: Option<u64>,
 }
 
 pub(super) fn current_year_month_utc() -> String {

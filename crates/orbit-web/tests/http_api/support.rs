@@ -230,7 +230,26 @@ impl Fixture {
         self.server_impl(false, true, false)
     }
 
+    pub(super) fn split_log_server(&self) -> Server {
+        self.server_impl_with_log(false, false, false, &self.path("orbit.jsonl"))
+    }
+
     fn server_impl(&self, operator: bool, resources: bool, replay_worker: bool) -> Server {
+        self.server_impl_with_log(
+            operator,
+            resources,
+            replay_worker,
+            &self.path("process.log"),
+        )
+    }
+
+    fn server_impl_with_log(
+        &self,
+        operator: bool,
+        resources: bool,
+        replay_worker: bool,
+        log_path: &Path,
+    ) -> Server {
         orbit_common::test_env::assert_child_test_exists("server_child");
         let log = tempfile::NamedTempFile::new_in(self.temp.path()).unwrap();
         let mut command = fixture_command(self.temp.path());
@@ -247,7 +266,7 @@ impl Fixture {
                 if resources { "1" } else { "0" },
             )
             .env("ORBIT_HTTP_OPERATOR", if operator { "1" } else { "0" })
-            .env("ORBIT_LOG_PATH", self.path("process.log"))
+            .env("ORBIT_LOG_PATH", log_path)
             .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
             .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
         let mut server = Server {

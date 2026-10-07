@@ -470,7 +470,7 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         );
     }
     // A rotated or disabled live feed must not hide the retained capture.
-    let feed = fixture.home.join(".orbit/state/logs/orbit.jsonl");
+    let feed = fixture.home.join(".orbit/state/logs/orbit-agent.jsonl");
     fs::rename(&feed, feed.with_file_name("rotated.jsonl")).unwrap();
     let fallback = fixture
         .orbit()

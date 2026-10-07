@@ -61,3 +61,59 @@ fn warn_then_exit_child() {
     tracing::warn!(target: "orbit.test.exit", code = EXIT_CODE, "last words before exit");
     logging::exit(EXIT_CODE);
 }
+
+/// Sparse relay archives model 400 MiB/day without writing gigabytes. The
+/// operational age window must survive pruning the independent relay budget.
+#[test]
+fn relay_volume_does_not_evict_seven_days_of_operational_history() {
+    use orbit_common::observability::log_rotation::{LogRotationConfig, rotate_and_prune};
+    use std::{
+        fs::File,
+        time::{Duration, SystemTime},
+    };
+    let logs = tempfile::tempdir().unwrap();
+    let operational = logs.path().join("orbit.jsonl");
+    let agent = logging::agent_jsonl_log_path(&operational).unwrap();
+    let config = LogRotationConfig::default();
+    let now = SystemTime::now();
+    let mut retained = Vec::new();
+    for day in 1..=8 {
+        let modified = now - Duration::from_secs(day * 86_400 - 3600);
+        let path = operational.with_file_name(format!("orbit.jsonl.day{day}"));
+        let file = File::create(&path).unwrap();
+        file.set_len(1024 * 1024).unwrap();
+        file.set_modified(modified).unwrap();
+        if day <= 7 {
+            retained.push(path);
+        }
+        for part in 0..8 {
+            let file =
+                File::create(agent.with_file_name(format!("orbit-agent.jsonl.day{day}.{part}")))
+                    .unwrap();
+            file.set_len(50 * 1024 * 1024).unwrap();
+            file.set_modified(modified).unwrap();
+        }
+    }
+    rotate_and_prune(&agent, &config.agent_output());
+    rotate_and_prune(&operational, &config);
+    assert!(
+        retained.iter().all(|path| path.exists()),
+        "relay pruning must preserve the operational seven-day window"
+    );
+    assert!(
+        !operational.with_file_name("orbit.jsonl.day8").exists(),
+        "operational age pruning still applies"
+    );
+    let relay_bytes: u64 = std::fs::read_dir(logs.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("orbit-agent.jsonl.")
+        })
+        .map(|entry| entry.metadata().unwrap().len())
+        .sum();
+    assert!(relay_bytes <= config.agent_output().max_total_bytes);
+}

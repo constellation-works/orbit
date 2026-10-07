@@ -1077,6 +1077,7 @@ fn emit_output_line(
     let line = line_text(raw_line);
     if let Some(cwd) = cwd {
         tracing::info!(
+            agent_output = true,
             provider = provider,
             stream = stream,
             job_run_id = job_run_id,
@@ -1086,6 +1087,7 @@ fn emit_output_line(
         );
     } else {
         tracing::info!(
+            agent_output = true,
             provider = provider,
             stream = stream,
             job_run_id = job_run_id,

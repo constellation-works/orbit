@@ -58,7 +58,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
 | `resources/activities/`, `resources/jobs/` | managed defaults plus operator-authored activity/job YAML; hidden manifests retain managed content provenance | mixed: current defaults are regenerable, but untracked YAML and `resources/.retired-managed/` backups are **authoritative until reviewed** |
 | other `resources/`, `skills/` | default executor/policy defs and skills; `resources/.orbit-global-defaults.json` records which embedded default set was last reconciled here | regenerable (`orbit init` reseeds) |
-| `state/logs/orbit.jsonl` (+ rotated archives) | unified JSONL log sink for all Orbit processes | disposable |
+| `state/logs/orbit.jsonl`, `state/logs/orbit-agent.jsonl` (+ rotated archives) | Operational and separately budgeted agent relay JSONL feeds | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |

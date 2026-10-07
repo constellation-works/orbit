@@ -236,19 +236,19 @@ define_config_settings! {
     },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",
-        description: "Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",
+        description: "Roll the active operational orbit.jsonl log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",
         section: ConfigSection::Housekeeping, order: 50,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_file_bytes / (1024 * 1024))),
     },
     runtime_log_max_total_mb: u64 => u64 {
         key: "runtime.log_max_total_mb", value_type: "integer",
-        description: "Total size budget (MiB) across JSONL log archives; oldest are pruned first when exceeded (must be >= 1).",
+        description: "Total size budget (MiB) across operational orbit.jsonl archives; oldest are pruned first when exceeded (must be >= 1).",
         section: ConfigSection::Housekeeping, order: 40,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_total_bytes / (1024 * 1024))),
     },
     runtime_log_retention_days: u64 => u64 {
         key: "runtime.log_retention_days", value_type: "integer",
-        description: "Delete JSONL log archives whose mtime is older than this many days (must be >= 1).",
+        description: "Delete operational and agent JSONL log archives whose mtime is older than this many days (must be >= 1).",
         section: ConfigSection::Housekeeping, order: 30,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().retention_days)),
     },

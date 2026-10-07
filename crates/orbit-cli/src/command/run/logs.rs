@@ -109,7 +109,10 @@ fn follow_logs(
     json: bool,
     writer: &mut dyn Write,
 ) -> Result<(), FollowError> {
-    let mut offset = 0;
+    let mut feeds = vec![(path.to_path_buf(), 0)];
+    if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
+        feeds.push((agent_path, 0));
+    }
     let mut streamed = HashMap::<(String, String), FollowedPrefix>::new();
     let mut completed = HashSet::new();
     loop {
@@ -117,7 +120,9 @@ fn follow_logs(
         // invocation captures have already been persisted.
         let run = read.show(runtime, run_id)?;
         if step.is_none() {
-            drain_provider_lines(path, run_id, &mut offset, &mut streamed, json, writer)?;
+            for (path, offset) in &mut feeds {
+                drain_provider_lines(path, run_id, offset, &mut streamed, json, writer)?;
+            }
         }
         if step.is_some() || run.state.is_terminal() {
             let records =

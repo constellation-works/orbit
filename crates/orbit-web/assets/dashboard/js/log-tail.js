@@ -30,6 +30,7 @@ const LOG_STREAM_RETRY_MIN_MS = 1000;
 const LOG_STREAM_RETRY_MAX_MS = 15000;
 const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
 let logStreamOffset = 0;
+let logAgentStreamOffset = 0;
 let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // True once the snapshot resolved and a live stream is owed. A hidden tab
@@ -484,6 +485,8 @@ function applyLogSnapshot(payload) {
     payload.offset >= 0
   ) {
     logStreamOffset = payload.offset;
+    logAgentStreamOffset = Number.isFinite(payload.agent_offset) && payload.agent_offset >= 0
+      ? payload.agent_offset : 0;
   }
   events.slice().reverse().forEach(ev => {
     const row = renderLogEvent(ev, false);
@@ -686,8 +689,11 @@ function applyLogFilters() {
 
 function rememberStreamOffset(lastEventId) {
   if (!lastEventId) return;
-  const parsed = Number.parseInt(lastEventId, 10);
+  const [operational, agent] = lastEventId.split(":");
+  const parsed = Number(operational);
   if (Number.isFinite(parsed) && parsed >= 0) logStreamOffset = parsed;
+  const agentParsed = Number(agent);
+  if (Number.isFinite(agentParsed) && agentParsed >= 0) logAgentStreamOffset = agentParsed;
 }
 
 function setLogStreamConnected(connected) {
@@ -741,7 +747,7 @@ function connectLogStream() {
   closeLogStream();
   // A hidden tab opens nothing; becoming visible reconnects from the offset.
   if (document.hidden) return;
-  logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}`);
+  logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`);
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);
