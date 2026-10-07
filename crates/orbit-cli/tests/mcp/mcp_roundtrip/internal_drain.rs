@@ -269,6 +269,89 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     assert!(call(&host("hm_wrong"), "orbit.drain.claim.bind", bind.clone()).is_err());
     let bound = call(&follower, "orbit.drain.claim.bind", bind.clone()).unwrap();
     assert_eq!(bound["phase"], "running");
+    // A real SSH worker session is not authority for internal projections.
+    // Only the runtime-selected host server mode accepts them; an agent's
+    // initialize metadata cannot select it.
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: machine.into(),
+        owner_workspace_id: workspace_id.into(),
+        owner_destination: selector.clone(),
+        task_id: id.into(),
+        claim_id: claim.as_str().unwrap().into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "hm_follower".into(),
+            machine_name: None,
+        },
+        bound_run_id: "leaf-1".into(),
+    };
+    let worker_session = ToolSessionContext {
+        worker_invocation: Some(binding.clone()),
+        ..Default::default()
+    };
+    let update = json!({"id":id,"workspace":selector,"_worker_update":{
+        "evidence":{"summary":"host summary","artifacts":[]},"external_refs":[],"status":"in-progress",
+        "expected_status":"in-progress","status_note":"host note"
+    }});
+    for input in [
+        update.clone(),
+        json!({"id":id,"workspace":selector,"_worker_read":"tasks"}),
+    ] {
+        assert!(
+            orbit_tools::OwnerCoordinator::call(
+                &follower,
+                "orbit.task.update",
+                input,
+                worker_session.clone()
+            )
+            .is_err()
+        );
+    }
+    let child = McpWorkspace::orbit_command(&owner.work, &owner.home)
+        .args(["mcp", "serve", "--remote-caller-machine-id", "hm_follower"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut params =
+        McpClient::initialize_params("orbit-federated-mux", Some(&owner.work.to_string_lossy()));
+    params["_meta"]["orbit"]["worker_invocation"] = json!(binding);
+    params["_meta"]["orbit"]["worker_host_call"] = json!(true);
+    let (mut agent, response) = McpClient::initialized(child, params);
+    assert!(response.get("error").is_none(), "{response}");
+    let mut agent_update = update.clone();
+    agent_update["workspace"] = json!(workspace_id);
+    assert_eq!(
+        agent.call_tool_err("orbit_task_update", agent_update)["code"],
+        "policy_denied"
+    );
+    assert!(
+        public.call_tool_ok("orbit_task_show", json!({"id":id}))["execution_summary"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    let host_session = ToolSessionContext {
+        worker_host_call: true,
+        ..worker_session
+    };
+    let updated = orbit_tools::OwnerCoordinator::call(
+        &follower,
+        "orbit.task.update",
+        update,
+        host_session.clone(),
+    )
+    .unwrap();
+    assert_eq!(updated["execution_summary"], "host summary");
+    let task = orbit_tools::OwnerCoordinator::call(
+        &follower,
+        "orbit.task.show",
+        json!({"id":id,"workspace":selector,"_worker_read":"task"}),
+        host_session,
+    )
+    .unwrap();
+    assert_eq!(task["id"], id);
+    assert_eq!(task["execution_summary"], "host summary");
     assert_eq!(
         call(&follower, "orbit.drain.claim.bind", bind.clone()).unwrap(),
         bound
@@ -386,8 +469,58 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
         admissions[0]["params"]["arguments"]["request_id"],
         admissions[1]["params"]["arguments"]["request_id"]
     );
+    let mut worker_route = false;
+    for request in requests {
+        if request["method"] == "initialize" {
+            worker_route = !request["params"]["_meta"]["orbit"]["worker_invocation"].is_null();
+        }
+        if request["method"] == "tools/list" {
+            assert!(
+                worker_route,
+                "internal drain preflight must not use public discovery"
+            );
+        }
+    }
+
+    // Bind this isolated test process as the agent provider. Its descendants
+    // retain the immutable binding even when their activity env is removed,
+    // so the agent cannot launch the host channel itself.
+    use orbit_engine::RuntimeHost;
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &owner.home.join(".orbit"),
+        &owner.work.join(".orbit"),
+    )
+    .unwrap()
+    .with_worker_invocation(
+        orbit_types::tool::WorkerInvocation {
+            execution: orbit_types::task::ExecutionLocation {
+                machine_id: machine.into(),
+                machine_name: None,
+            },
+            ..binding
+        },
+        Arc::new(follower),
+    )
+    .unwrap();
+    RuntimeHost::register_worker_process(&runtime, std::process::id()).unwrap();
+    let denied = McpWorkspace::orbit_command(&owner.work, &owner.home)
+        .args([
+            "mcp",
+            "serve",
+            "--remote-caller-machine-id",
+            "hm_follower",
+            "--worker-host",
+        ])
+        .output()
+        .unwrap();
     assert!(
-        !requests.iter().any(|r| r["method"] == "tools/list"),
-        "internal schema preflight must not use public discovery"
+        !denied.status.success(),
+        "a managed agent must not launch the host channel"
+    );
+    assert!(
+        String::from_utf8_lossy(&denied.stderr)
+            .contains("managed workers require an agent session"),
+        "{}",
+        String::from_utf8_lossy(&denied.stderr)
     );
 }

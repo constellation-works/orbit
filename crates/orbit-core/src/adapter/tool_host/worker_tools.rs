@@ -39,6 +39,7 @@ pub(crate) fn execute(
     ) {
         return Ok(None);
     }
+    crate::runtime::check_worker_host_input(input, session.worker_host_call)?;
     let Some(binding) = &session.worker_invocation else {
         return Ok(None);
     };

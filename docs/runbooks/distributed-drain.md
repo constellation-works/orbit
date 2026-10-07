@@ -31,6 +31,15 @@ fallback. CLI diagnostics below retain their authority requirements, and
 completion approval, revocation and recovery remain owner-dashboard actions.
 The follower never merges.
 
+Internal worker reads and typed claim updates use host-owned session
+provenance. The local runtime supplies it directly; the remote runtime selects
+the hidden `--worker-host` SSH server mode. Managed worker processes cannot
+launch that mode, even after removing their activity environment. Neither
+initialize metadata nor tool arguments can grant it. Ordinary agent calls
+containing `_worker_read` or `_worker_update` are refused before routing and
+again at the owner. Allowed worker updates still pass through input redaction
+and record any redaction audit against the claimed task.
+
 ## Prerequisites and safety
 
 - **One control plane per repository.** Two independently initialized owners of

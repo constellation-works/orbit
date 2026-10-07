@@ -30,6 +30,12 @@ impl OrbitRuntime {
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
+        if super::worker_coordination::is_coordination_tool(name) {
+            super::worker_coordination::check_worker_host_input(
+                &input,
+                tool_context.session_context.worker_host_call,
+            )?;
+        }
         if tool_context.cwd.is_none() {
             tool_context.cwd = std::env::current_dir()
                 .ok()

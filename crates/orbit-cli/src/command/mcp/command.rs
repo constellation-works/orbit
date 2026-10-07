@@ -119,6 +119,14 @@ pub struct ServeArgs {
         requires = "remote_caller_machine_id"
     )]
     pub internal_drain: bool,
+    /// Host-owned worker projections; selected only by the runtime SSH route.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["mode", "internal_drain", "operator"],
+        requires = "remote_caller_machine_id"
+    )]
+    pub worker_host: bool,
     /// Serve sessions with operator authority, so they may perform governed
     /// operations such as dispatching a workflow or deleting a task.
     ///
@@ -185,6 +193,7 @@ impl ServeArgs {
         if worker.is_some()
             && (self.operator
                 || self.internal_drain
+                || self.worker_host
                 || matches!(self.mode, Some(ServeMode::Remote)))
         {
             return Err(OrbitError::PolicyDenied(
@@ -228,6 +237,7 @@ impl ServeArgs {
                     .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
                 self.orchestrator,
                 self.internal_drain,
+                self.worker_host,
             )?,
         }
         Ok(CommandOutput::Silent)

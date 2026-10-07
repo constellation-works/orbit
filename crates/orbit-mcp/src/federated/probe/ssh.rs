@@ -62,6 +62,7 @@ impl DestinationProbe for SshDestinationProbe {
             self.orchestrator.as_deref(),
             McpSessionAuthority::Agent,
             true,
+            false,
         )?;
         let mut session =
             DestinationSession::start(destination.clone(), child, self.probe_timeout)?;
@@ -77,7 +78,11 @@ impl DestinationProbe for SshDestinationProbe {
         context: &ToolSessionContext,
     ) -> Result<Box<dyn RoutedSession>, OrbitError> {
         Ok(Box::new(SshRoutedSession::new(
-            self.start_worker_session(destination, context.worker_invocation.as_ref())?,
+            self.start_worker_session(
+                destination,
+                context.worker_invocation.as_ref(),
+                context.worker_host_call,
+            )?,
             self.delivery_timeout,
         )))
     }
@@ -105,13 +110,14 @@ impl DestinationProbe for SshDestinationProbe {
 
 impl SshDestinationProbe {
     fn start_session(&self, destination: &Destination) -> Result<DestinationSession, OrbitError> {
-        self.start_worker_session(destination, None)
+        self.start_worker_session(destination, None, false)
     }
 
     fn start_worker_session(
         &self,
         destination: &Destination,
         binding: Option<&orbit_types::tool::WorkerInvocation>,
+        host_call: bool,
     ) -> Result<DestinationSession, OrbitError> {
         let child = spawn_destination_session(
             destination,
@@ -123,6 +129,7 @@ impl SshDestinationProbe {
                 self.authority
             },
             false,
+            host_call,
         )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
@@ -246,6 +253,7 @@ fn spawn_destination_session(
     orchestrator: Option<&str>,
     authority: McpSessionAuthority,
     internal: bool,
+    worker_host: bool,
 ) -> Result<Child, OrbitError> {
     let ssh = destination.ssh_target().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -257,6 +265,9 @@ fn spawn_destination_session(
         crate::remote::remote_serve_command(caller_machine_id, orchestrator, authority);
     if internal {
         remote.push_str(" --internal-drain");
+    }
+    if worker_host {
+        remote.push_str(" --worker-host");
     }
     Command::new("ssh")
         .arg("-T")

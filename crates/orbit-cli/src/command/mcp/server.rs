@@ -54,16 +54,19 @@ pub(super) fn serve_mcp_stdio(
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
     internal_drain: bool,
+    worker_host: bool,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     orbit_mcp::warn_ignored_caller_authorization(&global_root);
-    let (host, session_context) = compose_server(
+    let (host, mut session_context) = compose_server(
         global_root,
         remote_caller_machine_id,
         authority,
         bound_workspace,
         bound_orchestrator,
     )?;
+    // This is launch provenance, never initialize or per-call metadata.
+    session_context.worker_host_call = worker_host;
     let exit = if internal_drain {
         block_on_server(orbit_mcp::serve_internal_drain_stdio(host, session_context))?
     } else {

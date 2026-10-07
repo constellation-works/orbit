@@ -154,6 +154,7 @@ impl RoutedSession for InProcessRoutedSession {
             ));
         }
         destination_context.worker_invocation = call_context.worker_invocation;
+        destination_context.worker_host_call = call_context.worker_host_call;
         if destination_context.worker_invocation.is_some() {
             destination_context
                 .effective_capabilities

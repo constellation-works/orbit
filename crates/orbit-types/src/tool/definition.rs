@@ -11,6 +11,11 @@ pub struct ToolSessionContext {
     /// create authority; transport adapters propagate it explicitly.
     #[serde(skip)]
     pub worker_invocation: Option<super::WorkerInvocation>,
+    /// Internal worker projections are host calls, independent of the worker
+    /// binding. Set only by the runtime or the host's SSH server launch path;
+    /// JSON arguments and initialize metadata cannot grant this provenance.
+    #[serde(skip)]
+    pub worker_host_call: bool,
     /// Legacy caller-supplied workspace address. This value is deliberately
     /// untrusted until an adapter/runtime resolves it to [`Self::workspace_id`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +112,7 @@ impl ToolSessionContext {
         Self {
             workspace: None,
             worker_invocation: None,
+            worker_host_call: false,
             workspace_id,
             caller_machine_id: machine_id.clone(),
             caller_machine_name: machine_name.clone(),

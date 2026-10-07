@@ -54,7 +54,7 @@ pub use orbit_runtime::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
-pub(crate) use worker_coordination::is_coordination_tool;
+pub(crate) use worker_coordination::{check_worker_host_input, is_coordination_tool};
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
