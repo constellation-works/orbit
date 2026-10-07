@@ -59,6 +59,7 @@ mod allow_crew;
 mod before_pr;
 mod cancel;
 mod candidate_carry;
+#[cfg(unix)]
 mod claimed_host_evidence;
 mod claimed_owner;
 mod claimed_review;
