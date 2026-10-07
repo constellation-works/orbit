@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -480,6 +480,7 @@ function frictionAvailableCount(stats = {}) {
 function renderFrictions(payload) {
   const body = $("frictions-body");
   if (!body) return;
+  enableRovingRows(body);
   const items = Array.isArray(payload && payload.items) ? payload.items : [];
   const stats = (payload && payload.stats) || {};
   const accordion = frictionAccordionMedia.matches;
@@ -510,6 +511,10 @@ function renderFrictions(payload) {
     const title = friction.title || friction.id;
     const expanded = activeFrictionId === friction.id;
     const detailId = `friction-accordion-${friction.id}`;
+    // The title is the row's button. Beside the detail pane it selects the
+    // friction the pane shows; in the one-column accordion it discloses the
+    // detail beneath the row.
+    const openButton = el("button", { class: "title", text: title });
     const row = el("div", { class: "knowledge-row friction-row", title }, [
       el("div", { class: "top" }, [
         el("span", { class: "id", text: friction.id, title: friction.id }),
@@ -517,7 +522,7 @@ function renderFrictions(payload) {
         el("span", { class: "when", text: fmtTimestamp(friction.created_at), title: fmtAbsTime(friction.created_at) }),
         accordion ? el("span", { class: "friction-row-toggle", text: expanded ? "▾" : "▸" }) : null,
       ]),
-      el("div", { class: "title", text: title }),
+      openButton,
       el("div", { class: "summary", text: truncate(friction.body || title, 180) }),
       el("div", { class: "meta" }, [
         knowledgeStatusPill(friction.status || "open"),
@@ -549,18 +554,9 @@ function renderFrictions(payload) {
       activeFrictionId = accordion && expanded ? null : friction.id;
       renderFrictions(lastFrictionPayload);
     };
-    row.addEventListener("click", toggle);
-    if (accordion) {
-      row.tabIndex = 0;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-expanded", String(expanded));
-      row.setAttribute("aria-controls", detailId);
-      row.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        toggle();
-      });
-    }
+    makeRowDisclosure(row, openButton, accordion
+      ? { expanded, controls: detailId, onToggle: toggle }
+      : { controls: "friction-detail", current: expanded, onToggle: toggle });
     frag.appendChild(row);
     if (accordion && expanded) {
       const inlineDetail = el("section", { class: "friction-accordion-detail" });

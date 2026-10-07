@@ -175,7 +175,11 @@ node crates/orbit-web/src/tests/dashboard_loading_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/loading-browser --run-detail
 ```
 
-Omit `--run-detail` to include the full loading and responsive-layout suite.
+Omit `--run-detail` to include the full loading and responsive-layout suite,
+which also checks row keyboard access: no task, run or friction row nests a
+control inside a button, each row list is one Tab stop with Up/Down between
+rows, Enter and Space toggle a task row, its disclosure keeps focus across a
+refresh that rebuilds the row, and `/` focuses the task search.
 
 The Operations browser fixture also checks the responsive dashboard shell. At
 375×812, the brand, workspace picker, Drain indicator and Refresh icon share

@@ -367,11 +367,13 @@ export function el(tag, opts = {}, children = []) {
 }
 
 // ORB-11658: expanding a row is the dashboard's primary interaction, so it has
-// to be operable without a mouse. The row itself carries the button semantics —
-// wrapping the cells in a real <button> would break the CSS grid every row type
-// lays out in — so this is the one place that grants the tab stop, the ARIA
-// role and state, and the Enter/Space binding, and it binds `click` from the
-// same handler so pointer and keyboard can never drift apart.
+// to be operable without a mouse. For a row that holds no controls of its own,
+// the row itself carries the button semantics — wrapping the cells in a real
+// <button> would break the CSS grid every row type lays out in — so this is the
+// one place that grants the tab stop, the ARIA role and state, and the
+// Enter/Space binding, and it binds `click` from the same handler so pointer
+// and keyboard can never drift apart. A row that holds selects or buttons uses
+// `makeRowDisclosure` instead: a button cannot contain other controls.
 //
 // `expanded` is omitted for rows that navigate instead of disclosing; those get
 // button semantics with no expansion state. `controls` names the detail node
@@ -392,6 +394,91 @@ export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
     onToggle(event);
   });
   return node;
+}
+
+// ORB-14495: a row that holds controls (copy-id, selects, actions) cannot itself
+// be a button — a screen reader announces one button whose children are
+// controls. One cell becomes the real <button> that discloses or opens the row;
+// the row stays a plain pointer target so a click anywhere outside its controls
+// still toggles. The button's own Enter/Space click bubbles to that same
+// listener, so pointer and keyboard share one handler. Nested controls stop
+// their clicks from reaching the row themselves.
+//
+// `expanded`, `controls` and `current` map to aria-expanded, aria-controls and
+// aria-current; each is omitted when null.
+export function makeDisclosure(host, button, { expanded, controls, current, onToggle } = {}) {
+  button.type = "button";
+  button.classList.add("disclosure");
+  if (expanded != null) button.setAttribute("aria-expanded", String(!!expanded));
+  if (controls) button.setAttribute("aria-controls", controls);
+  if (current) button.setAttribute("aria-current", "true");
+  host.addEventListener("click", onToggle);
+  return host;
+}
+
+/// `makeDisclosure` for a row in a list that `enableRovingRows` manages: the row
+/// and its button are marked so the list can move focus between rows.
+export function makeRowDisclosure(row, button, opts = {}) {
+  row.dataset.rovingRow = "";
+  button.dataset.rowFocus = "";
+  return makeDisclosure(row, button, opts);
+}
+
+// ORB-14495: a list of rows is one Tab stop. Only the current row's controls
+// (its disclosure button first among them, then its selects and actions) are
+// in the tab order; Up/Down/Home/End move between rows' disclosure buttons.
+// The current row is the one that last held focus, remembered by its keyed
+// identity so it survives the rebuild a refresh does, which is also what lets
+// `captureFocus` hand focus back to a rebuilt disclosure.
+const ROW_CONTROLS = "button, select, input, textarea, a[href]";
+const rovingLists = new WeakMap();
+
+function rowIdentity(row) {
+  for (let node = row; node; node = node.parentNode) {
+    if (node.dataset && node.dataset.key) return node.dataset.key;
+  }
+  return null;
+}
+
+function syncRovingRows(container) {
+  const state = rovingLists.get(container);
+  if (!state || typeof container.querySelectorAll !== "function") return;
+  const rows = Array.from(container.querySelectorAll("[data-roving-row]"));
+  const current = rows.find((row) => state.key !== null && rowIdentity(row) === state.key) || rows[0];
+  for (const row of rows) {
+    const tabIndex = row === current ? 0 : -1;
+    for (const control of row.querySelectorAll(ROW_CONTROLS)) control.tabIndex = tabIndex;
+  }
+}
+
+export function enableRovingRows(container) {
+  if (!container || rovingLists.has(container)) return;
+  rovingLists.set(container, { key: null });
+  container.addEventListener("focusin", (event) => {
+    const row = event.target && event.target.closest ? event.target.closest("[data-roving-row]") : null;
+    if (!row || !container.contains(row)) return;
+    const key = rowIdentity(row);
+    const state = rovingLists.get(container);
+    if (state.key === key) return;
+    state.key = key;
+    syncRovingRows(container);
+  });
+  container.addEventListener("keydown", (event) => {
+    const from = event.target;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!from || !from.matches || !from.matches("[data-row-focus]")) return;
+    const buttons = Array.from(container.querySelectorAll("[data-row-focus]"))
+      .filter((button) => button.getClientRects().length > 0);
+    const at = buttons.indexOf(from);
+    let next;
+    if (event.key === "ArrowDown") next = buttons[at + 1];
+    else if (event.key === "ArrowUp") next = buttons[at - 1];
+    else if (event.key === "Home") next = buttons[0];
+    else if (event.key === "End") next = buttons[buttons.length - 1];
+    else return;
+    event.preventDefault();
+    if (next) next.focus();
+  });
 }
 
 // ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
@@ -717,6 +804,7 @@ export function syncNodes(container, newNodesArr) {
   }
 
   if (state) panelMessage(container.id, state);
+  syncRovingRows(container);
   restoreFocus();
 }
 

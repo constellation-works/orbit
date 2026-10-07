@@ -70,6 +70,172 @@ async function assertFrictionTaskLinks(page) {
   }
 }
 
+// axe's nested-interactive rule: a button's children are presentational, so a
+// button (or role="button") holding a focusable control hides that control
+// from a screen reader. Returns every such button under `root`.
+function nestedInteractive(page, root) {
+  return page.evaluate(root => {
+    const focusable = 'button, select, input, textarea, a[href], [tabindex], [role="button"]';
+    return [...document.querySelectorAll(`${root} button, ${root} [role="button"]`)]
+      .filter(node => node.querySelector(focusable))
+      .map(node => node.outerHTML.slice(0, 160));
+  }, root);
+}
+
+// Each row list is one Tab stop: only the current row's controls are
+// tabbable, Up/Down/Home/End move between rows' disclosure buttons, Enter and
+// Space toggle the focused row, and its disclosure keeps focus across a
+// refresh that rebuilds the row. `/` jumps to the task search.
+async function assertRowKeyboard(page) {
+  const activeKey = () => page.evaluate(() => {
+    const active = document.activeElement;
+    return active?.matches('[data-row-focus]') ? active.closest('[data-key]').dataset.key : active?.id || active?.tagName;
+  });
+  const tabbableRows = root => page.evaluate(root => [...document.querySelectorAll(`${root} [data-roving-row]`)]
+    .map(row => [...row.querySelectorAll('button, select, a[href]')].filter(node => node.tabIndex >= 0).length), root);
+  const expectFocus = async (key, message) => {
+    const actual = await activeKey();
+    if (actual !== key) throw new Error(`${message}: expected focus on ${key}, got ${actual}`);
+  };
+
+  const nestedTasks = await nestedInteractive(page, '#tasks-body');
+  if (nestedTasks.length) throw new Error(`Task rows nest controls in a button: ${nestedTasks.join('\n')}`);
+  const keys = await page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').evaluateAll(rows => rows.map(row => row.dataset.key));
+  if (keys.length < 4) throw new Error(`Row keyboard check needs several task rows, got ${keys.length}`);
+  const title = key => page.locator(`#tasks-body [data-key="${key}"] > .title`);
+  if (await title(keys[0]).evaluate(node => node.tagName) !== 'BUTTON') throw new Error('Task title must be the row disclosure button');
+  if (await page.locator('#tasks-body .row[role]').count()) throw new Error('Task rows must not carry a role of their own');
+
+  await title(keys[0]).focus();
+  const tabbable = await tabbableRows('#tasks-body');
+  if (!(tabbable[0] > 0 && tabbable.slice(1).every(count => count === 0))) {
+    throw new Error(`Only the current task row may be in the tab order: ${JSON.stringify(tabbable)}`);
+  }
+  await page.keyboard.press('ArrowDown');
+  await expectFocus(keys[1], 'ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expectFocus(keys[0], 'ArrowUp');
+  await page.keyboard.press('End');
+  await expectFocus(keys.at(-1), 'End');
+  await page.keyboard.press('Home');
+  await expectFocus(keys[0], 'Home');
+
+  // Tab walks into the current row's controls, then leaves the list.
+  await page.keyboard.press('ArrowDown');
+  const stops = [];
+  for (let press = 0; press < 8; press++) {
+    await page.keyboard.press('Tab');
+    const inside = await page.evaluate(() => {
+      const active = document.activeElement;
+      const row = active.closest('#tasks-body [data-key]');
+      return row ? `${row.dataset.key}:${active.className.split(' ')[0]}` : null;
+    });
+    if (!inside) break;
+    stops.push(inside);
+  }
+  if (stops.length === 0 || stops.length > 4 || stops.some(stop => !stop.startsWith(`${keys[1]}:`))) {
+    throw new Error(`Tab must cross only the current row's controls before leaving the list: ${JSON.stringify(stops)}`);
+  }
+
+  await title(keys[1]).focus();
+  await page.keyboard.press('Enter');
+  const detailId = `detail-${keys[1].slice('task-'.length)}`;
+  await page.locator(`#tasks-body #${detailId}`).waitFor({ state: 'visible' });
+  await expectFocus(keys[1], 'Enter expands and keeps focus on the disclosure');
+  if (await title(keys[1]).getAttribute('aria-expanded') !== 'true' || await title(keys[1]).getAttribute('aria-controls') !== detailId) {
+    throw new Error('Expanded task disclosure must report its state and detail');
+  }
+  const nestedExpanded = await nestedInteractive(page, '#tasks-body');
+  if (nestedExpanded.length) throw new Error(`Expanded task detail nests controls in a button: ${nestedExpanded.join('\n')}`);
+  await page.keyboard.press(' ');
+  await page.locator(`#tasks-body #${detailId}`).waitFor({ state: 'detached' });
+  await expectFocus(keys[1], 'Space collapses and keeps focus on the disclosure');
+  if (await title(keys[1]).getAttribute('aria-expanded') !== 'false') throw new Error('Collapsed task disclosure must report its state');
+
+  // A refresh that changes the task rebuilds its row; focus follows the key.
+  await title(keys[2]).focus();
+  await page.evaluate(() => {
+    const prior = globalThis.fetch;
+    globalThis.rowKeyboardFixtureFetch = prior;
+    globalThis.rowBeforeRefresh = document.activeElement;
+    globalThis.fetch = async (path, options) => {
+      const response = await prior(path, options);
+      if (new URL(path, window.location.href).pathname !== '/api/tasks' || !response.ok) return response;
+      const payload = await response.json();
+      payload.items = payload.items.map(task => ({ ...task, title: `${task.title} (refreshed)` }));
+      return { ...response, json: async () => payload, text: async () => JSON.stringify(payload) };
+    };
+    document.getElementById('refresh-btn').click();
+  });
+  await page.waitForFunction(key => document.querySelector(`#tasks-body [data-key="${key}"] > .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
+  await expectFocus(keys[2], 'Refresh restores focus to the rebuilt disclosure');
+  if (await page.evaluate(() => document.activeElement === globalThis.rowBeforeRefresh)) {
+    throw new Error('The refresh check must rebuild the focused row for it to mean anything');
+  }
+  await page.evaluate(() => {
+    globalThis.fetch = globalThis.rowKeyboardFixtureFetch;
+    delete globalThis.rowKeyboardFixtureFetch;
+    delete globalThis.rowBeforeRefresh;
+    document.getElementById('refresh-btn').click();
+  });
+  await page.waitForFunction(key => !document.querySelector(`#tasks-body [data-key="${key}"] > .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
+
+  await page.keyboard.press('/');
+  await expectFocus('task-search', '/ focuses the task search');
+  if (await page.locator('#task-search').inputValue() !== '') throw new Error('/ must not be typed into the search it focuses');
+  const typedInField = await page.evaluate(() => {
+    const event = new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true });
+    document.getElementById('task-search').dispatchEvent(event);
+    return !event.defaultPrevented;
+  });
+  if (!typedInField) throw new Error('/ inside a field must stay a character');
+  await page.evaluate(() => document.activeElement.blur());
+
+  // Runs and Knowledge friction rows follow the same pattern.
+  await page.evaluate(async () => {
+    const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
+    // Failed, so the Runs filter earlier scenarios leave on shows all three.
+    const runs = [0, 1, 2].map(index => ({
+      run_id: `jrun-keyboard-${index}`, job_id: `keyboard-job-${index}`, state: 'failed', created_at: new Date().toISOString(),
+    }));
+    const prior = globalThis.fetch;
+    globalThis.rowKeyboardFixtureFetch = prior;
+    globalThis.fetch = async (path, options) => new URL(path, window.location.href).pathname === '/api/job-runs'
+      ? response({ items: runs, total: runs.length, limit: 50, truncated: false })
+      : prior(path, options);
+    (await import('/js/router.js')).setActiveTab('diagnostics/runs');
+    document.getElementById('refresh-btn').click();
+  });
+  const runButtons = page.locator('#runs-body .runs-row[data-key^="run-"] > .id');
+  await page.waitForFunction(() => document.querySelectorAll('#runs-body .runs-row[data-key^="run-"]').length === 3);
+  const nestedRuns = await nestedInteractive(page, '#runs-body');
+  if (nestedRuns.length) throw new Error(`Run rows nest controls in a button: ${nestedRuns.join('\n')}`);
+  if (await runButtons.first().evaluate(node => node.tagName) !== 'BUTTON') throw new Error('Run job cell must be the row button');
+  await runButtons.first().focus();
+  await page.keyboard.press('ArrowDown');
+  if (!(await runButtons.nth(1).evaluate(node => node === document.activeElement))) throw new Error('ArrowDown must move between run rows');
+  const runTabbable = await tabbableRows('#runs-body');
+  if (!(runTabbable[1] > 0 && runTabbable[0] === 0 && runTabbable[2] === 0)) {
+    throw new Error(`Only the current run row may be in the tab order: ${JSON.stringify(runTabbable)}`);
+  }
+  await page.evaluate(async () => {
+    document.activeElement.blur();
+    globalThis.fetch = globalThis.rowKeyboardFixtureFetch;
+    delete globalThis.rowKeyboardFixtureFetch;
+    (await import('/js/router.js')).setActiveTab('knowledge/frictions');
+  });
+  const frictionTitle = page.locator('#frictions-body .friction-row > .title').first();
+  await frictionTitle.waitFor({ state: 'visible' });
+  const nestedFrictions = await nestedInteractive(page, '#frictions-body');
+  if (nestedFrictions.length) throw new Error(`Friction rows nest controls in a button: ${nestedFrictions.join('\n')}`);
+  if (await frictionTitle.evaluate(node => node.tagName) !== 'BUTTON'
+    || await frictionTitle.getAttribute('aria-controls') !== 'friction-detail'
+    || await frictionTitle.getAttribute('aria-current') !== 'true') {
+    throw new Error('The selected friction title must be a button naming the detail pane it fills');
+  }
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
+}
+
 async function assertVisibleTaskRow(page, viewport, pageName) {
   const visible = await page.evaluate(() => {
     const row = document.querySelector('#tasks-body .row[data-key^="task-"]:not(.header)');
@@ -693,6 +859,7 @@ try {
     await assertFrictionTaskLinks(page);
     await page.evaluate(() => globalThis.showTaskPaginationEvidence());
     await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
+    await assertRowKeyboard(page);
     for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
       await page.setViewportSize({ width: viewport.width, height: 900 });
       await page.evaluate(() => {
@@ -789,7 +956,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs pinned first column and scroll edge at 601–768px, card layout at 375px, unchanged at 1280px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge at 601–768px, card layout at 375px, unchanged at 1280px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
 } finally {

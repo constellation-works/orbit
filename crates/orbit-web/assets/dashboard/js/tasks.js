@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -637,6 +637,17 @@ export function wireSearch(context) {
     setSearchQuery(context, e.target.value.trim().toLowerCase());
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(() => navigateTasksHash(context), 250);
+  });
+  // ORB-14495: `/` jumps to the task search while the Tasks view shows it. A
+  // field that takes typing keeps the key as a character.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select")))) return;
+    if (input.getClientRects().length === 0) return;
+    event.preventDefault();
+    input.focus();
+    input.select();
   });
 }
 
@@ -1635,11 +1646,9 @@ export function scrollToComment(hash = getCommentHash()) {
         .split(/\s+/)
         .filter((c) => c !== "collapsed")
         .join(" ");
-      const head = panel.querySelector
-        ? panel.querySelector("h4")
-        : (panel.children || []).find((c) => c.tag === "h4" || (c.tagName && c.tagName.toLowerCase() === "h4"));
-      if (head && typeof head.setAttribute === "function") {
-        head.setAttribute("aria-expanded", "true");
+      const toggle = panel.querySelector ? panel.querySelector("h4 .field-toggle") : null;
+      if (toggle && typeof toggle.setAttribute === "function") {
+        toggle.setAttribute("aria-expanded", "true");
       }
       commentPrefs = { ...commentPrefs, collapsed: false };
       saveCommentPrefs();
@@ -1709,12 +1718,14 @@ function renderCommentsPanel(panel, task, context) {
     });
     actions.appendChild(collapseAll);
   }
-  const head = el("h4", {}, [
+  // The header also holds the order and collapse-all buttons, so the title and
+  // count are the disclosure button rather than the whole header.
+  const toggle = el("button", { class: "field-toggle" }, [
     el("span", { class: "field-title", text: "comments" }),
     el("span", { class: "field-count", text: String(comments.length) }),
-    actions,
   ]);
-  makeToggleRow(head, {
+  const head = el("h4", {}, [toggle, actions]);
+  makeDisclosure(head, toggle, {
     expanded: !isCollapsed,
     onToggle: (event) => {
       if (event && typeof event.stopPropagation === "function") {
@@ -1731,7 +1742,7 @@ function renderCommentsPanel(panel, task, context) {
         else set.delete("collapsed");
         panel.className = Array.from(set).join(" ");
       }
-      head.setAttribute("aria-expanded", String(!nowCollapsed));
+      toggle.setAttribute("aria-expanded", String(!nowCollapsed));
       commentPrefs = { ...commentPrefs, collapsed: nowCollapsed };
       saveCommentPrefs();
     },
@@ -2630,24 +2641,18 @@ function takeTaskActionNotice() {
 // The pinned global-resolver result: a task outside the active filter, shown
 // above the list with its own dismiss control.
 function buildPinnedTask(ptask, context) {
-  const idSpan = el("span", { class: "id mono", text: ptask.id });
+  // The pinned row's detail is always open, so the row discloses nothing: its
+  // ID is the same copy button every task row has, and the row holds no other
+  // action of its own.
   const row = el("div", {
     class: "row pinned-external",
     title: `${ptask.title} (global resolver; status ${ptask.status})`
   }, [
-    idSpan,
+    makeCopyButton(ptask.id, { class: "id mono", title: "Copy task ID" }),
     el("span", { class: "title", text: ptask.title }),
     buildStatusUpdateControl(ptask, context),
     buildCrewUpdateControl(ptask, context),
   ]);
-  // The pinned row's detail is always open, so the row is a plain copy-the-id
-  // action rather than a disclosure.
-  makeToggleRow(row, {
-    onToggle: (e) => {
-      e.stopPropagation();
-      copyWithFeedback(idSpan, ptask.id);
-    },
-  });
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const detail = buildTaskDetail(ptask, context);
@@ -2840,6 +2845,7 @@ export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
+  enableRovingRows(body);
 
   // ORB-00030: in the aggregate ("All workspaces") view each task carries its
   // owning workspace; show it as a badge in the Title cell. Detected from the
@@ -2942,15 +2948,17 @@ export function renderTasks(tasks, context) {
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
         const osBadges = buildOsBadges(t);
+        // The title is the row's disclosure: the row holds the copy-id button,
+        // the selects and the quick action, so it cannot be a button itself.
         const titleCell = (aggregate && t.workspace_name) || osBadges.length > 0
-          ? el("span", { class: "title" }, [
+          ? el("button", { class: "title" }, [
               ...(aggregate && t.workspace_name
                 ? [el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })]
                 : []),
               ...osBadges,
               t.title,
             ])
-          : el("span", { class: "title", text: t.title });
+          : el("button", { class: "title", text: t.title });
         const quickError = buildQuickActionError(t);
         row = el("div", { class: `row${quickError ? " has-quick-error" : ""}`, title: t.title }, [
           idSpan,
@@ -2962,7 +2970,7 @@ export function renderTasks(tasks, context) {
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;
-        makeToggleRow(row, {
+        makeRowDisclosure(row, titleCell, {
           expanded: expandedTaskIds.has(t.id),
           // The detail node only exists while the row is open, so the IDREF is
           // only published while it actually resolves.

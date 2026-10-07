@@ -291,6 +291,13 @@
   align-items: center;
 }
 .field-block h4 .field-actions:empty { display: none; }
+/* A header that also holds actions keeps its title and count in one
+   disclosure button (the comments thread), laid out like the bare header. */
+.field-block h4 .field-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 
 .field-block.collapsible h4 {
   cursor: pointer;

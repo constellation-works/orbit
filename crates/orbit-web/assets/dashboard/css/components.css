@@ -158,14 +158,37 @@
    keyboard-operable (role="button" plus Enter/Space), so focus has to be
    visible on them as well. The ring is inset because an outward one on a
    full-bleed row is clipped by the panel's scroll container. */
-.row:focus-visible,
 .artifact-row:focus-visible,
 .audit-row:focus-visible,
 .step-row:focus-visible,
-.runs-row:focus-visible,
 .field-block.collapsible h4:focus-visible {
   outline: 2px solid var(--accent-hover);
   outline-offset: -2px;
+}
+/* ORB-14495: a row that holds controls is disclosed by one of its cells, a
+   real button (makeDisclosure) that must still read as that cell's text. The
+   row's own rules (.row .title, .runs-row .id, .knowledge-row .title) supply
+   font, colour and truncation. */
+.disclosure {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  line-height: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.disclosure:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 /* Click-to-copy identifiers are real buttons (keyboard-operable) that must
    still read as the plain mono text of the row that hosts them. The row's own

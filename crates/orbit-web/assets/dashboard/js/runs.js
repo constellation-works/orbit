@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow, formatDateTime } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -913,6 +913,7 @@ function runDurationCell(run) {
 export function renderRuns(runs) {
   if (!panelCanRender("runs-body")) return;
   const body = $("runs-body");
+  enableRovingRows(body);
   const frag = document.createDocumentFragment();
   const unavailable = hasCtx("getRunSourcesUnavailable") ? _runsCtx.getRunSourcesUnavailable() : [];
   const meta = hasCtx("getRunsMeta") ? _runsCtx.getRunsMeta() : null;
@@ -1005,10 +1006,13 @@ export function renderRuns(runs) {
       });
       runIdCell.appendChild(lineage);
     }
+    // The job cell is the row's button: the row also holds the copy-id,
+    // lineage and run actions, so it cannot be a button itself.
+    const openButton = el("button", { class: "id", text: r.job_id, title: `Open run ${r.run_id}` });
     const rowCells = [
       el("span", { class: "state" }, [stateCell(r.state)]),
       attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
-      el("span", { class: "id", text: r.job_id, title: r.job_id }),
+      openButton,
       runIdCell,
       el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
       runCountCell(friction.denials, "denials"),
@@ -1023,9 +1027,9 @@ export function renderRuns(runs) {
     row.dataset.key = `run-${runIdentity(r)}`;
     row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}`;
     row.style.cursor = "pointer";
-    // A run row opens the run detail view rather than disclosing inline, so it
-    // gets button semantics with no expansion state.
-    makeToggleRow(row, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
+    // A run row opens the run detail view rather than disclosing inline, so its
+    // button has no expansion state.
+    makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
     frag.appendChild(row);
   }
   syncNodes(body, Array.from(frag.children));
