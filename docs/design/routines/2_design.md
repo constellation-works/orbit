@@ -348,11 +348,20 @@ not need to wait for a separate GC fire.
 This boundary delegates to the same `collect_worktrees` classifier used by the
 `worktree_gc_pipeline` job. It therefore requires a terminal run, a settled task
 (`done`, `rejected`, or `archived`), a registered real worktree, and a clean Git
-status before removing the directory and branch. `review`, failed/non-terminal
-runs, unresolved tasks, and dirty trees remain on disk as evidence. The removal
-report is written into the run pipeline state under `worktree_cleanup`, with the
+status before removing the directory and branch. Unsettled tasks (including
+`review`), non-terminal runs, unresolved tasks, and dirty trees remain on disk as
+evidence. The removal report is written into the run pipeline state under
+`worktree_cleanup`, with the
 same path, task id, action, and `bytes_reclaimed` fields as scheduled GC; it is
 visible from `orbit run show` even after the run is terminal.
+
+Delivery cleanup indexes every recorded run before applying its run filter,
+just as the scheduled sweep does. A stable worktree token or task fallback
+shared with a non-terminal run stays `skipped:ambiguous_run_path`, preserving
+both the checkout and its branch. Once all mapped runs are terminal, the path
+can be collected only if every mapped run passes the task and Git safety gates
+(and the worker-liveness gate for build-output collection). Each shared path is
+removed at most once in a sweep.
 
 The earlier unexplained removals were the setup recovery path, not delivery GC:
 `ensure_worktree` removes an owned incomplete checkout during path reuse, and

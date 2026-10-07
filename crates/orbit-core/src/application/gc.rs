@@ -42,7 +42,9 @@ impl OrbitRuntime {
 
         collect_worktrees(
             &self.paths().repo_root,
-            std::slice::from_ref(&run),
+            // Scope collection to this delivery, but retain every run in the
+            // path index so another run sharing its token or fallback protects it.
+            &self.list_job_runs_for_worktree_gc()?,
             self,
             &WorktreeGcOptions {
                 delete: true,
