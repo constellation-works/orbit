@@ -9,10 +9,12 @@ import { Content as ChangelogContent, getHeadings } from '../../../CHANGELOG.md'
 
 // The changelog's own H1 ("Changelog") duplicates the page title; the release
 // sections underneath it are the useful table of contents.
-const headings = getHeadings().filter((heading) => heading.depth === 2).map((heading) => ({
-  ...heading,
-  text: heading.text.match(/^\d+\.\d+\.\d+/)?.[0] ?? heading.text,
-}));
+// Release headings may carry a date ("0.28.0 — 2026-10-07"), but the rendered
+// anchor stays version-only, so the rail must link to that anchor.
+const headings = getHeadings().filter((heading) => heading.depth === 2).map((heading) => {
+  const version = heading.text.match(/^\d+\.\d+\.\d+/)?.[0];
+  return version ? { ...heading, text: version, slug: version.replaceAll('.', '') } : heading;
+});
 ---
 
 <StarlightPage
