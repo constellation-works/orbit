@@ -11,6 +11,10 @@ let healthFixture = false;
 const healthQueries = [];
 let marker = 'first';
 let taskPaging = false;
+let shipFixture = null;
+let shipLive = false;
+let shipRequests = 0;
+const pendingShips = [];
 let terminalRunFixture = false;
 let liveDrain = false;
 let readinessReads = 0;
@@ -30,6 +34,7 @@ function fixture(url) {
   switch (url.pathname) {
     case '/api/workspaces': return ['one', 'two'].map(id => ({ id, name: id, status: 'active', is_default: id === 'one' }));
     case '/api/tasks': {
+      if (shipFixture) return list([{ ...shipFixture }]);
       if (!taskPaging) return list([{ id: 'TEST-1', title: marker, status: 'in-progress', priority: 'medium' }]);
       const cursor = url.searchParams.get('cursor');
       const page = cursor === 'page-2' ? 2 : cursor === 'page-1' ? 1 : 0;
@@ -115,8 +120,15 @@ function fixture(url) {
     default: return [];
   }
 }
-globalThis.fetch = async path => {
+globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  if (shipFixture && url.pathname === '/api/workflows/ship') {
+    check(options.method === 'POST', 'Ship uses the dispatch endpoint');
+    check(JSON.stringify(JSON.parse(options.body).task_ids) === JSON.stringify([shipFixture.id]), 'Ship dispatches only the selected task');
+    shipRequests++;
+    if (shipLive) return response({ error: 'Ship run is already in flight', code: 'ship_run_in_flight' }, 409);
+    return new Promise(resolve => pendingShips.push(resolve));
+  }
   if (url.pathname === '/api/workflows/auto/readiness') readinessReads += 1;
   if (url.pathname === '/api/crews') crewReads += 1;
   if (networkDown) throw new TypeError('Fixture network unavailable');
@@ -266,6 +278,73 @@ for (const state of ['failed', 'timeout', 'interrupted']) {
 }
 check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
 terminalRunFixture = false;
+
+// Both entrypoints share a pending-request guard, but an accepted run must not
+// lock Ship for the page lifetime after cancellation or failed delivery.
+setActiveTab('tasks');
+for (const origin of ['detail', 'row']) {
+  shipFixture = { id: `SHIP-${origin}`, title: `Ship ${origin} fixture`, status: 'backlog', priority: 'medium', job_run_id: null };
+  shipLive = false;
+  const rowShip = () => node('tasks-body').querySelector('.task-quick.ship');
+  const detailShip = () => node(`detail-${shipFixture.id}`)?.querySelector('.action.ship');
+  const openDetail = async () => {
+    if (!detailShip()) {
+      click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] > .title`));
+      await settle();
+    }
+  };
+  const bothEnabled = () => rowShip() && detailShip() && !rowShip().disabled && !detailShip().disabled;
+  refresh(); await settle();
+  await openDetail();
+  check(bothEnabled(), `${origin}: backlog task enables both Ship controls`);
+  const requestsBefore = shipRequests;
+  click(origin === 'detail' ? detailShip() : rowShip()); await settle();
+  check(shipRequests === requestsBefore + 1 && pendingShips.length === 1, `${origin}: one dispatch is pending`);
+  refresh(); await settle();
+  check(rowShip().disabled && detailShip().disabled, `${origin}: refresh preserves both pending Ship controls`);
+  // Dispatch synthetic events to exercise the handler guards as well as the
+  // disabled DOM controls while the first request has not answered.
+  for (const control of [rowShip(), detailShip()]) control.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await settle();
+  check(shipRequests === requestsBefore + 1, `${origin}: pending duplicate never reaches the server`);
+  pendingShips.shift()(response({ error: 'Dispatch fixture failed' }, 503));
+  await settle();
+  check(bothEnabled(), `${origin}: dispatch failure after refresh enables retry in both controls`);
+  check(text('tasks-body').includes('Dispatch fixture failed'), `${origin}: dispatch failure appears in the current detail or row`);
+  click(origin === 'detail' ? detailShip() : rowShip()); await settle();
+  check(shipRequests === requestsBefore + 2 && pendingShips.length === 1, `${origin}: failed dispatch can be retried`);
+  refresh(); await settle();
+  shipLive = true;
+  pendingShips.shift()(response({ run_id: `jrun-${origin}-live`, state: 'submitted' }));
+  await settle();
+
+  // A list may still show backlog after acceptance. The server's conflict
+  // response must be surfaced if the other entrypoint tries the live run.
+  await openDetail();
+  click(origin === 'detail' ? rowShip() : detailShip()); await settle();
+  check(shipRequests === requestsBefore + 3 && pendingShips.length === 0, `${origin}: live duplicate is refused by the server`);
+  check(text('tasks-body').includes('Ship run is already in flight'), `${origin}: live duplicate error is visible`);
+
+  shipFixture.status = 'in-progress';
+  shipFixture.job_run_id = `jrun-${origin}-live`;
+  refresh(); await settle();
+  check(!rowShip() && !detailShip(), `${origin}: active task does not offer Ship`);
+  shipLive = false;
+  shipFixture.status = 'backlog';
+  shipFixture.job_run_id = null;
+  refresh(); await settle();
+  await openDetail();
+  check(bothEnabled(), `${origin}: both Ship controls recover after the run ends without reloading`);
+  click(origin === 'detail' ? detailShip() : rowShip()); await settle();
+  check(shipRequests === requestsBefore + 4 && pendingShips.length === 1, `${origin}: the returned backlog task can be shipped again`);
+  shipFixture.status = 'in-progress';
+  shipFixture.job_run_id = `jrun-${origin}-retry`;
+  shipLive = true;
+  pendingShips.shift()(response({ run_id: shipFixture.job_run_id, state: 'submitted' }));
+  await settle();
+}
+shipFixture = null;
+shipLive = false;
 taskPaging = true;
 setActiveTab('tasks');
 refresh(); await settle();
