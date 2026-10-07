@@ -801,6 +801,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .write_job_run_state_for_workspace(&self.workspace_id, run_id, state)
     }
 
+    fn initialize_run_state(
+        &self,
+        run_id: &str,
+        state: &PipelineState,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .initialize_job_run_state_for_workspace(&self.workspace_id, run_id, state)
+    }
+
     fn update_run_state(
         &self,
         run_id: &str,

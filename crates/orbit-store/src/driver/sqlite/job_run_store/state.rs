@@ -110,6 +110,41 @@ impl Store {
         Ok(())
     }
 
+    /// Initialize without replacing a checkpoint another writer supplied.
+    pub fn initialize_job_run_state_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        state: &PipelineState,
+    ) -> Result<bool, OrbitError> {
+        let state_json = serde_json::to_string(state)
+            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let updated = tx
+                .tx
+                .execute(
+                    "UPDATE job_runs SET pipeline_state_json = ?3 \
+                 WHERE workspace_id = ?1 AND run_id = ?2 AND pipeline_state_json IS NULL",
+                    rusqlite::params![workspace_id, run_id, state_json],
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            if updated == 0 {
+                let exists = tx.tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)",
+                    rusqlite::params![workspace_id, run_id],
+                    |row| row.get::<_, bool>(0),
+                ).map_err(|error| OrbitError::Store(error.to_string()))?;
+                if !exists {
+                    return Err(OrbitError::not_found(
+                        NotFoundKind::JobRun,
+                        run_id.to_string(),
+                    ));
+                }
+            }
+            Ok(updated != 0)
+        })
+    }
+
     /// [ORB-11253] Apply `update` to a run's pipeline state, reading the run's
     /// state and its checkpoint blob inside the same immediate write
     /// transaction that persists the result.
