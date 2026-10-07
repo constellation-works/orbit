@@ -1,7 +1,9 @@
+use std::collections::BTreeSet;
+
 use chrono::{Duration, Utc};
 use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
-use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
-use orbit_types::task::TaskStatus;
+use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase, TaskListFilter};
+use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
@@ -55,9 +57,10 @@ impl OrbitRuntime {
 
     /// A task's settlement state for worktree GC [ORB-13658].
     ///
-    /// An owner checkout reads its own store. A replica holds no task records
-    /// — they live on its owner — so it asks the owner over the owner's
-    /// ordinary tool surface, through the route the run's own claim names
+    /// An owner checkout reads its own store. A replica also reads locally
+    /// for ids this machine minted before becoming a replica. It asks the
+    /// owner only for the owner's prefix, learned from stored claim admissions
+    /// or the workspace's mirrored task ids, through the route the claim names
     /// (its admission's destination) or else this checkout's registered
     /// workspace on the owner. Only a transport failure is reported as the
     /// owner being unreachable [ORB-13920]: the owner not answering says
@@ -69,15 +72,27 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> WorktreeGcTaskLookup {
         let Some(owner_machine) = self.coordination_write_owner() else {
-            return match self.get_task(task_id) {
-                Ok(task) => WorktreeGcTaskLookup::Found {
-                    status: task.status,
-                    pr_status: task.pr_status,
-                },
-                Err(_) => WorktreeGcTaskLookup::Unresolved,
-            };
+            return self.worktree_gc_local_task_lookup(task_id);
         };
-        let Some(selector) = self.worktree_gc_owner_selector(owner_machine, run_id) else {
+        // Uninitialized legacy runtimes allocate under ORB. Registered runtime
+        // composition keeps the allocator and machine identity in agreement.
+        let local_prefix = self.context.settings().machine_task_prefix();
+        let Some(prefix) = task_id_prefix(task_id) else {
+            return WorktreeGcTaskLookup::TaskPrefixUnroutable;
+        };
+        if prefix == local_prefix {
+            return self.worktree_gc_local_task_lookup(task_id);
+        }
+        let selector = self.worktree_gc_owner_selector(owner_machine, run_id);
+        match self.worktree_gc_owner_prefix(owner_machine, selector.as_deref(), local_prefix) {
+            Ok(Some(owner_prefix)) if prefix == owner_prefix => {}
+            Ok(_) => return WorktreeGcTaskLookup::TaskPrefixUnroutable,
+            Err(error) => {
+                tracing::warn!(%error, "worktree GC could not establish the owner's task prefix");
+                return WorktreeGcTaskLookup::Unresolved;
+            }
+        }
+        let Some(selector) = selector else {
             return WorktreeGcTaskLookup::NoOwnerRoute(
                 "this replica checkout is not a registered workspace and the run holds no claim \
                  naming its owner; register it with `orbit workspace init --role replica`"
@@ -109,6 +124,59 @@ impl OrbitRuntime {
             }
             Err(error) => WorktreeGcTaskLookup::OwnerLookupFailed(format!("{selector}: {error}")),
         }
+    }
+
+    fn worktree_gc_local_task_lookup(&self, task_id: &str) -> WorktreeGcTaskLookup {
+        // Read the store directly: get_task can route through a managed
+        // worker's coordinator, which is not the authority for local ids.
+        match self.stores().tasks().get_task(task_id) {
+            Ok(Some(task)) => WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+            },
+            _ => WorktreeGcTaskLookup::Unresolved,
+        }
+    }
+
+    fn worktree_gc_owner_prefix(
+        &self,
+        owner_machine: &str,
+        selector: Option<&str>,
+        local_prefix: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        // Admissions tie task ids to an explicit owner route. They take
+        // precedence over mirrors, which may include other hosts' prefixes.
+        let mut prefixes = self
+            .stores()
+            .jobs()
+            .local_pull_admissions()?
+            .into_iter()
+            .filter(|record| match selector {
+                Some(selector) => record.destination.selector == selector,
+                None => record.destination.owner_machine_id == owner_machine,
+            })
+            .filter_map(|record| record.receipt.and_then(|receipt| receipt.claim))
+            .filter_map(|claim| task_id_prefix(&claim.task_id).map(ToOwned::to_owned))
+            .collect::<BTreeSet<_>>();
+        if prefixes.is_empty() {
+            // Before this checkout has pulled, a single foreign namespace in
+            // its workspace mirrors identifies the owner. Multiple foreign
+            // namespaces are ambiguous; never guess or probe the owner.
+            prefixes = self
+                .stores()
+                .tasks()
+                .task_candidates(&TaskListFilter::default(), usize::MAX)?
+                .items
+                .into_iter()
+                .filter_map(|task| task_id_prefix(&task.id).map(ToOwned::to_owned))
+                .filter(|prefix| prefix != local_prefix)
+                .collect();
+        }
+        Ok(if prefixes.len() == 1 {
+            prefixes.into_iter().next()
+        } else {
+            None
+        })
     }
 
     /// Scope for memoizing owner lookups during one worktree GC sweep.

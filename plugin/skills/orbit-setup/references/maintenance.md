@@ -60,10 +60,17 @@ removing an entry skips that entry and the sweep continues.
 use `orbit gc tmp`.
 
 On a replica checkout (one that pulls work from an owner on another machine),
-task records live on the owner. A claimed leaf whose claim this follower has
-settled with the owner needs no task answer: the owner holds its delivery, so
-its worktree is collected and `detail` names the settled claim. For any other
-worktree GC asks the owner for the task's status over the owner's tool
+new claimed tasks live on the owner; historical tasks minted with this machine's
+prefix remain local. A claimed leaf whose handoff the owner accepted and whose
+claim this follower settled needs no task answer: the owner holds its delivery, so
+its worktree is collected and `detail` names the settled claim. For other
+worktrees, GC reads tasks carrying this machine's prefix from its local store
+and asks the owner only for the owner's prefix, learned from existing claim
+admissions or a single foreign prefix in the workspace's stored tasks. Claims
+identify the owner even when other foreign task mirrors exist; without claims,
+multiple foreign prefixes are ambiguous. An unknown or ambiguous prefix retains the worktree with
+`skipped:task_prefix_unroutable` and makes no owner call. Missing local or owner
+tasks stay `skipped:task_unresolved`. Owner lookups use the owner's tool
 surface, through the claim's own route (the owner must be in
 `~/.orbit/mcp-destinations.toml`). A transport failure keeps the worktree as
 `skipped:owner_unreachable` with the error in `detail`; run GC again once the

@@ -12,6 +12,9 @@ pub enum WorktreeGcTaskLookup {
     },
     /// The owning store answered but did not produce the task.
     Unresolved,
+    /// A replica cannot associate the task's prefix with this machine or its
+    /// workspace owner. No owner lookup was attempted; retain the worktree.
+    TaskPrefixUnroutable,
     /// This checkout is a replica with no route to ask its owner: it is not
     /// a registered workspace or has no federated destination for the owner.
     /// Nothing was attempted over the wire, so this is a configuration gap,

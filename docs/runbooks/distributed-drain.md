@@ -1034,9 +1034,15 @@ orbit routine list --workspace <replica-workspace>
 orbit clock status
 ```
 
-The GC asks the owner, through the run's claim route or the replica's
-registered workspace, whether each task is settled. It reclaims a worktree only
-when the claim is settled or the owner reports the task settled. A worktree
+GC reads historical tasks carrying this machine's prefix from the local store.
+It asks the owner only for the owner's prefix, through the run's claim route or
+the replica's registered workspace. Existing admissions identify the owner's
+prefix; before any pull, GC uses a single foreign prefix in this workspace's
+stored task ids. Multiple foreign prefixes without admissions are ambiguous.
+Other or ambiguous prefixes stay `skipped:task_prefix_unroutable` without an
+owner call, and missing tasks stay `skipped:task_unresolved`. GC reclaims a
+worktree only when its claim was accepted and settled or every task is settled
+in its authoritative store. A worktree
 whose owner is unreachable or unrouted stays, reported as
 `skipped:owner_unreachable` or `skipped:no_owner_route` in the run's `reap`
 output.

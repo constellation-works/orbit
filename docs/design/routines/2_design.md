@@ -381,8 +381,13 @@ contribute one kind of routine only (§2.1). Two properties fall out:
 
 A replica checkout schedules exactly one kind of routine for itself: a cron
 definition targeting `job:worktree_gc_pipeline` [ORB-14173]. That job reclaims this
-host's own run worktrees and asks the owner over its tool surface whether each task is
-settled; it writes nothing to the owner's task store. Owner and replica definitions
+host's own run worktrees. It reads historical tasks carrying this machine's prefix
+locally and asks the owner over its tool surface only for the owner's prefix;
+it writes nothing to the owner's task store. The owner prefix comes from existing
+claim admissions, or a single foreign prefix in this workspace's stored task ids
+before any pull. Other prefixes, including ambiguous foreign mirrors without
+admissions, are retained as `skipped:task_prefix_unroutable` without an owner call.
+Owner and replica definitions
 load together, so a name claimed in both still fails closed.
 
 Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
@@ -401,8 +406,9 @@ operations stay owner-only. Refusals name the owner machine.
 Worktree cleanup therefore has two paths. On the owner, a delivery run removes its own
 worktree once it lands (§1, *Delivered worktree cleanup*), with the owner's hourly GC
 routine as the backstop. On a replica, a claimed leaf's worktree is reclaimed only by
-the replica's own scheduled GC, once its claim is settled with the owner or the owner
-reports the task settled; an unreachable owner leaves the worktree in place.
+the replica's own scheduled GC, once its claim handoff was accepted and settled
+with the owner or every task's authoritative store reports it settled. A missing
+task or an unreachable owner leaves the worktree in place.
 
 A `config.toml` written before [ORB-12236] may still carry `[routines] role = "source"`;
 it loads with a warning for one release and selects nothing.

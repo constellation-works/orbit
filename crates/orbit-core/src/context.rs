@@ -402,6 +402,8 @@ pub(crate) struct OrbitRuntimeSettings {
     operation: orbit_config::OperationPolicy,
     /// Global `machine.worker_*` limits for detached workers [ORB-12903].
     worker_containment: orbit_config::WorkerContainmentSettings,
+    /// Existing machine identity's task namespace; ORB for legacy runtimes.
+    machine_task_prefix: String,
 }
 
 impl OrbitRuntimeSettings {
@@ -428,6 +430,7 @@ impl OrbitRuntimeSettings {
         system_crew_alias: Option<String>,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
+        machine_task_prefix: String,
     ) -> Self {
         Self {
             persistence,
@@ -451,6 +454,7 @@ impl OrbitRuntimeSettings {
             system_crew_alias,
             operation,
             worker_containment,
+            machine_task_prefix,
         }
     }
 
@@ -460,6 +464,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn worker_containment(&self) -> &orbit_config::WorkerContainmentSettings {
         &self.worker_containment
+    }
+
+    pub(crate) fn machine_task_prefix(&self) -> &str {
+        &self.machine_task_prefix
     }
 
     pub(crate) fn automation_stall_window_minutes(&self) -> u32 {

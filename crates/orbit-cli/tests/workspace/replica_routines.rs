@@ -4,8 +4,8 @@
 //! The fixture host owns one owner checkout and one replica checkout of a
 //! workspace owned by another machine. Both carry the seeded routines. The
 //! replica's worktree GC, ship sweep and an auto-task are all enabled; only the
-//! GC may fire there, and the GC run must ask the owner about task settlement
-//! rather than read or write a task store of its own. The owner checkout's
+//! GC may fire there, and the GC run must retain a task whose prefix it cannot
+//! route. The owner checkout's
 //! scheduling is the control: its routines are evaluated exactly as before.
 
 use std::collections::BTreeMap;
@@ -165,20 +165,17 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
         replica_orbit_dir.to_string_lossy().as_ref(),
         "{run}"
     );
-    // Task settlement is the owner's answer. With no route to the owner the
-    // eligible-looking worktree is retained, never judged from a local store.
+    // This task's foreign prefix has no owner admission or mirror here, so
+    // GC retains it without querying an owner whose namespace it cannot verify.
     let reports = run["pipeline_state"]["pipeline"]["reap"]["reports"]
         .as_array()
         .unwrap_or_else(|| panic!("reap reports array: {run}"));
     let retained = reports
         .iter()
-        .find(|report| report["task_id"] == "RR-REPLICA-1")
+        .find(|report| report["task_id"] == "RM-00001")
         .unwrap_or_else(|| panic!("seeded replica worktree was not classified: {run}"));
-    assert!(
-        matches!(
-            retained["action"].as_str(),
-            Some("skipped:no_owner_route" | "skipped:owner_unreachable")
-        ),
+    assert_eq!(
+        retained["action"], "skipped:task_prefix_unroutable",
         "{retained}"
     );
     assert!(replica_worktree.exists(), "retained worktree was removed");
@@ -369,7 +366,7 @@ fn seed_replica_worktree(repo: &Path, home: &Path) -> PathBuf {
             "job",
             fixture_job.to_str().expect("utf-8 fixture path"),
             "--input",
-            "task_id=RR-REPLICA-1",
+            "task_id=RM-00001",
             "--input",
             "crew=sol",
             "--wait",

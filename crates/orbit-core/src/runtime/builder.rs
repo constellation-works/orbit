@@ -332,6 +332,11 @@ pub(crate) fn build_context_from_roots(
             runtime_config.system_crew_alias.clone(),
             operation,
             runtime_config.snapshot.worker_containment(),
+            runtime_config
+                .snapshot
+                .machine()
+                .task_prefix
+                .unwrap_or_else(|| "ORB".to_string()),
         ),
     ))
 }

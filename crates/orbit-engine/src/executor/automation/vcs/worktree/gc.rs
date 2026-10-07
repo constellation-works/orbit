@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
@@ -212,9 +212,9 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 }
 
 /// One sweep's task lookups. Results and transport failures are memoized by
-/// owner route and task, so a down owner is contacted once while another
-/// route can still answer. A missing route is not an outage and is not carried
-/// over: another run's claim may name a route.
+/// owner route and task, so a down owner is contacted once per prefix while
+/// local and unroutable prefixes still get their own verdict. A missing route
+/// is not an outage and is not carried over: another run's claim may name a route.
 struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
     host: &'a H,
     answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
@@ -231,7 +231,10 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
     }
 
     fn lookup(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
-        let scope = self.host.worktree_gc_task_lookup_scope(run_id);
+        let scope = self
+            .host
+            .worktree_gc_task_lookup_scope(run_id)
+            .map(|scope| format!("{scope}/{}", task_id_prefix(task_id).unwrap_or_default()));
         if let Some(scope) = scope.as_ref() {
             let key = (scope.clone(), task_id.to_string());
             if let Some(answer) = self.answers.borrow().get(&key) {
@@ -372,6 +375,9 @@ fn classify_known<H: RuntimeHost + ?Sized>(
                 )
             }
             WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
+            WorktreeGcTaskLookup::TaskPrefixUnroutable => {
+                (None, None, "skipped:task_prefix_unroutable", None)
+            }
             WorktreeGcTaskLookup::NoOwnerRoute(reason) => {
                 (None, None, "skipped:no_owner_route", Some(reason))
             }
