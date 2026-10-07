@@ -102,8 +102,20 @@ fn friction_polls_reuse_projection_without_mixing_months_or_limits() {
             let blob_ref = blobs.write(b"cached stderr").unwrap();
             let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
             seed_cli_failure(&fixture, "first", ts, &blob_ref);
-            let server = fixture.server(false);
             let path = "/api/diagnostics/friction?month=2026-04&limit=1&workspace=ws_http_fixture";
+            // A neighboring dashboard has the same logical workspace ID but
+            // an empty store. Its health response must not admit this child
+            // before the child has bound and announced its own address.
+            let empty_fixture = Fixture::new();
+            let empty_server = empty_fixture.server(false);
+            assert!(
+                json_ok(empty_server.get(path))
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            let server = fixture.server(false);
+            assert_ne!(server.origin, empty_server.origin);
             let first = json_ok(server.get(path));
             assert_eq!(first.as_array().unwrap().len(), 1);
             assert_eq!(first[0]["command"], "first");

@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::net::TcpListener;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -224,17 +224,12 @@ impl Fixture {
 
     fn server_impl(&self, operator: bool, resources: bool, replay_worker: bool) -> Server {
         orbit_common::test_env::assert_child_test_exists("server_child");
-        let port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let log = self.path(&format!("server-{port}.log"));
+        let log = tempfile::NamedTempFile::new_in(self.temp.path()).unwrap();
         let mut command = fixture_command(self.temp.path());
         command
             .args(["--ignored", "--exact", "server_child", "--nocapture"])
             .env(FIXTURE_ROOT, self.temp.path())
-            .env("ORBIT_HTTP_PORT", port.to_string())
+            .env("ORBIT_HTTP_PORT", "0")
             .env(
                 "ORBIT_HTTP_REPLAY_WORKER",
                 if replay_worker { "1" } else { "0" },
@@ -245,10 +240,8 @@ impl Fixture {
             )
             .env("ORBIT_HTTP_OPERATOR", if operator { "1" } else { "0" })
             .env("ORBIT_LOG_PATH", self.path("process.log"))
-            .stdout(Stdio::from(File::create(&log).unwrap()))
-            .stderr(Stdio::from(
-                File::options().append(true).open(&log).unwrap(),
-            ));
+            .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
+            .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
         let mut server = Server {
             process: Process(command.spawn().unwrap(), false),
             client: Client::builder()
@@ -256,27 +249,42 @@ impl Fixture {
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap(),
-            origin: format!("http://127.0.0.1:{port}"),
+            origin: String::new(),
+            log,
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if server
-                .client
-                .get(format!("{}/healthz", server.origin))
-                .send()
-                .is_ok_and(|response| response.status().is_success())
+            let output = fs::read_to_string(server.log.path()).unwrap();
+            assert!(
+                server.process.0.try_wait().unwrap().is_none(),
+                "server exited: {output}"
+            );
+            // The child owns the port before announcing it. A probe of a
+            // released parent-selected port can accept another fixture's
+            // health response and send the first API request to its store.
+            let complete_output = output.rsplit_once('\n').map_or("", |(lines, _)| lines);
+            if server.origin.is_empty()
+                && let Some(authority) = complete_output
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Dashboard listening on http://"))
+            {
+                let address: SocketAddr = authority.parse().expect("child listening address");
+                assert!(address.ip().is_loopback());
+                assert_ne!(address.port(), 0, "child must announce its bound port");
+                server.origin = format!("http://{address}");
+            }
+            if !server.origin.is_empty()
+                && server
+                    .client
+                    .get(format!("{}/healthz", server.origin))
+                    .send()
+                    .is_ok_and(|response| response.status().is_success())
             {
                 return server;
             }
             assert!(
-                server.process.0.try_wait().unwrap().is_none(),
-                "server exited: {}",
-                fs::read_to_string(&log).unwrap()
-            );
-            assert!(
                 Instant::now() < deadline,
-                "server readiness exceeded 10 seconds: {}",
-                fs::read_to_string(&log).unwrap()
+                "server readiness exceeded 10 seconds: {output}"
             );
             thread::sleep(Duration::from_millis(20));
         }
@@ -331,6 +339,7 @@ impl Fixture {
 
 pub(super) struct Server {
     process: Process,
+    log: tempfile::NamedTempFile,
     client: Client,
     pub(super) origin: String,
 }
