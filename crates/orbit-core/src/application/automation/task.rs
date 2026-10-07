@@ -6,7 +6,7 @@ use orbit_automation::{
     AutomationError,
     delivery::{ActionOutcome, digest, evidence::EvidenceFacts},
 };
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
@@ -65,7 +65,19 @@ pub(super) fn outcome(
         return Ok(ActionOutcome::Pending);
     };
 
-    let task = runtime.get_task(id)?;
+    let task = match runtime.get_task(id) {
+        Ok(task) => task,
+        Err(OrbitError::NotFound {
+            kind: NotFoundKind::Task,
+            ..
+        }) => {
+            return Ok(ActionOutcome::Failed {
+                retryable: true,
+                reason: "task_deleted_without_accepted_evidence".into(),
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
     let stopped = matches!(
         task.status,
         TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
@@ -102,6 +114,22 @@ pub(super) fn outcome(
     }
 
     Ok(ActionOutcome::Pending)
+}
+
+/// A claim can survive the mint but miss the action-id checkpoint. Resolve
+/// its permanent key without replaying creation against a changed definition.
+pub(super) fn action_id(
+    runtime: &OrbitRuntime,
+    attempt: &BatchAttempt,
+) -> Result<Option<String>, OrbitError> {
+    if let Some(id) = &attempt.action_id {
+        return Ok(Some(id.clone()));
+    }
+    Ok(runtime
+        .stores()
+        .tasks()
+        .automation_task_for_key(&attempt.action_key)?
+        .map(|task| task.id))
 }
 
 pub(super) fn job_outcome(

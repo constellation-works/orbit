@@ -1,4 +1,4 @@
-//! Settle admitted work against Core's outcome and retire proven-covered prefixes.
+//! Settle minted work against Core's outcome and retire proven-covered prefixes.
 
 use super::{ActionOutcome, DeliveryHost, evidence, observe};
 use crate::AutomationError;
@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
 
-/// Host-proven liveness and settlement facts for an admitted action.
+/// Host-proven liveness and settlement facts for a claimed or admitted action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ActionLiveness {
     /// The task or job run can no longer submit evidence.
@@ -150,7 +150,7 @@ fn settle_failed(
     next
 }
 
-/// Inspect whether an admitted action is terminal and whether it stopped
+/// Inspect whether a claimed or admitted action is terminal and whether it stopped
 /// without acceptable evidence. Reset uses terminal liveness to avoid
 /// refusing a closed task as executing; reissue and diagnostics use the
 /// failure fact so a closed action with valid evidence is not retried.
@@ -162,12 +162,18 @@ pub fn action_liveness(
     let Some(active) = state
         .active
         .as_ref()
-        .filter(|active| active.state == BatchState::Admitted && active.action_id.is_some())
+        .filter(|active| matches!(active.state, BatchState::Claimed | BatchState::Admitted))
     else {
         return Ok(ActionLiveness::default());
     };
 
-    Ok(match host.outcome(active)? {
+    let mut active = active.clone();
+    active.action_id = host.action_id(&active)?;
+    if active.action_id.is_none() {
+        return Ok(ActionLiveness::default());
+    }
+
+    Ok(match host.outcome(&active)? {
         ActionOutcome::Pending => ActionLiveness::default(),
         ActionOutcome::Failed { .. } => ActionLiveness {
             terminal: true,
@@ -178,7 +184,7 @@ pub fn action_liveness(
             ActionLiveness {
                 terminal,
                 failed_without_evidence: terminal
-                    && evidence::validate(active, &facts, now).is_err(),
+                    && evidence::validate(&active, &facts, now).is_err(),
             }
         }
     })

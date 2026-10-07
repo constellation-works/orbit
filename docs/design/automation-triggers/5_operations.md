@@ -270,9 +270,10 @@ workspace base branch, or create the branch). The same check reports every
 enabled definition whose resolved owner is not this host, naming the refusal
 (`owned_elsewhere` or `ownership_unresolved`), the owner machine and this host's,
 and pointing at `orbit auto-task show <name> --preview` for the coverage debt it
-is holding. It also reports a consumer *wedged* on an admitted action whose task
-closed without acceptable evidence, naming the action and its recorded
-validation reason. Evaluation settles such an action, so one still reported
+is holding. It also reports a consumer *wedged* on a claimed or admitted action whose task
+closed without acceptable evidence, reporting its terminal status and its recorded
+validation reason. Evaluation settles such an action even while its definition
+has changed, so one still reported
 means no evaluation is reaching it; the remediation names `orbit auto-task
 recover <name> --reissue-action --reason <why>` and `orbit auto-task reset`.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
@@ -320,7 +321,7 @@ stays healthy. Later ticks see the adopted identity and repeat nothing.
 
 The evaluator never adopts an edit `--adopt-settings` would refuse — a changed
 branch, repository, owner machine or coverage class, or an action still claimed
-or admitted — nor one it cannot judge alone: legacy state with no recorded
+or admitted whose task remains open or whose liveness is unknown — nor one it cannot judge alone: legacy state with no recorded
 trigger (`coverage_unverifiable`), a state-member consumer, or a consumer
 already stalled for an operator (`consumer_stalled`). Those still report
 `definition_changed` and admit nothing while every obligation stays retained.
@@ -376,10 +377,24 @@ does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
 or coverage class is never adopted: those change what the retained debt means,
 so settle the old consumer's debt and preview a new baseline instead. An action
-that is claimed or admitted has to settle first. An admitted action whose task
+that is claimed or admitted and still live has to settle first. A claimed or admitted action whose task
 is already terminal without evidence its settlement would accept counts as
 settled: it is reissuable and does not refuse as `active_execution`, even
-before an evaluation has run.
+before an evaluation has run. This includes a task minted before a crash left
+its id unrecorded on the claim: the consumer looks up its permanent action key
+without replaying creation against the edited definition. Read failures keep
+liveness unknown and continue to refuse recovery.
+The liveness proof is tied to the inspected consumer generation: a concurrent
+admission defers recovery instead of treating the replacement action as closed.
+
+A tick reconciles the closed task before judging a compatible settings edit.
+When the frozen retry budget remains, it schedules the next attempt with its
+existing backoff and adopts the edit in the same pass. Pending deliveries,
+accepted receipts and frozen obligations remain unchanged; terminal tasks are
+never reopened. An exhausted batch still requires explicit reissue. Before
+that tick, doctor's review row reports the closed task's status and gives
+the recover command, adding `--adopt-settings` when the recorded identity is
+stale. Reset is not needed to retain the debt.
 
 Only this host, as the resolved owner, may recover its own consumer, and only
 delivery auto-tasks are covered: delivery routines and state-member consumers

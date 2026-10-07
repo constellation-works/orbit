@@ -162,7 +162,7 @@ fn evaluate(
     Ok(diagnostic)
 }
 
-/// Liveness and evidence facts for an admitted delivery auto-task action, as
+/// Liveness and evidence facts for a claimed or admitted delivery auto-task action, as
 /// used by reset, recovery and `orbit doctor`. A consumer without state has
 /// no action. An unreadable outcome stays unknown, so `--force` remains the
 /// only way past an action whose liveness cannot be proved.
@@ -185,7 +185,7 @@ fn auto_task_action_liveness(
         tracing::warn!(
             consumer = state.consumer,
             %error,
-            "cannot read the admitted action's outcome; treating it as executing"
+            "cannot read the action's outcome; treating it as executing"
         );
         orbit_automation::delivery::ActionLiveness::default()
     })
@@ -331,6 +331,21 @@ impl DeliveryHost for Host<'_> {
         match self.action {
             Action::Task(_) => task::outcome(self.runtime, &self.source, attempt),
             Action::Job(_) => task::job_outcome(self.runtime, &self.source, attempt),
+        }
+    }
+
+    fn action_id(&self, attempt: &BatchAttempt) -> Result<Option<String>, AutomationError> {
+        if let Some(id) = &attempt.action_id {
+            return Ok(Some(id.clone()));
+        }
+        match self.action {
+            Action::Task(_) => task::action_id(self.runtime, attempt).map_err(Into::into),
+            Action::Job(_) => self
+                .runtime
+                .stores()
+                .jobs()
+                .automation_job_for_key(&attempt.action_key)
+                .map_err(Into::into),
         }
     }
 }

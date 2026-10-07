@@ -94,20 +94,42 @@ fn evaluate_pass(
         }
     };
 
-    // Reconcile admitted work even when disabled or a definition was edited.
-    if !dry_run
-        && state
+    // Resolve minted claims and reconcile even when disabled or edited. A
+    // crash can leave a task behind before its action id was checkpointed.
+    let mut retry_scheduled = false;
+    if !dry_run && let Some(active) = &state.active {
+        if matches!(active.state, BatchState::Claimed | BatchState::Admitted)
+            && active.action_id.is_none()
+            && let Some(id) = host.action_id(active)?
+        {
+            let mut next = state.clone();
+            if let Some(active) = &mut next.active {
+                active.action_id = Some(id);
+            }
+            state = commit(store, &state, next, None)?;
+        }
+        if state
             .active
             .as_ref()
-            .is_some_and(|attempt| attempt.action_id.is_some())
-    {
-        state = reconcile(store, host, state, now)?;
+            .is_some_and(|active| active.action_id.is_some())
+        {
+            let previous_attempt = state.active.as_ref().map(|active| active.attempt);
+            state = reconcile(store, host, state, now)?;
+            // A retry just scheduled by settlement has no executing action.
+            // It can carry the compatible settings forward in this pass,
+            // before admission, while retaining its frozen batch and backoff.
+            retry_scheduled = state.active.as_ref().is_some_and(|active| {
+                active.state == BatchState::Claimed
+                    && active.action_id.is_none()
+                    && Some(active.attempt) != previous_attempt
+            });
+        }
     }
 
     // A settings-only edit is adopted in place and the pass carries on; any
     // other edit holds the consumer and names why.
     if state.epoch != epoch || state.branch != trigger.branch {
-        match adopt(store, host, &request, &state)? {
+        match adopt(store, host, &request, &state, retry_scheduled)? {
             Adoption::Adopted(adopted) => state = *adopted,
             Adoption::Refused(refusals) => {
                 let mut changed = diagnostic(store, consumer, DEFINITION_CHANGED, Some(state))?;

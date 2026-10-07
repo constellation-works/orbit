@@ -421,14 +421,14 @@ fn validate_reissue(
 ) -> Result<(), OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid automation recovery transition".into());
 
-    // An admitted attempt is replaceable only once Automation proved its
+    // A claimed or admitted attempt is replaceable only once Automation proved its
     // action stopped without acceptable evidence; Store cannot see task
     // liveness, so it fences the batch identity, not that proof.
     if settled.batch != claim.batch
         || settled.input_digest != claim.input_digest
         || !matches!(
             settled.state,
-            BatchState::Failed | BatchState::Exhausted | BatchState::Admitted
+            BatchState::Failed | BatchState::Exhausted | BatchState::Claimed | BatchState::Admitted
         )
         || claim.state != BatchState::Claimed
         || claim.action_id.is_some()
@@ -445,7 +445,10 @@ fn validate_reissue(
     };
 
     if authorization != &reissued.authorization
-        || authorization.from_action_id != settled.action_id
+        // A claimed action may have been minted before its id was checkpointed.
+        // Automation supplies that host-resolved identity in the audit record.
+        || (authorization.from_action_id != settled.action_id
+            && !(settled.state == BatchState::Claimed && settled.action_id.is_none()))
         || authorization.by != record.by
         || authorization.reason != record.reason
         || authorization.at != record.at
@@ -455,7 +458,7 @@ fn validate_reissue(
     }
 
     if reissued.batch_id != settled.batch.id
-        || reissued.from_action_id != settled.action_id
+        || reissued.from_action_id != authorization.from_action_id
         || reissued.from_attempt != settled.attempt
         || reissued.from_state != settled.state
         || reissued.from_reason != settled.reason

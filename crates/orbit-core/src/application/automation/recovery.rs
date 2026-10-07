@@ -48,12 +48,22 @@ pub fn recover_auto_task(
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
     let store = runtime.automation_store()?;
-    let action_liveness = super::auto_task_action_liveness(
-        runtime,
-        definition,
-        store.automation_state(&consumer)?.as_ref(),
-        now,
-    );
+    let state = store.automation_state(&consumer)?;
+    let action_liveness =
+        super::auto_task_action_liveness(runtime, definition, state.as_ref(), now);
+    let resolved_action_id = state
+        .as_ref()
+        .and_then(|state| state.active.as_ref())
+        .filter(|active| {
+            matches!(
+                active.state,
+                orbit_types::workflow::automation::BatchState::Claimed
+                    | orbit_types::workflow::automation::BatchState::Admitted
+            )
+        })
+        .map(|active| super::task::action_id(runtime, active))
+        .transpose()?
+        .flatten();
     let operation = recovery::Recovery {
         consumer: &consumer,
         epoch: &epoch,
@@ -64,6 +74,8 @@ pub fn recover_auto_task(
         by: &by,
         now,
         replay: None,
+        resolved_action_id: resolved_action_id.as_deref(),
+        expected_generation: state.as_ref().map(|state| state.generation),
         action_terminal: action_liveness.terminal,
         action_failed_without_evidence: action_liveness.failed_without_evidence,
     };

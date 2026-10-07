@@ -3,6 +3,14 @@ use crate::contracts::TaskListFilter;
 use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
+    pub(crate) fn automation_task_for_key(&self, key: &str) -> Result<Option<Task>, OrbitError> {
+        self.ensure_recovered()?;
+        match self.registry.task_action_id(&self.workspace_id, key)? {
+            Some(id) => self.get_task(&id),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task_with_key(params, None)
             .map(|(task, _)| task)

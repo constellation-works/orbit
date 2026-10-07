@@ -24,7 +24,7 @@ const REVIEW_CREW: &str = "sonnet";
 
 /// Runtime writes, as well as CLI writes, belong in an isolated child. Returns
 /// true inside that child; the parent asserts the child passed.
-fn in_isolated_child(test: &str) -> bool {
+pub(super) fn in_isolated_child(test: &str) -> bool {
     const CHILD: &str = "ORBIT_TEST_REVIEW_AFTER_LANDING_CHILD";
     if std::env::var(CHILD).ok().as_deref() == Some(test) {
         return true;
@@ -84,7 +84,7 @@ fn in_isolated_child_with_provider_paths(test: &str) -> bool {
     false
 }
 
-fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+pub(super) fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
     use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
     use orbit_core::ActorIdentity;
 
@@ -105,7 +105,7 @@ fn set_policy(fixture: &Fixture, key: &str, value: &str) {
 
 /// Provider discovery at `orbit init` is host-dependent; these tests need a
 /// configured review crew regardless of which provider CLIs are installed.
-fn enable_review_crew(fixture: &Fixture) {
+pub(super) fn enable_review_crew(fixture: &Fixture) {
     set_policy(fixture, "crews.sonnet.enabled", "true");
     set_policy(fixture, "workflow.default_crew", REVIEW_CREW);
     set_policy(fixture, "workflow.system_crew", REVIEW_CREW);
@@ -113,7 +113,7 @@ fn enable_review_crew(fixture: &Fixture) {
 
 /// Toggle the shipped consumer, as an operator switching after-landing
 /// review does.
-fn toggle(fixture: &Fixture, state: &str) {
+pub(super) fn toggle(fixture: &Fixture, state: &str) {
     fixture
         .command(&["auto-task", "toggle", CONSUMER, state])
         .assert()
@@ -134,7 +134,7 @@ fn append_global_config(fixture: &Fixture, toml: &str) {
 
 /// Land one direct delivery past the trigger's threshold of one and
 /// evaluate the consumer until it settles; the review task it minted, if any.
-fn land_and_evaluate(
+pub(super) fn land_and_evaluate(
     fixture: &Fixture,
     runtime: &orbit_core::OrbitRuntime,
     content: &str,
@@ -179,7 +179,7 @@ fn land_and_evaluate(
 }
 
 /// Point the shipped consumer at `trigger` without touching its `enabled`.
-fn retarget(fixture: &Fixture, trigger: &Value) {
+pub(super) fn retarget(fixture: &Fixture, trigger: &Value) {
     fixture.json(&[
         "auto-task",
         "update",
@@ -215,11 +215,11 @@ fn plant_retired_coverage(fixture: &Fixture) {
     fs::write(path, planted).unwrap();
 }
 
-fn trigger() -> Value {
+pub(super) fn trigger() -> Value {
     json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":1})
 }
 
-fn commit(fixture: &Fixture, content: &str) -> SourceRevision {
+pub(super) fn commit(fixture: &Fixture, content: &str) -> SourceRevision {
     fs::write(fixture.repo.join("fixture.txt"), content).unwrap();
     git(fixture, &["add", "fixture.txt"]);
     git(fixture, &["commit", "-m", content.trim()]);
@@ -284,7 +284,7 @@ fn doctor_output(fixture: &Fixture, path: Option<&OsStr>) -> DoctorOutput {
 }
 
 /// The `review` doctor row and whether doctor exited zero.
-fn doctor_row(fixture: &Fixture) -> (Value, bool) {
+pub(super) fn doctor_row(fixture: &Fixture) -> (Value, bool) {
     let output = doctor_output(fixture, None);
     (output.review_row, output.success)
 }

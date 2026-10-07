@@ -47,8 +47,8 @@ pub(super) enum Adoption {
 
 /// Everything that keeps the evaluator from adopting `trigger` over `state`
 /// on its own; empty when it may. `repository` is the identity the source
-/// reports for the configured branch now, and `host_refusal` one the host
-/// already knows, such as `owned_elsewhere`.
+/// reports for the configured branch now. `action_terminal` proves no action
+/// is still executing, including a retry just scheduled by reconciliation.
 ///
 /// Inspection calls this too, so it reports the same position a tick would
 /// reach without writing anything.
@@ -58,7 +58,7 @@ pub fn refusals(
     epoch: &str,
     trigger: &DeliveryTrigger,
     repository: &str,
-    host_refusal: Option<&str>,
+    action_terminal: bool,
 ) -> Result<Vec<String>, AutomationError> {
     // The automatic path always carries its own authorization, so only the
     // refusals about the consumer and the change itself can apply.
@@ -68,14 +68,14 @@ pub fn refusals(
         epoch,
         trigger,
         repository,
-        host_refusal,
+        host_refusal: None,
         request: &request,
         by: SYSTEM_ACTOR,
         now: DateTime::<Utc>::UNIX_EPOCH,
         replay: None,
-        // The evaluator reconciles before it gets here, so an action still
-        // admitted has not been proved stopped.
-        action_terminal: false,
+        resolved_action_id: None,
+        expected_generation: Some(state.generation),
+        action_terminal,
         action_failed_without_evidence: false,
     };
 
@@ -117,6 +117,7 @@ pub(super) fn adopt(
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
+    action_terminal: bool,
 ) -> Result<Adoption, AutomationError> {
     // Only the owner admits, and a disabled consumer probes no source.
     if !request.enabled || !host.adopts_settings() {
@@ -137,7 +138,7 @@ pub(super) fn adopt(
         request.epoch,
         request.trigger,
         &repository,
-        None,
+        action_terminal,
     )?;
     if !refused.is_empty() {
         return Ok(Adoption::Refused(refused));
@@ -151,13 +152,19 @@ pub(super) fn adopt(
     }
 
     let preview = RecoveryRequest::default();
-    let changes = recovery::changes(state, &request_for(state, request, &repository, &preview));
+    let changes = recovery::changes(
+        state,
+        &request_for(state, request, &repository, &preview, action_terminal),
+    );
     let summary = format!(
         "settings changed ({}) — adopted automatically, coverage debt retained",
         changes.join(", ")
     );
     let adoption = adopt_request(summary.clone());
-    recovery::apply(store, &request_for(state, request, &repository, &adoption))?;
+    recovery::apply(
+        store,
+        &request_for(state, request, &repository, &adoption, action_terminal),
+    )?;
 
     let definition = request
         .consumer
@@ -209,6 +216,7 @@ fn request_for<'a>(
     evaluation: &Evaluation<'a>,
     repository: &'a str,
     request: &'a RecoveryRequest,
+    action_terminal: bool,
 ) -> recovery::Recovery<'a> {
     recovery::Recovery {
         consumer: &state.consumer,
@@ -220,7 +228,9 @@ fn request_for<'a>(
         by: SYSTEM_ACTOR,
         now: evaluation.now,
         replay: None,
-        action_terminal: false,
+        resolved_action_id: None,
+        expected_generation: Some(state.generation),
+        action_terminal,
         action_failed_without_evidence: false,
     }
 }
