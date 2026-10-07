@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::state::Ws;
-use axum::extract::Query;
+use crate::runtime_memo::SCOREBOARD_TTL;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Datelike, Utc};
@@ -13,8 +14,8 @@ use orbit_core::{FailureIncidentQuery, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::blocking;
 use super::incidents::{ActorFailureRollup, ROLLUP_SCAN_LIMIT, agent_family_key, rollup_by_actor};
+use super::map_runtime_error;
 
 /// Query-string shape for `GET /api/scoreboard`.
 ///
@@ -26,7 +27,11 @@ pub(super) struct ScoreboardQuery {
     pub(super) window: Option<String>,
 }
 
-pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQuery>) -> Response {
+pub(super) async fn scoreboard(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<ScoreboardQuery>,
+) -> Response {
     let window = match query.window.as_deref() {
         None => ScoreboardWindow::All,
         Some(raw) => match raw.parse::<ScoreboardWindow>() {
@@ -41,20 +46,28 @@ pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQu
         },
     };
 
-    let value = match blocking("scoreboard", move || {
-        let summary = runtime.generate_scoreboard_summary(Some(window))?;
-        let mut value = serde_json::to_value(&summary)
-            .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
-        assemble_scoreboard_joins(&runtime, window, &mut value);
-        Ok(value)
-    })
-    .await
+    let runtime_for_compute = runtime.clone();
+    let value = match state
+        .scoreboard_memo()
+        .get_or_compute(
+            &runtime,
+            window.as_str().to_string(),
+            SCOREBOARD_TTL,
+            move || {
+                let summary = runtime_for_compute.build_scoreboard_summary(Some(window))?;
+                let mut value = serde_json::to_value(&summary)
+                    .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                assemble_scoreboard_joins(&runtime_for_compute, window, &mut value);
+                Ok(value)
+            },
+        )
+        .await
     {
         Ok(value) => value,
-        Err(response) => return *response,
+        Err(error) => return map_runtime_error(error),
     };
 
-    Json(value).into_response()
+    Json((*value).clone()).into_response()
 }
 
 fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, value: &mut Value) {

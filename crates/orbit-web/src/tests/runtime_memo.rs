@@ -59,6 +59,24 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
         assert!(poll_once(first.as_mut()).await.is_pending());
         computation_started.await.expect("refresh is in flight");
 
+        // While this refresh holds its gate, another workspace runtime and
+        // another window must compute independently instead of waiting on it.
+        let other_runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
+        let other_workspace = memo
+            .get_or_compute(&other_runtime, "key", ttl, || {
+                Ok(json!({"generation": "other workspace"}))
+            })
+            .await
+            .unwrap();
+        let other_window = memo
+            .get_or_compute(&runtime, "other window", ttl, || {
+                Ok(json!({"generation": "other window"}))
+            })
+            .await
+            .unwrap();
+        assert_eq!(*other_workspace, json!({"generation": "other workspace"}));
+        assert_eq!(*other_window, json!({"generation": "other window"}));
+
         let second_count = Arc::clone(&refreshes);
         let mut second = pin!(memo.get_or_compute(&runtime, "key", ttl, move || {
             second_count.fetch_add(1, Ordering::SeqCst);

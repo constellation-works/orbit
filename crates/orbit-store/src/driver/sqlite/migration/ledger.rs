@@ -365,12 +365,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_invocation_workspace_scope,
     },
+    Migration {
+        version: 37,
+        name: "audit_tool_call_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_audit_tool_call_index,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 36;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 37;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

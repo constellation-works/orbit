@@ -15,14 +15,24 @@ const RECENT_WINDOW_DAYS: i64 = 7;
 const TOP_TOOLS_LIMIT: usize = 50;
 
 impl OrbitRuntime {
-    /// Build a scoreboard summary for the workspace.
+    /// Build and persist a scoreboard summary for the workspace.
+    pub fn generate_scoreboard_summary(
+        &self,
+        window: Option<ScoreboardWindow>,
+    ) -> Result<orbit_store::scoreboard_summary::ScoreboardSummary, OrbitError> {
+        let summary = self.build_scoreboard_summary(window)?;
+        orbit_store::scoreboard_summary::write_summary(&self.paths().scoreboard_dir, &summary)?;
+        Ok(summary)
+    }
+
+    /// Build a scoreboard summary without writing `summary.json`.
     ///
     /// `window`: `None` (or `Some(ScoreboardWindow::All)`) preserves the
     /// legacy lifetime view. A finite window scopes audit-sourced fields
     /// to the matching SQL cutoff and zeroes snapshot-sourced fields
     /// (see [`ScoreboardWindow`] for per-source semantics). `recent_7d`
     /// stays fixed at 7d regardless of `window`.
-    pub fn generate_scoreboard_summary(
+    pub fn build_scoreboard_summary(
         &self,
         window: Option<ScoreboardWindow>,
     ) -> Result<orbit_store::scoreboard_summary::ScoreboardSummary, OrbitError> {
@@ -96,8 +106,6 @@ impl OrbitRuntime {
                 Err(error) => Err(error),
             },
         )?;
-        let _ =
-            orbit_store::scoreboard_summary::write_summary(&self.paths().scoreboard_dir, &summary)?;
         Ok(summary)
     }
 }

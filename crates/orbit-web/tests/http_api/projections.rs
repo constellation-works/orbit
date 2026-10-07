@@ -652,3 +652,56 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
         },
     );
 }
+
+#[test]
+fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
+    isolated(
+        "projections::scoreboard_polls_reuse_window_memo_without_writing_summary",
+        || {
+            let fixture = Fixture::new();
+            let summary_path = fixture.runtime.paths().scoreboard_dir.join("summary.json");
+            assert!(!summary_path.exists());
+            let server = fixture.server(false);
+            let first = json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            assert!(
+                !summary_path.exists(),
+                "scoreboard GET must not create summary.json"
+            );
+            let now = Utc::now();
+            let metrics_dir = fixture
+                .runtime
+                .data_root()
+                .join("state/diagnostics/metrics")
+                .join(now.format("%Y-%m").to_string());
+            fs::create_dir_all(&metrics_dir).unwrap();
+            fs::write(metrics_dir.join("memo.jsonl"), format!("{}\n", json!({
+                "ts":now.to_rfc3339(), "job_run":"memo-fixture", "step":"implement",
+                "actor_identity":"http-memo-fixture", "step_duration_ms":100, "retry_count":7,
+                "tool_invocations":1, "token_usage":10,
+            }))).unwrap();
+            let repeated =
+                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            assert_eq!(
+                repeated, first,
+                "same-window poll must return the cached computation"
+            );
+            let other = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
+            assert_eq!(other["agents"]["http-memo-fixture"]["retries"], 7);
+            assert!(!summary_path.exists(), "a memo miss must also be read-only");
+
+            // Explicit persistence remains available, and a GET for another
+            // window must not replace that durable lifetime document.
+            fixture.runtime.generate_scoreboard_summary(None).unwrap();
+            let persisted = fs::read(&summary_path).unwrap();
+            let finite = json_ok(server.get("/api/scoreboard?window=7d&workspace=ws_http_fixture"));
+            assert_eq!(finite["window"], "7d");
+            assert_eq!(fs::read(&summary_path).unwrap(), persisted);
+            let lifetime = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            assert_eq!(
+                lifetime,
+                json_ok(server.get("/api/scoreboard?window=all&workspace=ws_http_fixture")),
+                "omitted window and all share the canonical memo key"
+            );
+        },
+    );
+}

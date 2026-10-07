@@ -10,6 +10,7 @@ use super::types::{
 };
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::telemetry::AuditEvent;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Per-incident cap on the sampled raw events echoed back to callers. The
@@ -177,6 +178,16 @@ fn sort_samples(samples: &mut [IncidentEventRef]) {
 /// Groups failed audit rows into incidents. Pure and order-independent: the
 /// same rows in any input order produce the same incidents.
 pub fn group_failure_incidents(failures: &[AuditEvent]) -> Vec<FailureIncident> {
+    let mut incidents = collapse_cited_run_cascades(group_run_cascades(failures));
+    incidents.sort_by(|a, b| {
+        b.last_ts
+            .cmp(&a.last_ts)
+            .then_with(|| a.incident_id.cmp(&b.incident_id))
+    });
+    incidents
+}
+
+fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
     // Pass 1+2 — cluster by (run scope, signature).
     let mut clusters: BTreeMap<(String, String), Cluster> = BTreeMap::new();
     for event in failures {
@@ -252,18 +263,6 @@ pub fn group_failure_incidents(failures: &[AuditEvent]) -> Vec<FailureIncident> 
         }
     }
 
-    // Pass 4 — collapse parent/child propagation across job runs. A later
-    // incident whose raw message cites another incident's `job_run_id` is the
-    // same root cause (a guard copying a leaf failure), not a second incident.
-    incidents = collapse_cited_run_cascades(incidents);
-
-    // Newest incident first; the deterministic id breaks ties so two incidents
-    // sharing a last-seen timestamp never swap places between renders.
-    incidents.sort_by(|a, b| {
-        b.last_ts
-            .cmp(&a.last_ts)
-            .then_with(|| a.incident_id.cmp(&b.incident_id))
-    });
     incidents
 }
 
@@ -330,113 +329,196 @@ fn incident_from(run_scope: &str, root: Cluster, chain: Vec<Cluster>) -> Failure
 /// Fold incidents whose raw messages cite another incident's `job_run_id`
 /// onto that cited incident. Parent/child pipeline guards are the motivating
 /// case; matching is by durable columns only (message tokens ∩ known run ids).
-fn collapse_cited_run_cascades(mut incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
+fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIncident> {
     if incidents.len() < 2 {
         return incidents;
     }
-    let cascade_window = Duration::seconds(CASCADE_WINDOW_SECS);
-    loop {
-        let known_runs = unique_run_index(&incidents);
-        if known_runs.is_empty() {
-            break;
-        }
-        let known_ids: BTreeMap<String, ()> = known_runs
-            .keys()
-            .cloned()
-            .map(|run_id| (run_id, ()))
-            .collect();
-        let mut merge: Option<(usize, usize)> = None;
-        for (from_idx, incident) in incidents.iter().enumerate() {
-            for cited in cited_known_run_ids_from_incident(incident, &known_ids) {
-                let Some(&onto_idx) = known_runs.get(&cited) else {
-                    continue;
-                };
-                if onto_idx == usize::MAX || onto_idx == from_idx {
-                    continue;
-                }
-                let onto = &incidents[onto_idx];
-                if onto.class != incident.class {
-                    continue;
-                }
-                if incident.first_ts < onto.first_ts {
-                    continue;
-                }
-                if incident.first_ts - onto.last_ts > cascade_window {
-                    continue;
-                }
-                merge = Some((from_idx, onto_idx));
-                break;
-            }
-            if merge.is_some() {
-                break;
-            }
-        }
-        let Some((from_idx, onto_idx)) = merge else {
-            break;
-        };
-        let from = incidents.remove(from_idx);
-        let onto_idx = if onto_idx > from_idx {
-            onto_idx - 1
-        } else {
-            onto_idx
-        };
-        merge_incident_into(&mut incidents[onto_idx], from);
-    }
-    incidents
-}
-
-fn unique_run_index(incidents: &[FailureIncident]) -> BTreeMap<String, usize> {
-    let mut known_runs: BTreeMap<String, usize> = BTreeMap::new();
-    for (idx, incident) in incidents.iter().enumerate() {
-        for run_id in &incident.run_ids {
-            known_runs
-                .entry(run_id.clone())
-                .and_modify(|existing| *existing = usize::MAX)
-                .or_insert(idx);
+    let mut runs: BTreeMap<String, RunLinks> = BTreeMap::new();
+    for (index, incident) in incidents.iter().enumerate() {
+        for run in &incident.run_ids {
+            runs.entry(run.clone()).or_default().owners.insert(index);
         }
     }
-    known_runs
-}
-
-fn cited_known_run_ids_from_incident(
-    incident: &FailureIncident,
-    known: &BTreeMap<String, ()>,
-) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut consider = |message: Option<&str>| {
-        if let Some(message) = message {
-            for run_id in cited_known_run_ids(message, known) {
-                if !found.iter().any(|existing| existing == &run_id) {
-                    found.push(run_id);
+    let mut nodes: Vec<Option<CascadeNode>> = incidents
+        .into_iter()
+        .enumerate()
+        .map(|(index, incident)| {
+            let citations = IncidentCitations::new(&incident, &runs);
+            for run in citations.events.keys() {
+                if let Some(links) = runs.get_mut(run) {
+                    links.citers.insert(index);
                 }
             }
+            Some(CascadeNode {
+                incident,
+                citations,
+            })
+        })
+        .collect();
+
+    // Stable slot numbers preserve the original vector's first-eligible fold
+    // order without shifting every remaining incident on removal. A static
+    // union of initial edges would miss folds unlocked by a longer last_ts or
+    // by two owners of an ambiguous run joining the same component.
+    let mut candidates = BTreeMap::new();
+    for index in 0..nodes.len() {
+        refresh_candidate(index, &nodes, &runs, &mut candidates);
+    }
+    while let Some((from, onto)) = candidates.pop_first() {
+        let Some(child) = nodes[from].take() else {
+            continue;
+        };
+        let Some(root) = nodes[onto].as_mut() else {
+            nodes[from] = Some(child);
+            continue;
+        };
+        let mut changed_runs: BTreeSet<String> = child.incident.run_ids.iter().cloned().collect();
+        if child.incident.last_ts > root.incident.last_ts {
+            changed_runs.extend(root.incident.run_ids.iter().cloned());
         }
+        for run in &child.incident.run_ids {
+            if let Some(links) = runs.get_mut(run) {
+                links.owners.remove(&from);
+                links.owners.insert(onto);
+            }
+        }
+        for (run, rank) in child.citations.events {
+            if let Some(links) = runs.get_mut(&run) {
+                links.citers.remove(&from);
+                links.citers.insert(onto);
+            }
+            root.citations
+                .events
+                .entry(run)
+                .and_modify(|earliest| *earliest = (*earliest).min(rank))
+                .or_insert(rank);
+        }
+        merge_incident_into(&mut root.incident, child.incident);
+
+        let mut dirty = BTreeSet::from([onto]);
+        for run in changed_runs {
+            if let Some(links) = runs.get(&run) {
+                dirty.extend(&links.citers);
+            }
+        }
+        // Only citers of changed targets and the joined root can have a new
+        // first-eligible edge. Messages and unrelated incidents are untouched.
+        for index in dirty {
+            refresh_candidate(index, &nodes, &runs, &mut candidates);
+        }
+    }
+    nodes
+        .into_iter()
+        .flatten()
+        .map(|mut node| {
+            sort_samples(&mut node.incident.events);
+            node.incident.propagation.sort_by(|a, b| {
+                a.first_ts
+                    .cmp(&b.first_ts)
+                    .then_with(|| a.signature.cmp(&b.signature))
+            });
+            node.incident
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct RunLinks {
+    owners: BTreeSet<usize>,
+    citers: BTreeSet<usize>,
+}
+
+struct CascadeNode {
+    incident: FailureIncident,
+    citations: IncidentCitations,
+}
+
+// Citation precedence is root message first, then raw events newest-first,
+// then token order. Samples and propagation messages are already present in
+// the exhaustive events list built by incident_from, so cannot add a citation.
+type CitationRank = (Reverse<DateTime<Utc>>, Reverse<i64>, usize);
+
+struct IncidentCitations {
+    root: Vec<String>,
+    events: BTreeMap<String, CitationRank>,
+}
+
+impl IncidentCitations {
+    fn new(incident: &FailureIncident, known: &BTreeMap<String, RunLinks>) -> Self {
+        // The root and samples repeat raw messages; tokenize each distinct
+        // message once for this incident, and discard the message cache after
+        // retaining only known-run edges and their precedence.
+        let mut messages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut consider = |message: Option<&str>| {
+            message
+                .map(|message| {
+                    messages
+                        .entry(message.to_string())
+                        .or_insert_with(|| {
+                            message
+                                .split_whitespace()
+                                .filter_map(|token| {
+                                    let token = token
+                                        .trim_matches(['"', '\'', '`', '(', ')', ',', ':', ';']);
+                                    known.contains_key(token).then(|| token.to_string())
+                                })
+                                .collect()
+                        })
+                        .clone()
+                })
+                .unwrap_or_default()
+        };
+        let root = consider(incident.message.as_deref());
+        let mut events = BTreeMap::new();
+        for event in &incident.events {
+            for (position, run) in consider(event.message.as_deref()).into_iter().enumerate() {
+                let rank = (Reverse(event.ts), Reverse(event.id), position);
+                events
+                    .entry(run)
+                    .and_modify(|earliest: &mut CitationRank| {
+                        *earliest = (*earliest).min(rank);
+                    })
+                    .or_insert(rank);
+            }
+        }
+        Self { root, events }
+    }
+}
+
+fn refresh_candidate(
+    index: usize,
+    nodes: &[Option<CascadeNode>],
+    runs: &BTreeMap<String, RunLinks>,
+    candidates: &mut BTreeMap<usize, usize>,
+) {
+    candidates.remove(&index);
+    let Some(node) = &nodes[index] else {
+        return;
     };
-    consider(incident.message.as_deref());
-    for event in incident.events.iter().chain(incident.sample_events.iter()) {
-        consider(event.message.as_deref());
-    }
-    for link in &incident.propagation {
-        consider(link.message.as_deref());
-        for event in &link.sample_events {
-            consider(event.message.as_deref());
+    let target = |run: &String| -> Option<usize> {
+        let owners = &runs.get(run)?.owners;
+        if owners.len() != 1 {
+            return None;
         }
+        let onto = *owners.first()?;
+        let root = &nodes[onto].as_ref()?.incident;
+        (onto != index
+            && root.class == node.incident.class
+            && node.incident.first_ts >= root.first_ts
+            && node.incident.first_ts - root.last_ts <= Duration::seconds(CASCADE_WINDOW_SECS))
+        .then_some(onto)
+    };
+    let onto = node.citations.root.iter().find_map(target).or_else(|| {
+        node.citations
+            .events
+            .iter()
+            .filter_map(|(run, rank)| target(run).map(|onto| (*rank, onto)))
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, onto)| onto)
+    });
+    if let Some(onto) = onto {
+        candidates.insert(index, onto);
     }
-    found
-}
-
-fn cited_known_run_ids(message: &str, known: &BTreeMap<String, ()>) -> Vec<String> {
-    if known.is_empty() {
-        return Vec::new();
-    }
-    let mut found = Vec::new();
-    for token in message.split_whitespace() {
-        let trimmed = token.trim_matches(['"', '\'', '`', '(', ')', ',', ':', ';']);
-        if known.contains_key(trimmed) && !found.iter().any(|existing| existing == trimmed) {
-            found.push(trimmed.to_string());
-        }
-    }
-    found
 }
 
 fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
@@ -448,8 +530,7 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
     for task_id in &child.task_ids {
         push_unique(&mut root.task_ids, Some(task_id));
     }
-    root.events.extend(child.events.iter().cloned());
-    sort_samples(&mut root.events);
+    root.events.extend(child.events);
     let child_root_last = child
         .sample_events
         .iter()
@@ -467,9 +548,8 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
         sample_events: child.sample_events,
     });
     root.propagation.extend(child.propagation);
-    root.propagation.sort_by(|a, b| {
-        a.first_ts
-            .cmp(&b.first_ts)
-            .then_with(|| a.signature.cmp(&b.signature))
-    });
 }
+
+#[cfg(test)]
+#[path = "tests/grouping.rs"]
+mod tests;
