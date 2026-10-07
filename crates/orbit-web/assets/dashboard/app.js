@@ -245,6 +245,11 @@ function runsContext() {
     getLastRuns: () => lastRuns,
     getRunsMeta: () => lastRunsMeta,
     getRunsLoading: () => lastRunsLoading,
+    // The server clamps the requested limit; once it echoes less than was asked
+    // for, another Load more would refetch the same rows.
+    getRunsLimitCapped: () => Boolean(lastRunsMeta)
+      && Number.isFinite(lastRunsMeta.limit)
+      && jobRunLimit > lastRunsMeta.limit,
     markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
     fmtTimestamp,

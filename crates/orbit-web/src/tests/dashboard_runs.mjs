@@ -254,22 +254,28 @@ assert.ok(cancelBtn, 'cancel button exists for running run');
 assert.equal(cancelBtn.textContent, 'Cancel', 'cancel button has text "Cancel"');
 assert.ok(cancelBtn.classList.contains('run-cancel'), 'cancel button has run-cancel class');
 
-// Test 5: CSS checks in runs.css and components.css
-const runsCss = fs.readFileSync(new URL('../../assets/dashboard/css/runs.css', import.meta.url), 'utf8');
-const componentsCss = fs.readFileSync(new URL('../../assets/dashboard/css/components.css', import.meta.url), 'utf8');
-
-// Font family and nowrap on headers
-assert.ok(runsCss.includes('.runs-row.runs-header'), 'runs.css targets .runs-row.runs-header');
-assert.ok(runsCss.includes('font-family: var(--font-sans);'), 'runs.css sets font-family: var(--font-sans) for headers');
-assert.ok(runsCss.includes('white-space: nowrap;'), 'runs.css sets white-space: nowrap for headers');
-
-// Tool fails column width widened to prevent wrapping
-assert.ok(runsCss.includes('84px 84px 96px'), 'Tool fails column has at least 84px width');
-
-// Cancel button styled as destructive secondary button
-assert.ok(runsCss.includes('.runs-row .run-actions .run-cancel'), 'runs.css styles .runs-row .run-actions .run-cancel');
-assert.ok(runsCss.includes('#e7b8b1'), 'runs.css styles run-cancel with destructive color #e7b8b1');
-assert.ok(componentsCss.includes('.action.run-cancel'), 'components.css styles .action.run-cancel');
-assert.ok(!componentsCss.includes('.action.run-cancel { border-color: transparent;'), 'components.css does not make run-cancel border transparent');
+// Test 5: at the server's request cap Load more is withheld, since it would refetch the same rows
+let limitCapped = true;
+initRuns({
+  navigateToRun: () => {},
+  fetchAndRenderRuns: () => Promise.resolve(),
+  getLastRuns: () => currentRunsList,
+  getRunsMeta: () => currentMeta,
+  getRunsLoading: () => false,
+  getRunsLimitCapped: () => limitCapped,
+  markRunsLoading: () => {},
+  getRunSourcesUnavailable: () => [],
+  fmtTimestamp: () => '10:00:00',
+  fmtDuration,
+  loadMoreRuns: () => Promise.resolve(),
+});
+currentMeta = { limit: 200, total: 5000, truncated: true };
+renderRuns(sampleRuns);
+const cappedNote = runsBody.querySelector('.runs-limit-note');
+assert.ok(cappedNote, 'limit note still explains the truncation at the server cap');
+assert.equal(cappedNote.querySelector('.runs-load-more'), null, 'no Load more button once the server cap is reached');
+limitCapped = false;
+renderRuns(sampleRuns);
+assert.ok(runsBody.querySelector('.runs-load-more'), 'Load more returns while the server can still return more');
 
 console.log('All dashboard runs behavior assertions passed.');

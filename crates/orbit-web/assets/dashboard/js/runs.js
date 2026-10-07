@@ -783,7 +783,9 @@ function runsLimitNote(meta) {
     class: "runs-limit-note",
   });
   container.dataset.key = "runs-limit-note";
-  container.dataset.hash = `limit-note-${meta.limit}-${meta.total || ""}`;
+  const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
+  const isLoading = hasCtx("getRunsLoading") && _runsCtx.getRunsLoading();
+  container.dataset.hash = `limit-note-${meta.limit}-${meta.total || ""}-${capped ? "capped" : ""}-${isLoading ? "loading" : ""}`;
 
   const textSpan = el("span", {
     class: "runs-limit-text",
@@ -791,7 +793,12 @@ function runsLimitNote(meta) {
   });
   container.appendChild(textSpan);
 
-  const isLoading = hasCtx("getRunsLoading") && _runsCtx.getRunsLoading();
+  // The server caps one request; past that cap Load more would return the same rows.
+  if (capped) {
+    textSpan.textContent = `Showing newest ${meta.limit} matching runs${total}, the most one request returns.`;
+    return container;
+  }
+
   const button = el("button", {
     class: "action runs-load-more",
     text: isLoading ? "Loading…" : "Load more",
