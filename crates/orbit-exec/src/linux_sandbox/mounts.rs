@@ -1,9 +1,9 @@
 use super::*;
 
 pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
-    writable_roots
-        .iter()
-        .any(|root| cwd.starts_with(root) || root.starts_with(cwd))
+    // A writable descendant cannot justify binding the entire cwd writable
+    // through the stable aliases: ungranted siblings would become writable.
+    writable_roots.iter().any(|root| cwd.starts_with(root))
 }
 
 /// Bind the managed worktree (and its `target/` directory) at stable `/tmp`

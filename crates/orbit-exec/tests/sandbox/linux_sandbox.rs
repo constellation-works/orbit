@@ -910,6 +910,57 @@ fn managed_worktree_argv_binds_stable_workspace_and_build_mounts() {
 }
 
 #[test]
+fn managed_worktree_subdirectory_grant_does_not_expose_writable_stable_aliases() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let docs = workspace.join("docs");
+    let drafts = docs.join("drafts");
+    std::fs::create_dir_all(&drafts).expect("create docs fixture");
+    std::fs::create_dir_all(workspace.join("src")).expect("create ungranted source directory");
+    std::fs::create_dir_all(workspace.join("target")).expect("create ungranted build directory");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let docs = workspace.join("docs").display().to_string();
+    let drafts = workspace.join("docs/drafts").display().to_string();
+    let resolved = profile(vec![format!("{docs}/**"), format!("!{drafts}/**")]);
+
+    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
+        .expect("compile subdirectory-only managed profile");
+    assert!(
+        plan.args
+            .windows(3)
+            .any(|args| args == ["--bind", &docs, &docs]),
+        "the granted docs directory must stay writable: {:?}",
+        plan.args
+    );
+    assert!(
+        plan.args
+            .windows(3)
+            .any(|args| args == ["--ro-bind", &drafts, &drafts]),
+        "the explicit drafts deny must remain read-only: {:?}",
+        plan.args
+    );
+    for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
+        assert!(
+            !plan.args.iter().any(|arg| arg == alias),
+            "a subdirectory grant must not expose ungranted src/ or target/ through {alias}: {:?}",
+            plan.args
+        );
+    }
+
+    let nested_cwd = workspace.join("docs");
+    let nested_plan =
+        compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&nested_cwd), true)
+            .expect("compile cwd inside the writable root");
+    for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
+        assert!(
+            nested_plan.args.iter().any(|arg| arg == alias),
+            "a cwd inside the granted subtree must retain {alias}: {:?}",
+            nested_plan.args
+        );
+    }
+}
+
+#[test]
 fn argv_reallows_only_narrow_existing_paths_after_orbit_deny() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = temp.path().join("workspace");
