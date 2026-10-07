@@ -121,6 +121,17 @@ pub(crate) fn command(req: &ExecRequest) -> Command {
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+        unsafe {
+            command.pre_exec(|| {
+                let dev_tty = c"/dev/tty";
+                let fd = libc::open(dev_tty.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+                if fd >= 0 {
+                    libc::ioctl(fd, libc::TIOCNOTTY);
+                    libc::close(fd);
+                }
+                Ok(())
+            });
+        }
     }
 
     if let EnvironmentMode::ClearAndSet(pairs) = &req.environment_mode {

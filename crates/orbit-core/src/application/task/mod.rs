@@ -52,6 +52,7 @@ pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
 pub(crate) use pilot_admission::{
     OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
+    operator_validation_requirements,
 };
 pub(crate) use validation_tools::positive_validation_tools;
 

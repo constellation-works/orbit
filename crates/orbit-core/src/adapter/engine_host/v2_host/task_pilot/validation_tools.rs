@@ -39,7 +39,7 @@ use orbit_types::workflow::activity_job::{
 
 use crate::OrbitRuntime;
 use crate::application::task::validation_tools::{names_tool, positive_validation_sentences};
-use crate::application::task::{OperatorValidationRequirement, positive_validation_tools};
+use crate::application::task::{OperatorValidationRequirement, operator_validation_requirements};
 
 /// Activity that implements a task. Its tool allowlist is the baseline a
 /// task's `required_tools` extends, so it is the lane a validation criterion
@@ -152,27 +152,8 @@ impl ImplementationLane {
 
     /// Typed operator requirements use the same positive-mention parser as
     /// warning generation, so quoted denials never become admission holds.
-    pub(super) fn operator_requirements(
-        &self,
-        task: &Task,
-        warnings: &[String],
-    ) -> Vec<OperatorValidationRequirement> {
-        positive_validation_tools(task, &self.registered)
-            .into_iter()
-            .filter(|(_, tool)| {
-                governed_tool(tool)
-                    .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
-                    && warnings.iter().any(|warning| {
-                        warning.starts_with(&format!(
-                            "acceptance criterion requires `{tool}`, a governed operation reserved for the "
-                        ))
-                    })
-            })
-            .map(|(criterion, tool)| OperatorValidationRequirement {
-                criterion,
-                tool: tool.into(),
-            })
-            .collect()
+    pub(super) fn operator_requirements(&self, task: &Task) -> Vec<OperatorValidationRequirement> {
+        operator_validation_requirements(task, &self.registered)
     }
 
     /// Matching walks the registered surface rather than scanning for

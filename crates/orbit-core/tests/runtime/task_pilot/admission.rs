@@ -212,9 +212,9 @@ fn human_approved_validation_task(workspace: &Workspace, criterion: &str) -> Tas
     human_approved_validation_task_with_tools(workspace, criterion, vec![])
 }
 
-fn human_approved_validation_task_with_tools(
+fn human_approved_validation_task_with_criteria(
     workspace: &Workspace,
-    criterion: &str,
+    criteria: Vec<String>,
     required_tools: Vec<String>,
 ) -> Task {
     // Use an allow-mode fixture to exercise a repairable missing grant. The
@@ -247,7 +247,7 @@ fn human_approved_validation_task_with_tools(
             required_tools,
             title: "Human-approved validation work".into(),
             description: "Repair the README fixture.".into(),
-            acceptance_criteria: vec![criterion.into()],
+            acceptance_criteria: criteria,
             plan: "Inspect README.md.".into(),
             status: Some(TaskStatus::Proposed),
             complexity: TaskComplexity::Low,
@@ -266,6 +266,14 @@ fn human_approved_validation_task_with_tools(
             "human:fixture".into(),
         )
         .unwrap()
+}
+
+fn human_approved_validation_task_with_tools(
+    workspace: &Workspace,
+    criterion: &str,
+    required_tools: Vec<String>,
+) -> Task {
+    human_approved_validation_task_with_criteria(workspace, vec![criterion.into()], required_tools)
 }
 
 #[test]
@@ -645,4 +653,116 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
         )
         .unwrap();
     assert_admission(&workspace, &task, None);
+}
+
+#[test]
+fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
+    if !isolated(
+        "task_pilot::admission::operator_validation_hold_is_retained_when_warnings_exceed_cap",
+    ) {
+        return;
+    }
+    let criteria = vec![
+        "Validate with `github.run.list` over MCP.".into(),
+        "Validate with `github.run.view` over MCP.".into(),
+        "Validate with `github.run.logs` over MCP.".into(),
+        "Validate with `orbit.pipeline.invoke`.".into(),
+    ];
+
+    // 1. Fresh pilot assessment retains the typed hold even when the warning cap drops the governed finding.
+    let workspace = Workspace::new();
+    let task = human_approved_validation_task_with_criteria(&workspace, criteria.clone(), vec![]);
+    assess(&workspace, &task, None);
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: serde_json::Value =
+        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+    let warnings = audit["assessment"]["validation_tool_warnings"]
+        .as_array()
+        .unwrap();
+    assert_eq!(warnings.len(), 8, "warnings must hit the cap: {warnings:?}");
+    assert!(
+        !warnings.iter().any(|w| {
+            w.as_str().unwrap().starts_with(
+                "acceptance criterion requires `orbit.pipeline.invoke`, a governed operation",
+            )
+        }),
+        "governed operation warning must be dropped by the cap: {warnings:?}"
+    );
+    let hold_requirements = audit["operator_validation_hold"]["requirements"]
+        .as_array()
+        .unwrap();
+    assert_eq!(hold_requirements.len(), 1);
+    assert_eq!(hold_requirements[0]["criterion"], 4);
+    assert_eq!(hold_requirements[0]["tool"], "orbit.pipeline.invoke");
+    assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+
+    // 2. Legacy pilot assessment backfill also derives the hold directly, independent of the warning cap.
+    let workspace2 = Workspace::new();
+    let task2 = human_approved_validation_task_with_criteria(&workspace2, criteria, vec![]);
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace2.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace2.runtime.workspace_id().unwrap(),
+        workspace2.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task;
+    let at = chrono::Utc::now();
+    let legacy_audit = json!({"assessment": {
+        "validation_tool_warnings": warnings,
+        "duplicate_of": null, "already_landed": null,
+    }});
+    backends
+        .history
+        .update_task_history(
+            &task2.id,
+            orbit_store::contracts::TaskHistoryUpdateParams {
+                actor: "task-pilot".into(),
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at,
+                    by: "task-pilot".into(),
+                    event: "task_pilot_applied".into(),
+                    note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                append_comments: vec![orbit_types::task::TaskComment {
+                    at,
+                    by: "task-pilot".into(),
+                    message: format!("operation_id=legacy-pilot\n{legacy_audit}"),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_admission(&workspace2, &task2, Some("operator_validation_handoff"));
+    let history2 = workspace2.runtime.get_task_history(&task2.id).unwrap();
+    assert_eq!(
+        history2
+            .iter()
+            .filter(|entry| entry.event == "operator_validation_held")
+            .count(),
+        1
+    );
+    let comments2 = workspace2.runtime.get_task_comments(&task2.id).unwrap();
+    let record2: serde_json::Value = serde_json::from_str(
+        comments2
+            .last()
+            .unwrap()
+            .message
+            .split_once('\n')
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    assert_eq!(record2["hold"]["requirements"][0]["criterion"], 4);
+    assert_eq!(
+        record2["hold"]["requirements"][0]["tool"],
+        "orbit.pipeline.invoke"
+    );
 }

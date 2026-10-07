@@ -181,7 +181,7 @@ pub(super) fn apply_task(
                 history_summary.push_str(marker);
             }
             let requirements = super::validation_tools::ImplementationLane::resolve(runtime)
-                .operator_requirements(&current, &snapshot.validation_tool_warnings);
+                .operator_requirements(&current);
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
             let crew_redraw_history =
