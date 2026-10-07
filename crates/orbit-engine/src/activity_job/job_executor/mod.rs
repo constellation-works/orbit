@@ -49,6 +49,7 @@ mod loop_block;
 mod parallel;
 mod recovery;
 mod recovery_evidence;
+mod recovery_observation;
 mod reviewer;
 mod step;
 mod target;

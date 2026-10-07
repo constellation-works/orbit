@@ -84,6 +84,9 @@ spec:
       # Host-allocated, run-local decision file for this one invocation.
       # Absent when the host has no decision slot; the executor then keeps
       # its legacy single post-recovery attempt whenever recovery completes.
+      # With a slot but no file written, the executor retries only when it
+      # observes a change since the failure (worktree, base or validation
+      # environment).
       recovery_decision:
         type: object
         additionalProperties: false
@@ -190,8 +193,13 @@ spec:
 
         {"schema_version": 1, "run_id": "<run_id>",
          "failed_step_id": "<failed_step_id>", "attempt": <attempt>,
-         "nonce": "<nonce>", "decision": "retry" | "not_recovered",
+         "nonce": "<nonce>",
+         "decision": "retry" | "not_recovered" | "external_blocker",
          "reason": "<one short sentence>"}
+
+    An `external_blocker` decision also carries
+    `"blocker": {"kind": "<token>", "evidence": "<why>"}`; no other decision
+    carries `blocker`.
 
     The only allowed bytes after the closing brace are an optional real
     newline. Do not append a literal backslash followed by `n` or any other
@@ -210,12 +218,22 @@ spec:
       missing precondition you may not create, or anything you only
       diagnosed). The executor skips the attempt and keeps the original
       failure.
+    - `external_blocker`: the failure has a cause outside this run that no
+      retry, resume, or other agent can clear, and a human must act (for
+      example missing credentials, an unavailable external service, or a
+      decision only the operator can make). `kind` is a short token: an
+      ASCII letter, then ASCII letters, digits, `_`, `.`, `:`, or `-`, at
+      most 64 bytes. `evidence` is the reason. The executor skips the
+      attempt and Orbit's final recovery, and the failure handoff blocks the
+      task with that kind and leaves the worktree as it is. Prefer
+      `not_recovered` when you only lack evidence.
     No other fields. Write it once, at that exact path, as a regular file —
     never a link, and never anywhere else. A file that does not match this
     invocation exactly is refused and also prevents the attempt. If you
-    write nothing, the executor keeps its legacy behavior and re-runs the
-    step whenever this activity completes. The `recovered` field of your
-    final response is a report for humans; it decides nothing.
+    write nothing, the executor re-runs the step only when it observes that
+    the worktree, the base, or the validation environment changed since the
+    failure; otherwise it keeps the original failure. The `recovered` field
+    of your final response is a report for humans; it decides nothing.
 
     Repository configuration is out of bounds. Never add, rename, retarget, or
     remove a Git remote, and never write persistent Git configuration by any

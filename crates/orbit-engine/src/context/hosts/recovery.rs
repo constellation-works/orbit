@@ -73,6 +73,10 @@ pub enum StepRecoveryVerdict {
     Retry,
     /// Recovery could not repair the failure; return the original failure.
     NotRecovered,
+    /// Something outside the run blocks the step [ORB-14268]. The step fails
+    /// as an agent-declared blocker, so final recovery is skipped and the
+    /// failure handoff blocks the task with the decision's kind.
+    ExternalBlocker,
 }
 
 impl StepRecoveryVerdict {
@@ -80,6 +84,7 @@ impl StepRecoveryVerdict {
         match self {
             Self::Retry => "retry",
             Self::NotRecovered => "not_recovered",
+            Self::ExternalBlocker => "external_blocker",
         }
     }
 }
@@ -87,12 +92,16 @@ impl StepRecoveryVerdict {
 /// The host's reading of one decision slot after its invocation completed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepRecoveryDecisionRead {
-    /// Nothing was written; the legacy retry-on-success admission applies.
+    /// Nothing was written. The executor retries only when it observes a
+    /// change since the failure [ORB-14268].
     Absent,
     /// A well-formed decision bound to exactly this invocation.
     Verified {
         verdict: StepRecoveryVerdict,
         reason: Option<String>,
+        /// The declared blocker; present exactly when `verdict` is
+        /// [`StepRecoveryVerdict::ExternalBlocker`].
+        blocker: Option<orbit_types::workflow::AgentBlocker>,
     },
     /// Something is at the slot but it is not a decision for this invocation:
     /// malformed, oversized, a link or non-regular file, or bound to another

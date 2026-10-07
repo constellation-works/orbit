@@ -122,8 +122,8 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pipeline.worktree.workspace_path",
     )?;
 
-    // [ORB-14269] The implementer declared a blocker before commit. The
-    // worktree may be dirty. Leave it: do not abort a rebase, commit, push,
+    // [ORB-14269] The implementer, or step recovery [ORB-14268], declared a
+    // blocker. The worktree may be dirty. Leave it: do not abort a rebase, commit, push,
     // or open a `[BLOCKED]` PR. Checked before those mutations.
     if orbit_types::workflow::is_task_blocked_by_agent(Some(error_code), Some(error_message)) {
         return preserve_agent_blocked_candidate(

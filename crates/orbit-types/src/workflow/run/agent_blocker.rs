@@ -8,6 +8,9 @@
 //! with no `[BLOCKED]` pull request.
 //!
 //! A malformed shape is not a blocker. The step keeps its ordinary outcome.
+//!
+//! Step recovery declares the same blocker through an `external_blocker`
+//! decision [ORB-14268]; its step fails with the same marker and handoff.
 
 use serde_json::Value;
 
@@ -36,7 +39,8 @@ pub struct AgentBlocker {
     pub evidence: String,
 }
 
-/// Whether a step failure says the implementer declared a blocker.
+/// Whether a step failure says an agent (the implementer or step recovery)
+/// declared a blocker.
 #[must_use]
 pub fn is_task_blocked_by_agent(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(TASK_BLOCKED_BY_AGENT_ERROR_CODE)
