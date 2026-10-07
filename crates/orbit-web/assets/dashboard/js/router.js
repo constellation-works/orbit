@@ -461,6 +461,14 @@ function startDashboardPolling(ctx) {
 }
 
 function initTabsImpl(ctx) {
+  // Native focus scrolling can leave half a button outside the phone's
+  // overflow row when its centre is already visible. Reveal the whole entry
+  // on keyboard focus, without changing the route or moving focus elsewhere.
+  $("tabs")?.addEventListener("focusin", (event) => {
+    if (event.target.matches('.tab, .subtab')) {
+      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  });
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false }));
   }

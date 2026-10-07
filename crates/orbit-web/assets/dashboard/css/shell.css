@@ -113,6 +113,7 @@
 .rail-subtabs .subtab {
   display: flex;
   align-items: center;
+  gap: 6px;
   height: 30px;
   padding: 0 8px;
   border-radius: 6px;
@@ -301,43 +302,47 @@
   color: var(--accent-hover);
 }
 
+.refresh-icon { display: none; }
+.refresh-btn:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
 .refresh-btn:disabled {
   cursor: wait;
   opacity: 0.55;
 }
 
-/* ORB-11559: below ~760px the rail steals the content column. The shell
-   stacks: one scrolling row of destinations, the open section's views
-   on a second row, then the workspace picker. This block follows the
-   base `.topbar` / `.kpi` rules so height and label hiding win the
-   cascade. */
+/* On phones, the brand, workspace and icon actions share the first row.
+   Destinations and the open section's views scroll together on the next;
+   the health strip has its own single scrolling row below that. Actions
+   stay in the topbar DOM so their listeners and desktop layout are shared. */
 @media (max-width: 760px) {
   .shell {
+    position: relative;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
   }
   .rail {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr) 34px 34px;
+    grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
-    overflow-x: auto;
-    overflow-y: visible;
-    padding: 8px 8px 0;
-    flex-direction: row;
-    flex-wrap: wrap;
+    overflow: hidden;
+    padding: 8px;
     align-items: center;
     gap: 6px;
   }
-  .rail-brand { display: none; }
-  .rail-workspace { flex: 0 0 auto; order: -1; }
-  .rail-workspace .workspace-select { height: 34px; width: auto; max-width: 11rem; }
+  .rail-brand { grid-column: 1; padding: 0; height: 34px; display: flex; align-items: center; align-self: start; }
+  .rail-brand svg { width: 64px; height: auto; }
+  .rail-workspace { grid-column: 2; min-width: 0; }
+  .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
   .rail .tabs {
-    flex: 1 1 100%;
+    grid-column: 1 / -1;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     overflow-x: auto;
     min-width: 0;
     margin-top: 0;
-    padding: 0 0 4px;
+    padding: 2px;
     gap: 2px;
   }
   .rail-group { display: contents; }
@@ -349,14 +354,13 @@
     height: 36px;
   }
   .rail-label { flex: 0 1 auto; }
-  .rail-subtabs {
-    flex: 1 1 100%;
+  .rail .rail-subtabs {
+    flex: 0 0 auto;
     flex-direction: row;
     flex-wrap: nowrap;
-    overflow-x: auto;
+    overflow: visible;
     margin: 0;
-    padding: 2px 0 6px;
-    border-left: none;
+    padding: 0 4px;
     gap: 2px;
   }
   .rail-subtabs .subtab {
@@ -365,12 +369,40 @@
     flex: 0 0 auto;
   }
   .rail-foot { display: none; }
-  .kpi-window { display: none; }
-  .tab-pane[data-tab="operations"] .subtabs,
-  #operations-subtabs {
-    overflow-x: auto;
-    flex-wrap: nowrap;
+  .topbar { padding: 6px 8px; gap: 0; }
+  .topbar-spacer { display: none; }
+  .topbar .kpis { flex: 1 1 100%; padding: 2px; }
+  .topbar .global-drain-state,
+  .topbar .refresh-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 34px;
+    height: 34px;
+    padding: 0;
   }
+  .topbar .global-drain-state { right: 48px; }
+  .topbar .global-drain-state[hidden] { display: none; }
+  .refresh-icon { display: block; width: 17px; height: 17px; }
+  /* Keep the route heading and action names available to assistive tech. */
+  .topbar .crumb,
+  .refresh-label,
+  .global-drain-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .rail .tabs .tab:focus-visible,
+  .rail .tabs .subtab:focus-visible { outline-offset: -2px; }
   .subtab { white-space: nowrap; }
 }
 
@@ -618,10 +650,4 @@ footer {
   text-align: right;
   border-top: 1px solid var(--border);
   background: var(--bg);
-}
-
-@media (max-width: 520px) {
-  /* On a phone the two counts that need action stay; the rest are one tap
-     away in Audit. */
-  #tile-events, #tile-active { display: none; }
 }
