@@ -112,7 +112,7 @@ function runActionLabel(verb, run) {
 function buildCancelRunButton(run, host) {
   const btn = el("button", {
     class: "action reject run-cancel",
-    text: "cancel",
+    text: "Cancel",
     title: `Cancel ${run.run_id}`,
   });
   btn.disabled = !runIsCancellable(run) || cancelRequestsInFlight.has(runIdentity(run));
@@ -649,8 +649,29 @@ function runTimestampValue(run) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function runElapsedMs(run) {
+  if (!run || !run.started_at) return null;
+  const started = new Date(run.started_at).getTime();
+  if (!Number.isFinite(started)) return null;
+  return Math.max(0, Date.now() - started);
+}
+
 function runFriction(run) {
   return run.diagnostics_friction || emptyRunFrictionSummary(run);
+}
+
+function runDurationInfo(run) {
+  const friction = runFriction(run);
+  let durationMs = friction.durationMs;
+  let isLive = false;
+  if ((durationMs == null || durationMs <= 0) && run && run.state === "running") {
+    const elapsed = runElapsedMs(run);
+    if (elapsed != null) {
+      durationMs = elapsed;
+      isLive = true;
+    }
+  }
+  return { durationMs, isLive, longRun: friction.longRun };
 }
 
 function runSortValue(run, key) {
@@ -666,8 +687,10 @@ function runSortValue(run, key) {
       return friction.denials || 0;
     case "tool_fails":
       return friction.toolFails || 0;
-    case "duration":
-      return friction.durationMs || 0;
+    case "duration": {
+      const { durationMs } = runDurationInfo(run);
+      return durationMs || 0;
+    }
     case "state":
       return run.state || "";
     default:
@@ -748,17 +771,51 @@ function runsEmptyText() {
 function runsScopeNote() {
   return el("div", {
     class: "runs-scope-note",
-    text: "Every job run, newest first, with no time window. The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures this month.",
+    text: "Every job run, newest first, with no time window.",
+    title: "The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures this month.",
   });
 }
 
 function runsLimitNote(meta) {
   if (!meta || !meta.truncated) return null;
   const total = Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
-  return el("div", {
+  const container = el("div", {
     class: "runs-limit-note",
-    text: `Showing the newest ${meta.limit} matching runs${total}. Add ?runs=<n> to the address to load more.`,
   });
+  container.dataset.key = "runs-limit-note";
+  const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
+  const isLoading = hasCtx("getRunsLoading") && _runsCtx.getRunsLoading();
+  container.dataset.hash = `limit-note-${meta.limit}-${meta.total || ""}-${capped ? "capped" : ""}-${isLoading ? "loading" : ""}`;
+
+  const textSpan = el("span", {
+    class: "runs-limit-text",
+    text: `Showing newest ${meta.limit} matching runs${total}.`,
+  });
+  container.appendChild(textSpan);
+
+  // The server caps one request; past that cap Load more would return the same rows.
+  if (capped) {
+    textSpan.textContent = `Showing newest ${meta.limit} matching runs${total}, the most one request returns.`;
+    return container;
+  }
+
+  const button = el("button", {
+    class: "action runs-load-more",
+    text: isLoading ? "Loading…" : "Load more",
+    title: "Load more runs",
+  });
+  button.type = "button";
+  button.disabled = Boolean(isLoading);
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (hasCtx("loadMoreRuns")) {
+      button.disabled = true;
+      button.textContent = "Loading…";
+      _runsCtx.loadMoreRuns().catch((error) => console.error("Failed to load more runs", error));
+    }
+  });
+  container.appendChild(button);
+  return container;
 }
 
 function runsLoadingSkeleton() {
@@ -842,10 +899,12 @@ function runCountCell(value, kind) {
 }
 
 function runDurationCell(run) {
-  const friction = runFriction(run);
+  const { durationMs, isLive, longRun } = runDurationInfo(run);
+  const formatted = fmtDurationValue(durationMs);
+  const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
   return el("span", { class: "duration" }, [
-    fmtDurationValue(friction.durationMs),
-    friction.longRun
+    text,
+    longRun
       ? el("span", { class: "long-run-flag", text: "!", title: "Long run" })
       : null,
   ]);
@@ -900,14 +959,14 @@ export function renderRuns(runs) {
   }
   const headerCells = [
     runHeaderCell("State", "state"),
-    attributed ? el("span", { text: "Workspace" }) : null,
+    attributed ? el("span", { class: "runs-workspace-header", text: "Workspace" }) : null,
     runHeaderCell("Job", "job"),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
     runHeaderCell("Denials", "denials", { num: true }),
     runHeaderCell("Tool fails", "tool_fails", { num: true }),
-    runHeaderCell("Duration", "duration", { style: { textAlign: "right" } }),
-    el("span", { text: "" }),
+    runHeaderCell("Duration", "duration", { class: "duration", style: { textAlign: "right" } }),
+    el("span", { class: "run-actions-header", text: "Actions", style: { textAlign: "right" } }),
   ];
   const header = el("div", { class: `runs-row runs-header${attributed ? " workspace-attributed" : ""}` }, headerCells);
   header.dataset.key = "runs-header";
@@ -916,6 +975,8 @@ export function renderRuns(runs) {
   for (const r of top) {
     const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
     const friction = runFriction(r);
+    const { durationMs, isLive } = runDurationInfo(r);
+    const formattedDuration = fmtDurationValue(durationMs);
     const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
     const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
     if (r.retry_source_run_id) {
@@ -960,7 +1021,7 @@ export function renderRuns(runs) {
     ];
     const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
     row.dataset.key = `run-${runIdentity(r)}`;
-    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
+    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}`;
     row.style.cursor = "pointer";
     // A run row opens the run detail view rather than disclosing inline, so it
     // gets button semantics with no expansion state.

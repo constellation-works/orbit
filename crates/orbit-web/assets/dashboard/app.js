@@ -62,7 +62,9 @@ const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archi
 // default (applyTasksHashQuery) read from, so they cannot drift apart.
 const DEFAULT_ACTIVE_STATUSES = STATUS_ORDER.filter((s) => !DEFAULT_INACTIVE_STATUSES.has(s));
 
-const JOB_RUN_LIMIT = positiveIntParam("runs", 25);
+const DEFAULT_JOB_RUN_LIMIT = 25;
+const JOB_RUN_STEP = 25;
+let jobRunLimit = positiveIntParam("runs", DEFAULT_JOB_RUN_LIMIT);
 const DIAG_LIMIT = positiveIntParam("diag", 50);
 const FRICTION_LIMIT = positiveIntParam("frictions", 100);
 
@@ -223,6 +225,16 @@ function routerContext() {
   };
 }
 
+function loadMoreRuns() {
+  const currentLimit = (lastRunsMeta && Number.isFinite(lastRunsMeta.limit))
+    ? lastRunsMeta.limit
+    : jobRunLimit;
+  jobRunLimit = currentLimit + JOB_RUN_STEP;
+  markRunsLoading();
+  renderRuns(lastRuns);
+  return fetchAndRenderRuns();
+}
+
 function runsContext() {
   return {
     navigateToRun: nTR,
@@ -233,10 +245,16 @@ function runsContext() {
     getLastRuns: () => lastRuns,
     getRunsMeta: () => lastRunsMeta,
     getRunsLoading: () => lastRunsLoading,
+    // The server clamps the requested limit; once it echoes less than was asked
+    // for, another Load more would refetch the same rows.
+    getRunsLimitCapped: () => Boolean(lastRunsMeta)
+      && Number.isFinite(lastRunsMeta.limit)
+      && jobRunLimit > lastRunsMeta.limit,
     markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
     fmtTimestamp,
     fmtDuration,
+    loadMoreRuns,
   };
 }
 
@@ -405,7 +423,7 @@ function fmtDuration(ms) {
   if (ms == null) return "-";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
 }
 
 function knowledgeStatusPill(status) {
@@ -1430,12 +1448,12 @@ function fetchAndRenderRuns() {
   const requestedAggregate = isAggregateView();
   const runFilter = getRunFilter();
   return requestPanel("runs-body", runFilter, () => requestedAggregate
-    ? fetchJson(`/api/job-runs/all?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
+    ? fetchJson(`/api/job-runs/all?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
         runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`),
+        fetchJson(`/api/job-runs?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
