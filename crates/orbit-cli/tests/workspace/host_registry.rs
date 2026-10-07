@@ -17,6 +17,41 @@ use crate::git_repo;
 use crate::host_fleet::{Fleet, host_row};
 
 #[test]
+fn tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote() {
+    let fleet = Fleet::new();
+    let alpha = fleet.install("alpha", "alpha", "AL");
+    fleet.route("alpha", &alpha, "plain");
+    fleet.json(&["host", "add", "alpha", "--json"]);
+    let root = fleet.local.home.join(".orbit");
+    let absolute = fleet.orbit_ok(
+        &fleet.local_repo,
+        &[
+            "--root",
+            root.to_str().expect("UTF-8 root"),
+            "host",
+            "list",
+            "--json",
+        ],
+    );
+    let absolute: Value = serde_json::from_slice(&absolute.stdout).expect("absolute hosts JSON");
+    assert_eq!(absolute["hosts"].as_array().expect("hosts").len(), 2);
+
+    for use_flag in [false, true] {
+        let mut command = fleet.orbit_in(&fleet.local.home, &fleet.local_repo, &[]);
+        if use_flag {
+            command.args(["--root", "~/.orbit"]);
+        } else {
+            command.env("ORBIT_ROOT", "~/.orbit");
+        }
+        let output = command.args(["host", "list", "--json"]).assert().success();
+        let hosts: Value =
+            serde_json::from_slice(&output.get_output().stdout).expect("tilde hosts JSON");
+        assert_eq!(hosts, absolute);
+        assert!(!fleet.local_repo.join("~").exists());
+    }
+}
+
+#[test]
 fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");

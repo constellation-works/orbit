@@ -36,7 +36,7 @@ fn resolve_workspace_layout_for_cwd(
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<WorkspaceLayout, OrbitError> {
-    let explicit_root = explicit_orbit_root(cwd, root_override);
+    let explicit_root = explicit_orbit_root(cwd, root_override)?;
     let explicit_root = explicit_root.as_deref();
     let registry_root = registry_root(explicit_root);
 
@@ -66,23 +66,21 @@ fn resolve_workspace_layout_for_cwd(
 /// every other root-aware surface applies. Honoring the variable here is what
 /// keeps `ORBIT_ROOT=<root> orbit mcp init` pointed at the same workspace as
 /// `ORBIT_ROOT=<root> orbit task list`.
-fn explicit_orbit_root(cwd: &Path, root_override: Option<&Path>) -> Option<PathBuf> {
-    let root = match root_override {
-        Some(root) => root.to_path_buf(),
-        None => {
-            let value = env::var("ORBIT_ROOT").ok()?;
-            let value = value.trim();
-            if value.is_empty() {
-                return None;
-            }
-            PathBuf::from(value)
-        }
-    };
-    Some(if root.is_relative() {
-        cwd.join(root)
-    } else {
-        root
-    })
+fn explicit_orbit_root(
+    cwd: &Path,
+    root_override: Option<&Path>,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let env_root = env::var("ORBIT_ROOT").ok();
+    let raw = root_override
+        .map(|root| root.to_string_lossy())
+        .or_else(|| {
+            env_root
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(std::borrow::Cow::Borrowed)
+        });
+    raw.map(|raw| orbit_core::runtime::resolve_root_path_value(&raw, cwd))
+        .transpose()
 }
 
 /// The Orbit data root whose workspace catalog describes this checkout.

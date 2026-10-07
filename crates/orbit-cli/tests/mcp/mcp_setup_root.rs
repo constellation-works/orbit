@@ -32,6 +32,10 @@ struct ExternalRootFixture {
 
 impl ExternalRootFixture {
     fn init() -> Self {
+        Self::init_at(None)
+    }
+
+    fn init_at(home_suffix: Option<&str>) -> Self {
         // `--root` is recorded as given, and the assertions below expect the
         // resolved spelling, so root the fixture at a resolved temp directory
         // (the default macOS one sits behind the `/var` symlink).
@@ -39,7 +43,9 @@ impl ExternalRootFixture {
             tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         // Deliberately nested, so a write to the root's parent is visible.
-        let orbit_root = temp.path().join("orbit-data").join("root");
+        let orbit_root = home_suffix
+            .map(|suffix| home.join(suffix))
+            .unwrap_or_else(|| temp.path().join("orbit-data").join("root"));
         let checkout = temp.path().join("checkout");
         let elsewhere = temp.path().join("elsewhere");
         for directory in [&home, &elsewhere] {
@@ -250,6 +256,41 @@ impl ExternalRootFixture {
                     skill.path().display()
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment() {
+    for (raw, home_suffix) in [
+        ("~", Some("")),
+        ("~/x", Some("x")),
+        ("~//x", Some("x")),
+        ("~/.orbit", Some(".orbit")),
+        ("../orbit-data/root", None),
+    ] {
+        let fixture = ExternalRootFixture::init_at(home_suffix);
+        for use_flag in [false, true] {
+            let env_root = if use_flag { "unused-env-root" } else { raw };
+            let env = [("ORBIT_ROOT", Path::new(env_root))];
+            let selected = |args: &[&str]| {
+                let mut args = argv(args);
+                if use_flag {
+                    args.splice(0..0, argv(&["--root", raw]));
+                }
+                fixture.orbit_with_env(&fixture.checkout, &args, &env)
+            };
+            selected(&["mcp", "init", "--claude"]).success();
+            assert_eq!(
+                generated_server_args(&fixture.claude_config()),
+                vec!["mcp", "serve", "--workspace", "ws_wsname"],
+                "{raw} must bind the checkout registered at the expanded root"
+            );
+            fixture.assert_no_client_config_outside_the_checkout();
+            selected(&["mcp", "remove", "--claude"]).success();
+            assert!(!fixture.claude_config().exists());
+            assert!(!fixture.checkout.join("~").exists());
+            assert!(!fixture.checkout.join("unused-env-root").exists());
         }
     }
 }

@@ -14,12 +14,181 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+use orbit_common::fs::generation::{
+    GenerationGuard, ParticipantRecord, ParticipantRole, executable_generation,
+};
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots() {
+    for (raw, suffix) in [
+        ("~", ""),
+        ("~/x", "x"),
+        ("~//x", "x"),
+        ("~/.orbit", ".orbit"),
+        ("./relative-root", "relative-root"),
+    ] {
+        let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("fixture tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        fs::create_dir_all(&home).expect("home");
+        crate::git_repo::init(&work);
+        let root = if suffix.is_empty() {
+            home.clone()
+        } else if raw.starts_with('~') {
+            home.join(suffix)
+        } else {
+            work.join(suffix)
+        };
+        initialize_registered_root(&work, &home, &root);
+
+        for use_flag in [false, true] {
+            let selected = || {
+                let mut command = orbit(&work, &home);
+                if use_flag {
+                    command.args(["--root", raw]);
+                    // A flag still outranks a different environment root.
+                    command.env("ORBIT_ROOT", "unused-env-root");
+                } else {
+                    command.env("ORBIT_ROOT", raw);
+                }
+                command
+            };
+            selected()
+                .args(["task", "list", "--json"])
+                .assert()
+                .success();
+            let hosts = selected()
+                .args(["host", "list", "--no-probe", "--json"])
+                .assert()
+                .success();
+            let hosts: Value =
+                serde_json::from_slice(&hosts.get_output().stdout).expect("hosts JSON");
+            assert_eq!(hosts["hosts"][0]["name"], "root-spelling-host");
+
+            let sweep = selected()
+                .args(["run", "ship-sweep", "--dry-run", "--json"])
+                .assert()
+                .success();
+            let sweep: Value =
+                serde_json::from_slice(&sweep.get_output().stdout).expect("sweep JSON");
+            assert_eq!(sweep["workspaces"], 1, "{raw}: {sweep}");
+            assert_eq!(sweep["reports"][0]["workspace_name"], "root-spelling");
+
+            let preflight = selected()
+                .args(["update", "--preflight", "--json"])
+                .output()
+                .expect("preflight");
+            let home_orbit = home.join(".orbit");
+            let expected = if root == home_orbit {
+                vec![root.as_path()]
+            } else {
+                vec![root.as_path(), home_orbit.as_path()]
+            };
+            assert_admitted_roots(&preflight, &expected);
+            assert_generation_record(&root);
+            assert!(
+                !work.join("~").exists(),
+                "{raw} created a literal tilde tree"
+            );
+            assert!(!work.join("unused-env-root").exists());
+        }
+    }
+}
+
+fn initialize_registered_root(work: &Path, home: &Path, root: &Path) {
+    let root_arg = root.to_str().expect("UTF-8 root");
+    orbit(work, home)
+        .args([
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "root-spelling-host",
+            "--task-prefix",
+            "RSP",
+        ])
+        .assert()
+        .success();
+    orbit(work, home)
+        .args([
+            "--root",
+            root_arg,
+            "workspace",
+            "init",
+            "--name",
+            "root-spelling",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn task_list_with_tilde_orbit_root_registers_its_participant_under_home() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::init(&work);
+    let root = home.join(".orbit");
+    initialize_registered_root(&work, &home, &root);
+
+    // Hold the task index in rollback-journal mode so the built CLI cannot
+    // finish its read before its live generation registration is inspected.
+    let index = rusqlite::Connection::open(root.join("tasks/index.sqlite")).expect("task index");
+    index
+        .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+        .expect("hold task index read");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("ORBIT_ROOT", "~/.orbit")
+        .args(["task", "list", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("task list child");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let participant = loop {
+        let found = fs::read_dir(root.join(".generation-participants"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|entry| fs::read(entry.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice::<ParticipantRecord>(&bytes).ok())
+            .find(|record| record.pid == child.id());
+        if found.is_some() || child.try_wait().expect("child status").is_some() {
+            break found;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("stop unregistered child");
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    index
+        .execute_batch("ROLLBACK;")
+        .expect("release task index");
+    let output = child.wait_with_output().expect("task list output");
+    assert!(output.status.success(), "{output:?}");
+    let participant = participant.expect("task list must register under the expanded HOME root");
+    assert_eq!(participant.role, ParticipantRole::Command);
+    assert!(!work.join("~").exists());
+}
 
 #[test]
 fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
