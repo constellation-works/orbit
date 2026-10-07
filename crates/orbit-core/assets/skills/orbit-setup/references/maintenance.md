@@ -133,7 +133,8 @@ a missing/incompatible candidate is refused, including pre-fix downgrades.
 Use `orbit update --preflight --json` against the configured executable and
 same authorities before a wrapper changes the installation. Exit 0 reports
 `schema_version: 1`, `admitted: true`, `reservation: false`,
-`contract: executable-generation-v1`, and the `admission_roots` it locked;
+`contract: executable-generation-v1`, `admission_contract: compatibility-generation-v2`,
+and the `admission_roots` it locked;
 exit 1 refuses admission on stderr and names the refusing authority.
 `--root`, then `ORBIT_ROOT`, otherwise isolated `HOME=` / the host-global
 root selects the first authority, reported as `global_root` (scratch init in
@@ -162,19 +163,28 @@ is not race-free, so preflight plus a raw copy is never a way to deploy a
 local build — use `--local-candidate` (below). `orbit update --check` checks releases, not running-client
 compatibility.
 
-Participating CLI/MCP processes pin their executable generation for their entire
-lifetime. An update refuses while any is live, and a different executable cannot
-auto-migrate underneath them. A read-only command whose compiled store schema
+Participating CLI/MCP processes hold a generation lock for their entire
+lifetime. The updater still requires exclusive admission and refuses while a
+participant is live. Ordinary v2 runtime admission instead compares store,
+layout and feature compatibility: compatible builds may run and apply additive
+migrations side by side despite different executable digests. A breaking newer
+writer records a pending switch and waits up to 120 seconds by default for
+participants to yield at safe points; an incompatible older build is refused.
+With a v1-owned generation record, a read-only command whose compiled store schema
 equals the live store schema may join that pin without rewriting `.generation.lock`
 (`task show`/`list`/`flow`, `run history`/`show`, `search`, `workspace list`/`show`,
-`tool list`, `friction list`). The joiner still holds the shared flock, so
+`tool list`, `friction list`). That v1 joiner still holds the shared flock, so
 `orbit update` stays refused until it exits. Writers, MCP/web serve, `migrate --confirm`,
 and a differing schema are still refused; schema equality is exact, not
 additive-newer. Additive-newer read-only compatibility still applies
 to a matching digest. This covers stdio/operator, TCP listener, federated local,
 destination SSH and managed processes without changing their authority. Quiesce
-via the owning client/operator and retry; Orbit does not kill sessions, hand off
-connections, reclaim claims or replay mutations. For a lost reply, inspect the
+via the owning client/operator when replacement is refused. After an installed
+executable changes, supported long-lived processes can re-exec at idle boundaries;
+MCP stdio preserves its session and drain coordinators reattach to their run.
+The clock resumes eligible runs interrupted by the current upgrade at most once,
+leaving elapsed, stopped or superseded drains alone. It does not reclaim claims
+or replay uncertain mutations. For a lost reply, inspect the
 durable operation/audit before any retry. Never delete the root's
 `.generation.lock` or `.generation-admission.lock` to force admission.
 

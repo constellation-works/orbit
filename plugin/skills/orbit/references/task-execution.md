@@ -31,7 +31,7 @@ still sitting in it: implement the comment's direction. An arbitrary comment is
 not authority by timestamp alone; resolve material contradictions before
 implementing, without reopening already settled decisions.
 
-Use `context_files` as the modification boundary, not a demand to ingest the
+Use `context_files` as starting targets, not a limit or a demand to ingest the
 whole repository before editing. Verify paths and inspect the interfaces needed
 for the next increment; for directories use `rg --files` to find those targets.
 Read enough of each affected file and its consumers to make a correct change.
@@ -141,7 +141,7 @@ non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
 
-**Keep `context_files` current.** Declare newly identified modification targets
+**Keep `context_files` current.** You may declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
 rules. `orbit.task.update` replaces the whole context list when `context_files`
 or the legacy `context` alias is supplied. Omitting both preserves the list;
@@ -189,8 +189,8 @@ and linked job-run worktrees, the repository's `.git` mount is read-only and
 must not be worked around by chmod or host-side gitdir writes. Commands that
 write to `.git` fail:
 - Do not use `git worktree add` to inspect or build other revisions. Extract
-  each revision into its own scratch directory outside the checkout:
-  `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`. That reads
+  each revision into its own scratch directory under `.orbit/tmp/`:
+  `mkdir -p .orbit/tmp/base && git archive <sha> | tar -x -C .orbit/tmp/base`. That reads
   `.git` without writing it or creating `.git/worktrees/*`.
 - When `git checkout -- <path>` fails because it cannot acquire `index.lock`,
   revert the tracked file with `git show HEAD:<path> > <path>`.

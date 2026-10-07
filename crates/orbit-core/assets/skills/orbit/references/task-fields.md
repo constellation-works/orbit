@@ -39,8 +39,10 @@ The connected tool schema is authoritative for supported fields.
   from `orbit.task.add`; for bug tasks, set it after creation with
   `orbit.task.update` (which accepts the field), and use an empty string there
   to clear it. `tags` (reuse existing before inventing new).
-- `required_tools: ["<exact.canonical.tool>", ...]` — tools the task must add to
-  any agent activity's baseline. Use only exact, active, agent-facing registered
+- `required_tools: ["<exact.canonical.tool>", ...]` — tools the task requires.
+  Allowlist activities add them to their baseline; deny-list activities refuse
+  a requirement covered by `tool_disallow_list`, which it never overrides.
+  Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,
   sorted, and deduplicated at creation. It is immutable afterward, and every
   existing-task update surface rejects `required_tools` — so declare every tool
@@ -52,8 +54,9 @@ The connected tool schema is authoritative for supported fields.
   authentication can still deny execution. A task that names exactly
   `github.auth.status`, `github.run.list`, `github.run.view`,
   `github.run.logs`, and `github.pr.list` is the worked example:
-  `agent_implement` stays unchanged and
-  `effective_tools = activity baseline ∪ those five`. Reaching
+  an allowlist activity stays unchanged and
+  `effective_tools = activity baseline ∪ those five`. The shipped deny-list
+  `agent_implement` already includes those GitHub reads. Reaching
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
@@ -61,7 +64,7 @@ The connected tool schema is authoritative for supported fields.
 ## Validation your lane can actually run
 
 A criterion that names a tool is a promise about the lane that will run it, and
-`required_tools` is the only field that can keep that promise — which is why it
+`required_tools` records that requirement — which is why it
 has to be right at creation. Task-pilot preparation reads each criterion
 against the registered tool surface, the canonical MCP tool list, the
 implementation activity's allowlist, and the governed-operation registry, and
@@ -85,8 +88,10 @@ owner pull claims until an operator handles it.
   transport the lane provides. A `proc.spawn` timeout on cargo/make is never a
   validation blocker; rerun there and await completion, including shared
   build-budget admission. Preserve sandboxing and build-budget admission.
-- **Allowlist.** A tool outside the implementation activity's baseline has to
-  be in `required_tools`, or the criterion is unreachable from the lane.
+- **Activity tools.** For an allowlist activity, a tool outside its baseline
+  has to be in `required_tools`. A deny-list activity exposes registered
+  agent-facing tools except its disallowed names; `required_tools` cannot
+  override a denial, and such a requirement refuses dispatch.
 - **Operator capability.** Governed operations — workflow run observation and
   resume, `orbit.command.exec`, `orbit.agent.invoke`,
   and the other destructive surfaces — are reserved for an operator.

@@ -71,8 +71,8 @@ bounded, so distinct prefixes are preferable to guessed disjoint ranges.
 
 Routine definitions carry no host field: every host with a registered owner
 checkout and an enabled clock evaluates them against its own store. Inspect
-their seeded names with `orbit routine list`. Definition enablement travels
-through Git; last-fire timestamps and pauses do not. Two hosts running the same
+their seeded names with `orbit routine list`. Definitions and enablement are
+per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local. Two hosts running the same
 routine each evaluate it independently, and `overlap: forbid` is local — pause
 it on the hosts that should not run it.
 

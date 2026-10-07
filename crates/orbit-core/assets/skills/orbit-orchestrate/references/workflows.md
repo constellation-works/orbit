@@ -17,7 +17,7 @@ dispatch see [orchestration.md](orchestration.md), and for scheduling it see
 - **Run** — one execution, with a `jrun-*` id, a durable state bundle under
   `.orbit/state/job-runs/`, and an audit trail.
 
-For every task-backed agent activity, Orbit computes
+For a task-backed agent activity using `tools` as an allowlist, Orbit computes
 `effective_tools = deduplicate(activity.tools union task.required_tools)`. Task
 requirements are immutable after creation. The
 activity list remains the baseline; an empty task requirement list preserves it
@@ -25,7 +25,10 @@ exactly. When one agent activity selects a batch, Orbit unions the requirements
 from every selected task into that same effective list. Admission rejects
 invalid required names before provider launch, and
 the run envelope, `ORBIT_ACTIVITY_TOOLS`, and audit evidence carry the effective
-list. Tool inclusion does not bypass later role, capability, policy, sandbox,
+list. A deny-list activity instead exposes registered agent-facing tools except
+those covered by `tool_disallow_list`; a task requirement never overrides that
+list and refuses dispatch when covered. The shipped `agent_implement` uses
+this deny-list mode. Tool inclusion does not bypass later role, capability, policy, sandbox,
 subprocess, or authentication checks.
 
 ## Running a job
@@ -109,11 +112,15 @@ fresh. It is refused while the task is `in-progress`.
 
 Scope limits:
 
-- Claimed (distributed-drain) runs never resume. Their pipelines have no
-  failure handoff, so they never preserve a candidate: a failure settles the
-  claim. Their delivery steps also judge the implementation step's output,
-  which a skipped implementation does not produce. The evidence also lives in
-  the owner's run store, which a follower cannot read.
+- Generic resume of a claimed leaf is refused. A new claim can carry the
+  committed candidate the owner preserved from a failed attempt. The leaf
+  fetches its durable ref from `origin` when needed, applies it onto the new
+  base, and always runs the implementer with `continuation`, `review` or
+  `conflict` repair context. An unpublished candidate that could not be carried
+  to a durable ref resumes only on its original host. A repair claim after a
+  stopped owner landing instead supplies `landing` or `conflict` context.
+  The handoff needs this attempt's implementation output; validation judges
+  the resulting candidate. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md).
 - A failure after the PR opened (completion, CI on the published PR) leaves
   the task in `review` with its PR, not a preserved candidate.
 

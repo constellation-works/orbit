@@ -262,7 +262,7 @@ orbit routine resume <name>
 
 Resolve the toggles in this order — `orbit routine list` shows both at once:
 
-1. `enabled: false` in the definition (versioned, affects every host).
+1. `enabled: false` in this checkout's definition (per-user, gitignored).
 2. A local pause (this host only, unversioned, durable across reboots).
 
 If neither explains it, check further out: is this checkout registered as an
