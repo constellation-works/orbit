@@ -55,7 +55,7 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
         self.runtime.mint_task(definition)
     }
 
-    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
         self.runtime.skip_reason(definition)
     }
 
@@ -130,22 +130,15 @@ impl AutoTaskDispatch for OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    /// Why an auto-task definition is skipped this pass, when it is.
+    /// The plugin that makes `definition` inactive in this workspace, if any:
+    /// the one rule both the scheduler's skip and every listing's default
+    /// hiding read.
     ///
     /// A definition a plugin seeded fires only while that plugin is enabled,
     /// on the host and in this workspace:
     /// its template belongs to the plugin, and firing it after a disable would
     /// mint chores nothing on this host can carry out (design §4.5). The file
     /// is left exactly where it is, edits and all.
-    pub fn auto_task_skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
-        let path = self.auto_task_definition_path(definition);
-        self.auto_task_inactive_plugin(definition)
-            .map(|inactive| inactive.reason(&path, None))
-    }
-
-    /// The plugin that makes `definition` inactive in this workspace, if any:
-    /// the one rule both the scheduler's skip and every listing's default
-    /// hiding read.
     pub fn auto_task_inactive_plugin(
         &self,
         definition: &AutoTaskDefinition,
