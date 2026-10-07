@@ -27,6 +27,22 @@ const $ = (id) => document.getElementById(id);
 // audit.js's expandedAuditIds) so a refresh tick does not collapse the row
 // someone is reading.
 const expandedIncidents = new Set();
+let incidentClass = "unexpected";
+export function getIncidentClass() { return incidentClass; }
+let agentDiagnosticsOpen = false;
+
+function shortenWorktreePaths(message) {
+  return String(message || "").replace(/(?:\/[\w.@~+-]+)+\/\.orbit\/state\/worktrees\/[^\s/:"'<>]+\/?/g, "[worktree]/");
+}
+
+function recoverableAgentDiagnostic(row) {
+  if (row.source !== "agent-stderr") return false;
+  const lines = String(row.message || "").split("\n").filter(Boolean);
+  return lines.length > 0 && lines.every(message =>
+    (/apply_patch/i.test(row.target || "") && /verification failed|Failed to find expected lines/i.test(message))
+    || (/model_manager/i.test(row.target || "") && /request timed out/i.test(message)));
+
+}
 
 function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
@@ -69,7 +85,7 @@ function getDiagMetricsColumns(ctx) {
       key: "token_usage",
       label: "tokens",
       num: true,
-      render: (v) => (v == null ? "-" : String(v)),
+      render: (v) => (v == null ? "-" : Number(v).toLocaleString("en-US")),
     },
     { key: "tool_invocations", label: "tools", num: true },
     {
@@ -100,6 +116,7 @@ function getDiagErrorsColumns(ctx) {
     },
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
+    { key: "target", label: "target", num: false, render: (v) => v || "-" },
     {
       key: "message",
       label: "message",
@@ -108,19 +125,18 @@ function getDiagErrorsColumns(ctx) {
       render: (v, row, td) => {
         const full = v || "";
         td.title = row.target ? `${row.target}: ${full}` : full;
-        return truncateValue(ctx, full, 220);
+        return truncateValue(ctx, shortenWorktreePaths(full), 220);
       },
     },
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false } = {}) {
-  const body = $("diag-body");
+function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, body = $("diag-body") } = {}) {
   
   if (!rows || rows.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: emptyText || "No entries this month." })
+      el("div", { class: "text", text: emptyText || "No entries in this window." })
     ])]);
     return;
   }
@@ -199,7 +215,7 @@ function eventCountLabel(value) {
 
 const INCIDENT_CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic"];
 
-function incidentSummaryNode(payload) {
+function incidentSummaryNode(payload, ctx) {
   const incidents = asCount(payload.incident_count);
   const failed = asCount(payload.raw_failed_events);
   const total = asCount(payload.total_events);
@@ -227,18 +243,27 @@ function incidentSummaryNode(payload) {
   const byClass = payload.incidents_by_class || {};
   const eventsByClass = payload.raw_events_by_class || {};
   const labels = payload.class_labels || {};
-  const chips = el("div", { class: "incident-class-chips" });
-  for (const key of INCIDENT_CLASS_ORDER) {
+  const chips = el("div", { class: "incident-class-chips", role: "group", "aria-label": "Incident class" });
+  for (const key of ["all", ...INCIDENT_CLASS_ORDER]) {
     const count = asCount(byClass[key]);
     const events = asCount(eventsByClass[key]);
     const category = categories[key] || {};
     const categoryRuns = asCount(category.affected_runs);
-    if (count === 0 && events === 0) continue;
-    chips.appendChild(el("span", {
+    const chip = el("button", {
       class: `incident-class-chip ${key}`,
-      title: `${labels[key] || key}: ${count} incidents from ${events} raw events affecting ${categoryRuns} runs (window ${window})`,
-      text: `${labels[key] || key}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
-    }));
+      type: "button",
+      "aria-pressed": incidentClass === key ? "true" : "false",
+      title: `${labels[key] || key}: ${key === "all" ? incidents : count} incidents (window ${window})`,
+      text: key === "all" ? `All: ${incidents}` : `${labels[key] || key}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
+    });
+    chip.dataset.class = key;
+    chip.addEventListener("click", () => {
+      if (incidentClass === key) return;
+      incidentClass = key;
+      renderIncidents(payload, ctx);
+      if (hasCtx(ctx, "refreshDiagnostics")) ctx.refreshDiagnostics();
+    });
+    chips.appendChild(chip);
   }
 
   const children = [head];
@@ -415,8 +440,11 @@ function incidentRowNode(incident, ctx) {
 
 function renderIncidents(payload, ctx) {
   const body = $("diag-body");
-  const incidents = Array.isArray(payload && payload.incidents) ? payload.incidents : [];
-  const summary = incidentSummaryNode(payload || {});
+  const incidents = (Array.isArray(payload && payload.incidents) ? payload.incidents : [])
+    .filter(incident => incidentClass === "all" || incident.class === incidentClass)
+    .slice().sort((a, b) => INCIDENT_CLASS_ORDER.indexOf(a.class) - INCIDENT_CLASS_ORDER.indexOf(b.class)
+      || String(b.last_ts || "").localeCompare(String(a.last_ts || "")));
+  const summary = incidentSummaryNode(payload || {}, ctx);
   if (incidents.length === 0) {
     syncNodes(body, [summary, el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
@@ -441,10 +469,9 @@ function renderDiagnostics(ctx = {}) {
 
   if (sub === "incidents") {
     const payload = last.incidents || {};
-    // Both counts in the header: grouped incidents, and the raw failed events
-    // they were derived from. Neither is inferable from the other.
+    // Full denominators live in the summary; the header names the displayed range.
     $("diag-count").textContent =
-      `${asCount(payload.failure_categories && payload.failure_categories.unexpected && payload.failure_categories.unexpected.incidents)} unexpected / ${asCount(payload.incident_count)} all incidents / ${asCount(payload.raw_failed_events)} failed events`;
+      `${asCount(payload.shown_incident_count)} shown · window ${payload.window || getWindow()}`;
     renderIncidents(payload, ctx);
     return;
   }
@@ -452,24 +479,40 @@ function renderDiagnostics(ctx = {}) {
   const rows = last[sub] || [];
   const count = $("diag-count");
   if (sub === "errors") {
-    count.textContent = `${rows.length} error events this month`;
-    count.title = `Step and event failures for the current month, capped at the diag URL parameter (default 50). Distinct from header Failed runs and Recent Runs, which both include Failed, Timeout, and Interrupted job runs (${getWindow()} window on the header, no window on Recent Runs).`;
+    count.textContent = `${rows.length} error events · window ${getWindow()}`;
+    count.title = "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
   } else {
-    count.textContent = `${rows.length} metric entries this month`;
-    count.title = "Invocation metrics for the current month.";
+    count.textContent = `${rows.length} metric entries · window ${getWindow()}`;
+    count.title = "Most recent invocation metrics in the selected window; capped by the diag URL parameter (default 50).";
   }
   const columns =
     sub === "metrics"
       ? getDiagMetricsColumns(ctx)
       : getDiagErrorsColumns(ctx);
+  if (sub === "errors") {
+    const main = el("div", { class: "diagnostics-errors-main" });
+    const internal = rows.filter(recoverableAgentDiagnostic);
+    renderDiagnosticsTable(rows.filter(row => !recoverableAgentDiagnostic(row)), columns, ctx,
+      rows.length ? "No other error events in this window." : "No error events in this window.", { cards: true, body: main });
+    const children = [main];
+    if (internal.length) {
+      const details = el("details", { class: "agent-diagnostics" });
+      details.open = agentDiagnosticsOpen;
+      details.addEventListener("toggle", () => { if (details.isConnected) agentDiagnosticsOpen = details.open; });
+      details.appendChild(el("summary", { text: `Agent diagnostics (${internal.length}) · patch verification and model timeouts` }));
+      const content = el("div");
+      renderDiagnosticsTable(internal, columns, ctx, "", { cards: true, body: content });
+      details.appendChild(content);
+      children.push(details);
+    }
+    syncNodes($("diag-body"), children);
+    return;
+  }
   renderDiagnosticsTable(
     rows,
     columns,
     ctx,
-    sub === "errors"
-      ? "No error events this month (step/event failures, not job-run states)."
-      : "No metric entries this month.",
-    { cards: sub === "errors" },
+    "No metric entries in this window.",
   );
 }
 

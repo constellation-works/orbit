@@ -7,6 +7,8 @@ const response = (payload, status = 200) => ({ ok: status === 200, status, json:
 let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
+let healthFixture = false;
+const healthQueries = [];
 let marker = 'first';
 let taskPaging = false;
 let terminalRunFixture = false;
@@ -70,7 +72,28 @@ function fixture(url) {
         : terminalRuns;
       return list(runs);
     }
-    case '/api/diagnostics/errors': return [{ message: marker, source: 'fixture' }];
+    case '/api/diagnostics/errors':
+      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
+      return healthFixture ? [
+        { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished' },
+        { event_id: 'retry', message: 'Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'apply_patch' },
+      ] : [{ message: marker, source: 'fixture' }];
+    case '/api/diagnostics/metrics':
+      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
+      return healthFixture ? [{ ts: new Date().toISOString(), actor_identity: 'fixture', token_usage: 1379713 }] : [];
+    case '/api/audit/incidents': {
+      const selectedClass = url.searchParams.get('class');
+      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since'), class: selectedClass });
+      const incidents = [
+        { incident_id: 'expected', class: 'expected', class_label: 'expected negative path', message: 'input validation', last_ts: new Date().toISOString() },
+        { incident_id: 'unexpected', class: 'unexpected', message: 'database failure', last_ts: new Date(Date.now() - 1000).toISOString() },
+      ];
+      const selected = incidents.filter(incident => !selectedClass || incident.class === selectedClass);
+      return { window: url.searchParams.get('since'), class: selectedClass, incident_count: 2,
+        shown_incident_count: selected.length, raw_failed_events: 2, total_events: 10,
+        incidents_by_class: { expected: 1, unexpected: 1 }, raw_events_by_class: { expected: 1, unexpected: 1 },
+        failure_categories: { unexpected: { incidents: 1 } }, incidents: selected };
+    }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
     case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0 };
@@ -104,7 +127,7 @@ globalThis.fetch = async path => {
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow } = await import('./js/common.js');
 const { setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -290,6 +313,37 @@ refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
 check(text('meta-text').includes('refreshed') && !text('meta-text').includes('diagnostics/'), 'connection line names the destination, not its route');
 check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
+// Exercise Health through the full request builder and DOM rendering path.
+healthFixture = true;
+for (const selectedWindow of ['24h', '7d']) {
+  setWindow(selectedWindow);
+  for (const subtab of ['metrics', 'errors']) {
+    setActiveTab(`diagnostics/${subtab}`); await settle(); refresh(); await settle();
+    check(healthQueries.at(-1).window === selectedWindow, `${subtab} requests selected window ${selectedWindow}`);
+    check(text('diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
+  }
+  check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
+  const internal = node('diag-body').querySelector('details.agent-diagnostics');
+  check(internal && (selectedWindow !== '24h' || !internal.open), 'recoverable agent diagnostics start collapsed');
+  internal.open = true;
+  const shortened = internal.querySelector('.c-message');
+  check(shortened.textContent.includes('[worktree]/src/lib.rs') && !shortened.textContent.includes('/home/operator'), 'worktree prefix shortened in message');
+  check(shortened.title.includes('/home/operator'), 'full failure text remains available');
+}
+setActiveTab('diagnostics/metrics'); await settle();
+check(node('diag-body').querySelector('.c-token_usage').textContent === '1,379,713', 'tokens use thousands grouping');
+setActiveTab('diagnostics/incidents'); await settle();
+check(healthQueries.at(-1).class === 'unexpected', 'default incident request isolates unexpected failures before limit');
+check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'default list shows unexpected failures');
+click(node('diag-body').querySelector('[data-class="all"]')); await settle();
+check(node('diag-body').querySelectorAll('.incident-row').length === 2 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'all classes keep unexpected incidents first');
+click(node('diag-body').querySelector('[data-class="expected"]')); await settle();
+check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('expected'), 'one click isolates expected paths');
+click(node('diag-body').querySelector('[data-class="unexpected"]')); await settle();
+check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'one click isolates unexpected failures');
+healthFixture = false;
+setWindow('24h');
+setActiveTab('diagnostics/metrics'); await settle();
 const realTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);
@@ -428,6 +482,23 @@ globalThis.showDiagnosticsEvidence = async () => {
   setActiveTab('diagnostics/metrics');
   refresh();
   await settle();
+};
+globalThis.showHealthEvidence = async subtab => {
+  healthFixture = true;
+  heldPath = null;
+  setWindow('7d');
+  setActiveTab(`diagnostics/${subtab}`);
+  refresh();
+  await settle();
+  if (subtab === 'metrics') {
+    const { renderDiagnosticsSideCard } = await import('./js/diagnostics.js');
+    renderDiagnosticsSideCard({
+      completion_by_complexity: [{ complexity: 'unset', total: 999, statuses: [
+        { status: 'done', count: 532 }, { status: 'rejected', count: 17 }, { status: 'archived', count: 450 },
+      ] }],
+      implement_one_by_complexity: [{ complexity: 'unset', n: 532, actors: [{ actor: 'long-provider/model-name', n: 532, avg: 125000, p50: 90000, p95: 400000 }] }],
+    }, { fmtDuration: value => `${value / 1000}s` });
+  }
 };
 globalThis.loadingTestsPassed = true;
 console.log('Dashboard loading, ordering, empty, error and recovery scenarios passed.');

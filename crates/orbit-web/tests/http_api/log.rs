@@ -419,3 +419,149 @@ fn split_log_reconnect_preserves_partial_records_in_either_feed() {
         },
     );
 }
+
+#[test]
+fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
+    isolated(
+        "log::diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate",
+        || {
+            use chrono::{DateTime, Duration, Utc};
+            use orbit_common::storage::blob_store::BlobStore;
+            use orbit_core::V2AuditEventInsertParams;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let recent = now - Duration::minutes(2);
+            let old = now - Duration::days(2);
+            let insert = |id: &str, run: &str, ts: DateTime<Utc>, mut body: Value| {
+                body["event_id"] = json!(id);
+                body["ts"] = json!(ts.to_rfc3339());
+                body["run_id"] = json!(run);
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: fixture.runtime.workspace_id().unwrap(),
+                        event_id: id.into(),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: body["body_kind"].as_str().unwrap().into(),
+                        ts,
+                        run_id: run.into(),
+                        agent_identity: "http-fixture".into(),
+                        parent_event_id: body["parent_event_id"].as_str().map(str::to_string),
+                        workspace_path: None,
+                        payload_json: body.to_string(),
+                    })
+                    .unwrap();
+            };
+            for (run, message) in [
+                ("run-a", "build failed: missing dependency"),
+                ("run-b", "validation failed"),
+            ] {
+                insert(
+                    &format!("{run}-start"),
+                    run,
+                    if run == "run-a" { old } else { recent },
+                    json!({"body_kind":"step_started", "step_id":"fulfil"}),
+                );
+                insert(
+                    &format!("{run}-finish"),
+                    run,
+                    recent + Duration::milliseconds(1),
+                    json!({"body_kind":"step_finished", "step_id":"fulfil", "outcome":"error", "error_message":message}),
+                );
+            }
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            for (id, ts) in [("agent-recent", recent), ("agent-old", old)] {
+                let ts_text = ts.to_rfc3339();
+                let stderr = format!(
+                    "{ts_text} ERROR model_manager: request timed out: retrying\n{ts_text} ERROR model_manager: request timed out: retrying\n{ts_text} ERROR apply_patch: verification failed: src/file.rs\n"
+                );
+                let blob = blobs.write(stderr.as_bytes()).unwrap();
+                insert(
+                    id,
+                    "run-a",
+                    ts,
+                    json!({"body_kind":"cli_invocation_finished", "parent_event_id":"run-a-start", "stderr_blob_ref":blob}),
+                );
+            }
+            let process = |run: &str, ts: chrono::DateTime<Utc>, id: &str| {
+                json!({
+                    "timestamp":ts.to_rfc3339(), "level":"ERROR", "target":"orbit.job.step_finished",
+                    "fields":{"job_run_id":run, "step_id":"fulfil", "outcome":"error", "success":false, "event_id":id},
+                })
+            };
+            let mut records = vec![
+                process("run-a", recent, "process-a"),
+                process("run-a", recent, "process-a"),
+                process("run-b", recent, "process-b"),
+                process("run-old", old, "process-old"),
+                process("run-future", now + Duration::minutes(10), "future"),
+            ];
+            records.push(
+                json!({"timestamp":recent.to_rfc3339(), "level":"ERROR", "target":"backend",
+            "fields":{"error_message":"direct failure", "event_id":"direct"}}),
+            );
+            fs::write(
+                fixture.path("process.log"),
+                records
+                    .iter()
+                    .map(|row| format!("{row}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let server = fixture.server(false);
+            let read = |window: &str, limit| {
+                json_ok(server.get(&format!(
+                    "/api/diagnostics/errors?since={window}&limit={limit}&workspace=ws_http_fixture"
+                )))
+            };
+            let day = read("24h", 50);
+            let rows = day.as_array().unwrap();
+            assert_eq!(
+                rows.len(),
+                4,
+                "one row per event; older/future errors excluded: {day}"
+            );
+            let row = |id: &str| rows.iter().find(|row| row["event_id"] == id).unwrap();
+            assert_eq!(
+                row("process-a")["message"],
+                "build failed: missing dependency"
+            );
+            assert_eq!(row("process-b")["message"], "validation failed");
+            assert_eq!(row("process-a")["source"], "process");
+            assert_eq!(row("process-a")["target"], "orbit.job.step_finished");
+            assert_eq!(row("process-a")["step_index"], 0);
+            assert_eq!(row("direct")["message"], "direct failure");
+            assert_eq!(
+                row("agent-recent")["message"],
+                "request timed out: retrying\nverification failed: src/file.rs"
+            );
+            assert_eq!(row("agent-recent")["target"], "model_manager, apply_patch");
+            assert_eq!(row("agent-recent")["step_index"], 0);
+            assert_eq!(
+                row("agent-recent")["step"],
+                "fulfil",
+                "step ancestor before the selected window still attributes the row"
+            );
+            assert_eq!(read("7d", 50).as_array().unwrap().len(), 6);
+            assert_eq!(
+                read("24h", 50),
+                day,
+                "window-specific memo survives neighboring polls"
+            );
+            assert_eq!(
+                read("24h", 1).as_array().unwrap().len(),
+                1,
+                "limit-specific memo"
+            );
+            assert!(read("all", 0).as_array().unwrap().is_empty());
+            assert_eq!(
+                server
+                    .get("/api/diagnostics/errors?since=bogus")
+                    .status()
+                    .as_u16(),
+                400
+            );
+        },
+    );
+}

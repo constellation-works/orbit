@@ -7,7 +7,7 @@ import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWin
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
@@ -155,6 +155,7 @@ function diagnosticsContext() {
   return {
     getLastDiagnostics: () => lastDiagnostics,
     getActiveDiagSubtab: () => activeDiagSubtab,
+    refreshDiagnostics: () => refreshDashboard(),
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
@@ -1420,12 +1421,15 @@ function activeRefreshJobs() {
     } else {
       const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
+      const incidentClass = getIncidentClass();
+      const classQuery = incidentClass === "all" ? "" : `&class=${encodeURIComponent(incidentClass)}`;
       const path = subtab === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`
-        : `/api/diagnostics/${subtab}?limit=${DIAG_LIMIT}`;
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}${classQuery}&limit=${DIAG_LIMIT}`
+        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`;
       jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
-        if (activeDiagSubtab === subtab && getWindow() === selectedWindow) renderDiagnostics(diagnosticsContext());
+        if (activeDiagSubtab === subtab && getWindow() === selectedWindow
+          && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
 

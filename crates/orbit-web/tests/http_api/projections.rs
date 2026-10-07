@@ -192,6 +192,19 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     "/api/scoreboard?window={window}&workspace=ws_http_fixture"
                 )));
                 let after = Utc::now();
+                let metrics = json_ok(server.get(&format!(
+                    "/api/diagnostics/metrics?since={window}&workspace=ws_http_fixture"
+                )));
+                assert_eq!(
+                    metrics
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| row["retry_count"].as_u64().unwrap())
+                        .sum::<u64>(),
+                    expected,
+                    "metrics must filter all month partitions before limiting: {window}"
+                );
                 assert_eq!(result["window"], window);
                 assert_eq!(
                     result["agents"]["http-metrics-fixture"]["retries"], expected,
@@ -210,6 +223,40 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     assert!(result["window_since"].is_null());
                 }
             }
+            let limited = json_ok(
+                server.get("/api/diagnostics/metrics?since=all&limit=1&workspace=ws_http_fixture"),
+            );
+            assert_eq!(limited.as_array().unwrap().len(), 1);
+            assert_eq!(
+                limited[0]["retry_count"], 1,
+                "newest eligible row wins across partitions"
+            );
+            assert!(
+                json_ok(
+                    server.get(
+                        "/api/diagnostics/metrics?since=all&limit=0&workspace=ws_http_fixture"
+                    )
+                )
+                .as_array()
+                .unwrap()
+                .is_empty()
+            );
+            assert_eq!(
+                server
+                    .get("/api/diagnostics/metrics?since=bogus&workspace=ws_http_fixture")
+                    .status()
+                    .as_u16(),
+                400
+            );
+            assert_eq!(
+                server
+                    .get(
+                        "/api/diagnostics/metrics?since=24h&month=2026-04&workspace=ws_http_fixture"
+                    )
+                    .status()
+                    .as_u16(),
+                400
+            );
             let default = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
             assert_eq!(default["window"], "all");
             assert_eq!(
