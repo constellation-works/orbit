@@ -152,7 +152,6 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             }
         }
     } else {
-        crate::runtime::plugin::broker::refuse_unbrokered_call(global_root, name)?;
         None
     };
     let execution_kind = registry
@@ -208,6 +207,8 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             if let Some(error) = broker_refusal {
                 return Err(error);
             }
+            #[cfg(unix)]
+            crate::runtime::plugin::broker::refuse_unbrokered_call(&global_root, name)?;
             // The workspace path authorizes inside `execute_registered_tool`;
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
@@ -451,10 +452,6 @@ impl OrbitRuntime {
             }
             None => {}
         }
-        #[cfg(unix)]
-        if self.tool_registry().plugin_binding(name).is_some() {
-            crate::runtime::plugin::broker::refuse_unbrokered_call(&self.global_root(), name)?;
-        }
         let audit_session_context = session_context.clone();
         self.execute_tool_dispatch_with(
             name,
@@ -467,6 +464,13 @@ impl OrbitRuntime {
                 brokered: None,
             },
             |input| {
+                #[cfg(unix)]
+                if self.tool_registry().plugin_binding(name).is_some() {
+                    crate::runtime::plugin::broker::refuse_unbrokered_call(
+                        &self.global_root(),
+                        name,
+                    )?;
+                }
                 self.ensure_tool_agent_facing(name)?;
                 #[cfg(unix)]
                 if let Some(error) = claimed_owner_refusal {

@@ -458,6 +458,59 @@ fn unreachable_host_read_is_audited_once_by_cli() {
 
 #[cfg(unix)]
 #[test]
+fn unbrokered_plugin_refusals_are_audited_once_over_mcp() {
+    for scope in ["workspace", "global"] {
+        let workspace = McpWorkspace::init();
+        let source = write_plugin_with_scope(&workspace.home, "unbrokered", scope);
+        run_orbit(
+            &workspace,
+            &[
+                "plugin",
+                "add",
+                source.to_str().expect("source"),
+                "--enable",
+            ],
+        );
+        // Initialize the lazy audit schema and take the count before the MCP
+        // request that exercises the missing-broker refusal.
+        run_orbit(
+            &workspace,
+            &[
+                "tool",
+                "run",
+                "orbit.search",
+                "--input",
+                "{\"query\":\"unbrokered\"}",
+            ],
+        );
+        let tool = "unbrokered.echo";
+        let before = audit_count_for_tool(&workspace, tool);
+
+        // Match the signal supplied by the agent sandbox while leaving the
+        // fixture's installed plugin metadata available to the MCP server.
+        let plugins = workspace.home.join(".orbit/state/plugins");
+        std::fs::create_dir_all(&plugins).expect("plugin state tree");
+        std::fs::write(plugins.join(".orbit-brokered"), "masked")
+            .expect("lay the plugin state mask");
+
+        let mut client = workspace.serve();
+        let error = client.call_tool_err("unbrokered_echo", json!({}));
+        assert_eq!(
+            error["code"], "plugin_broker_unavailable",
+            "{scope}: {error}"
+        );
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("ORBIT_PLUGIN_BROKER is not set")),
+            "{scope}: refusal names the unavailable broker: {error}"
+        );
+        assert_caller_failure_rows(&workspace, tool, before, 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "pluginerror");
