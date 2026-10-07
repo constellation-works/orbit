@@ -6131,3 +6131,5 @@ fn agent_invoke_mcp_reports_a_saturated_queue() {
         ]),
     );
 }
+
+mod search;

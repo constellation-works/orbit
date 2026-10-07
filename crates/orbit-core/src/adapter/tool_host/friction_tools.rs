@@ -26,7 +26,7 @@ use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::search::empty_whitespace_query_note;
+use crate::application::search::{GlobalSearchKind, whitespace_query_note};
 
 /// Route one friction verb to its handler.
 ///
@@ -151,7 +151,7 @@ fn list_payload(records: Vec<Value>, query: Option<&str>, with_notes: bool) -> V
     if with_notes {
         let notes = if records.is_empty() {
             query
-                .and_then(empty_whitespace_query_note)
+                .and_then(|query| whitespace_query_note(query, GlobalSearchKind::Friction))
                 .into_iter()
                 .collect::<Vec<_>>()
         } else {

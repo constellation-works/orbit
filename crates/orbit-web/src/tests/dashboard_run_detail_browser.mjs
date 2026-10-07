@@ -2,6 +2,172 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
+// Drive the full app's actions and its actual scheduled polls. A new render
+// must keep feedback reachable, and its rebuilt buttons must use that host.
+export async function assertRunDetailActions(page, evidence) {
+  await page.evaluate(async () => {
+    const { navigateToRun } = await import('/js/router.js');
+    const { setWorkspace, describePullSettlements } = await import('/js/common.js');
+    setWorkspace('one');
+    const previousFetch = globalThis.fetch;
+    const settlements = [{ outcome: 'settled' }, { outcome: 'pending_delivery' }, { outcome: 'pending_delivery' }];
+    const fixture = globalThis.runActionFixture = {
+      state: 'running', detailReads: 0, detailStatus: 200, cancelStatus: 200, requests: [],
+      cancelError: 'Cancel fixture refused', replayError: 'Replay fixture refused',
+      expectedSettlements: describePullSettlements(settlements).text,
+      holdAction: false, release: null, previousFetch,
+    };
+    const response = (payload, status = 200) => ({
+      ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload),
+    });
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const match = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|events|logs))?$/);
+      if (!match) return previousFetch(input, options);
+      const [, runId, action] = match;
+      fixture.requests.push({ runId, action: action || 'detail', workspace: url.searchParams.get('workspace') });
+      if (action === 'events' || action === 'logs') return response([]);
+      if (action === 'cancel' || action === 'replay') {
+        if (fixture.holdAction) await new Promise(resolve => { fixture.release = resolve; });
+        if (action === 'replay') return response({ error: fixture.replayError }, 503);
+        if (fixture.cancelStatus !== 200) return response({ error: fixture.cancelError }, fixture.cancelStatus);
+        fixture.state = 'cancelled';
+        return response({ outcome: 'cancelled', pull_settlements: settlements });
+      }
+      fixture.detailReads += 1;
+      if (fixture.detailStatus !== 200) return response({ error: 'Detail fixture unavailable' }, fixture.detailStatus);
+      return response({ run: { run_id: runId, job_id: 'fixture', state: fixture.state, attempt: fixture.detailReads }, steps: [] });
+    };
+    navigateToRun('jrun-action-feedback');
+    // The loading scenarios parked the scheduler on a captured timer. Restore
+    // its ordinary browser cadence through the production visibility handler.
+    for (const hidden of [true, false]) {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: hidden });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+  });
+  const notice = page.locator('#run-detail-meta .run-cancel-notice');
+  const error = page.locator('#run-detail-meta .action-error[role="alert"]');
+  const cancel = page.locator('#run-detail-meta .run-cancel');
+  const replay = page.locator('#run-detail-meta .run-replay');
+  const refresh = async () => {
+    const before = await page.evaluate(() => globalThis.runActionFixture.detailReads);
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(before => globalThis.runActionFixture.detailReads > before, before);
+  };
+  const poll = async () => {
+    const before = await page.evaluate(() => globalThis.runActionFixture.detailReads);
+    // The production router uses a 30-second one-shot timer after each poll.
+    await page.waitForFunction(before => globalThis.runActionFixture.detailReads > before, before, { timeout: 45000 });
+  };
+  const clickCancel = async () => {
+    page.once('dialog', dialog => dialog.accept());
+    await cancel.click();
+  };
+  const expectError = async message => {
+    await error.waitFor({ state: 'visible' });
+    if (!(await error.textContent()).includes(message)) throw new Error(`Missing action error: ${message}`);
+  };
+  try {
+    await cancel.waitFor({ state: 'visible' });
+    await clickCancel();
+    await notice.waitFor({ state: 'visible', timeout: 5000 });
+    await page.waitForFunction(async () => (await import('/js/run-detail.js')).getActiveRunDetail()?.run.state === 'cancelled');
+    const expected = await page.evaluate(() => globalThis.runActionFixture.expectedSettlements);
+    if (!(await notice.textContent()).includes(expected) || !await notice.evaluate(node => node.classList.contains('error'))) {
+      throw new Error('Cancel settlement report must show the delivered and undelivered counts after the refresh');
+    }
+    await poll();
+    if (!(await notice.isVisible()) || !(await notice.textContent()).includes(expected)) throw new Error('Scheduled poll erased the cancel settlement report');
+    await page.screenshot({ path: path.join(evidence, 'run-cancel-settlement.png'), fullPage: true });
+    await notice.locator('button').click();
+    await refresh();
+    if (await notice.count()) throw new Error('Dismissed settlement report returned after a refresh');
+
+    await page.evaluate(() => Object.assign(globalThis.runActionFixture, { state: 'running', cancelStatus: 503 }));
+    await refresh();
+    await clickCancel();
+    await expectError('Cancel fixture refused');
+    await poll();
+    await expectError('Cancel fixture refused');
+    await error.locator('button').click();
+    await refresh();
+    if (await error.count()) throw new Error('Dismissed cancel error returned after a refresh');
+    await clickCancel();
+    await expectError('Cancel fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.holdAction = true; });
+    await clickCancel();
+    await page.waitForFunction(() => typeof globalThis.runActionFixture.release === 'function');
+    if (await error.count()) throw new Error('Starting another cancel must clear the previous error');
+    // A render during the request must not detach its feedback host either.
+    await refresh();
+    await page.evaluate(() => {
+      globalThis.runActionFixture.holdAction = false;
+      globalThis.runActionFixture.release();
+      globalThis.runActionFixture.release = null;
+    });
+    await expectError('Cancel fixture refused');
+
+    await page.evaluate(async () => (await import('/js/router.js')).navigateToRun('jrun-replay-feedback'));
+    await page.waitForFunction(() => document.getElementById('run-detail-title').textContent === 'Run jrun-replay-feedback');
+    if (await error.count() || await notice.count()) throw new Error('Action feedback leaked into a different run');
+    await page.evaluate(() => { globalThis.runActionFixture.state = 'failed'; });
+    await refresh();
+    await replay.click();
+    await expectError('Replay fixture refused');
+    await poll();
+    await expectError('Replay fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.detailStatus = 503; });
+    await refresh();
+    await page.locator('#run-detail-meta .empty-state').waitFor({ state: 'visible' });
+    await expectError('Replay fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.detailStatus = 200; });
+    await refresh();
+    await expectError('Replay fixture refused');
+    await page.screenshot({ path: path.join(evidence, 'run-replay-error.png'), fullPage: true });
+    await error.locator('button').click();
+    await refresh();
+    if (await error.count()) throw new Error('Dismissed replay error returned after a refresh');
+    await replay.click();
+    await expectError('Replay fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.holdAction = true; });
+    await replay.click();
+    await page.waitForFunction(() => typeof globalThis.runActionFixture.release === 'function');
+    if (await error.count()) throw new Error('Starting another replay must clear the previous error');
+    await page.evaluate(async () => {
+      const { setWorkspace } = await import('/js/common.js');
+      setWorkspace('two');
+      globalThis.runActionFixture.holdAction = false;
+      globalThis.runActionFixture.release();
+      globalThis.runActionFixture.release = null;
+    });
+    await refresh();
+    if (await error.count() || await notice.count()) throw new Error('Action feedback leaked into a different workspace');
+    fs.writeFileSync(path.join(evidence, 'run-actions-result.json'), JSON.stringify({
+      passed: true, scheduledPolls: 3,
+      scenarios: ['settlement counts after cancel refresh and poll', 'cancel error after poll', 'replay error after poll',
+        'dismissal and next-action clearing', 'render during action', 'failed detail refresh and recovery', 'run and workspace isolation'],
+    }, null, 2));
+  } catch (failure) {
+    fs.writeFileSync(path.join(evidence, 'run-actions-failure.json'), JSON.stringify(await page.evaluate(() => ({
+      ...globalThis.runActionFixture,
+      meta: document.getElementById('run-detail-meta').outerHTML,
+      title: document.getElementById('run-detail-title').textContent,
+    })), null, 2));
+    await page.screenshot({ path: path.join(evidence, 'run-actions-failure.png'), fullPage: true });
+    throw failure;
+  } finally {
+    await page.evaluate(async () => {
+      const fixture = globalThis.runActionFixture;
+      fixture.release?.();
+      globalThis.fetch = fixture.previousFetch;
+      delete globalThis.runActionFixture;
+      (await import('/js/common.js')).setWorkspace('one');
+      (await import('/js/router.js')).setActiveTab('tasks');
+    });
+  }
+}
+
 export async function assertRunDetailPresentation(page, evidence) {
   await page.setViewportSize({ width: 1440, height: 1100 });
   const render = async (run, steps, logs = []) => page.evaluate(async ({ run, steps, logs }) => {

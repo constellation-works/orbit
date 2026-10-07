@@ -144,7 +144,7 @@ function retireRunDetailView() {
   activeRunLogsError = null;
   expandedStepIndices = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
-    renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.");
+    renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.", { preserveFeedback: false });
   }
 }
 
@@ -202,12 +202,13 @@ export { RUN_EVENTS_LIMIT };
 
 // --- renderers (exported for app orchestrators and runDetailContext) ---
 
-export function renderRunDetailEmpty(message) {
+export function renderRunDetailEmpty(message, { preserveFeedback = true } = {}) {
   const meta = $("run-detail-meta");
+  const feedback = preserveFeedback && meta?.querySelector('[data-key="run-detail-feedback"]');
   if (meta) syncNodes(meta, [el("div", { class: "empty-state" }, [
     el("div", { class: "icon", text: "✧" }),
     el("div", { class: "text", text: message }),
-  ])]);
+  ]), ...(feedback ? [feedback] : [])]);
   const title = $("run-detail-title");
   if (title) title.textContent = "Run Detail";
   const count = $("run-detail-count");
@@ -261,6 +262,13 @@ export function renderRunDetailMeta() {
     grid.appendChild(cell);
   }
 
+  // Actions retain this host even while their response refreshes the header.
+  // Reuse the mounted node when wiring new buttons: a fresh keyed node would
+  // be discarded by syncNodes, leaving their callbacks with a detached host.
+  // Changing run or workspace retires it through retireRunDetailView.
+  const feedback = meta.querySelector('[data-key="run-detail-feedback"]')
+    || el("div");
+  feedback.dataset.key = "run-detail-feedback";
   const wrap = el("div");
   const back = el("button", { class: "back-action", text: "← Runs" });
   back.addEventListener("click", () => setActiveTab("diagnostics/runs"));
@@ -275,11 +283,11 @@ export function renderRunDetailMeta() {
     lineage.addEventListener("click", () => navigateToRun(sourceId));
     actions.appendChild(lineage);
   }
-  const replay = run.run_id ? buildReplayRunButton(run, wrap) : null;
+  const replay = run.run_id ? buildReplayRunButton(run, feedback) : null;
   if (replay) actions.appendChild(replay);
   // The claim rides beside the run in the detail payload; the cancel
   // confirmation reads it off the run it is handed.
-  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, wrap));
+  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
@@ -293,7 +301,7 @@ export function renderRunDetailMeta() {
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
-  syncNodes(meta, [wrap]);
+  syncNodes(meta, [wrap, feedback]);
 }
 
 // A pull drain's launched leaves that are still running, and whether a

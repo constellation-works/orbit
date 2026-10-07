@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use orbit_common::OrbitError;
-use orbit_search::{SOURCE_KIND_TASK, bm25_page};
+use orbit_search::{SOURCE_KIND_TASK, bm25_or_page, bm25_page};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
@@ -107,6 +107,10 @@ impl OrbitRuntime {
     /// behind the BM25 hits [DANI-10445]. Without task chunks the bundle
     /// matcher is the only source. Neither source opens artifact payloads.
     ///
+    /// When fewer than `limit` full matches survive, append any-term indexed
+    /// hits ordered by the best chunk's matched-term count, then BM25. Partial
+    /// labels report that chunk's count; bundle-only fields stay substring-based.
+    ///
     /// Only tasks `accepts` admits count toward the candidate budget, so a
     /// status, tag or path filter cannot starve the page when the best
     /// lexical matches are all filtered out: BM25 is read in bounded pages,
@@ -164,7 +168,7 @@ impl OrbitRuntime {
         // judged from envelopes, so neither costs a bundle read, and the scan
         // stops as soon as the budget is full.
         if candidates.len() < candidate_limit {
-            let seen = RefCell::new(seen);
+            let seen = RefCell::new(&mut seen);
             self.search_tasks_visit(
                 query,
                 &[],
@@ -176,6 +180,50 @@ impl OrbitRuntime {
                     candidates.len() < candidate_limit
                 },
             )?;
+        }
+        // Full FTS and bundle matches retain priority. Only a short page
+        // needs the broader pass, and single-term queries cannot be partial.
+        let term_count = query.split_whitespace().count();
+        if candidates.len() < limit
+            && term_count > 1
+            && let Ok(index) = self.stores().lexical_index().store()
+            && index.has_source_kind(SOURCE_KIND_TASK)?
+        {
+            let page_size = limit.saturating_mul(5);
+            let mut offset = 0;
+            loop {
+                let page = bm25_or_page(
+                    index,
+                    query,
+                    Some(SOURCE_KIND_TASK),
+                    None,
+                    offset,
+                    page_size,
+                )?;
+                let exhausted = page.len() < page_size;
+                for hit in page {
+                    if !seen.insert(hit.source_id.clone()) {
+                        continue;
+                    }
+                    if let Some(task) = self.lexical_hit_task(&hit.source_id)
+                        && accepts(&task)
+                    {
+                        let mut result = lexical_task_hit(&task);
+                        result.matched_by = Some(vec![
+                            "partial".into(),
+                            format!("terms:{}/{term_count}", hit.matched_terms),
+                        ]);
+                        candidates.push((result, task));
+                        if candidates.len() == limit {
+                            return Ok(candidates);
+                        }
+                    }
+                }
+                if exhausted {
+                    break;
+                }
+                offset += page_size;
+            }
         }
         Ok(candidates)
     }
