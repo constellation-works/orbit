@@ -9,6 +9,120 @@ use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
 
 #[test]
+fn friction_update_empty_title_restores_derivation_like_the_tool() {
+    let fixture = Fixture::new();
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "Derived friction title\n\nDetails.",
+        "--title",
+        "Explicit title",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    let input = json!({"id": id, "title": "", "model": "codex"}).to_string();
+    let tool_cleared = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+    assert_eq!(tool_cleared["title"], "Derived friction title");
+
+    for value in ["", " \t "] {
+        fixture.json(&[
+            "friction",
+            "update",
+            id,
+            "--title",
+            "Replacement title",
+            "--json",
+        ]);
+        let cleared = fixture.json(&["friction", "update", id, "--title", value, "--json"]);
+        assert_eq!(cleared["title"], tool_cleared["title"]);
+        assert_eq!(
+            fixture.json(&["friction", "show", id, "--json"])["title"],
+            tool_cleared["title"]
+        );
+    }
+}
+
+#[test]
+fn friction_update_empty_rehome_to_clears_alone_and_with_other_edits() {
+    let fixture = Fixture::new();
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "Disposition fixture",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    for (value, other_flags, status) in [
+        ("", vec![], "open"),
+        ("", vec!["--status", "triaged"], "triaged"),
+        (" \t ", vec![], "triaged"),
+    ] {
+        let recorded = fixture.json(&[
+            "friction",
+            "update",
+            id,
+            "--rehome-to",
+            "unregistered-owner",
+            "--move",
+            "false",
+            "--json",
+        ]);
+        assert_eq!(recorded["rehome_to"], "unregistered-owner");
+        let mut args = vec!["friction", "update", id, "--rehome-to", value, "--json"];
+        args.extend(other_flags);
+        let cleared = fixture.json(&args);
+        assert!(cleared["rehome_to"].is_null());
+        assert_eq!(cleared["status"], status);
+        let stored = fixture.json(&["friction", "show", id, "--json"]);
+        assert!(stored["rehome_to"].is_null());
+        assert_eq!(stored["status"], status);
+    }
+}
+
+#[test]
+fn friction_optional_blank_strings_without_clear_semantics_remain_omitted() {
+    let fixture = Fixture::new();
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "Blank omission fixture",
+        "--title",
+        " \t ",
+        "--during-task",
+        " \t ",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    assert_eq!(created["title"], "Blank omission fixture");
+    assert!(created["during_task"].is_null());
+    fixture
+        .command(&[
+            "friction", "update", id, "--status", " \t ", "--body", " \t ", "--json",
+        ])
+        .assert()
+        .failure();
+    let updated = fixture.json(&[
+        "friction", "update", id, "--status", "triaged", "--body", " \t ", "--json",
+    ]);
+    assert_eq!(updated["status"], "triaged");
+    assert_eq!(updated["body"], created["body"]);
+    assert_eq!(updated["title"], created["title"]);
+    let listed = fixture.json(&[
+        "friction", "list", "--status", " \t ", "--model", " \t ", "--month", " \t ", "--json",
+    ]);
+    assert!(listed.as_array().unwrap().iter().any(|row| row["id"] == id));
+}
+
+#[test]
 fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     let mut fixture = Fixture::new();
     fixture.root = PathBuf::new();
