@@ -1,6 +1,7 @@
 mod agent_blocker;
 mod baseline;
 mod delivery;
+mod forge_hold;
 mod id;
 mod provider_hold;
 mod state;
@@ -18,6 +19,10 @@ pub use delivery::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
     LandingMethod, LandingObservation, LandingObservationStatus, RUN_DELIVERY_EVIDENCE_SOURCE,
     RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation, RunDeliveryStatus,
+};
+pub use forge_hold::{
+    FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER,
+    ForgeUnavailableHold, is_forge_unavailable,
 };
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use provider_hold::{

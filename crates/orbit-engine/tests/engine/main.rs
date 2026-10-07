@@ -18,6 +18,8 @@ mod completion_review;
 #[cfg(unix)]
 mod dependabot_collect;
 mod final_recovery;
+#[cfg(unix)]
+mod forge_hold;
 mod handoff_landing;
 mod history_note;
 mod pr_landing;

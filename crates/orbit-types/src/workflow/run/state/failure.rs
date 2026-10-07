@@ -143,7 +143,8 @@ pub enum ClaimFailureClass {
     Environment,
     /// Required validation fails on the base as well as on the candidate.
     BaselineRed,
-    /// An inconclusive outcome that may not recur, or a leaf whose worker died.
+    /// An inconclusive outcome that may not recur, a leaf whose worker died,
+    /// or a push the forge kept refusing ([`super::super::ForgeUnavailableHold`]).
     Transient,
     /// An operator cancelled the launched leaf.
     OperatorCancel,
@@ -232,7 +233,9 @@ impl ClaimFailureClass {
                 .is_some()
         {
             Some(Self::BaselineRed)
-        } else if typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER) {
+        } else if typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER)
+            || super::super::is_forge_unavailable(error_code, message)
+        {
             Some(Self::Transient)
         } else {
             None

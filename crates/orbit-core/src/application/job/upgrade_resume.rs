@@ -292,7 +292,7 @@ impl OrbitRuntime {
     }
 
     /// A claimed follower leaf or a run bound to an execution claim.
-    fn is_claimed_execution(&self, run_id: &str) -> Result<bool, OrbitError> {
+    pub(super) fn is_claimed_execution(&self, run_id: &str) -> Result<bool, OrbitError> {
         if self.stores().jobs().local_pull_for_run(run_id)?.is_some() {
             return Ok(true);
         }

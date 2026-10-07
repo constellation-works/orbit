@@ -90,6 +90,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                     success: false,
                     pipeline,
                     evidence_hold: hold,
+                    forge_hold: None,
                     message: (!held).then(|| message.into()),
                     events_emitted: 0,
                 };

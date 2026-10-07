@@ -5,10 +5,26 @@ use std::path::Path;
 
 use serde_json::json;
 
+use orbit_types::workflow::ForgeUnavailableHold;
+
 use super::super::run_private_operation;
 
 const PUSH_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PUSH_PREVIOUS_HEAD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/// The stderr GitHub returned for every push from about 16:52Z on
+/// 2026-10-07, as captured by jrun-20261007-1552-c3 [ORB-14617].
+const GITHUB_INTERNAL_SERVER_ERROR: &str = "remote: Internal Server Error        \n\
+remote: Request ID CDCC:2CC602:119167:1D0D1D:6AC6792E        \n\
+remote: Time 2026-10-07T16:54:08Z\n\
+To https://github.com/constellation-works/orbit.git\n \
+! [remote rejected]     orbit/ORB-14525-dd948970 -> orbit/ORB-14525-dd948970 (Internal Server Error)\n\
+error: failed to push some refs to 'https://github.com/constellation-works/orbit.git'\n";
+
+/// A budget short enough for a test, at the same shape as production.
+fn fast_retry(max_attempts: u64) -> serde_json::Value {
+    json!({"max_attempts": max_attempts, "initial_backoff_ms": 4, "backoff_cap_ms": 8})
+}
 
 // Fault injection at the private operation boundary forces lost push replies
 // and server refusals without involving GitHub or the shipment pipeline.
@@ -18,6 +34,10 @@ fn pushes_recover_from_transient_remote_failures() {
     let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
     for operation in ["push", "push.candidate_ref"] {
         for message in [
+            GITHUB_INTERNAL_SERVER_ERROR,
+            "! [remote rejected] branch -> branch (Service Unavailable)",
+            "! [remote rejected] branch -> branch (Bad Gateway)",
+            "! [remote rejected] branch -> branch (Gateway Timeout)",
             "! [remote rejected] branch -> branch (failed)",
             "fatal: unable to access origin: The requested URL returned error: 500",
             "fatal: HTTP 503 Service Unavailable",
@@ -29,9 +49,12 @@ fn pushes_recover_from_transient_remote_failures() {
             fixture.reset(message, 1, false);
             // A matching SHA on a different ref does not confirm this push.
             fixture.write("remote", &format!("{PUSH_HEAD}\trefs/heads/another\n"));
-            let output = run_private_operation(operation, &fixture.input(operation, false))
+            let mut input = fixture.input(operation, false);
+            input["forge_retry"] = fast_retry(3);
+            let output = run_private_operation(operation, &input)
                 .expect("transient push failure must recover");
             assert_eq!(output["stdout"], "pushed\n", "{operation}: {message}");
+            assert_eq!(output["attempts"], 2, "{operation}: {message}");
             assert_eq!(fixture.calls(), ["push", "ls-remote", "push"]);
             assert_eq!(fixture.push_count(), 2, "{operation}: {message}");
         }
@@ -57,7 +80,10 @@ fn pushes_do_not_retry_permanent_refusals_even_with_transport_diagnostics() {
             "! [rejected] branch -> branch (stale info)",
             "! [remote rejected] branch -> branch (unexpected reason)",
         ] {
-            let mixed = format!("{message}\nerror: RPC failed; HTTP 503\n");
+            let mixed = format!(
+                "{message}\nerror: RPC failed; HTTP 503\n\
+                 ! [remote rejected] branch -> branch (Internal Server Error)\n"
+            );
             // An unknown rejection alone is permanent; the other cases must
             // dominate even an additional transient transport diagnostic.
             let failure = if message.ends_with("(unexpected reason)") {
@@ -93,15 +119,45 @@ fn pushes_confirm_lost_replies_without_reusing_a_consumed_lease() {
     }
 }
 
+/// [ORB-14617] A forge outage shorter than the budget costs waits, not a
+/// failure: the push lands on the attempt after the last refusal, and the
+/// output reports how many attempts and how long they waited.
+#[test]
+fn a_push_outlasts_a_forge_outage_that_fits_its_backoff_budget() {
+    let fixture = PushFixture::new();
+    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+    for refusals in [1, 3, 5] {
+        fixture.reset(GITHUB_INTERNAL_SERVER_ERROR, refusals, false);
+        let mut input = fixture.input("push", false);
+        input["forge_retry"] = fast_retry(6);
+        let output = run_private_operation("push", &input)
+            .expect("an outage inside the budget must not fail the push");
+        assert_eq!(output["stdout"], "pushed\n");
+        assert_eq!(output["attempts"], refusals as u64 + 1);
+        assert_eq!(fixture.push_count(), refusals + 1);
+        // Each wait is between half and all of its capped exponential step.
+        let waited = output["waited_ms"].as_u64().expect("waited_ms is reported");
+        let steps = (1..=refusals as u32).map(|attempt| (4_u64 << (attempt - 1)).min(8));
+        let floor: u64 = steps.clone().map(|step| step / 2).sum();
+        let ceiling: u64 = steps.sum();
+        assert!(
+            (floor..=ceiling).contains(&waited),
+            "{refusals} refusals waited {waited} ms, outside {floor}..={ceiling}"
+        );
+    }
+}
+
 #[test]
 fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
     let fixture = PushFixture::new();
     let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
     for operation in ["push", "push.candidate_ref"] {
-        fixture.reset("! [remote rejected] branch -> branch (failed)", 9, false);
-        let error = run_private_operation(operation, &fixture.input(operation, true))
+        fixture.reset(GITHUB_INTERNAL_SERVER_ERROR, 9, false);
+        let mut input = fixture.input(operation, true);
+        input["forge_retry"] = fast_retry(3);
+        let error = run_private_operation(operation, &input)
             .expect_err("repeated transient failures must exhaust the push budget");
-        assert!(error.to_string().contains("(failed)"));
+        assert!(error.to_string().contains("(Internal Server Error)"));
         assert_eq!(fixture.push_count(), 3);
         assert_eq!(
             fixture.calls(),
@@ -114,11 +170,28 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                 "ls-remote"
             ]
         );
+        // Only the delivery push holds; a carried candidate ref is pushed by
+        // a failure activity, which has no later step to hold at.
+        let hold = ForgeUnavailableHold::from_text(&error.to_string());
+        if operation == "push" {
+            let hold = hold.expect("an exhausted delivery push carries a forge hold");
+            assert_eq!(hold.target_ref, "refs/heads/branch");
+            assert_eq!(hold.head_sha, PUSH_HEAD);
+            assert_eq!(hold.attempts, 3);
+            assert!(hold.waited_ms <= 4 + 8, "{hold:?}");
+            assert!(
+                hold.diagnostic.contains("(Internal Server Error)"),
+                "{hold:?}"
+            );
+        } else {
+            assert_eq!(hold, None, "{error}");
+        }
 
         fixture.reset("fatal: early EOF", 1, false);
         fixture.write("lookup-failure", "fatal: unable to read remote ref");
         let error = run_private_operation(operation, &fixture.input(operation, false))
             .expect_err("a failed remote read must not trigger another mutation");
+        assert_eq!(ForgeUnavailableHold::from_text(&error.to_string()), None);
         assert!(error.to_string().contains("unable to read remote ref"));
         assert_eq!(fixture.calls(), ["push", "ls-remote"]);
         assert_eq!(fixture.push_count(), 1);

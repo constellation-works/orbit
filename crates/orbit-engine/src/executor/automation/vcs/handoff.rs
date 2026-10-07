@@ -13,7 +13,7 @@ use super::super::input::{
 use super::claim::{carries_implementer_output, implementer_summary};
 use super::pr::meaningful_execution_summary;
 
-const FAILED_HANDOFF_ACTOR: &str = "system";
+pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 
 /// The durable execution-summary first line that blocks delivery.
 const DELIVERY_FAILED_LINE: &str = "Outcome: failed";

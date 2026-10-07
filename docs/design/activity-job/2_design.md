@@ -563,16 +563,25 @@ After [ORB-11639] / [Worktree setup refuses unexplained stale branch reuse befor
 
 `pr_prepare` is the pre-rewrite authority boundary. It records the exact head SHA, base SHA, and observed remote task-branch SHA before `git_rebase` may rewrite history. `git_push` classifies the remote ref as missing, current, fast-forwardable, remote-ahead, or diverged. Missing and fast-forwardable refs use normal push; current refs are reused; remote-ahead refs fail closed. Divergence may use force-with-lease only when the persisted preparation SHA still exactly matches the observed remote SHA and `git_rebase` reports a performed or recovery-reused rewrite. The engine-private VCS operation emits a branch-scoped `--force-with-lease=refs/heads/<branch>:<expected-sha>`, so a concurrent remote update rejects the push instead of overwriting it. This is [PR handoff recovery follows job checkpoints and exact remote leases](./4_decisions.md#pr-handoff-recovery-follows-job-checkpoints-and-exact-remote-leases).
 
-Private branch and candidate-ref pushes allow three attempts for transient remote
-failures, with backoff between attempts. These include generic remote `(failed)`
-rejections without policy diagnostics, HTTP 5xx, RPC failures, early EOF,
-connection resets, and TLS handshake timeouts. Authentication, permission,
+Private branch and candidate-ref pushes allow six attempts for transient remote
+failures, with jittered exponential backoff between attempts (10 s doubling to a
+160 s cap, about five minutes in all; a step's `forge_retry` input may narrow it).
+These include generic remote `(failed)` rejections without policy diagnostics,
+`[remote rejected]` refusals for `Internal Server Error`, `Service Unavailable`,
+`Bad Gateway` or `Gateway Timeout`, `remote: Internal Server Error`, HTTP 5xx,
+RPC failures, early EOF, connection resets, and TLS handshake timeouts. Authentication, permission,
 non-fast-forward, hook, protection, and stale-lease refusals fail immediately,
 even when accompanied by a transport error. After each transient failure,
 `ls-remote` checks the exact target ref: if it already holds the intended local
 SHA, the operation succeeds without resending the push or consuming the lease
 again. A failed confirmation read stops further pushes; a different remote SHA
 permits another attempt only within the retry budget, using the original lease.
+A branch push whose budget the forge exhausts with transient refusals does not
+fail its step: the run ends `held` with a typed `ForgeUnavailableHold` in its
+state, bypassing step recovery, final recovery and `failure_activity`, and the
+clock resumes it from its checkpoints for two hours from the lineage's first
+hold ([stuck job runs](../../runbooks/stuck-job-runs.md#a-delivery-held-for-the-forge)).
+A candidate-ref push fails its step as before.
 
 After [ORB-10363], `JobV2.failure_activity` is a terminal, best-effort hook distinct from retry recovery. It receives the merged job input, all completed pipeline checkpoints, the failing step/action, and the structured error; it runs once and never replaces the original failure. `task_pr_pipeline` binds this hook to `pr_failure_handoff` ([Terminal PR shipment uses a job-level failure handoff](./4_decisions.md#terminal-pr-shipment-uses-a-job-level-failure-handoff)). When [ORB-11281]'s bounded conflict repair fails or its deterministic retry still conflicts, this action aborts the stopped rebase back to the prepared branch, commits any remaining candidate, performs non-overwriting push classification, and opens or reuses the same blocked PR. Its body retains original/target SHAs and conflicting paths, and the task stays `blocked` with `pr_conflict_blocked`; it never restarts implementation or loops recovery. Task and run ownership do not prove ownership of a Git rebase: after [ORB-13455] the hook aborts an in-progress rebase only when its `orig-head`, `onto`, and `head-name` match this run's `prepare_branch` head SHA, base SHA, and branch — the rebase `sync_base` started. Any other rebase, including the pre-existing one `git_rebase` refused, keeps its metadata, index, and worktree edits; the hook commits, pushes, and publishes nothing, blocks the task with `pr_foreign_rebase_refused` and the recorded provenance, and returns `foreign_rebase_refused`, which resume never accepts as preservation evidence. A successful recovery continues the original run through push, PR open/reuse, and review promotion. If that run carried `completion: done`, the unchanged verified-merge checkpoint retains the authorization and moves the task to `done` only after GitHub reports the same PR merged.
 

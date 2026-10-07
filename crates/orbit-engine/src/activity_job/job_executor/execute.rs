@@ -110,6 +110,7 @@ pub fn execute_job_with_resume(
     let mut overall_ok = true;
     let mut overall_message = None;
     let mut evidence_hold = None;
+    let mut forge_hold = None;
     let mut index = 0;
     while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
@@ -156,6 +157,28 @@ pub fn execute_job_with_resume(
                 );
                 overall_ok = false;
                 evidence_hold = Some(*hold);
+                break;
+            }
+            Err((DispatchError::ForgeUnavailableHold(hold), _)) => {
+                let hold = lineage_forge_hold(*hold, &step.id, resume);
+                record_pipeline(
+                    &ctx,
+                    &step.id,
+                    serde_json::json!({
+                        "gate": "forge_unavailable",
+                        "forge_hold": hold,
+                    }),
+                );
+                overall_ok = false;
+                overall_message = Some(hold.text(&format!(
+                    "step `{}` held: the forge refused the push of {} to {} {} times over {} s",
+                    step.id,
+                    hold.head_sha,
+                    hold.target_ref,
+                    hold.attempts,
+                    hold.waited_ms / 1000,
+                )));
+                forge_hold = Some(hold);
                 break;
             }
             Err((error, unsuccessful)) => {
@@ -205,6 +228,7 @@ pub fn execute_job_with_resume(
     Ok(JobOutcome {
         success: overall_ok,
         evidence_hold,
+        forge_hold,
         pipeline: ctx.pipeline_value(),
         message: (!overall_ok).then_some(overall_message).flatten(),
         audit_failures: audit.audit_failure_count(),
@@ -212,6 +236,20 @@ pub fn execute_job_with_resume(
         telemetry_failures: audit.telemetry_failure_count(),
         degraded_telemetry: audit.degraded_telemetry(),
     })
+}
+
+/// [ORB-14617] Name the step that held, and keep the lineage's first hold
+/// time when this run resumes one that held before it.
+fn lineage_forge_hold(
+    mut hold: orbit_types::workflow::ForgeUnavailableHold,
+    step_id: &str,
+    resume: Option<&PipelineState>,
+) -> orbit_types::workflow::ForgeUnavailableHold {
+    step_id.clone_into(&mut hold.step_id);
+    if let Some(earlier) = resume.and_then(|state| state.forge_hold.as_ref()) {
+        hold.held_since = hold.held_since.min(earlier.held_since);
+    }
+    hold
 }
 
 /// [ORB-10002] Seed the executor pipeline map from successful checkpoints so

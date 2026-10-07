@@ -82,6 +82,9 @@ pub struct JobOutcome {
     pub success: bool,
     /// A settled review awaiting external evidence, without a delivery failure.
     pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
+    /// [ORB-14617] A delivery push the forge kept refusing: the run holds at
+    /// that step, without a delivery failure, for a later resume.
+    pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
     pub pipeline: Value,
     pub message: Option<String>,
     /// [ORB-00414] Number of audit-write failures observed during the run.

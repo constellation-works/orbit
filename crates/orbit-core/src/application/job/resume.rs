@@ -175,12 +175,22 @@ impl OrbitRuntime {
                  `orbit.agent.invoke` to authorize another one"
             )));
         }
-        if !matches!(
-            source.state,
-            JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
-        ) {
+        // [ORB-14617] A run held because the forge refused its push resumes
+        // from its checkpoints. Every other hold names its own resumption
+        // (an evidence hold queues a fresh review on receipt).
+        let forge_held = source.state == JobRunState::Held
+            && self
+                .read_run_state(&source.run_id)?
+                .is_some_and(|state| state.forge_hold.is_some());
+        if !forge_held
+            && !matches!(
+                source.state,
+                JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
+            )
+        {
             return Err(OrbitError::JobValidation(format!(
-                "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run",
+                "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
+                 or one held because the forge refused its push",
                 source_run_id, source.state
             )));
         }
@@ -502,7 +512,8 @@ fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
         "pr_failure_handoff"
         | "pr_conflict_blocked"
         | "validation_environment_blocked"
-        | "review_gate_escalation" => failure_handoff_run_id(note),
+        | "review_gate_escalation"
+        | orbit_types::workflow::FORGE_UNAVAILABLE_EXPIRED_EVENT => failure_handoff_run_id(note),
         _ => None,
     }
 }

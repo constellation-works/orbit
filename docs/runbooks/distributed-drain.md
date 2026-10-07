@@ -528,7 +528,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   leaf could not reach the owner), `baseline_red` (required validation fails
   on the base exactly as on the candidate; the owner holds the task until the
   base passes), `transient` (validation could not reach the network after its
-  reruns, or the leaf's worker died) and `base_conflict` (the committed
+  reruns, the forge kept refusing the leaf's push past its backoff
+  (`[forge_unavailable]`), or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
   breaker does not count a release. After `operator_cancel` or `transient`,
   the drain stops offering that crew for the rest of its window. After

@@ -475,6 +475,36 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // [ORB-14617] A delivery run held because the forge refused its push is
+    // resumed from its checkpoints each tick, within its retry window; past
+    // the window its tasks are blocked for a human.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            match runtime.auto_resume_forge_held_runs(now_utc) {
+                Ok(tick) => {
+                    if !tick.resumed.is_empty() || !tick.expired.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            resumed = tick.resumed.len(),
+                            expired = tick.expired.len(),
+                            "sweep.forge_held_runs"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.forge_held_runs_failed"
+                ),
+            }
+        }
+    }
+
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
     // `workflow.final_recovery_crews` pool.
