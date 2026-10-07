@@ -276,7 +276,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => ActionPolicy {
-            free_text_fields: &["body", "description"],
+            free_text_fields: &["title", "body", "description"],
             free_text_arrays: &[],
             path_fields: &[],
             path_arrays: &[],
@@ -284,7 +284,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::Friction(FrictionVerb::Update) => ActionPolicy {
-            free_text_fields: &["body"],
+            free_text_fields: &["title", "body"],
             free_text_arrays: &[],
             path_fields: &[],
             path_arrays: &[],

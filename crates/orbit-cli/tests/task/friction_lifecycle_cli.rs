@@ -436,3 +436,66 @@ fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
         "resolved"
     );
 }
+
+#[test]
+fn friction_add_and_update_redact_secrets_in_title() {
+    let mut fixture = Fixture::new();
+    fixture.root = PathBuf::new();
+    fixture
+        .command(&[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "friction-redact-qa",
+            "--task-prefix",
+            "FR",
+        ])
+        .assert()
+        .success();
+    fixture
+        .command(&["workspace", "init", "--name", "friction-redact"])
+        .assert()
+        .success();
+    let add_token = format!("ghp_{}", "A".repeat(36));
+    let update_token = format!("ghp_{}", "B".repeat(36));
+
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "Redaction fixture body",
+        "--title",
+        &format!("CI leaked {add_token} in logs"),
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    assert!(
+        !created.to_string().contains(&add_token),
+        "friction add must not echo a secret from the title: {created}"
+    );
+    let shown = fixture.json(&["friction", "show", id, "--json"]);
+    assert!(
+        !shown.to_string().contains(&add_token),
+        "friction add must not persist a secret from the title: {shown}"
+    );
+
+    let updated = fixture.json(&[
+        "friction",
+        "update",
+        id,
+        "--title",
+        &format!("Retitled with {update_token}"),
+        "--json",
+    ]);
+    assert!(
+        !updated.to_string().contains(&update_token),
+        "friction update must not echo a secret from the title: {updated}"
+    );
+    let shown = fixture.json(&["friction", "show", id, "--json"]);
+    assert!(
+        !shown.to_string().contains(&update_token),
+        "friction update must not persist a secret from the title: {shown}"
+    );
+}
