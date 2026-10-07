@@ -27,17 +27,46 @@ function addClasses(node, ctx, ...classNames) {
   ctx.setProperty(node, 'className', list);
 }
 
+function visibleTextLength(html) {
+  let length = 0;
+  let index = 0;
+
+  while (index < html.length) {
+    if (html[index] === '<') {
+      const tagEnd = html.indexOf('>', index + 1);
+      if (tagEnd > index + 1) {
+        index = tagEnd + 1;
+        continue;
+      }
+    }
+
+    const entity = html.startsWith('&lt;', index)
+      ? '&lt;'
+      : html.startsWith('&gt;', index)
+        ? '&gt;'
+        : html.startsWith('&quot;', index)
+          ? '&quot;'
+          : html.startsWith('&amp;', index)
+            ? '&amp;'
+            : null;
+    if (entity) {
+      length += 1;
+      index += entity.length;
+      continue;
+    }
+
+    length += 1;
+    index += 1;
+  }
+
+  return length;
+}
+
 function processRawHtml(html) {
   const parts = html.split(/(<pre[\s\S]*?<\/pre>)/gi);
   for (let i = 0; i < parts.length; i += 2) {
     parts[i] = parts[i].replace(/<code([^>]*)>([\s\S]*?)<\/code>/gi, (match, attrs, content) => {
-      const text = content
-        .replace(/<[^>]+>/g, '')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, '&');
-      if (text.length > 38) {
+      if (visibleTextLength(content) > 38) {
         if (/class\s*=\s*["']/.test(attrs)) {
           attrs = attrs.replace(/class\s*=\s*(["'])([^"']*)\1/, (_m, q, cls) => {
             const classes = cls.split(/\s+/).filter(Boolean);
