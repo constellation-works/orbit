@@ -54,10 +54,8 @@ impl LexicalStore {
     pub(super) fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
     }
-    /// Number of BM25 page queries executed by this handle and its clones.
-    pub fn fts_query_count(&self) -> u64 {
-        self.fts_queries.load(Ordering::Relaxed)
-    }
+    /// Count one BM25 page query and emit it on `orbit.search.fts`, the event
+    /// composed-runtime tests observe to prove a full page runs one query.
     pub(super) fn record_fts_query(&self) {
         let fts_queries = self.fts_queries.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(target: "orbit.search.fts", fts_queries, "BM25 page query");
