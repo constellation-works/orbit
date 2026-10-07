@@ -328,6 +328,82 @@ async function assertScoreboardLayout(page) {
   }
 }
 
+// ORB-14481: from 1024px up the top bar is one fixed-height row on every
+// route, and the host verdict flipping to throttled neither re-wraps it nor
+// moves Refresh. The fixture is the worst case the bar can hold: wide counts,
+// both alert tiles, the drain pill, and a held host chip.
+async function assertTopbarSingleRow(page) {
+  const routes = ['tasks', 'operations/routines', 'config/effective', 'knowledge/frictions', 'plugins'];
+  const snapshot = () => page.evaluate(() => {
+    const rect = id => document.getElementById(id).getBoundingClientRect();
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const children = [...document.querySelectorAll('.topbar .crumb, .topbar .kpi, .topbar #refresh-btn, .topbar #global-drain-state')]
+      .filter(node => node.getClientRects().length);
+    // Items are centred in the row, so one row means one shared vertical centre.
+    const centres = children.map(node => { const r = node.getBoundingClientRect(); return r.top + r.height / 2; });
+    const rows = Math.max(...centres) - Math.min(...centres) <= 2 ? 1 : 2;
+    const refresh = rect('refresh-btn');
+    const chip = document.querySelector('#host-resource-chips .host-resource').getBoundingClientRect();
+    const strip = document.getElementById('health-strip');
+    const lastTile = [...strip.querySelectorAll('.kpi')].filter(node => node.getClientRects().length).pop().getBoundingClientRect();
+    return {
+      height: bar.height, refreshLeft: refresh.left, chipWidth: chip.width, rows,
+      refreshRight: refresh.right, barRight: bar.right, stripOverflows: strip.scrollWidth > strip.clientWidth,
+      overlaps: lastTile.right > rect('refresh-btn').left || (!document.getElementById('global-drain-state').hidden && lastTile.right > rect('global-drain-state').left),
+    };
+  });
+  await page.evaluate(async () => {
+    const { renderHostResources } = await import('/js/host-resources.js');
+    for (const id of ['tile-failed-value', 'tile-denials-value', 'tile-active-value', 'tile-events-value']) document.getElementById(id).textContent = '12,345';
+    for (const id of ['tile-failed', 'tile-denials']) document.getElementById(id).classList.add('tile-alert');
+    const drain = document.getElementById('global-drain-state');
+    drain.hidden = false;
+    drain.dataset.drainState = 'draining';
+    globalThis.topbarHost = throttle => renderHostResources({
+      cpu: { percent: 193.7, severity: 'critical' }, memory: { percent: 40, severity: 'ok' },
+      disk: { path: '/workspace', percent: 50, severity: 'ok' }, sample_age_seconds: 1, max_age_seconds: 15,
+      stale: false, throttle, pressures: throttle ? [{ resource: 'cpu' }] : [], reason: 'cpu load high', thresholds: { enabled: true },
+    });
+  });
+  try {
+    for (const width of [1024, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const heights = new Set();
+      for (const route of routes) {
+        await page.evaluate(async route => {
+          const { setActiveTab } = await import('/js/router.js');
+          setActiveTab(route);
+        }, route);
+        const flips = [];
+        for (const throttle of [false, true]) {
+          await page.evaluate(throttle => globalThis.topbarHost(throttle), throttle);
+          flips.push(await snapshot());
+        }
+        for (const state of flips) {
+          heights.add(state.height);
+          if (state.height > 64 || state.rows !== 1) throw new Error(`Top bar wraps on #${route} at ${width}px: ${JSON.stringify(state)}`);
+          if (state.stripOverflows || state.overlaps || state.refreshRight > state.barRight + 0.5) throw new Error(`Top bar content overflows on #${route} at ${width}px: ${JSON.stringify(state)}`);
+        }
+        if (flips[0].height !== flips[1].height || flips[0].refreshLeft !== flips[1].refreshLeft || flips[0].chipWidth !== flips[1].chipWidth) {
+          throw new Error(`Throttled verdict moved the top bar on #${route} at ${width}px: ${JSON.stringify(flips)}`);
+        }
+      }
+      if (heights.size !== 1) throw new Error(`Top bar height differs across routes at ${width}px: ${[...heights]}`);
+      await page.screenshot({ path: path.join(evidence, `topbar-${width}.png`) });
+    }
+    // Narrower than 1024px the bar may wrap, to two rows at most.
+    await page.setViewportSize({ width: 800, height: 900 });
+    const narrow = await snapshot();
+    if (narrow.height > 100) throw new Error(`Top bar takes more than two rows at 800px (taller than 100px): ${JSON.stringify(narrow)}`);
+  } finally {
+    await page.evaluate(async () => {
+      const { setActiveTab } = await import('/js/router.js');
+      document.getElementById('global-drain-state').hidden = true;
+      setActiveTab('tasks');
+    });
+  }
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
@@ -417,6 +493,7 @@ try {
   await assertScoreboardLayout(page);
   await assertRunStepLayout(page);
   await assertCrewWindow(page);
+  await assertTopbarSingleRow(page);
   await assertProtocolSkewFailure(page);
   await new Promise(resolve => server.close(resolve));
   await page.evaluate(() => {
@@ -425,7 +502,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();

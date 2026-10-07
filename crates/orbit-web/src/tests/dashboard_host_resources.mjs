@@ -59,8 +59,7 @@ assert.ok(descendants(byId('health-strip')).includes(host));
 assert.equal(byId('host-resources'), undefined, 'there is no standalone host panel');
 const stripChildren = byId('health-strip').children.filter(child => child instanceof Node);
 assert.ok(stripChildren.indexOf(host) > stripChildren.indexOf(byId('kpi-window')), 'live resources follow the window label');
-assert.equal(chips().length, 3, 'exactly three host chips exist before the first fetch');
-assert.deepEqual(chips().map(chip => descendants(chip).find(node => node.className === 'k').textContent.trim()), ['cpu', 'memory', 'disk']);
+assert.equal(chips().length, 1, 'one host chip exists before the first fetch');
 
 let now = 100000;
 let nextResponse;
@@ -83,37 +82,56 @@ await resource.evaluate();
 const { renderHostResources, fetchAndRenderHostResources, initHostResources } = resource.namespace;
 const reading = (percent, severity = 'ok', unknown_reason = null) => ({ percent, severity, unknown_reason });
 const payload = {
-  cpu: reading(95, 'critical'), memory: reading(82, 'elevated'), disk: { path: '/worst', ...reading(88, 'critical') },
+  cpu: reading(193.7, 'critical'), memory: reading(82, 'elevated'), disk: { path: '/worst', ...reading(88, 'critical') },
   // A large legacy per-path payload must never produce additional chips.
   disks: Array.from({ length: 22 }, (_, index) => ({ path: `/workspace/${index}`, ...reading(20) })),
   severity: 'critical', sample_age_seconds: 2, max_age_seconds: 15, throttle: true,
   pressures: [{ resource: 'cpu' }, { resource: 'disk /held' }],
   reason: '<unsafe> cpu and disk high', thresholds: { enabled: true }, stale: false,
 };
+const text = chip => Object.fromEntries(['k', 'v'].map(name => [name, descendants(chip).find(node => node.className === name).textContent.replace(/\s+/g, ' ').trim()]));
 renderHostResources(payload);
-assert.equal(chips().length, 3);
-assert.equal(chips()[0].children[0].textContent, '95.0%');
-assert.equal(chips()[2].children[0].textContent, '88.0%', 'disk uses the worst known aggregate');
+assert.equal(chips().length, 1, 'cpu, memory and disk collapse into one host chip');
 assert.equal(chips()[0].className, 'kpi host-resource critical throttled');
-assert.equal(chips()[1].className, 'kpi host-resource elevated');
-assert.equal(chips()[2].className, 'kpi host-resource critical throttled');
-assert.equal(chips()[2].children[2].textContent, 'throttled');
-assert.match(chips()[2].title, /\/worst/);
-for (const chip of chips()) {
-  assert.match(chip.title, /sampled 2s ago/);
-  assert.match(chip.title, /Throttle verdict: held/);
-  assert.match(chip.title, /<unsafe> cpu and disk high/);
-  assert.equal(chip.tabIndex, 0, 'keyboard users can inspect chip tooltips');
-  assert.equal(chip.children.some(child => child.tagName === 'unsafe'), false, 'throttle reasons never become markup');
-}
+assert.deepEqual(text(chips()[0]), { k: 'load', v: '1.9× cores' }, 'a held cpu is the worst resource and reads as load relative to cores');
+assert.doesNotMatch(chips()[0].textContent, /cpu|193/, 'the chip never shows load as a bare cpu percentage');
+const held = chips()[0];
+assert.equal(held.children.length, 3);
+assert.equal(held.children[2].textContent, 'throttled', 'the throttle verdict is accessible text');
+assert.equal(held.tabIndex, 0, 'keyboard users can inspect the chip tooltip');
+assert.match(held.title, /1-minute load average divided by online cores/, 'the title explains the load measure');
+assert.match(held.title, /193\.7% of cores/);
+assert.match(held.title, /memory 82\.0% \(elevated\)/);
+assert.match(held.title, /disk \/worst 88\.0%/);
+assert.match(held.title, /sampled 2s ago/);
+assert.match(held.title, /Throttle verdict: held/);
+assert.match(held.title, /<unsafe> cpu and disk high/);
+assert.equal(descendants(held).some(child => child.tagName === 'unsafe'), false, 'throttle reasons never become markup');
+
+// The verdict flipping changes state, never the chip's text, so the bar's
+// width and height cannot move with it.
+renderHostResources({ ...payload, throttle: false, pressures: [] });
+assert.equal(chips()[0].className, 'kpi host-resource critical');
+assert.deepEqual(text(chips()[0]), { k: 'load', v: '1.9× cores' });
+assert.equal(chips()[0].children.length, 2);
+assert.match(chips()[0].title, /Throttle verdict: open/);
+
+renderHostResources({ ...payload, cpu: reading(20), throttle: false, pressures: [] });
+assert.equal(chips()[0].className, 'kpi host-resource critical', 'the worst severity wins');
+assert.deepEqual(text(chips()[0]), { k: 'disk', v: '88%' });
+renderHostResources({ ...payload, cpu: reading(20), disk: { path: '/worst', ...reading(30) }, throttle: false, pressures: [] });
+assert.equal(chips()[0].className, 'kpi host-resource elevated');
+assert.deepEqual(text(chips()[0]), { k: 'mem', v: '82%' });
 renderHostResources({ ...payload, disk: null });
-assert.equal(chips()[2].children[0].textContent, '-');
-assert.equal(chips()[2].className, 'kpi host-resource unknown throttled');
-assert.match(chips()[2].title, /unavailable/);
+assert.deepEqual(text(chips()[0]), { k: 'load', v: '1.9× cores' }, 'an unknown disk does not hide a known reading');
+assert.match(chips()[0].title, /disk unavailable/);
+renderHostResources({ ...payload, cpu: null, memory: null, disk: null });
+assert.deepEqual(text(chips()[0]), { k: 'host', v: '-' });
+assert.equal(chips()[0].className, 'kpi host-resource unknown throttled');
 renderHostResources({ ...payload, stale: true });
-assert.ok(chips().every(chip => chip.children[0].textContent === '-'));
-assert.ok(chips().every(chip => chip.className === 'kpi host-resource unknown'));
-assert.match(chips()[2].title, /Throttle verdict: unknown/);
+assert.deepEqual(text(chips()[0]), { k: 'host', v: '-' });
+assert.equal(chips()[0].className, 'kpi host-resource unknown');
+assert.match(chips()[0].title, /Throttle verdict: unknown/);
 
 nextResponse = { ok: true, json: async () => payload };
 await fetchAndRenderHostResources();
@@ -124,20 +142,20 @@ nextResponse = new Promise(resolve => { resolvePending = resolve; });
 const pendingPoll = timers.get(5000)();
 now += 14000;
 timers.get(1000)();
-assert.ok(chips().every(chip => chip.children[0].textContent === '-'));
-assert.match(chips()[2].title, /sampled 16s ago/);
-assert.match(chips()[2].title, /Throttle verdict: unknown.*Resource sample expired/);
+assert.deepEqual(text(chips()[0]), { k: 'host', v: '-' });
+assert.match(chips()[0].title, /sampled 16s ago/);
+assert.match(chips()[0].title, /Throttle verdict: unknown.*Resource sample expired/);
 const recovered = { ...payload, throttle: false, severity: 'ok', cpu: reading(20), memory: reading(42), disk: { path: '/known', ...reading(50) }, pressures: [], reason: 'recovered' };
 resolvePending({ ok: true, json: async () => recovered });
 await pendingPoll;
-assert.equal(chips()[0].children[0].textContent, '20.0%');
-assert.ok(chips().every(chip => chip.className === 'kpi host-resource ok'));
-assert.match(chips()[2].title, /Throttle verdict: open.*recovered/);
+assert.deepEqual(text(chips()[0]), { k: 'disk', v: '50%' });
+assert.equal(chips()[0].className, 'kpi host-resource ok');
+assert.match(chips()[0].title, /Throttle verdict: open.*recovered/);
 renderHostResources({ ...recovered, thresholds: { enabled: false } });
 assert.match(chips()[0].title, /Throttle verdict: disabled/);
 nextResponse = { ok: false, status: 503 };
 await assert.rejects(fetchAndRenderHostResources());
-assert.equal(chips().length, 3);
-assert.ok(chips().every(chip => chip.children[0].textContent === '-'));
-assert.match(chips()[2].title, /age unknown.*Throttle verdict: unknown.*Resource API unavailable/);
-console.log('three topbar host chips: aggregate, many paths, severity, held/open, unknown/stale and polling passed');
+assert.equal(chips().length, 1);
+assert.deepEqual(text(chips()[0]), { k: 'host', v: '-' });
+assert.match(chips()[0].title, /age unknown.*Throttle verdict: unknown.*Resource API unavailable/);
+console.log('one topbar host chip: worst resource, load label, many paths, fixed text across throttle, unknown/stale and polling passed');
