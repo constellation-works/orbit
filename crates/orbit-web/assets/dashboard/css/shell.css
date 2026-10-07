@@ -167,16 +167,23 @@
   overflow: hidden;
 }
 
+/* ORB-14481: from 1024px up the bar is one fixed-height row on every route,
+   so no destination crumb or host verdict can re-wrap it and shift the page.
+   Groups never wrap; the compact label and padding tiers below keep the
+   widest content inside the row instead. */
+:root { --topbar-height: 56px; }
+
 /* ORB-10972: one bar replaces the old header + tabs + health strip
    stack (~194px). The four health metrics ride inline in it. */
 .topbar {
   flex: 0 0 auto;
-  min-height: 60px;
+  box-sizing: border-box;
+  height: var(--topbar-height);
   border-bottom: 1px solid var(--hair);
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 10px 24px;
+  padding: 0 24px;
   background: var(--bg);
 }
 
@@ -188,9 +195,10 @@
   flex: 0 0 auto;
 }
 
-.topbar-spacer { flex: 1 1 auto; }
+.topbar-spacer { flex: 1 1 0; min-width: 0; }
+.topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
 
-.kpis { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.kpis { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; }
 
 .kpi {
   display: inline-flex;
@@ -205,6 +213,7 @@
   font: inherit;
   font-size: 13px;
   white-space: nowrap;
+  flex: 0 0 auto;
   cursor: pointer;
 }
 .kpi:hover { border-color: #3a3a44; color: var(--fg); }
@@ -218,13 +227,26 @@
   border-radius: 50%;
   background: var(--state-failed);
 }
-.host-resource-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--border); }
-.kpi.host-resource { cursor: default; }
+.host-resource-chips { display: flex; align-items: center; flex: 0 0 auto; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--border); }
+/* One host chip of a fixed width: the worst resource's name and reading fill it,
+   and throttling changes its colour and outline, never its size. */
+.kpi.host-resource { cursor: default; position: relative; box-sizing: border-box; width: 9.5rem; overflow: hidden; }
+.kpi.host-resource::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--state-running); }
+.kpi.host-resource .v { overflow: hidden; text-overflow: ellipsis; }
 .kpi.host-resource.elevated { background: color-mix(in srgb, var(--state-pending) 10%, var(--bg)); border-color: var(--state-pending); color: var(--state-pending); }
+.kpi.host-resource.elevated::before { background: var(--state-pending); }
 .kpi.host-resource.critical { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
+.kpi.host-resource.critical::before { background: var(--state-failed); }
+.kpi.host-resource.unknown::before { background: var(--fg-mute); }
 .kpi.host-resource.elevated .v, .kpi.host-resource.critical .v { color: inherit; }
 .kpi.host-resource.unknown .v { color: var(--fg-dim); }
-.host-resource-held { font-size: 11px; font-weight: 600; }
+.kpi.host-resource.throttled { outline: 1px solid currentColor; outline-offset: 1px; }
+.kpi.host-resource.throttled::before { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px currentColor; }
+/* The verdict's words stay for assistive tech and the title; they take no room. */
+.kpi.host-resource .host-resource-held {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 .kpi-window {
   font-size: 12px;
   color: var(--fg-dim);
@@ -235,19 +257,29 @@
 .kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
 .kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
 
-/* Leave room for the windowed metrics and live host chips. The groups wrap
-   within the bar on smaller screens. */
+/* Width tiers: the sparkline goes first, then the long labels and the window
+   tag, so the single row still holds the drain pill and Refresh at 1024px. */
 @media (max-width: 1400px) {
   .kpi-spark { display: none; }
 }
-@media (max-width: 1300px) {
+@media (max-width: 1240px) {
+  .topbar { padding: 0 14px; gap: 10px; }
+  .kpi .k-more, .kpi-window { display: none; }
+  .kpi { padding: 0 8px; }
+  .kpi.host-resource { width: 7.5rem; }
+  .host-resource-chips { padding-left: 8px; margin-left: 0; }
+}
+/* Below 1024px the bar may wrap, but only to two rows: crumb, drain and
+   Refresh on the first, the health strip scrolling on the second. */
+@media (max-width: 1023px) {
   .topbar {
     height: auto;
-    min-height: 52px;
     flex-wrap: wrap;
-    row-gap: 8px;
+    row-gap: 6px;
     padding: 8px 12px;
   }
+  .topbar .kpis { order: 1; flex: 1 1 100%; overflow-x: auto; }
+  .topbar-spacer { order: 0; }
 }
 
 .refresh-btn {

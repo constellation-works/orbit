@@ -84,15 +84,13 @@
           <!-- The four health metrics read as counts with plain labels, and each
                one opens the view that explains it. Same ids for the values. -->
           <div class="kpis" id="health-strip" role="group" aria-label="Windowed health and live host resources">
-            <button type="button" class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Opens Runs filtered to failures."><span class="v" id="tile-failed-value">-</span><span class="k">failed runs</span></button>
-            <button type="button" class="kpi" id="tile-denials" title="Policy denials in the selected window. Opens Audit &gt; Policy."><span class="v" id="tile-denials-value">-</span><span class="k">policy denials</span></button>
-            <button type="button" class="kpi" id="tile-active" title="Runs still going after longer than 95% of this window's finished runs took. Opens live runs."><span class="v" id="tile-active-value">-</span><span class="k">running long</span></button>
+            <button type="button" class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Opens Runs filtered to failures."><span class="v" id="tile-failed-value">-</span><span class="k">failed<span class="k-more"> runs</span></span></button>
+            <button type="button" class="kpi" id="tile-denials" title="Policy denials in the selected window. Opens Audit &gt; Policy."><span class="v" id="tile-denials-value">-</span><span class="k"><span class="k-more">policy </span>denials</span></button>
+            <button type="button" class="kpi" id="tile-active" title="Runs still going after longer than 95% of this window's finished runs took. Opens live runs."><span class="v" id="tile-active-value">-</span><span class="k"><span class="k-more">running </span>long</span></button>
             <button type="button" class="kpi" id="tile-events" title="Audited events in the selected window. Opens Audit."><span class="v" id="tile-events-value">-</span><span class="k">events</span><svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg></button>
             <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
             <div class="host-resource-chips" id="host-resource-chips" role="group" aria-label="Live serving host resources" aria-live="polite">
-              <span class="kpi host-resource unknown" tabindex="0" title="CPU unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">cpu</span></span>
-              <span class="kpi host-resource unknown" tabindex="0" title="Memory unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">memory</span></span>
-              <span class="kpi host-resource unknown" tabindex="0" title="Disk unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">disk</span></span>
+              <span class="kpi host-resource unknown" tabindex="0" title="Host resources unknown · sample unavailable · Throttle verdict: unknown"><span class="k">host</span><span class="v">-</span></span>
             </div>
           </div>
           <span class="topbar-spacer"></span>

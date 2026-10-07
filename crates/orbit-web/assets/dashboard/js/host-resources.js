@@ -24,24 +24,47 @@ export function hostReading(payload, resource) {
   return { reading, known, severity, held: pressures.length > 0, pressures, note };
 }
 
+const SEVERITY_RANK = { critical: 3, elevated: 2, ok: 1, unknown: 0 };
+const CPU_MEASURE = 'cpu load: the 1-minute load average divided by online cores. 100% means every core is busy; above 100% means work is queueing.';
+
+/// How one resource reads in the chip and in the title. CPU is load relative to
+/// cores, so it can pass 100%; it is never labelled as a plain CPU percentage.
+function describeResource(payload, resource) {
+  const { reading, known, severity, held, note } = hostReading(payload, resource);
+  const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
+  const label = resource === 'cpu' ? 'load' : resource === 'memory' ? 'mem' : 'disk';
+  const value = !known ? '-' : resource === 'cpu' ? `${(reading.percent / 100).toFixed(1)}×` : `${reading.percent.toFixed(0)}%`;
+  const detail = !known ? `${resource}${path} ${note}`
+    : resource === 'cpu' ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
+    : `${resource}${path} ${reading.percent.toFixed(1)}% (${note})`;
+  return { resource, label, value, suffix: known && resource === 'cpu' ? ' cores' : '', detail, known, severity, held, percent: known ? reading.percent : -1 };
+}
+
+/// One chip for the serving host: the worst resource (held first, then by
+/// severity, then by usage) with the whole breakdown in the title. Throttling
+/// is a state of the chip (class, dot, accessible text), never extra text, so
+/// the top bar keeps one width and one height whatever the verdict.
 export function renderHostResources(payload, host = document.getElementById('host-resource-chips')) {
   if (!host) return;
   const { age, status, reason } = hostVerdict(payload);
-  const chip = resource => {
-    const { reading, known, severity, held, note } = hostReading(payload, resource);
-    const path = resource === 'disk' && reading?.path ? ` · ${reading.path}` : '';
-    const node = el('span', {
-      class: `kpi host-resource ${severity}${held ? ' throttled' : ''}`,
-      title: `${resource}${path} · ${note} · sampled ${age} · Throttle verdict: ${status} · ${reason}`,
-    }, [
-      el('span', { class: 'v', text: known ? `${reading.percent.toFixed(1)}%` : '-' }),
-      el('span', { class: 'k', text: resource }),
-      ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
-    ]);
-    node.tabIndex = 0;
-    return node;
-  };
-  host.replaceChildren(chip('cpu'), chip('memory'), chip('disk'));
+  const readings = ['cpu', 'memory', 'disk'].map(resource => describeResource(payload, resource));
+  // Held resources first, then severity, then usage.
+  const score = item => (item.held ? 1e6 : 0) + (SEVERITY_RANK[item.severity] ?? 0) * 1e4 + item.percent;
+  const worst = readings.reduce((best, item) => (score(item) > score(best) ? item : best));
+  const held = readings.some(item => item.held);
+  const shown = worst.known ? worst : { label: 'host', value: '-', suffix: '' };
+  const severity = worst.known ? worst.severity : 'unknown';
+  const title = [
+    `Host resources (serving host) · ${readings.map(item => item.detail).join(' · ')}`,
+    `sampled ${age} · Throttle verdict: ${status}${held ? ' (admission held)' : ''} · ${reason}`,
+  ].join(' · ');
+  const node = el('span', { class: `kpi host-resource ${severity}${held ? ' throttled' : ''}`, title }, [
+    el('span', { class: 'k', text: shown.label }),
+    el('span', { class: 'v', text: shown.value }, shown.suffix ? [el('span', { class: 'k-more', text: shown.suffix })] : []),
+    ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
+  ]);
+  node.tabIndex = 0;
+  host.replaceChildren(node);
 }
 
 const listeners = new Set();
