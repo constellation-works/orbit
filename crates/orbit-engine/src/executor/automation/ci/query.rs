@@ -186,6 +186,9 @@ pub(super) trait CiQueries {
     fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError>;
     /// Read all current heads from `origin` once for this sweep.
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
+    /// Whether commit `ancestor` is reachable from commit `descendant`. An
+    /// error means ancestry could not be established either way.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError>;
 }
 
 /// The production implementation: `gh` and `git`, run on the host.
@@ -427,6 +430,36 @@ impl CiQueries for HostCiQueries {
         Ok(RemoteBranchHeads::from_heads(parse_remote_branch_heads(
             &output,
         )))
+    }
+
+    /// Answered from the host checkout. A run commit this checkout has not
+    /// fetched yet is fetched by object id first; that writes no ref.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError> {
+        use super::super::vcs::git::{git_command_success, git_success};
+
+        for sha in [ancestor, descendant] {
+            if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "run commit '{sha}' is not a full commit id"
+                )));
+            }
+        }
+        let mut missing = Vec::new();
+        for sha in [ancestor, descendant] {
+            let object = format!("{sha}^{{commit}}");
+            if !git_command_success(&self.repo_root, &["cat-file", "-e", &object])? {
+                missing.push(sha);
+            }
+        }
+        if !missing.is_empty() {
+            let mut args = vec!["fetch", "--no-tags", "--quiet", "origin"];
+            args.extend(missing);
+            git_success(&self.repo_root, &args)?;
+        }
+        git_command_success(
+            &self.repo_root,
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+        )
     }
 }
 

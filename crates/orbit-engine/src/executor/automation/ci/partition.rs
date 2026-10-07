@@ -20,6 +20,11 @@ pub(super) struct RunPartition {
     /// favour of exactly such a successor, so once expansion shows the
     /// cancellation has no failed step it is superseded rather than evidence.
     pub(super) cancelled_successors: std::collections::BTreeMap<u64, Value>,
+    /// Current runs keyed by run id, mapped to every newer push run of the
+    /// same workflow on the same branch that is still queued or in progress
+    /// at a different commit, newest first. Whether one of them is at a
+    /// descendant commit needs Git, so collection decides the deferral.
+    pub(super) in_flight_successors: std::collections::BTreeMap<u64, Vec<Value>>,
 }
 
 /// Classify repository-wide runs by relevant workflow/ref identity.
@@ -160,6 +165,13 @@ pub(super) fn partition_runs(
                     continue;
                 }
                 out.current.push(run_summary(ref_for_run(refs, run), run));
+                let successors = in_flight_push_successors(ref_runs, run);
+                if let (Some(run_id), false) = (
+                    run.get("run_id").and_then(Value::as_u64),
+                    successors.is_empty(),
+                ) {
+                    out.in_flight_successors.insert(run_id, successors);
+                }
                 // A cancelled run is still inspected, but job expansion has to
                 // decide whether it is actionable. Claiming the current slot
                 // here would hide an older real failure behind a zero-step
@@ -178,6 +190,27 @@ pub(super) fn partition_runs(
             }
         }
     }
+}
+
+/// Newer push runs of `run`'s workflow and branch that have not completed and
+/// carry a different event commit, newest first. `ref_runs` is already sorted
+/// newest first.
+fn in_flight_push_successors(ref_runs: &[&Value], run: &Value) -> Vec<Value> {
+    let commit = run.get("reported_head_sha").and_then(Value::as_str);
+    ref_runs
+        .iter()
+        .copied()
+        .filter(|newer| {
+            !run_is_completed(newer)
+                && newer.get("event").and_then(Value::as_str) == Some("push")
+                && run_order(newer) > run_order(run)
+                && newer
+                    .get("reported_head_sha")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sha| Some(sha) != commit)
+        })
+        .cloned()
+        .collect()
 }
 
 fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str> {

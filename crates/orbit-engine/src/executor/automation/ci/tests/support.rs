@@ -28,6 +28,10 @@ pub(super) struct FakeQueries {
     open_pull_requests_by_branch: BTreeMap<String, Vec<Value>>,
     closed_pull_requests_by_branch: BTreeMap<String, Vec<Value>>,
     closed_pull_request_branch_errors: BTreeMap<String, String>,
+    /// `(ancestor, descendant)` commit pairs Git proves; any other pair of
+    /// distinct commits is not an ancestry, and `ancestry_errors` fail.
+    ancestry: Vec<(String, String)>,
+    ancestry_errors: Vec<String>,
     /// Concurrency-cancellation annotation per job id.
     concurrency_cancellations: BTreeMap<u64, String>,
     /// Failed-step logs per job id; an unscripted job's log is empty.
@@ -164,6 +168,18 @@ impl FakeQueries {
         self
     }
 
+    pub(super) fn with_ancestor(mut self, ancestor: &str, descendant: &str) -> Self {
+        self.ancestry
+            .push((ancestor.to_string(), descendant.to_string()));
+        self
+    }
+
+    /// Ancestry questions about this commit cannot be answered.
+    pub(super) fn with_unknown_commit(mut self, sha: &str) -> Self {
+        self.ancestry_errors.push(sha.to_string());
+        self
+    }
+
     /// A failed-step log whose source GitHub did not deliver in full.
     pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
         let mut log = super::super::query::bounded_run_log(text, 16_384);
@@ -272,6 +288,21 @@ impl CiQueries for FakeQueries {
             self.branch_heads.clone(),
             BTreeMap::new(),
         ))
+    }
+
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError> {
+        if let Some(sha) = [ancestor, descendant]
+            .into_iter()
+            .find(|sha| self.ancestry_errors.iter().any(|unknown| unknown == sha))
+        {
+            return Err(OrbitError::Execution(format!(
+                "commit {sha} is not fetched"
+            )));
+        }
+        Ok(self
+            .ancestry
+            .iter()
+            .any(|(older, newer)| older == ancestor && newer == descendant))
     }
 }
 

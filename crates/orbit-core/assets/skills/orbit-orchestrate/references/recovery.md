@@ -10,7 +10,9 @@ and admission evidence rather than duplicating that work. See
 
 Before filing or dispatching a repair, compare the failing run/job and SHA
 with the current landing branch and prior fix PRs. An old CI failure can arrive
-after the repair merged. Attach the exact failing command/log excerpt and
+after the repair merged; the sweep holds such failures in
+`pending_supersession` rather than filing them, so read that list in the
+sweep's step output before filing by hand. Attach the exact failing command/log excerpt and
 current reproducibility evidence to one bounded task. Search open and closed
 history; reject proven duplicates with a link to the delivered fix. Cancel a
 duplicate's active child only within authorization and after inspecting its
