@@ -88,6 +88,15 @@ Child tests have a 60-second deadline, server readiness has a 10-second
 deadline, and HTTP requests (including SSE reads) have a 5-second timeout.
 Process guards kill and reap servers even after an assertion fails.
 
+HTTP fixture servers bind port zero and the launcher reads the actual address
+from that child's listening announcement before probing health. Do not reserve
+and release a port in the launcher: another concurrent fixture can bind it
+before the intended child, and its successful health response can route the
+first API request into the wrong disposable workspace. The friction projection
+case keeps an empty dashboard alive alongside the seeded dashboard to check
+first-request isolation as well as month/limit memo reuse. This is a fixture
+startup race; no production audit visibility defect has been demonstrated.
+
 Submission fixtures normally substitute a harmless worker stub. The replay
 fixture instead re-executes the exact ignored `replay_worker_child` entry point
 against its disposable registry and calls the real pipeline worker. A sleep
