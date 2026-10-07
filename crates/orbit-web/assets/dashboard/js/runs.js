@@ -246,8 +246,8 @@ function confirmForceText(run) {
 // keyed nodes on every poll, and a node appended to it without a key is
 // dropped by the next one, so an error written straight into the host would
 // vanish within seconds, usually before it was read. It is held here and
-// rendered with the rows until dismissed or the next action starts. Other
-// hosts (the run detail) are rebuilt on their own terms and keep the node.
+// rendered with the rows until dismissed or the next action starts. Run detail
+// supplies a stable feedback host separate from its rebuilt header.
 let runActionError = null;
 const RUN_ACTION_ERROR_KEY = "run-action-error";
 
@@ -277,7 +277,8 @@ function showRunActionError(host, text, build = () => el("div", { class: "action
     return;
   }
   if (host) {
-    host.appendChild(runActionErrorNode(build, null));
+    const node = runActionErrorNode(build, () => node.remove());
+    host.appendChild(node);
   }
 }
 
