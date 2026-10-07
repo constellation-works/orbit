@@ -313,6 +313,12 @@ pub trait JobRunStoreBackend: Send + Sync {
         run_ids: &[String],
     ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
+    /// Initialize an existing run's pipeline state only while it is absent.
+    /// Returns `false` if another writer already supplied state, preserving
+    /// that document so the caller can apply its change with `update_run_state`.
+    /// A missing run returns a not-found error.
+    fn initialize_run_state(&self, run_id: &str, state: &PipelineState)
+    -> Result<bool, OrbitError>;
     /// [ORB-11253] Read-modify-write a run's pipeline state in one immediate
     /// transaction.
     ///
