@@ -5,6 +5,97 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated};
 
+#[test]
+fn task_mutations_redact_prose_before_persistence() {
+    isolated(
+        "guards::task_mutations_redact_prose_before_persistence",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let token = format!("ghp_{}", "b".repeat(36));
+            let text = format!("diagnostic GITHUB_TOKEN={token}");
+            let safe = "diagnostic GITHUB_TOKEN=[REDACTED_SECRET]";
+            let task = super::support::json_ok(server.send(
+                "POST",
+                "/api/tasks?workspace=ws_http_fixture",
+                json!({"title":"Redaction fixture", "description":"HTTP mutation test",
+                "acceptance_criteria":["Persist scrubbed prose"], "complexity":"low"}),
+            ));
+            let id = task["id"].as_str().unwrap();
+            let uri = format!("/api/tasks/{id}?workspace=ws_http_fixture");
+            let updated = super::support::json_ok(server.send(
+                "PATCH",
+                &uri,
+                json!({"title":text, "description":text, "plan":text, "execution_summary":text,
+                "acceptance_criteria":[text,"ordinary criterion"], "comment":text}),
+            ));
+            for field in ["title", "description", "plan", "execution_summary"] {
+                assert_eq!(updated[field], safe, "updated {field}");
+            }
+            assert_eq!(
+                updated["acceptance_criteria"],
+                json!([safe, "ordinary criterion"])
+            );
+            super::support::json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{id}/comments?workspace=ws_http_fixture"),
+                json!({"message":text}),
+            ));
+            let approved = super::support::json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{id}/approve?workspace=ws_http_fixture"),
+                json!({"note":text,"comment":text}),
+            ));
+            assert_eq!(approved["status"], "backlog");
+            assert!(
+                approved["history"].as_array().unwrap().iter().any(|event| {
+                    event["event"] == "proposal_approved" && event["note"] == safe
+                })
+            );
+            let rejected = super::support::json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{id}/reject?workspace=ws_http_fixture"),
+                json!({"note":text,"comment":text}),
+            ));
+            assert_eq!(rejected["status"], "rejected");
+            assert!(
+                rejected["history"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|event| { event["event"] == "backlog_rejected" && event["note"] == safe })
+            );
+            let persisted = super::support::json_ok(server.get(&uri));
+            let comments = persisted["comments"].as_array().unwrap();
+            assert_eq!(comments.len(), 4);
+            assert!(comments.iter().all(|comment| comment["message"] == safe));
+            // The selected logical workspace may use a different persisted
+            // task partition. Locate its canonical bundle by the created ID.
+            let bundle = std::fs::read_dir(fixture.global.join("tasks/workspaces"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path().join(id))
+                .find(|path| path.is_dir())
+                .expect("persisted task bundle");
+            for name in [
+                "task.yaml",
+                "description.md",
+                "plan.md",
+                "execution-summary.md",
+                "acceptance.md",
+                "comments.jsonl",
+                "events.jsonl",
+            ] {
+                let content = std::fs::read_to_string(bundle.join(name)).unwrap();
+                assert!(!content.contains(&token), "task secret leaked into {name}");
+                assert!(
+                    content.contains("[REDACTED_SECRET]"),
+                    "scrubbed prose missing from {name}"
+                );
+            }
+        },
+    );
+}
+
 /// Ordinary writes intentionally outside the exceptional-operation registry.
 /// New methods/paths default to operator-only, so a new unguarded route fails.
 /// Resume is ordinary only when the source input does not request completion.
