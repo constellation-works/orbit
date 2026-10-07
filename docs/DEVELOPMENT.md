@@ -207,6 +207,20 @@ node crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/audit-browser
 ```
 
+The refresh browser fixture loads the complete dashboard, aborts `/api/*` with
+Playwright after a successful load, and checks retained KPI chips, rail counts
+and the Drain pill at 1440px and 768px. Failed refreshes dim these surfaces;
+their titles show the last clean refresh as `as of HH:MM`. The connection dot
+is red for a network failure, amber for a panel failure, and green after a
+clean refresh. The rail names failed panels, and recovery clears stale styling
+and titles. Host resource chips retain their independent sample-age handling.
+The fixture also checks repeated failures and failed or absent run streams:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_refresh_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/refresh-browser
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

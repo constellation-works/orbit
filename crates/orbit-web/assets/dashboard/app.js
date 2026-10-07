@@ -98,6 +98,7 @@ let activeDiagSubtab = "runs";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
+let lastCleanRefresh = null;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -1302,19 +1303,24 @@ function activeRefreshJobs() {
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
   void fetchAndRenderHostResources().catch(error => console.error(error));
   const jobs = [];
+  const add = (panel, request) => jobs.push({ panel, request });
+  const subpanel = (group, name) => {
+    const button = document.querySelector(`#${group} [data-subtab="${name}"]`);
+    return `${refreshLabel()} › ${button?.firstChild?.textContent.trim() || name}`;
+  };
   if (aggregate) {
     renderAggregatePlaceholders();
   } else {
-    jobs.push(fetchAndRenderSummary());
+    add("Health summary", fetchAndRenderSummary());
   }
   // Keep the chrome indicator current even when Tasks and its dock are hidden.
-  jobs.push(fetchAndRenderAutoDrainPane());
+  add("Drain", fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
-    jobs.push(fetchAndRenderTasks());
+    add("Tasks", fetchAndRenderTasks());
     // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
     // panel shows the placeholder rendered above).
-    if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());
+    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // The dock's Drain card; without a concrete workspace it renders its own
     // read-only note instead of fetching.
     return jobs;
@@ -1322,30 +1328,30 @@ function activeRefreshJobs() {
 
   if (activeTab === "audit") {
     if (getActiveAuditSubtab() === "policy") {
-      jobs.push(fetchAndRenderPolicy(auditContext()));
+      add("Audit › Policy", fetchAndRenderPolicy(auditContext()));
     } else {
-      jobs.push(fetchAndRenderAudit(auditContext()));
+      add("Audit › Events", fetchAndRenderAudit(auditContext()));
     }
     return jobs;
   }
 
   if (activeTab === "knowledge") {
-    jobs.push(fetchAndRenderFrictions());
+    add("Knowledge › Frictions", fetchAndRenderFrictions());
     return jobs;
   }
 
   if (activeTab === "operations") {
-    jobs.push(fetchAndRenderOperations());
+    add(subpanel("operations-subtabs", activeOperationsSubtab), fetchAndRenderOperations());
     return jobs;
   }
 
   if (activeTab === "plugins") {
-    jobs.push(fetchAndRenderPlugins());
+    add("Plugins", fetchAndRenderPlugins());
     return jobs;
   }
 
   if (activeTab === "config") {
-    jobs.push(fetchAndRenderConfig());
+    add(subpanel("config-subtabs", getConfigSubtab()), fetchAndRenderConfig());
     return jobs;
   }
 
@@ -1354,12 +1360,12 @@ function activeRefreshJobs() {
       renderRunDetailEmpty("No run selected.");
       return jobs;
     }
-    jobs.push(fetchAndRenderRunDetail());
+    add("Run detail", fetchAndRenderRunDetail());
     // Events power both the Events sub-tab and the Gantt's retry markers, so
     // they're fetched on every run-detail refresh regardless of which sub-tab
     // is active.
-    jobs.push(fetchAndRenderRunEvents());
-    jobs.push(fetchAndRenderRunLogs());
+    add("Run events", fetchAndRenderRunEvents());
+    add("Run logs", fetchAndRenderRunLogs());
     return jobs;
   }
 
@@ -1371,12 +1377,12 @@ function activeRefreshJobs() {
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
     if (activeDiagSubtab === "reliability") {
-      jobs.push(fetchAndRenderReliability());
+      add("Health › Reliability", fetchAndRenderReliability());
       return jobs;
     }
     if (aggregate && activeDiagSubtab === "runs") {
       renderDiagnosticsPlaceholders();
-      jobs.push(fetchAndRenderRuns());
+      add("Runs", fetchAndRenderRuns());
       return jobs;
     }
     if (aggregate) {
@@ -1389,11 +1395,11 @@ function activeRefreshJobs() {
       // delivery/operations and Managed Execution stay on the same cutoff.
       // A mismatched window, a superseded request, or a stale workspace
       // visit is not painted.
-      jobs.push(fetchAndRenderScoreboard());
+      add("Health › Scoreboard", fetchAndRenderScoreboard());
       return jobs;
     }
     if (activeDiagSubtab === "runs") {
-      jobs.push(fetchAndRenderRuns());
+      add("Runs", fetchAndRenderRuns());
     } else {
       const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
@@ -1402,14 +1408,14 @@ function activeRefreshJobs() {
       const path = subtab === "incidents"
         ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}${classQuery}&limit=${DIAG_LIMIT}`
         : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`;
-      jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+      add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
         if (activeDiagSubtab === subtab && getWindow() === selectedWindow
           && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
 
-    jobs.push(
+    add("Health › Execution summary",
       requestPanel("diag-implement-one-body", "implement-one", () => Promise.all([
         fetchJson(`/api/diagnostics/implement_one`),
         fetchJson(`/api/tasks/completion-by-complexity`),
@@ -1490,6 +1496,7 @@ function fetchAndRenderRunEvents() {
     if (error.status !== 404) setActiveRunEventsError(error.message);
     renderRunEvents();
     renderRunGantt();
+    if (error.status !== 404) throw error;
   });
 }
 
@@ -1506,6 +1513,7 @@ function fetchAndRenderRunLogs() {
     setActiveRunLogs([]);
     if (error.status !== 404) setActiveRunLogsError(error.message);
     renderRunSteps();
+    if (error.status !== 404) throw error;
   });
 }
 
@@ -1648,8 +1656,27 @@ function refreshLabel() {
   return destinationLabel(activeTab, activeDiagSubtab);
 }
 
-
-
+// Chrome retains values when a panel fails. Mark the whole snapshot until a
+// clean refresh, preserving each control's own tooltip across repeated errors
+// and renderers that replace it while other panels are still failing.
+function markRefreshStale(stale) {
+  const suffix = lastCleanRefresh
+    ? `Stale · as of ${lastCleanRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
+    : "Stale · no successful refresh yet";
+  for (const node of document.querySelectorAll(".kpi:not(.host-resource), .rail-count, #global-drain-state")) {
+    const previous = node.dataset.refreshStaleSuffix;
+    if (previous && node.title.endsWith(previous)) {
+      node.title = node.title.slice(0, -previous.length).replace(/ · $/, "");
+    }
+    node.classList.toggle("refresh-stale", stale);
+    if (stale) {
+      node.title = node.title ? `${node.title} · ${suffix}` : suffix;
+      node.dataset.refreshStaleSuffix = suffix;
+    } else {
+      delete node.dataset.refreshStaleSuffix;
+    }
+  }
+}
 
 async function refreshDashboard() {
   const sequence = ++refreshSequence;
@@ -1657,14 +1684,20 @@ async function refreshDashboard() {
   $("meta-text").textContent = "fetching…";
   $("conn-status").className = "status-dot orange";
   // Refresh stays available so a slow request never locks navigation or retry.
-  const results = await Promise.allSettled(activeRefreshJobs());
+  const jobs = activeRefreshJobs();
+  const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
-  const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
-  const offline = errors.some(error => error.networkFailure);
-  for (const error of errors) console.error(error);
-  $("conn-status").className = `status-dot ${offline ? "red" : "green"}`;
-  const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
-  $("meta-text").textContent = `${label} · ${formatClock(new Date())}`;
+  const errors = results.flatMap((result, index) => result.status === "rejected"
+    ? [{ panel: jobs[index].panel, error: result.reason }] : []);
+  const offline = errors.some(({ error }) => error.networkFailure);
+  for (const { error } of errors) console.error(error);
+  const now = new Date();
+  if (errors.length === 0) lastCleanRefresh = now;
+  markRefreshStale(errors.length > 0);
+  $("conn-status").className = `status-dot ${offline ? "red" : errors.length ? "orange" : "green"}`;
+  const panels = [...new Set(errors.map(({ panel }) => panel))].join(", ");
+  const label = offline ? `offline · ${panels}` : errors.length ? `panel update failed: ${panels}` : `refreshed ${refreshLabel()}`;
+  $("meta-text").textContent = `${label} · ${formatClock(now)}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
   return errors.length === 0;
 }
@@ -1672,6 +1705,8 @@ async function refreshDashboard() {
 // Invalidate caches at the scope boundary, including programmatic selections.
 // Panel state is reset synchronously by common.js before another frame paints.
 onWorkspaceChange(() => {
+  lastCleanRefresh = null;
+  markRefreshStale(false);
   resetTaskPagination();
   taskFetchSequence += 1;
   lastTasks = [];
