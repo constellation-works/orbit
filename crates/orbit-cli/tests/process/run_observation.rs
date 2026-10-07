@@ -37,6 +37,161 @@ const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
 
+fn isolated_security_sweep(test: &str) -> bool {
+    const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
+    if std::env::var(MARKER).as_deref() == Ok(test) {
+        return true;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(MARKER, test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path());
+    let output = orbit_common::process::run_bounded_capped(
+        &mut command,
+        std::time::Duration::from_secs(60),
+        64 * 1024,
+    )
+    .unwrap();
+    test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
+    false
+}
+
+#[test]
+fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
+    if !isolated_security_sweep(
+        "run_observation::successful_security_sweep_shows_filing_floor_source_and_excluded_alerts",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    for source in [Some("workspace"), None] {
+        let id = format!("jrun-cli-security-{}", source.unwrap_or("historical"));
+        let now = chrono::Utc::now().to_rfc3339();
+        fixture.db().execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)",
+            params![id, fixture.workspace_id(), now],
+        ).unwrap();
+        let mut state = orbit_types::workflow::PipelineState::new(
+            id.clone(),
+            "dependabot_alert_sweep_pipeline".into(),
+            serde_json::json!({}),
+        );
+        let mut output = serde_json::json!({
+            "filed_count": 1, "min_severity": "high",
+            "excluded_below_min_severity": [
+                {"family": "dependabot", "number": 71, "severity": "moderate"},
+                {"family": "code_scanning", "alert_number": 81, "security_severity": "moderate"}
+            ]
+        });
+        if let Some(source) = source {
+            output["min_severity_source"] = serde_json::json!(source);
+        }
+        state.record_pipeline_output("file", output);
+        runtime.write_run_state(&id, &state).unwrap();
+        let output = fixture
+            .orbit()
+            .args(["run", "show", &id, "--no-reconcile"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("filed=1"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "min_severity=high ({})",
+                source.unwrap_or("unavailable")
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("2 (dependabot #71, code_scanning #81)"),
+            "successful sweeps must expose excluded alerts (2026-10-06/07 incident): {text}"
+        );
+    }
+}
+
+#[test]
+fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
+    if !isolated_security_sweep(
+        "run_observation::shipped_security_job_uses_config_unless_run_input_overrides_it",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    // No gh is available: collection reports the capability gap, but filing
+    // still resolves its floor through the shipped job's real templates.
+    for (config, input, floor, source) in [
+        ("", None, "moderate", "built-in"),
+        (
+            "[security_alert_sweep]\nmin_severity = \"high\"\n",
+            None,
+            "high",
+            "workspace",
+        ),
+        (
+            "[security_alert_sweep]\nmin_severity = \"high\"\n",
+            Some("min_severity=critical"),
+            "critical",
+            "input",
+        ),
+        (
+            "[security_alert_sweep]\nmin_severity = \"high\"\n",
+            None,
+            "high",
+            "workspace",
+        ),
+    ] {
+        fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
+        let mut command = fixture.orbit();
+        command.args([
+            "run",
+            "job",
+            "dependabot_alert_sweep_pipeline",
+            "--wait",
+            "--json",
+        ]);
+        if let Some(input) = input {
+            command.args(["--input", input]);
+        }
+        command.timeout(std::time::Duration::from_secs(30));
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let shown = fixture.json(&[
+            "run",
+            "show",
+            submitted["run_id"].as_str().unwrap(),
+            "--json",
+        ]);
+        let output = &shown["pipeline_state"]["pipeline"]["file"];
+        assert_eq!(output["min_severity"], floor);
+        assert_eq!(output["min_severity_source"], source);
+        assert_eq!(
+            fs::read_to_string(fixture.work.join(".orbit/config.toml")).unwrap(),
+            config
+        );
+    }
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     home: PathBuf,

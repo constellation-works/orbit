@@ -282,6 +282,8 @@ they do not launch repair agents or ship the tasks they create.
 orbit job show ci_failure_sweep_pipeline
 orbit run job ci_failure_sweep_pipeline --input integration_branch=<branch> --input max_tasks=5
 orbit job show dependabot_alert_sweep_pipeline
+orbit run job dependabot_alert_sweep_pipeline --input max_tasks=10
+# Override the configured floor for one run:
 orbit run job dependabot_alert_sweep_pipeline --input min_severity=high --input max_tasks=10
 ```
 
@@ -294,9 +296,21 @@ inert routine, is explicit promotion authorization; the filing activity and a
 standalone `task_pilot_pipeline` run carry no such authority. Set the CI
 integration branch explicitly when it differs from GitHub's default branch.
 CI defaults bound investigation to six runs and filing to five tasks. The
-security job defaults to high-severity Dependabot/code-scanning findings and
-always considers secret-scanning findings; it skips dependency alerts with an
-open Dependabot PR by default. Its catalog exposes per-source collection caps.
+security job defaults to `moderate` and above for Dependabot/code-scanning
+findings. Set `[security_alert_sweep] min_severity = "high"` in the workspace
+`.orbit/config.toml` or global `~/.orbit/config.toml` to change the floor for
+scheduled routines and manual runs. Allowed values are `low`, `moderate`,
+`high` and `critical`; precedence is explicit run/job `min_severity` input >
+workspace config > global config > built-in `moderate`. The `--input
+min_severity=high` example overrides config for that run only. Invalid config
+values fail validation with `security_alert_sweep.min_severity` named in the
+error. Secret-scanning findings are always considered regardless of this floor;
+dependency alerts with an open Dependabot PR are skipped by default. Its catalog
+exposes per-source collection caps. The file step records the effective
+`min_severity`, `min_severity_source` (`input`, `workspace`, `global` or
+`built-in`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
+summarizes the filed count, floor and source, and excluded alert count and
+numbers, including for a successful sweep.
 Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,

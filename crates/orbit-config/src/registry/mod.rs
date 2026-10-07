@@ -33,6 +33,7 @@ use serde_json::{Value as JsonValue, json};
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
+const SECURITY_ALERT_SEVERITIES: &[&str] = &["low", "moderate", "high", "critical"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// Built-in name of the bounded system lane and the default value of
 /// `workflow.system_crew`. Shipped job steps name this crew directly, and a
