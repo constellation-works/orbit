@@ -266,25 +266,40 @@ fn a_file_the_child_generates_is_readable() {
         .assert_returned("GENERATED_SENTINEL");
 }
 
-/// `/proc` is not granted as a tree, because a process can read any same-user
-/// process's `environ` — including the Orbit process that launched the child,
-/// whose environment may hold provider credentials.
+/// `/proc` must not expose another process's status. Unlike `environ`,
+/// `status` is not ptrace-gated, so granting `/proc` as a tree would leak it
+/// even when Landlock's separate ptrace restriction remains in force.
 #[test]
-fn the_child_cannot_read_another_processs_environment() {
+fn the_child_cannot_read_another_processs_status() {
     if unenforceable() {
         return;
     }
     let fixture = Fixture::new();
+    let profile = profile(&["**"]);
+    // This process is spawned outside the confined child's Landlock domain.
+    // Its guard keeps it alive through the read and kills/reaps it on drop,
+    // including when an assertion fails.
+    let sentinel = orbit_common::test_env::spawn_unrelated_process();
+    let status_path = format!("/proc/{}/status", sentinel.pid());
+    let pid_field = format!("Pid:\t{}\n", sentinel.pid());
+    let status = fs::read_to_string(&status_path).expect("read unsandboxed sentinel status");
+    assert!(
+        status.contains(&pid_field),
+        "the unsandboxed read must identify the live sentinel"
+    );
 
+    // Prove that cat works inside the boundary before testing denial.
+    fixture.write("visible.txt", "CAT_OK");
     fixture
-        .run(
-            &profile(&["**"]),
-            &format!(
-                "cat /proc/{}/environ && echo PARENT_ENVIRON_READ",
-                std::process::id()
-            ),
-        )
-        .assert_withheld("PARENT_ENVIRON_READ");
+        .run(&profile, "cat visible.txt")
+        .assert_returned("CAT_OK");
+    let output = fixture.run(&profile, &format!("cat {status_path}"));
+    output.assert_withheld(&pid_field);
+    assert!(
+        !output.succeeded,
+        "the confined child must fail to read another process's status: stderr={:?}",
+        output.stderr
+    );
 }
 
 /// Criterion 3: the programs shipped activity allowlists name still work, and
