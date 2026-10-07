@@ -385,6 +385,24 @@ table.sb2-matrix td.cell {
   }
 }
 
+/* The metric column stays pinned while the agent columns scroll under it;
+   the scroll padding keeps scroll-into-view from parking a value beneath it. */
+@media (max-width: 768px) {
+  #scoreboard-body { scroll-padding-left: 220px; }
+  table.sb2-matrix thead th.col-metric,
+  table.sb2-matrix td.m-label {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+  }
+  table.sb2-matrix thead th.col-metric { z-index: 3; box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border); }
+  table.sb2-matrix td.m-label { z-index: 1; }
+}
+@media (max-width: 720px) {
+  #scoreboard-body { scroll-padding-left: 132px; }
+}
+
 .scoreboard-insights .ins-row {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);

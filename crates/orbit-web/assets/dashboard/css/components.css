@@ -343,6 +343,74 @@
   overflow-x: auto;
 }
 
+/* Below tablet width a table that still overflows keeps its first column
+   pinned and fades the scrolling edges, so the sideways scroll is visible.
+   The fade is the classic scroll-shadow: `local` covers hide each shadow once
+   the scroller is at that edge. Cells need an opaque background so the
+   scrolled columns do not show through the pinned one. */
+@media (max-width: 768px) {
+  .scoreboard-table-wrap {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
+  table.scoreboard-table th { z-index: 2; }
+  table.scoreboard-table th:first-child,
+  table.scoreboard-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+  }
+  table.scoreboard-table th:first-child {
+    z-index: 3;
+    box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
+  }
+  table.scoreboard-table td:first-child { z-index: 1; }
+  table.scoreboard-table tr.clickable:hover td:first-child,
+  table.scoreboard-table tr.audit-row:hover td:first-child {
+    background: color-mix(in srgb, white 3%, var(--bg-elev));
+  }
+  table.scoreboard-table tr.audit-row.expanded td:first-child {
+    background: color-mix(in srgb, #6e9fff 5%, var(--bg-elev));
+  }
+}
+
+/* `.card-table` rows (audit events, errors) restack as cards on phones, so
+   they need no sideways scroll; each table's own CSS places its cells. */
+@media (max-width: 600px) {
+  table.card-table,
+  table.card-table tbody { display: block; width: 100%; }
+  table.card-table thead { display: none; }
+  table.card-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.card-table tbody tr td,
+  table.card-table tbody tr td:first-child {
+    position: static;
+    padding: 1px 0;
+    border: 0;
+    box-shadow: none;
+    /* The row paints the hover and expanded tints; per-cell tints would leave
+       gaps between grid areas. */
+    background: transparent !important;
+    min-width: 0;
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  table.card-table tbody tr.clickable:hover,
+  table.card-table tbody tr.audit-row:hover { background: rgba(255, 255, 255, 0.03); }
+  table.card-table tbody tr.audit-row.expanded { background: rgba(110, 159, 255, 0.05); }
+}
+
 .empty-state.compact {
   align-items: flex-start;
   padding: 16px;

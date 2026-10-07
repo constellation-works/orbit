@@ -404,6 +404,172 @@ async function assertTopbarSingleRow(page) {
   }
 }
 
+// Runs, Audit Events and Errors restack as cards on a phone and must show each
+// row's state, name and time without any sideways scrolling; the tables that
+// still scroll (Metrics, Scoreboard) keep their first column pinned and show a
+// scroll edge. Fixtures stay in this function so it owns its fetch.
+async function assertNarrowTableLayouts(page) {
+  await page.evaluate(async () => {
+    const now = Date.now();
+    const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
+    const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
+    const runs = ['failed', 'success', 'running'].map((state, index) => ({
+      run_id: `jrun-20261007-0717-c${index}-with-a-long-identifier`, job_id: `a-job-with-a-long-name-${index}`, state,
+      created_at: iso(index + 1), duration_ms: 90000,
+    }));
+    const events = ['success', 'failure'].map((status, index) => ({
+      id: 9000 + index, timestamp: iso(index + 1), role: 'implementer', tool_name: 'orbit.task.update',
+      command: 'task', subcommand: 'update', target_type: 'task', target_id: `TASK-${index}`,
+      status, exit_code: index, duration_ms: 1234,
+    }));
+    const errors = [0, 1].map(index => ({
+      ts: iso(index + 1), source: 'step_failed', job_run: `jrun-error-${index}`, provider: 'claude', step: 'implement',
+      message: 'a long failure message that has to wrap onto several lines inside a phone-width card '.repeat(3),
+    }));
+    const metrics = [0, 1, 2].map(index => ({
+      ts: iso(index + 1), step: `step-with-a-long-name-${index}`, actor_identity: 'claude-sonnet-5-5',
+      token_usage: 123456, tool_invocations: 77, step_duration_ms: 456000, retry_count: 1,
+    }));
+    const fixtureFetch = globalThis.fetch;
+    globalThis.narrowTableFixtureFetch = fixtureFetch;
+    globalThis.fetch = async (path, options) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname === '/api/job-runs') return response({ items: runs, total: runs.length, limit: 50, truncated: false });
+      if (url.pathname === '/api/audit') return response(events);
+      if (url.pathname === '/api/diagnostics/errors') return response(errors);
+      if (url.pathname === '/api/diagnostics/metrics') return response(metrics);
+      return fixtureFetch(path, options);
+    };
+  });
+  const refresh = async () => {
+    await page.evaluate(() => document.getElementById('refresh-btn').click());
+  };
+  const pageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  const scrolls = id => page.evaluate(target => {
+    const node = document.getElementById(target);
+    return node.scrollWidth > node.clientWidth + 1;
+  }, id);
+  // Every named element must lie inside the viewport with its text unclipped.
+  const assertVisible = async (selectors, scope, label, width) => {
+    const problems = await page.evaluate(({ selectors, scope }) => selectors.map(selector => {
+      const node = document.querySelector(`${scope} ${selector}`);
+      if (!node) return { selector, missing: true };
+      const rect = node.getBoundingClientRect();
+      const topmost = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+      const complete = node.scrollWidth <= node.clientWidth + 1;
+      const inside = rect.width > 0 && rect.left >= 0 && rect.right <= window.innerWidth + 0.5;
+      return inside && complete && node.contains(topmost) ? null : { selector, text: node.textContent, rect: rect.toJSON(), complete, inside };
+    }).filter(Boolean), { selectors, scope });
+    if (problems.length) throw new Error(`${label} hides content at ${width}px: ${JSON.stringify(problems)}`);
+  };
+  await page.setViewportSize({ width: 375, height: 900 });
+
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/runs'));
+  await refresh();
+  await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
+  if (await scrolls('runs-body') || await pageOverflow()) throw new Error('Runs must not scroll sideways at 375px');
+  await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
+  await page.screenshot({ path: path.join(evidence, 'runs-375.png'), fullPage: true });
+
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
+  await refresh();
+  await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
+  if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Audit events must not scroll sideways at 375px');
+  await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Audit events', 375);
+  await page.screenshot({ path: path.join(evidence, 'audit-375.png'), fullPage: true });
+
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
+  await refresh();
+  await page.locator('#diag-body tbody tr').first().waitFor({ state: 'visible', timeout: 5000 });
+  if (await scrolls('diag-body') || await pageOverflow()) throw new Error('Errors must not scroll sideways at 375px');
+  await assertVisible(['tbody tr .c-source', 'tbody tr .c-job_run', 'tbody tr .c-ts', 'tbody tr .c-message'], '#diag-body', 'Errors', 375);
+  await page.screenshot({ path: path.join(evidence, 'errors-375.png'), fullPage: true });
+
+  // Still-scrolling tables: first column pinned, scroll edge painted.
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/metrics'));
+  await refresh();
+  await page.locator('#diag-body tbody tr').first().waitFor({ state: 'visible', timeout: 5000 });
+  for (const width of [375, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    const pinned = await page.evaluate(() => {
+      const wrap = document.getElementById('diag-body');
+      const table = wrap.querySelector('table.scoreboard-table');
+      const cell = table.querySelector('tbody tr td:first-child');
+      wrap.scrollLeft = wrap.scrollWidth;
+      const wrapRect = wrap.getBoundingClientRect();
+      const rect = cell.getBoundingClientRect();
+      const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
+      return {
+        scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
+        scrolled: wrap.scrollLeft > 0,
+        stays: Math.abs(rect.left - wrapRect.left) < 1.5,
+        painted: cell.contains(topmost),
+        edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
+      };
+    });
+    if (width === 375 && !pinned.scrolls) throw new Error('Metrics must still scroll sideways at 375px for this check to mean anything');
+    if (pinned.scrolls && !(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
+      throw new Error(`Metrics first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
+    }
+    await page.screenshot({ path: path.join(evidence, `metrics-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.evaluate(async () => {
+    const { renderScoreboard } = await import('/js/scoreboard.js');
+    const { getWindow } = await import('/js/common.js');
+    const agent = base => ({ tasks_created: base, tasks_planned: base, tasks_completed: base, failed_tool_calls: base, tool_calls: base * 100 });
+    renderScoreboard({ window: getWindow(), agents: { codex: agent(1), claude: agent(2), gemini: agent(3), grok: agent(4) } });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'diagnostics');
+    document.getElementById('diagnostics-main').style.display = 'none';
+    document.getElementById('diagnostics-scoreboard-main').style.display = 'grid';
+  });
+  const matrix = await page.evaluate(() => {
+    const wrap = document.getElementById('scoreboard-body');
+    const label = wrap.querySelector('table.sb2-matrix td.m-label');
+    label.scrollIntoView({ block: 'center' });
+    wrap.scrollLeft = wrap.scrollWidth;
+    const rect = label.getBoundingClientRect();
+    const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
+    return {
+      scrolled: wrap.scrollLeft > 0,
+      stays: Math.abs(rect.left - wrap.getBoundingClientRect().left) < 1.5,
+      painted: label.contains(topmost),
+      edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
+    };
+  });
+  if (!(matrix.scrolled && matrix.stays && matrix.painted && matrix.edge)) {
+    throw new Error(`Scoreboard metric column or scroll edge missing at 375px: ${JSON.stringify(matrix)}`);
+  }
+  await page.screenshot({ path: path.join(evidence, 'scoreboard-375-pinned.png'), fullPage: true });
+
+  // Desktop keeps the plain tables: no cards, no pinned column, no scroll edge.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(async () => {
+    document.getElementById('diagnostics-scoreboard-main').style.display = 'none';
+    document.getElementById('diagnostics-main').style.display = '';
+    (await import('/js/router.js')).setActiveTab('audit/events');
+  });
+  await refresh();
+  await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
+  const desktop = await page.evaluate(() => {
+    const row = document.querySelector('#audit-body tr.audit-row');
+    const cell = row.querySelector('td');
+    return {
+      rowDisplay: getComputedStyle(row).display,
+      headVisible: getComputedStyle(document.querySelector('#audit-body thead')).display !== 'none',
+      cellPosition: getComputedStyle(cell).position,
+      edge: getComputedStyle(document.getElementById('audit-body')).backgroundImage,
+    };
+  });
+  if (desktop.rowDisplay !== 'table-row' || !desktop.headVisible || desktop.cellPosition !== 'static' || desktop.edge !== 'none') {
+    throw new Error(`Desktop audit table changed: ${JSON.stringify(desktop)}`);
+  }
+  await page.evaluate(() => {
+    globalThis.fetch = globalThis.narrowTableFixtureFetch;
+    delete globalThis.narrowTableFixtureFetch;
+  });
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
@@ -472,6 +638,7 @@ try {
   await detail.waitFor({ state: 'visible' });
   const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
+  await assertNarrowTableLayouts(page);
   await page.evaluate(() => globalThis.showDiagnosticsEvidence());
   // Hold a real visible panel in refresh, then inspect its rendered accessible
   // feedback and retry affordance at desktop and narrow widths.
@@ -502,7 +669,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();
