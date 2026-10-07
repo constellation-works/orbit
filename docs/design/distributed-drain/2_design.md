@@ -969,7 +969,7 @@ Acceptance criteria, not reported as passing.
 | Pull commits, response lost | Same request returns the same claim; no second task consumed |
 | Idle result replayed after new work arrives | Same request stays idle; a new poll may claim |
 | Crash before/after local run creation or before binding response | Same claim reconciled; at most one leaf per claim; pending admission holds capacity |
-| Invalid dependency or empty lock surface | Diagnostic exclusion; other eligible tasks progress |
+| Invalid dependency or invalid lock surface | Diagnostic exclusion; other eligible tasks progress |
 | Reservation expires during valid execution | No automatic revocation or duplicate admission; status lock remains |
 | Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
 | Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |

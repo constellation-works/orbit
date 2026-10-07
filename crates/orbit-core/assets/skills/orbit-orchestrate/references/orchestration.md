@@ -154,8 +154,8 @@ orbit run show <run_id>
 
 ## Prepare selectors before dispatching under traffic
 
-`context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. Empty-surface
-eligibility differs by admission path; do not assume it protects files.
+`context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. An empty
+surface is admitted without a context lock, so it protects no files.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it

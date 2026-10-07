@@ -46,7 +46,7 @@ The queue is a logical owner-side query, not a required maintained table:
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
 - **Invalid entries:** dangling/rejected dependencies, dependencies archived before reaching
-  `done`, or invalid/empty lock surfaces are excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
+  `done`, or invalid lock surfaces are excluded with diagnostics. An empty surface is not invalid: it is admitted without a context lock. They do not prevent unrelated valid work from being admitted.
   Missing filesystem targets are valid declarations, not grounds for pruning: retain canonical
   selectors for new files and symbols, and freeze the full footprint on the claim through review.
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty

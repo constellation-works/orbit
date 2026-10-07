@@ -115,7 +115,7 @@ fn lint_single_task(runtime: &OrbitRuntime, id: &str, restore_pruned: bool) -> C
 }
 
 /// Sweep active tasks for context declarations that need repair before they
-/// can be admitted: an empty or unusable surface, or selectors an earlier
+/// can hold context locks: an empty or unusable surface, or selectors an earlier
 /// prune removed and recorded ([ORB-12490]).
 ///
 /// Nothing here deletes a declaration. The sweep that used to drop selectors
