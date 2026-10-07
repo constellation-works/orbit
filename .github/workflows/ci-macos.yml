@@ -77,6 +77,33 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
+  macos-clippy:
+    name: macOS Clippy (informational)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-macos-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-macos-clippy-
+            ${{ runner.os }}-cargo-macos-sandbox-
+            ${{ runner.os }}-cargo-
+
+      - name: Run workspace Clippy gates
+        run: make ci-lint
+
   macos-sandbox:
     name: macOS Sandbox
     runs-on: macos-latest
