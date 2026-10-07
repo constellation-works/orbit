@@ -47,9 +47,12 @@ a host that can create Linux mount namespaces.
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
-root. Managed worktrees also bind the checkout at `/tmp/orbit-workspace` and
-`<worktree>/target` at `/tmp/orbit-build` inside the private mount namespace so
-sccache keys do not include the `jrun-*` path. Workspace `.orbit/**`
+root. Managed worktrees whose activity cwd lies within a writable policy root
+also bind that cwd at `/tmp/orbit-workspace` and
+`<cwd>/target` at `/tmp/orbit-build` inside the private mount namespace so
+sccache keys do not include the `jrun-*` path. A profile granting only a
+subdirectory below the cwd receives neither alias, preserving read-only
+access to ungranted source and build paths. Workspace `.orbit/**`
 protected-path denies are unchanged. Reviewer and other read-only profiles do
 not receive the cache grant. macOS already allows `$HOME/Library/Caches` and
 also grants `$HOME/.orbit/cache/**` to write-capable profiles so the same
