@@ -505,7 +505,11 @@ impl TaskCommitBoundary {
                 if !orbit_common::fs::selector::claim_new_path_is_safe(path)
                     || !additions.insert(format!("file:{path}"))
                 {
-                    return Err(invalid(&format!("footprint widening refused path: {path}")));
+                    return Err(invalid(&format!(
+                        "footprint widening refused path: {path}; paths must be unique and exclude \
+                         traversal, Git or `.orbit` metadata and environment files (including `.envrc`); \
+                         protected names and environment patterns ignore ASCII case on every host"
+                    )));
                 }
                 // Missing owner worktree files are normal for published candidates;
                 // existing symlink ancestors must not redirect selector identity.

@@ -918,8 +918,9 @@ A per-task bundle assigns each path to exactly one task instead of refusing an
 ambiguous path: the task whose agent's widening history names it, else the
 task with the exact `file:` selector, else the first owner; a path no selector
 covers goes to the first task. A claimed leaf writes no owner selectors; it
-refuses only protected new paths (Git or `.orbit` metadata, environment files)
-before changing the index, and the owner accepts the rest as footprint widening
+refuses only protected new paths (Git or `.orbit` metadata, environment files,
+including `.envrc`), matching protected names and environment patterns without
+regard to ASCII case on every host before changing the index, and the owner accepts the rest as footprint widening
 at handoff (distributed-drain design §3). Handoff and owner acceptance inspect
 the candidate's Git tree modes for additions and tracked type changes, refusing
 symlinks and gitlinks even when the owner's checkout still holds the base.

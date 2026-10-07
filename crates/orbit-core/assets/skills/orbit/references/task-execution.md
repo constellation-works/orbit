@@ -188,7 +188,9 @@ In claimed mode, use the injected list and report additions in
 frozen footprint. A declaration does not acquire a lock. Paths outside the
 footprint still deliver: the owner widens the footprint from the published
 candidate at handoff. Only Git or `.orbit` metadata, environment files and
-symlinks are refused.
+symlinks are refused. Protected metadata names and environment patterns (including
+`.envrc`) ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and
+`.Env.local` are refused even on Linux.
 
 **In a linked pipeline worktree, never use positional `git stash` /
 `git stash pop`.** Refs and the stash list are repository-global, so a positional

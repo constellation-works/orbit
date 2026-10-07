@@ -130,7 +130,9 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 10).
+exact paths. Protected metadata names and environment patterns (including `.envrc`)
+ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and `.Env.local`
+are refused even on Linux. Both peers require the same protocol revision (currently 10).
 Tagged `no-diff-expected` tasks remain on the owner with a receipt reason.
 An ordinary claim that proves its implementation changes nothing may instead
 hand off `NoDiff`. In claimed mode the implementer writes the verifier report

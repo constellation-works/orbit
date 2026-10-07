@@ -26,7 +26,8 @@ pub(super) enum NewPathPolicy {
     Owner,
     /// A claimed leaf: every untracked path outside scratch that the owner
     /// can accept as footprint widening at handoff — no traversal, Git or
-    /// `.orbit` metadata, or environment-secret path.
+    /// `.orbit` metadata, or environment-secret path. Protected names and
+    /// environment patterns ignore ASCII case on every host.
     Claimed,
 }
 
@@ -56,7 +57,8 @@ pub(super) fn task_candidate_paths(
         if !protected.is_empty() {
             return Err(OrbitError::Execution(format!(
                 "task delivery refused protected untracked paths: {protected:?}. A claimed run \
-                 cannot deliver Git or `.orbit` metadata or environment files; write scratch \
+                 cannot deliver Git or `.orbit` metadata or environment files (including `.envrc`); \
+                 protected names and environment patterns ignore ASCII case on every host. Write scratch \
                  and evidence under `{SCRATCH_DIR}/`. Orbit did not change the index or any \
                  listed file"
             )));
@@ -84,7 +86,9 @@ pub(super) fn task_candidate_paths(
 /// Independently read additions and tracked type changes (rename detection
 /// off), refusing anything but a regular file in the candidate tree. Added
 /// paths also exclude traversal, Git or `.orbit` metadata and environment
-/// secrets. Return the additions and the exact widening request from the
+/// secrets, including `.envrc`, matching protected names and environment
+/// patterns without regard to ASCII case on every host. Return the additions
+/// and the exact widening request from the
 /// original admission selectors: every added path they do not cover.
 pub fn validate_claim_new_paths(
     workspace_path: &Path,
@@ -137,7 +141,8 @@ pub fn validate_claim_new_paths(
     if !refused.is_empty() {
         return Err(OrbitError::Execution(format!(
             "task delivery refused protected candidate paths: {refused:?}. Owner footprint widening \
-             accepts any regular file outside Git and `.orbit` metadata and environment files; \
+             accepts any regular file outside Git and `.orbit` metadata and environment files \
+             (including `.envrc`); protected names and environment patterns ignore ASCII case on every host; \
              candidate symlinks and gitlinks are refused"
         )));
     }

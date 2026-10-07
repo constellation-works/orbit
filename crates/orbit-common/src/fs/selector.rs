@@ -687,16 +687,19 @@ pub(super) fn root_ancestor(path: &str) -> Option<&'static str> {
 }
 
 /// Whether a new path is one an owner can accept from a claimed run: no
-/// traversal, Git or `.orbit` metadata, or environment-secret path. Any other
-/// path widens the claim's footprint at handoff acceptance.
+/// traversal, Git or `.orbit` metadata, or environment-secret path (including
+/// `.envrc`). Protected names and environment patterns ignore ASCII case on
+/// every host, since a candidate may later be checked out on a filesystem
+/// that ignores case. Any other path widens the claim's footprint at handoff
+/// acceptance.
 pub fn claim_new_path_is_safe(path: &str) -> bool {
-    let parts = path.split('/').collect::<Vec<_>>();
-    !parts.iter().any(|part| {
+    !path.split('/').any(|part| {
+        let part = part.to_ascii_lowercase();
         part.is_empty()
-            || matches!(*part, "." | ".." | ".git" | ".orbit")
+            || matches!(part.as_str(), "." | ".." | ".git" | ".orbit" | ".envrc")
             || part.contains('\\')
             || part.contains(':')
-            || *part == ".env"
+            || part == ".env"
             || part.starts_with(".env.")
             || part.ends_with(".env")
             || part.contains(".env.")
