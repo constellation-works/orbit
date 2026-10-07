@@ -59,8 +59,8 @@ orbit task show "$TASK_ID" --fields status,context_files
 ## 2. Authorize the backlog
 
 Approving a `proposed` task moves it to `backlog`, where a window can start
-it. Only approval does this: neither the pilot nor anything you pass to the
-drain approves a task.
+it. The task pilot alone does not approve work; approve tasks individually or
+authorize a local drain to approve qualifying proposals.
 
 - **Dashboard:** in **Tasks**, click **Approve** on the task under **Awaiting
   approval**.
@@ -73,6 +73,25 @@ drain approves a task.
 
 Do not approve a task that is already in `backlog`. Once its pilot has
 applied the context it needs, it is ready.
+
+To authorize approval throughout a local window:
+
+```bash
+orbit run auto --for 4h --approve-proposed
+```
+
+On every pass, the drain pilots proposed tasks with the `no-diff-expected`
+tag, or with context files and an assessed complexity. It approves those
+with no duplicate, already-landed, conflict or warning finding, including
+tasks filed while the window is open. Tasks tagged `no-auto-approve` stay
+proposed until a human approves them. Other held tasks also stay proposed;
+`orbit run show` and `orbit run readiness` report approval counts and hold
+reasons. Each approval's history note names the drain run.
+
+`--approve-proposed` is off by default and conflicts with `--pull`, since
+only the owner approves work. Approval still respects dependencies, file
+locks, and crew restrictions when the drain admits a task. Add `--complete`
+separately if the window should also finish delivery.
 
 ## 3. Check what will actually start
 
@@ -237,7 +256,8 @@ running under the completion authority they were admitted with, and the
 coordinator is not cancelled. Stopping again, or with no active window, does
 nothing. Other workspaces and jobs are untouched. `orbit run show
 "$AUTO_RUN_ID"` then reports who stopped admissions. `--stop` cannot be
-combined with `--for`, `--concurrency`, `--complete`, or `--allow-crew`.
+combined with flags that start a drain, including `--for`, `--concurrency`,
+`--complete`, `--approve-proposed`, or `--allow-crew`.
 
 **Cancel work in flight.** Cancel each child you want to abandon: open it in
 **Runs** and click **cancel**, or:
@@ -247,9 +267,20 @@ orbit run trace "$AUTO_RUN_ID"           # find the child run IDs
 orbit run cancel "$CHILD_RUN_ID" --confirm
 ```
 
-Do not cancel the drain's own run to stop it: its children are detached and
-outlive it. Stop admissions first, then cancel only the children you want to
-abandon.
+Cancelling a task leaf returns its task to `backlog` with the reason and keeps
+its candidate available to resume. Add `--block` to keep the task blocked for
+manual recovery instead.
+
+A plain cancel of a local drain leaves its children running. Stop admissions
+first, then cancel only the children you want to abandon, or use
+`orbit run cancel "$AUTO_RUN_ID" --confirm --force` to stop the drain and all
+the task runs it started. A child whose stop cannot be confirmed is reported
+and makes the command exit 1.
+
+Cancelling a [pull drain](../distributed-drain/#stop-cancel-and-settle) is
+graceful: unlaunched claims return to the owner's backlog while launched
+leaves finish and settle. `--force` stops those leaves too and returns their
+claims to the owner's backlog once their stop is confirmed.
 
 ## 7. Recover from a failed delivery
 
@@ -273,9 +304,13 @@ review, or dependency problem first; do not rerun blindly.
      <run-id>`) to continue from its first unsuccessful step; or
    - move the task back to `backlog` with its status dropdown in **Tasks**
      (`orbit task update "$TASK_ID" --status backlog`) so a later window runs
-     it fresh. This is the only option after a cancelled run.
+     it again, resuming any saved candidate.
 
    `orbit task show "$TASK_ID"` prints the exact command on its `Next:` line.
+
+A cancelled task leaf is already back in `backlog` by default, with its
+candidate resumable on the next delivery. If you cancelled with `--block`,
+return it to `backlog` when it is ready to run again.
 
 A host-specific or environmental failure that keeps recurring needs the host
 fixed, not another attempt.

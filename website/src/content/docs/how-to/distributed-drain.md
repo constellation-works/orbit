@@ -63,14 +63,21 @@ orbit doctor
 ```
 
 Then probe the owner. On the owner, run this read-only check; it reports the
-first reason a real pull would be refused:
+first reason a real pull would be refused. Read `protocol_schema` from the
+installed binary instead of copying a revision from this page. Use that value
+for `caller_schema` only after confirming the replica runs the matching
+build; it is the distributed-drain revision, not the MCP protocol revision.
+Replace `<replica-version>` with the replica's `orbit --version` value and
+set `caller_before_pr` to its `review.before_pr` value:
 
 ```bash
-ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
-  "caller_version": "<replica-version>",
-  "caller_schema": 7,
-  "caller_before_pr": false
-}'
+DRAIN_SCHEMA=$(ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{}' |
+  node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).protocol_schema')
+ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input "{
+  \"caller_version\": \"<replica-version>\",
+  \"caller_schema\": $DRAIN_SCHEMA,
+  \"caller_before_pr\": false
+}"
 ```
 
 ## Start the pull drain
@@ -98,9 +105,23 @@ drain.
 `orbit run auto --stop` on the replica stops new claims. Running tasks still
 finish and hand off, and it delivers any result still waiting to reach the
 owner. It is safe to repeat, and `orbit doctor` on the replica warns when
-results are waiting. Prefer it to `orbit run cancel <drain-run> --confirm`,
-which kills the drain and sends tasks it had claimed but not started to
-`blocked`.
+results are waiting.
+
+`orbit run cancel <drain-run> --confirm` cancels a running pull drain
+gracefully. It stops new claims immediately and returns claims it has not
+launched to the owner's `backlog`. Launched leaves keep running until they
+finish and their outcomes reach the owner; the drain reports `cancelling`
+during that wait, then ends `cancelled`. The command returns immediately;
+follow the wait with `orbit run show <drain-run>`.
+
+Add `--force` to stop the drain and its running leaves without waiting for
+them to finish. Their claims return to the owner's `backlog` with the reason.
+A leaf whose stop cannot be confirmed keeps its claim on the owner, is
+reported, and makes the command exit 1. Only that drain's leaves are affected.
+
+Cancelling a task leaf directly returns its task to the owner's `backlog`
+and keeps its candidate available to resume. Add `--block` to keep that task
+blocked for manual recovery instead.
 
 ## Recover a failed task
 

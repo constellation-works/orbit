@@ -97,8 +97,13 @@ only after it has committed, merged, and pushed. A closed or blocked pull
 request, or a failed merge or push, fails the run and leaves the task in
 `review`.
 
-Completion is off unless you grant it on that run. No workspace setting,
-environment variable, or scheduled sweep turns it on. Two limits:
+Local ship and auto runs require completion authorization on that run;
+scheduled ship sweeps never complete tasks. For
+[distributed handoffs](../../how-to/distributed-drain/), the owner can instead
+set `workflow.distributed_completion = "done"` to authorize landing accepted
+handoffs automatically. Its default, `"review"`, waits for **Approve handoff**
+on the owner's dashboard. This setting applies to distributed handoffs, not
+local ship or auto runs. Two limits on per-run completion:
 
 - **A drain's completion covers its whole window**, including tasks that reach
   the backlog after it starts. It does not carry over to any other run.
