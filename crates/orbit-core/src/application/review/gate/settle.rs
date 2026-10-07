@@ -562,7 +562,7 @@ fn post_comment(
     comment: &str,
 ) -> Result<(), OrbitError> {
     if context.claimed {
-        runtime.route_worker_tool(
+        runtime.route_worker_host_tool(
             "orbit.task.update",
             json!({
                 "id": task_id,
@@ -574,7 +574,6 @@ fn post_comment(
                     ..ClaimWorkerUpdate::default()
                 },
             }),
-            Default::default(),
         )?;
         return Ok(());
     }

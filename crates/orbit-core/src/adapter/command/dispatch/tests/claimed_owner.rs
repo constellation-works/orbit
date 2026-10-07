@@ -182,7 +182,11 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
         ),
     ];
     for (case, name, input) in cases {
-        let error = fixture.forwarded(&broker, name, input).unwrap_err();
+        let error = match fixture.call(Some(broker.socket_path()), name, input) {
+            Some(ClaimedOwnerRoute::Forwarded(Err(error)))
+            | Some(ClaimedOwnerRoute::Refused(error)) => error.to_string(),
+            other => panic!("{case} must be refused before reaching the owner: {other:?}"),
+        };
         assert!(
             error.contains("bridge_refused") || error.contains("does not accept"),
             "{case}: {error}"

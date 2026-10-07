@@ -261,7 +261,7 @@ impl RuntimeHost for OrbitRuntime {
                     update.calling_run_id.as_deref(),
                 )?;
             }
-            self.route_worker_tool("orbit.task.update", serde_json::json!({
+            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
                 "id": task_id,
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: Some(update.status), expected_status: Some(update.expected_status),
@@ -269,7 +269,7 @@ impl RuntimeHost for OrbitRuntime {
                     evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None},
                     ..Default::default()
                 }
-            }), Default::default())?;
+            }))?;
             return self.get_task(task_id);
         }
         OrbitRuntime::update_task_from_activity(self, task_id, update)
@@ -465,7 +465,7 @@ impl RuntimeHost for OrbitRuntime {
                     .collect::<Vec<_>>()
                     .join("\n")
             });
-            self.route_worker_tool("orbit.task.update", serde_json::json!({
+            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
                 "id": task_id,
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: update.status, plan: update.plan, context_files: update.context_files,
@@ -473,7 +473,7 @@ impl RuntimeHost for OrbitRuntime {
                     evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None},
                     ..Default::default()
                 }
-            }), Default::default())?;
+            }))?;
             return Ok(());
         }
         apply_locked_task_automation_update(self, task_id, update)

@@ -88,7 +88,7 @@ impl OrbitRuntime {
         &self,
         request: Value,
     ) -> Result<T, OrbitError> {
-        let value = self.route_worker_tool("orbit.task.show", request, Default::default())?;
+        let value = self.route_worker_host_tool("orbit.task.show", request)?;
         decode_owner_read(value)
     }
 
@@ -122,6 +122,7 @@ impl OrbitRuntime {
         mut input: Value,
         mut session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        check_worker_host_input(&input, session.worker_host_call)?;
         let bound = self
             .worker_invocation()
             .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
@@ -151,6 +152,36 @@ impl OrbitRuntime {
             .call(name, input, session)
             .map_err(owner_route_failure)
     }
+
+    /// The host owns internal projections. Ordinary tool dispatch cannot
+    /// select this route by adding a key to its input or changing its env.
+    pub(crate) fn route_worker_host_tool(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        self.route_worker_tool(
+            name,
+            input,
+            ToolSessionContext {
+                worker_host_call: true,
+                ..Default::default()
+            },
+        )
+    }
+}
+
+pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<(), OrbitError> {
+    if !host_call
+        && ["_worker_read", "_worker_update"]
+            .iter()
+            .any(|key| input.get(key).is_some())
+    {
+        return Err(OrbitError::PolicyDenied(
+            "internal worker projections require a host-owned channel".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Type a call the owner never answered as an owner-route failure

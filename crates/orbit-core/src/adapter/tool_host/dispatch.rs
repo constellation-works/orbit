@@ -54,7 +54,10 @@ pub(super) fn execute(
             action,
             &mut result,
             &mut redaction_report,
-            None,
+            session_context
+                .worker_invocation
+                .as_ref()
+                .map(|binding| binding.task_id.as_str()),
             agent.as_deref(),
             model.as_deref(),
         )?;

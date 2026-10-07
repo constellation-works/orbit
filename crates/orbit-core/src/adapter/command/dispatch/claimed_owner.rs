@@ -119,6 +119,9 @@ pub(super) fn bridge_through(
         return None;
     }
     let binding = binding?;
+    if let Err(error) = crate::runtime::check_worker_host_input(input, false) {
+        return Some(ClaimedOwnerRoute::Refused(denied(&error.to_string())));
+    }
     let local = process_machine_id?;
     // A local owner does not need the broker, but the newly granted read
     // still has to stay within this claim. Reject the internal projections
@@ -128,11 +131,6 @@ pub(super) fn bridge_through(
         && binding.owner_machine_id == local
         && name == TASK_SHOW
     {
-        if input.get("_worker_read").is_some() {
-            return Some(ClaimedOwnerRoute::Refused(denied(
-                "internal task projections are not available to a claimed worker",
-            )));
-        }
         if input.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
             return Some(ClaimedOwnerRoute::Refused(denied(
                 "the request names a task other than the claimed task",
