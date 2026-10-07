@@ -636,9 +636,12 @@ is not one of those holders ([No-diff-expected work does not hold context locks]
 Readiness, `list_backlog_tasks`, and `reserve_locks` treat its context as unlocked, so an
 overlapping backlog task stays eligible and a drain can admit it. The tagged task still waits on
 its own dependencies, on locks other tasks hold, and on its claim. Its own `reserve_locks` grant
-records a reservation with no files, so release still has an id and the grant does not serialize
-anyone else. An unexpected diff is not refused: `git_commit` commits a non-empty stage and
-`sync_base` reports a recoverable rebase conflict the same way it does for any other shipment.
+checks the original context against persistent file reservations and frozen claim footprints at
+the serialized store boundary, then records a reservation with no files. The file-reservation
+conflict check and insert share one SQLite transaction. Release still has an id and the grant
+does not serialize anyone else. An unexpected diff is not refused: `git_commit` commits a
+non-empty stage and `sync_base` reports a recoverable rebase conflict the same way it does for
+any other shipment.
 
 **Recovery** preserves branch, PR and failure evidence; an authorized operator or supervised
 orchestrator revokes the claim and picks the transition (usually `blocked` or `backlog`).

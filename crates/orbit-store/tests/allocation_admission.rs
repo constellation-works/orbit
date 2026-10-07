@@ -70,6 +70,9 @@ use orbit_types::workflow::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+#[path = "allocation_admission/reservation_grants.rs"]
+mod reservation_grants;
+
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 
@@ -1842,6 +1845,7 @@ fn handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch() {
                             workspace_id: Some(PARTITION_ID.into()),
                             task_ids: vec![competitor.id.clone()],
                             requested_files: vec![format!("file:{path}")],
+                            stored_files: vec![format!("file:{path}")],
                             actor: "owner".into(),
                             ttl_seconds: 600,
                             owner_run_id: None,

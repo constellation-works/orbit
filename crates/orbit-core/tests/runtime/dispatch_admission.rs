@@ -43,6 +43,8 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod reservation_grants;
+
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 

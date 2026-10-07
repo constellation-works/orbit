@@ -300,8 +300,9 @@ pub(crate) fn reserve_with_index(
     };
     runtime.reconcile_stale_owned_reservations_for_files(&requested_files, 32)?;
     let mut conflicts = task_lock_conflicts_indexed(index, &task_ids, &requested_files, repo_root);
-    // A `no-diff-expected` scope still waits on other holders. When that check
-    // is clear, the grant records no files: `release_locks` keeps a
+    // A `no-diff-expected` scope still checks its original footprint against
+    // persistent holders atomically at the store boundary. The grant holds
+    // no files: `release_locks` keeps a
     // reservation id, and the row cannot block a later overlapping task
     // [ORB-14247].
     let stored_files =
@@ -337,7 +338,8 @@ pub(crate) fn reserve_with_index(
                 workspace_orbit_dir: workspace_orbit_dir(runtime),
                 workspace_id: workspace_id.clone(),
                 task_ids: task_ids.clone(),
-                requested_files: stored_files,
+                requested_files: requested_files.clone(),
+                stored_files,
                 actor: actor.clone(),
                 ttl_seconds,
                 owner_run_id: reservation_owner
