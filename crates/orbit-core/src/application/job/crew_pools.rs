@@ -47,6 +47,27 @@ const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::XHard,
 ];
 
+/// Replay recaptures automatic admission under current policy. Only a crew
+/// recorded as the caller's explicit choice survives; run-level pool overrides
+/// and allowlists remain caller input. Other jobs do not use this admission.
+pub(crate) fn strip_auto_crew_admission(job_name: &str, input: &mut Value) {
+    if !POLICY_PIPELINES.contains(&job_name) {
+        return;
+    }
+    if let Some(object) = input.as_object_mut() {
+        let explicit = object
+            .get(SELECTION_KEY)
+            .and_then(|selection| selection.get("source"))
+            .and_then(Value::as_str)
+            == Some("explicit");
+        object.remove(SELECTION_KEY);
+        object.remove(POOLS_KEY);
+        if !explicit {
+            object.remove("crew");
+        }
+    }
+}
+
 /// Crew chosen for a task at creation, with the provenance its history entry
 /// records: `explicit`, `pool:<complexity>`, or `default` [ORB-12717].
 #[derive(Debug, Clone, PartialEq, Eq)]

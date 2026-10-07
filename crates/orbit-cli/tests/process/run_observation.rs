@@ -33,6 +33,8 @@ use orbit_core::OrbitRuntime;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+mod replay_crew;
+
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
