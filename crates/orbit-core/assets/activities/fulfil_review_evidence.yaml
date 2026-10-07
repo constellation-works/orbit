@@ -1,0 +1,61 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: fulfil_review_evidence
+spec:
+  type: deterministic
+  description: >
+    Fulfils one review evidence hold on a Linux owner. The hold must still be
+    the in-progress task's latest decision, with only `codeql` requirements
+    whose command is `scripts/codeql-rust-local.sh` with its own options and
+    one query selector, and no result yet. The Linux owner must have working
+    Bubblewrap namespaces, and the scratch filesystem must have `min_free_mib`
+    free (default 30 GiB). It runs each command, without a shell, at the held
+    commit in a standalone shallow checkout, holding its own Git metadata,
+    confined by Bubblewrap, then removes the checkout. The checkout is the only writable task-controlled path. It
+    attaches every run's log. Only when every run completed its analysis with
+    no findings does it also attach the `codeql` results, which queues a
+    fresh review; it never approves a candidate. Otherwise `reason` names the
+    refusal and the hold stays in place. Always audited.
+  input_schema_json:
+    type: object
+    required: [task_id, hold_key]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      hold_key:
+        type: string
+        minLength: 1
+      attempt_key:
+        type: string
+      min_free_mib:
+        type: integer
+        minimum: 0
+  output_schema_json:
+    type: object
+    required: [task_id, hold_key, fulfilled, retryable, requeued]
+    properties:
+      task_id:
+        type: string
+      hold_key:
+        type: string
+      fulfilled:
+        type: boolean
+      # hold_not_current, command_not_allowed, not_owner,
+      # host_not_linux, sandbox_unavailable, disk_insufficient, candidate_unreachable,
+      # tool_missing, platform_refused, analysis_incomplete, command_failed,
+      # timed_out, results_unreadable or findings_reported; null when
+      # fulfilled.
+      reason:
+        type: [string, "null"]
+      detail:
+        type: string
+      # Whether a later tick may run the same hold again.
+      retryable:
+        type: boolean
+      # Whether receipt moved the task back to the backlog for review.
+      requeued:
+        type: boolean
+  action: fulfil_review_evidence
+  config: {}

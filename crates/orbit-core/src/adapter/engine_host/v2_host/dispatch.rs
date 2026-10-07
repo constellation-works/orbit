@@ -313,6 +313,17 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ApplyBlockedTaskRecovery => {
             blocked_recovery::apply(runtime, action, input, recovery_run_id(&tool_context))
         }
+        // Run a held candidate's named Linux CodeQL check at the held commit
+        // and attach its log, plus the result when it passed; receipt queues
+        // a fresh review.
+        CoreDeterministicAction::FulfilReviewEvidence => {
+            crate::application::review::fulfil_review_evidence(
+                runtime,
+                action,
+                input,
+                recovery_run_id(&tool_context),
+            )
+        }
         // [ORB-11333] Reserve a fresh reviewer start for the committed,
         // base-synchronized candidate and hand it a pinned manifest; then
         // settle the reviewer's report into an honest verdict, reviewer-

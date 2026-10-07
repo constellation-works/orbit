@@ -35,6 +35,7 @@ macro_rules! deterministic_action_catalog {
                 DrainWindow => "drain_window",
                 FileCiFailureTasks => "file_ci_failure_tasks",
                 FileDependabotAlertTasks => "file_dependabot_alert_tasks",
+                FulfilReviewEvidence => "fulfil_review_evidence",
                 GateStarvationFail => "gate_starvation_fail",
                 InvokeAndWait => "invoke_and_wait",
                 InvokeDetached => "invoke_detached",

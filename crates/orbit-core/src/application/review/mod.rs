@@ -25,6 +25,7 @@ use orbit_common::OrbitError;
 mod admission;
 mod coverage;
 pub(crate) mod evidence;
+mod fulfilment;
 mod gate;
 mod handoff;
 mod landing;
@@ -37,6 +38,10 @@ pub(crate) use admission::{
     upgrade_resume_admission_mismatch,
 };
 pub(crate) use coverage::exclusions;
+pub(crate) use fulfilment::fulfil_review_evidence;
+pub use fulfilment::{
+    EVIDENCE_FULFILMENT_AUDIT, EvidenceFulfilmentTick, REVIEW_EVIDENCE_FULFILMENT_JOB,
+};
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
 };
