@@ -13,7 +13,8 @@
 //! landing-branch failure. Already-failed jobs inside an in-flight workflow
 //! are current when their evidence is complete; a pending check is not. A red
 //! run whose workflow is still running a push on its branch at a descendant
-//! commit is held in `pending_supersession` until that run completes.
+//! commit is held in `pending_supersession`, unless its previous completed run
+//! already failed the same job and step or it has been held past the window.
 //!
 //! Losing the agent's ability to ask a follow-up question mid-diagnosis is the
 //! accepted cost of that boundary. The compensation is that the snapshot is
@@ -35,7 +36,7 @@ use super::partition::{
     partition_runs, run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
     supersede_older_when_cancelled_run_is_actionable, superseded_cancellation_entry,
 };
-use super::pending::defer_for_in_flight_descendants;
+use super::pending::{Supersession, hold_for_in_flight_descendants};
 use super::query::{CiQueries, RemoteBranchHeads};
 use super::refs::{RefKind, derive_refs, head_json, probe_branches};
 use super::{
@@ -77,6 +78,10 @@ const MAX_RETRYABLE_ERROR_CHARS: usize = 500;
 /// step was cancelled by a workflow concurrency group. A job past the cap is
 /// investigated as before.
 const MAX_CANCELLATION_ANNOTATION_READS: usize = 12;
+/// How long a red run may be held in `pending_supersession` for an in-flight
+/// descendant before it is filed anyway. A busy landing branch always has one.
+const DEFAULT_PENDING_SUPERSESSION_WINDOW_MINUTES: u64 = 30;
+const MAX_PENDING_SUPERSESSION_WINDOW_MINUTES: u64 = 1_440;
 
 pub(super) struct Bounds {
     max_runs: u64,
@@ -89,6 +94,7 @@ pub(super) struct Bounds {
     /// Which overflow candidate this sweep spends its rotating investigation
     /// slot on. Taken from the collection hour unless the caller pins it.
     pub(super) investigation_cursor: u64,
+    pending_supersession_window_minutes: u64,
 }
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
@@ -140,6 +146,12 @@ fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
             default_investigation_cursor(),
             u64::MAX,
         )?,
+        pending_supersession_window_minutes: bounded_u64(
+            input,
+            "pending_supersession_window_minutes",
+            DEFAULT_PENDING_SUPERSESSION_WINDOW_MINUTES,
+            MAX_PENDING_SUPERSESSION_WINDOW_MINUTES,
+        )?,
     })
 }
 
@@ -167,6 +179,18 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
     history: &mut RetryableHistory,
     sweep_id: &str,
 ) -> Result<Value, OrbitError> {
+    collect_at(queries, input, history, sweep_id, chrono::Utc::now())
+}
+
+/// [`collect_for_sweep`] as of `now`, the clock the `pending_supersession`
+/// window is measured against.
+pub(super) fn collect_at<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    input: &Value,
+    history: &mut RetryableHistory,
+    sweep_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, OrbitError> {
     let bounds = bounds_from_input(input)?;
     let auth = queries.auth_status();
     if !auth.usable() {
@@ -179,7 +203,7 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
             "collected": false,
             "outcome_hint": OUTCOME_CAPABILITY_UNAVAILABLE,
             "capability": auth.to_json(),
-            "collected_at": chrono::Utc::now().to_rfc3339(),
+            "collected_at": now.to_rfc3339(),
         }));
     }
 
@@ -257,11 +281,24 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         mut deferred,
         cancelled_successors,
         in_flight_successors,
+        previous_completed,
     } = partition;
     // Before any investigation slot is spent: a red run whose identity is
-    // still running on a descendant commit is not filed this sweep.
-    let (mut current, pending_supersession) =
-        defer_for_in_flight_descendants(queries, current, &in_flight_successors, &mut notes);
+    // still running on a descendant commit is not filed this sweep, unless it
+    // already reproduced or has been held past the window.
+    let held = hold_for_in_flight_descendants(
+        queries,
+        current,
+        &Supersession {
+            successors: &in_flight_successors,
+            previous_completed: &previous_completed,
+            window_minutes: bounds.pending_supersession_window_minutes,
+            now,
+        },
+        &mut notes,
+    );
+    let mut current = held.current;
+    let pending_supersession = held.pending;
 
     for failure in &mut deferred {
         failure["investigated"] = json!(false);
@@ -290,7 +327,7 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
     let mut superseded_cancellations = 0usize;
     let mut annotation_reads = 0usize;
     let mut annotation_reads_skipped = 0usize;
-    let mut screened_views = std::collections::BTreeMap::new();
+    let mut screened_views = held.views;
     let mut seen_run_ids = std::collections::BTreeSet::new();
     for failure in current.iter().chain(mixed_candidates.iter()) {
         let Some(run_id) = failure.get("run_id").and_then(Value::as_u64) else {
@@ -302,7 +339,10 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         if run_is_completed(failure) && run_is_cancelled(failure) {
             // A failed screen leaves the run to ordinary investigation, which
             // queries and reports the view itself.
-            if let Ok(mut view) = queries.run_view(&run_id.to_string()) {
+            let view = screened_views
+                .remove(&run_id)
+                .map_or_else(|| queries.run_view(&run_id.to_string()), Ok);
+            if let Ok(mut view) = view {
                 mark_concurrency_cancellations(
                     queries,
                     &mut view,
@@ -517,6 +557,7 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         "unverified_refs": unverified_refs,
         "max_retired_ref_probes": bounds.max_retired_ref_probes,
         "investigation_cursor": bounds.investigation_cursor,
+        "pending_supersession_window_minutes": bounds.pending_supersession_window_minutes,
         "notes": notes,
     });
     Ok(json!({
@@ -545,7 +586,7 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         "persistently_incomplete": persistently_incomplete,
         "summary": summary,
         "truncation": truncation,
-        "collected_at": chrono::Utc::now().to_rfc3339(),
+        "collected_at": now.to_rfc3339(),
     }))
 }
 

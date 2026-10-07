@@ -707,3 +707,80 @@ fn ci_failure_predating_a_landed_repair_is_held_not_refiled() {
         json!([37561651327u64])
     );
 }
+
+/// Collection releases a red run from `pending_supersession` despite a newer
+/// push run still queued at a descendant commit when the previous completed
+/// run failed the same way, or when the hold outlived its window [ORB-14610:
+/// agent-main stayed red for 50 minutes because every sweep held the newest
+/// red run behind the next queued push]. Filing files exactly one task for it
+/// and the description names the run it did not wait for.
+#[test]
+fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run() {
+    if !isolated("ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run") {
+        return;
+    }
+    let log = "build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[group]Run cargo check --workspace\n\
+               build\tRun CI\t2026-10-07T15:10:00.0000000Z error[E0425]: cannot find value `probe_timeout` in this scope\n\
+               build\tRun CI\t2026-10-07T15:10:00.0000000Z   --> crates/orbit-cmd/src/update/converge.rs:189:9\n\
+               build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[error]Process completed with exit code 101.\n";
+    let queued = json!({
+        "run_id": 37645190583u64, "status": "queued", "event": "push",
+        "url": "https://github.com/acme/orbit/actions/runs/37645190583",
+        "reported_head_sha": "9".repeat(40),
+    });
+    let previous = "5".repeat(40);
+    let mut reproduced = failure(log, 1, &"6".repeat(40));
+    reproduced["reproduced_on"] = json!({
+        "run_id": 10, "url": "https://github.com/acme/orbit/actions/runs/10",
+        "event_reported_head_sha": previous, "conclusion": "failure",
+        "shared_failed_steps": [{"job": "build", "step": "Run CI"}],
+        "pending_on": queued,
+    });
+    let mut held = failure(log, 2, &"7".repeat(40));
+    held["held_past_window"] = json!({
+        "pending_on": queued, "pending_since": "2026-10-07T15:10:00+00:00", "window_minutes": 30,
+    });
+
+    // What each release must name besides the pending run.
+    for (released, expected) in [
+        (
+            reproduced,
+            vec![
+                "https://github.com/acme/orbit/actions/runs/10",
+                previous.as_str(),
+            ],
+        ),
+        (held, vec!["2026-10-07T15:10:00+00:00"]),
+    ] {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let workspace = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+        let output = file(&runtime, vec![released]);
+
+        assert_eq!(output["filed_count"], 1, "{output}");
+        assert_eq!(output["pending_supersession"], json!([]), "{output}");
+        let task = runtime
+            .get_task(output["filed"][0]["task_id"].as_str().unwrap())
+            .unwrap();
+        let pending = "9".repeat(40);
+        for named in expected.into_iter().chain([
+            "https://github.com/acme/orbit/actions/runs/37645190583",
+            pending.as_str(),
+        ]) {
+            assert!(
+                task.description.contains(named),
+                "the filed description names {named}: {}",
+                task.description
+            );
+        }
+        assert!(
+            task.description.contains("- Compiler cause identity: `"),
+            "{}",
+            task.description
+        );
+    }
+}
