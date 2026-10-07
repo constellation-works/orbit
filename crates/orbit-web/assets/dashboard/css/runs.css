@@ -225,10 +225,11 @@
 }
 .runs-sort.active { color: var(--fg); }
 
-/* 600–760 px: the rows still scroll sideways, but the filter and notes are
+/* 601–768 px: the rows still scroll sideways, but the filter and notes are
    pinned at the scroller's own width (`#runs-body` is a size container) so
-   they never scroll away or run past the viewport. */
-@media (max-width: 760px) {
+   they never scroll away or run past the viewport, and the first column stays
+   pinned while the rest of the table scrolls under it. */
+@media (max-width: 768px) {
   #runs-body { container-type: inline-size; }
   .runs-row { min-width: 860px; }
   .runs-row.workspace-attributed { min-width: 980px; }
@@ -243,10 +244,32 @@
   .runs-source-warning,
   .runs-scope-note,
   .runs-limit-note { width: 100cqw; }
+  .runs-row > :first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+    z-index: 1;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .runs-row.runs-header > :first-child {
+    z-index: 3;
+    box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
+  }
+  .runs-row:not(.runs-header):hover > :first-child {
+    background: var(--bg-hover);
+  }
 }
 
 /* Phones: each run is a card; the header becomes a row of sort buttons. */
 @media (max-width: 600px) {
+  #runs-body { background: none; }
   .runs-row,
   .runs-row.workspace-attributed {
     min-width: 0;
@@ -261,6 +284,18 @@
     column-gap: 12px;
     row-gap: 0;
     padding: 8px 16px;
+  }
+  .runs-row > :first-child {
+    position: static;
+    background: transparent !important;
+    box-shadow: none;
+    align-self: auto;
+    display: block;
+    margin: 0;
+    padding: 0;
+  }
+  .runs-row.runs-header > :first-child {
+    box-shadow: none;
   }
   .runs-row .state { grid-area: state; }
   .runs-row .when { grid-area: when; }

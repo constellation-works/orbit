@@ -356,7 +356,8 @@
    the scroller is at that edge. Cells need an opaque background so the
    scrolled columns do not show through the pinned one. */
 @media (max-width: 768px) {
-  .scoreboard-table-wrap {
+  .scoreboard-table-wrap,
+  #runs-body {
     background:
       linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
       linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,

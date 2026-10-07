@@ -517,6 +517,32 @@ async function assertNarrowTableLayouts(page) {
   await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
   await page.screenshot({ path: path.join(evidence, 'runs-375.png'), fullPage: true });
 
+  for (const width of [601, 700, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    const pinned = await page.evaluate(() => {
+      const wrap = document.getElementById('runs-body');
+      const row = wrap.querySelector('.runs-row[data-key^="run-"]');
+      const cell = row.querySelector('.state');
+      wrap.scrollLeft = wrap.scrollWidth;
+      const wrapRect = wrap.getBoundingClientRect();
+      const rect = cell.getBoundingClientRect();
+      const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
+      return {
+        scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
+        scrolled: wrap.scrollLeft > 0,
+        stays: Math.abs(rect.left - wrapRect.left) < 1.5,
+        painted: cell.contains(topmost),
+        edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
+      };
+    });
+    if (!pinned.scrolls) throw new Error(`Runs must still scroll sideways at ${width}px for this check to mean anything`);
+    if (!(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
+      throw new Error(`Runs first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
+    }
+    await page.screenshot({ path: path.join(evidence, `runs-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 375, height: 900 });
+
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
   await refresh();
   await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
@@ -593,8 +619,24 @@ async function assertNarrowTableLayouts(page) {
   await page.evaluate(async () => {
     document.getElementById('diagnostics-scoreboard-main').style.display = 'none';
     document.getElementById('diagnostics-main').style.display = '';
-    (await import('/js/router.js')).setActiveTab('audit/events');
+    (await import('/js/router.js')).setActiveTab('diagnostics/runs');
   });
+  await refresh();
+  await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
+  const runsDesktop = await page.evaluate(() => {
+    const wrap = document.getElementById('runs-body');
+    const row = wrap.querySelector('.runs-row[data-key^="run-"]');
+    const cell = row.querySelector('.state');
+    return {
+      scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
+      cellPosition: getComputedStyle(cell).position,
+      edge: getComputedStyle(wrap).backgroundImage,
+    };
+  });
+  if (runsDesktop.scrolls || runsDesktop.cellPosition !== 'static' || runsDesktop.edge !== 'none') {
+    throw new Error(`Desktop runs table changed or scrolls: ${JSON.stringify(runsDesktop)}`);
+  }
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
   await refresh();
   await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
   const desktop = await page.evaluate(() => {
@@ -747,7 +789,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs pinned first column and scroll edge at 601–768px, card layout at 375px, unchanged at 1280px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
 } finally {
