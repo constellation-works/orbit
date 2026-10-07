@@ -1,7 +1,8 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions, plugin inspection and the sandbox opt-out.
+//! terminal decisions, plugin inspection, the sandbox opt-out and cold lexical
+//! search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -31,6 +32,7 @@ mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
 mod sandbox_off;
+mod search_hydration;
 mod security_alert_sweep;
 mod session_events;
 mod shared_root_identity;

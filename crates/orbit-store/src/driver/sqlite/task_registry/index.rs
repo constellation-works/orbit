@@ -325,6 +325,6 @@ impl TaskRegistryStore {
             ..filter.clone()
         };
         self.indexed_task_selection(partition_id, &filter, false, None)
-            .map(|selection| selection.ids)
+            .map(|selection| selection.rows.into_iter().map(|row| row.task_id).collect())
     }
 }

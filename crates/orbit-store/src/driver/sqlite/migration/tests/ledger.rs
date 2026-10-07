@@ -257,6 +257,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "audit_tool_call_index".to_string()
             ),
             ("migration.v0038".to_string(), "job_run_states".to_string()),
+            (
+                "migration.v0039".to_string(),
+                "job_runs_recency_index".to_string()
+            ),
         ]
     );
 }

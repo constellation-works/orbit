@@ -132,6 +132,25 @@ pub struct TaskCandidates {
     pub total_without_cursor: usize,
 }
 
+/// Ordered index matches for a fully indexed filter: what a cross-workspace
+/// merge needs to choose a page before reading any envelope. Counts are those
+/// of [`TaskCandidates`].
+#[derive(Debug, Default)]
+pub struct TaskCandidateKeys {
+    pub items: Vec<TaskCandidateKey>,
+    /// Matches remaining after `scan_before`, before `limit`.
+    pub total: usize,
+    /// Matches ignoring `scan_before`. Equals [`Self::total`] when no cursor.
+    pub total_without_cursor: usize,
+}
+
+/// One selected task with the creation time the listing orders by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCandidateKey {
+    pub id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// One fully validated bundle, retaining sidecars from that same read.
 #[derive(Debug)]
 pub struct TaskRow {

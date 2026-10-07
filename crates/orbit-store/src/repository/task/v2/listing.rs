@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskResidualFilter, TaskRow};
+use crate::contracts::{
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage,
+    TaskResidualFilter, TaskRow,
+};
 use crate::driver::sqlite::task_registry::is_terminal_status;
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
@@ -72,12 +75,14 @@ impl TaskV2Store {
         // A row that no longer matches was rewritten after the scan; leaving
         // it out here keeps every returned candidate true to the filter, and
         // hydration re-checks the selected page against the bundle anyway.
-        let envelopes = selection
-            .ids
-            .iter()
-            .filter_map(|id| self.envelope_cache.cached(id))
-            .filter(|envelope| index_source.matches(envelope))
-            .collect::<Vec<_>>();
+        let mut envelopes = Vec::with_capacity(selection.rows.len());
+        for row in &selection.rows {
+            if let Some(envelope) = self.selected_envelope(&row.task_id)?
+                && index_source.matches(&envelope)
+            {
+                envelopes.push(envelope);
+            }
+        }
         if bounded {
             return Ok(TaskCandidates {
                 items: envelopes,
@@ -86,6 +91,66 @@ impl TaskV2Store {
             });
         }
         Ok(select_candidates(envelopes, filter, limit))
+    }
+
+    /// The page a fully indexed filter selects, answered by the generated
+    /// index alone: ids and creation times, with no envelope read. `None` when
+    /// the filter needs envelope predicates or the index cannot serve, and the
+    /// caller selects through [`Self::task_candidates`] instead.
+    pub(crate) fn task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        self.ensure_recovered()?;
+        let filter = filter.normalized();
+        if !filter.is_fully_indexed() {
+            return Ok(None);
+        }
+        let Some(unsettled) = self.validate_index()? else {
+            return Ok(None);
+        };
+        let selection = self.registry.indexed_task_selection(
+            &self.workspace_id,
+            &filter.index_filter(unsettled.clone()),
+            filter.terminal_last,
+            (limit < usize::MAX).then_some(limit),
+        )?;
+        let total_without_cursor = if filter.scan_before.is_none() {
+            selection.total
+        } else {
+            self.registry
+                .indexed_task_selection(
+                    &self.workspace_id,
+                    &filter.without_cursor().index_filter(unsettled),
+                    filter.terminal_last,
+                    Some(0),
+                )?
+                .total
+        };
+        let items = selection
+            .rows
+            .into_iter()
+            .map(|row| {
+                let created_at = chrono::DateTime::parse_from_rfc3339(&row.created_at)
+                    .map_err(|error| {
+                        OrbitError::Store(format!(
+                            "invalid indexed created_at '{}' for task '{}': {error}",
+                            row.created_at, row.task_id
+                        ))
+                    })?
+                    .with_timezone(&Utc);
+                Ok(TaskCandidateKey {
+                    id: row.task_id,
+                    created_at,
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        Ok(Some(TaskCandidateKeys {
+            items,
+            total: selection.total,
+            total_without_cursor,
+        }))
     }
 
     pub(crate) fn query_task_rows(

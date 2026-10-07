@@ -382,12 +382,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Breaking,
         apply: super::apply_job_run_states,
     },
+    // Recency-ordered run pages (the dashboard's aggregate run list) sorted
+    // every run of the workspace for want of an index over the recency
+    // expression. Pure `CREATE INDEX IF NOT EXISTS`, which an older binary
+    // ignores and SQLite maintains on its writes.
+    Migration {
+        version: 39,
+        name: "job_runs_recency_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_job_runs_recency_index,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 38;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 39;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

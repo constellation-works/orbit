@@ -13,6 +13,7 @@ use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
+use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -113,7 +114,7 @@ pub(super) struct AllJobRunsQuery {
 }
 
 #[derive(Clone, Copy)]
-enum AllJobRunsState {
+pub(super) enum AllJobRunsState {
     All,
     Active,
     Failed,
@@ -149,7 +150,12 @@ impl AllJobRunsState {
 /// [`JobRunOrder::Recency`] — the same `run_timestamp` this handler later
 /// merge-sorts by — so an old, long-running run that only just finished
 /// cannot be dropped by a workspace's `limit` before its recency ever gets
-/// compared (ORB-11251).
+/// compared (ORB-11251). An index over that recency expression bounds each
+/// workspace's read to its page.
+///
+/// The listing is observational: it never runs the stale-run reconciliation
+/// that operator reads (`/api/job-runs`, `orbit job runs`) and workspace open
+/// perform, so a dashboard poll costs reads only.
 pub(super) async fn list_all_job_runs(
     State(state): State<DashboardState>,
     axum::extract::Query(query): axum::extract::Query<AllJobRunsQuery>,
@@ -169,7 +175,11 @@ pub(super) async fn list_all_job_runs(
     }
 }
 
-fn all_job_runs_json(state: &DashboardState, limit: usize, state_filter: AllJobRunsState) -> Value {
+pub(super) fn all_job_runs_json(
+    state: &DashboardState,
+    limit: usize,
+    state_filter: AllJobRunsState,
+) -> Value {
     let pinned = state.pin();
     let mut candidates = Vec::new();
     let mut unavailable = Vec::new();
@@ -246,7 +256,7 @@ fn workspace_job_runs(
     state_filter: AllJobRunsState,
 ) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
     let list = |state| {
-        runtime.list_job_runs(JobRunListParams {
+        runtime.list_job_runs_observed(JobRunListParams {
             state,
             limit: Some(limit),
             order_by: JobRunOrder::Recency,
@@ -283,7 +293,7 @@ fn all_tasks_json(
             continue;
         };
         // One broken workspace must not take down the fleet-wide list.
-        let page = match runtime.task_candidates(&query.filter(), query.limit()) {
+        let page = match workspace_task_keys(&runtime, query) {
             Ok(page) => page,
             Err(error) => {
                 tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
@@ -370,6 +380,33 @@ fn all_tasks_json(
         "offset": offset,
         "next_cursor": next_cursor,
     }))
+}
+
+/// One workspace's candidates for the merge, as ids and creation times. A
+/// filter the task index fully answers is selected there without reading a
+/// single envelope, so only the merged page's bundles are ever opened; the
+/// rest (title search, type, parent, external refs) select over envelopes.
+fn workspace_task_keys(
+    runtime: &OrbitRuntime,
+    query: &TaskPageQuery,
+) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
+    let filter = query.filter();
+    if let Some(keys) = runtime.task_candidate_keys(&filter, query.limit())? {
+        return Ok(keys);
+    }
+    let page = runtime.task_candidates(&filter, query.limit())?;
+    Ok(TaskCandidateKeys {
+        items: page
+            .items
+            .into_iter()
+            .map(|task| TaskCandidateKey {
+                id: task.id,
+                created_at: task.created_at,
+            })
+            .collect(),
+        total: page.total,
+        total_without_cursor: page.total_without_cursor,
+    })
 }
 
 /// Render a filesystem path for display, collapsing the user's home directory

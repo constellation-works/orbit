@@ -41,7 +41,10 @@ pub use final_recovery::{
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
-pub use listing::{TaskCandidates, TaskListFilter, TaskListQuery, TaskPage, TaskRow};
+pub use listing::{
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
+    TaskRow,
+};
 pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};

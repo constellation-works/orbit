@@ -16,7 +16,7 @@ use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
-use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexSelection};
+use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexKey, TaskIndexSelection};
 
 /// Bound at most this many ids per `IN (...)` list; well under SQLite's
 /// default variable limit.
@@ -103,7 +103,9 @@ impl TaskRegistryStore {
             None => None,
         };
 
-        let mut sql = format!("SELECT task_id FROM task_bundle_index WHERE {predicate} ORDER BY ");
+        let mut sql = format!(
+            "SELECT task_id, created_at FROM task_bundle_index WHERE {predicate} ORDER BY "
+        );
         if terminal_last {
             sql.push_str("(status IN (");
             push_placeholders(&mut sql, TERMINAL_STATUSES.len());
@@ -124,14 +126,17 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
             .query_map(params_from_iter(values.iter()), |row| {
-                row.get::<_, String>(0)
+                Ok(TaskIndexKey {
+                    task_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                })
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let ids = rows
+        let rows = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let total = total.unwrap_or(ids.len());
-        Ok(TaskIndexSelection { ids, total })
+        let total = total.unwrap_or(rows.len());
+        Ok(TaskIndexSelection { rows, total })
     }
 
     /// Status projection for one listing: every indexed task in

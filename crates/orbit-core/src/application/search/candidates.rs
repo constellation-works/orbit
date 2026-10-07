@@ -143,7 +143,7 @@ impl OrbitRuntime {
                     if !seen.insert(hit.source_id.clone()) {
                         continue;
                     }
-                    if let Ok(task) = self.get_task(&hit.source_id)
+                    if let Some(task) = self.lexical_hit_task(&hit.source_id)
                         && accepts(&task)
                     {
                         candidates.push((lexical_task_hit(&task), task));
@@ -178,5 +178,20 @@ impl OrbitRuntime {
             )?;
         }
         Ok(candidates)
+    }
+
+    /// Hydrate one BM25 hit for its summary and the filters. The listing read
+    /// parses the task documents without opening artifact payloads, which the
+    /// canonical read would hash for every hit [ORB-14595]; a bundle a
+    /// concurrent writer holds, or one that cannot be read, drops the hit as
+    /// an unreadable task always has. A worker reads through its owner.
+    fn lexical_hit_task(&self, id: &str) -> Option<orbit_types::task::Task> {
+        if self.worker_invocation().is_some() {
+            return self.get_task(id).ok();
+        }
+        self.get_listed_task_row(id)
+            .ok()
+            .flatten()
+            .map(|row| row.task)
     }
 }
