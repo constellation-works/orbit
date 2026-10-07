@@ -138,13 +138,15 @@ body {
   border-radius: 4px;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
+  display: inline-block;
+  max-width: 100%;
+  /* A single identifier wider than its container stays intact and scrolls
+     locally. Commands and paths wrap at the transform's token boundaries. */
+  overflow-x: auto;
+  vertical-align: bottom;
   white-space: nowrap;
-}
-
-.sl-markdown-content code.is-long:not(pre code) {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .sl-markdown-content table {
@@ -154,7 +156,7 @@ body {
   border-spacing: 0;
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .sl-markdown-content table.orbit-config-keys {
@@ -168,20 +170,6 @@ body {
 .sl-markdown-content table.orbit-config-keys th:first-child,
 .sl-markdown-content table.orbit-config-keys td:first-child {
   width: 45%;
-}
-
-.sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code:not(pre code) {
-  white-space: normal;
-  overflow-wrap: normal;
-  word-break: normal;
-}
-
-.sl-markdown-content table.orbit-config-keys td:nth-child(2) code:not(pre code, .is-long) {
-  display: inline-block;
-  max-width: 100%;
-  overflow-x: auto;
-  vertical-align: bottom;
-  white-space: nowrap;
 }
 
 @media (min-width: 1024px) {

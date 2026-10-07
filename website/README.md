@@ -80,3 +80,29 @@ Commands and flags shown in these docs are expected to match the CLI that
 ships. When you change CLI behavior, verify the affected page against
 `orbit <command> --help` from a current build and update it in the same pull
 request.
+
+## Inline code layout checks
+
+After `npm run check` and `npm run build`, serve `dist/` with `npm run preview`
+and run the browser regression check from the repository root with an installed
+Playwright module and Chromium:
+
+```bash
+node website/scripts/check-inline-code.mjs \
+  /absolute/path/to/playwright/index.mjs http://localhost:4321 .orbit/tmp/inline-code-browser
+```
+
+The script discovers every built HTML page and checks 375, 768, 1280 and 1440px
+in both site themes with web fonts loaded. It opens disclosures, selects each
+provider panel, measures glyph line breaks and code/container bounds, checks
+mobile page overflow, and verifies the agents provider table's width and borders.
+It saves measurements and failure screenshots in the evidence directory.
+
+When changing a Markdown plugin, run
+`ASTRO_TELEMETRY_DISABLED=1 npm exec -- astro sync --force` in `website/`
+before rebuilding to clear Astro's cached rendered content.
+
+Inline commands wrap at spaces and after `/`, `.` or `=`. Flags and identifiers
+stay intact regardless of length; a single token wider than its container gets
+local horizontal scrolling. The shared Markdown transform also handles raw HTML
+code examples, preserves their selectable text, and leaves `pre` blocks alone.

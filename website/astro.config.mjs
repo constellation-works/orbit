@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import { satteri } from '@astrojs/markdown-satteri';
 import { defineHastPlugin } from 'satteri';
 import { changelogLinks, changelogReleases } from './plugins/changelog.mjs';
+import { inlineCodeWrap } from './plugins/inline-code.mjs';
 
 function findFirstTh(node) {
   for (const child of node.children || []) {
@@ -28,134 +29,11 @@ function addClasses(node, ctx, ...classNames) {
   ctx.setProperty(node, 'className', list);
 }
 
-function addConfigKeyBreaks(node, ctx) {
-  const children = (node.children || []).flatMap((child) => {
-    if (child.type !== 'text' || !/[._]/.test(child.value)) return [child];
-
-    const parts = child.value.split(/([._])/);
-    return parts.flatMap((part) => {
-      if (!part) return [];
-      const text = { type: 'text', value: part };
-      return /[._]/.test(part)
-        ? [text, { type: 'element', tagName: 'wbr', properties: {}, children: [] }]
-        : [text];
-    });
-  });
-  ctx.setProperty(node, 'children', children);
-}
-
-function addConfigKeyBreaksInCell(node, ctx) {
-  if (node.tagName === 'code') {
-    addConfigKeyBreaks(node, ctx);
-    return;
-  }
-  if (node.tagName === 'pre') return;
-  for (const child of node.children || []) {
-    if (child.type === 'element') {
-      addConfigKeyBreaksInCell(child, ctx);
-    }
-  }
-}
-
-function addConfigKeyBreaksToTable(table, ctx) {
-  function visit(node) {
-    if (node.tagName === 'tr') {
-      const keyCell = node.children?.find((child) => child.tagName === 'td');
-      if (keyCell) {
-        addClasses(keyCell, ctx, 'orbit-config-key-cell');
-        addConfigKeyBreaksInCell(keyCell, ctx);
-      }
-      return;
-    }
-    for (const child of node.children || []) {
-      if (child.tagName) visit(child);
-    }
-  }
-
-  visit(table);
-}
-
-function visibleTextLength(html) {
-  let length = 0;
-  let index = 0;
-
-  while (index < html.length) {
-    if (html[index] === '<') {
-      const tagEnd = html.indexOf('>', index + 1);
-      if (tagEnd > index + 1) {
-        index = tagEnd + 1;
-        continue;
-      }
-    }
-
-    const entity = html.startsWith('&lt;', index)
-      ? '&lt;'
-      : html.startsWith('&gt;', index)
-        ? '&gt;'
-        : html.startsWith('&quot;', index)
-          ? '&quot;'
-          : html.startsWith('&amp;', index)
-            ? '&amp;'
-            : null;
-    if (entity) {
-      length += 1;
-      index += entity.length;
-      continue;
-    }
-
-    length += 1;
-    index += 1;
-  }
-
-  return length;
-}
-
-function processRawHtml(html) {
-  const parts = html.split(/(<pre[\s\S]*?<\/pre>)/gi);
-  for (let i = 0; i < parts.length; i += 2) {
-    parts[i] = parts[i].replace(/<code([^>]*)>([\s\S]*?)<\/code>/gi, (match, attrs, content) => {
-      if (visibleTextLength(content) > 38) {
-        if (/class\s*=\s*["']/.test(attrs)) {
-          attrs = attrs.replace(/class\s*=\s*(["'])([^"']*)\1/, (_m, q, cls) => {
-            const classes = cls.split(/\s+/).filter(Boolean);
-            if (!classes.includes('is-long')) classes.push('is-long');
-            return `class=${q}${classes.join(' ')}${q}`;
-          });
-        } else {
-          attrs = ` class="is-long"${attrs}`;
-        }
-        return `<code${attrs}>${content}</code>`;
-      }
-      return match;
-    });
-  }
-  return parts.join('');
-}
-
-const inlineCodePlugin = defineHastPlugin({
-  name: 'inline-code-wrap',
-  raw(node, ctx) {
-    if (typeof node.value === 'string' && node.value.includes('<code')) {
-      const updated = processRawHtml(node.value);
-      if (updated !== node.value) {
-        ctx.replaceNode(node, { type: 'raw', value: updated });
-      }
-    }
-  },
+const tablePlugin = defineHastPlugin({
+  name: 'documentation-tables',
   element: {
-    filter: ['code', 'table'],
+    filter: ['table'],
     visit(node, ctx) {
-      if (node.tagName === 'code') {
-        const parent = ctx.parent(node);
-        if (parent?.tagName === 'pre') {
-          return;
-        }
-        const text = ctx.textContent(node);
-        if (text.length > 38) {
-          addClasses(node, ctx, 'is-long');
-        }
-      }
-
       if (node.tagName === 'table') {
         const firstTh = findFirstTh(node);
         if (firstTh && /^(options?|flags?)$/i.test(ctx.textContent(firstTh).trim())) {
@@ -172,7 +50,6 @@ const inlineCodePlugin = defineHastPlugin({
           ctx.textContent(headers[1]).trim() === 'Type, default and purpose'
         ) {
           addClasses(node, ctx, 'orbit-config-keys');
-          addConfigKeyBreaksToTable(node, ctx);
         }
       }
     },
@@ -183,7 +60,7 @@ export default defineConfig({
   site: 'https://orbit-cli.com',
   markdown: {
     processor: satteri({
-      hastPlugins: [inlineCodePlugin, changelogLinks, changelogReleases],
+      hastPlugins: [inlineCodeWrap, tablePlugin, changelogLinks, changelogReleases],
     }),
   },
   vite: {
