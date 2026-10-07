@@ -5,8 +5,8 @@ use crate::OrbitRuntime;
 use super::candidates::BranchContext;
 use super::filters::SearchStatusFilters;
 use super::{
-    GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse, empty_whitespace_query_note,
-    merge_round_robin,
+    GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
+    merge_round_robin, whitespace_query_note,
 };
 
 impl OrbitRuntime {
@@ -105,9 +105,19 @@ impl OrbitRuntime {
         }
 
         let results = merge_round_robin(branches, limit);
-        if results.is_empty()
+        let partial = results.iter().any(|hit| {
+            hit.matched_by
+                .as_ref()
+                .is_some_and(|labels| labels.iter().any(|label| label == "partial"))
+        });
+        let searched_kind = if has_path && params.kind == GlobalSearchKind::All {
+            GlobalSearchKind::Task
+        } else {
+            params.kind
+        };
+        if (results.is_empty() || partial)
             && let Some(query) = query_owned.as_deref()
-            && let Some(note) = empty_whitespace_query_note(query)
+            && let Some(note) = whitespace_query_note(query, searched_kind)
         {
             notes.push(note);
         }

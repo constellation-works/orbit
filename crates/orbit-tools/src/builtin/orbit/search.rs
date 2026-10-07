@@ -15,7 +15,7 @@ impl Tool for OrbitSearchTool {
         let mut parameters = vec![
             ToolParam {
                 name: "query".to_string(),
-                description: "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions."
+                description: "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,

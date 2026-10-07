@@ -3,4 +3,6 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! SQLite FTS5 BM25 search over synchronously maintained task chunks.
 mod lexical;
-pub use lexical::{LexicalIndex, SOURCE_KIND_TASK, SearchIndexStats, bm25_page, bm25_top_k};
+pub use lexical::{
+    LexicalIndex, SOURCE_KIND_TASK, SearchIndexStats, bm25_or_page, bm25_page, bm25_top_k,
+};

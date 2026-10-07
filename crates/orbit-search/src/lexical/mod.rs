@@ -7,7 +7,7 @@ mod store;
 mod task_fields;
 #[cfg(test)]
 mod tests;
-pub use bm25::{bm25_page, bm25_top_k};
+pub use bm25::{bm25_or_page, bm25_page, bm25_top_k};
 pub use index::LexicalIndex;
 pub use store::SearchIndexStats;
 pub const SOURCE_KIND_TASK: &str = "task";
