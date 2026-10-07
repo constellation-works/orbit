@@ -168,6 +168,12 @@ define_config_settings! {
         section: ConfigSection::Review, order: 30,
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
+    security_alert_sweep_min_severity: String => String {
+        key: "security_alert_sweep.min_severity", value_type: "string",
+        description: "Minimum severity filed by the security alert sweep for Dependabot and Code scanning: low, moderate (default), high, or critical. Run input overrides workspace then global config; secret scanning is always filed.",
+        section: ConfigSection::Housekeeping, order: 90,
+        resolve: |raw: Option<String>| resolve_choice(raw, "moderate", "security_alert_sweep.min_severity", SECURITY_ALERT_SEVERITIES),
+    },
     plugin_legacy_callback_identity: bool => bool {
         key: "plugin.legacy_callback_identity", value_type: "bool",
         description: "Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.",

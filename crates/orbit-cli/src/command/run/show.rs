@@ -206,6 +206,10 @@ pub(crate) fn run_show_payload(
     header.push_str(&catalog_layer_lines(&catalog_layers));
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
+    header.push_str(&super::security_summary::security_alert_sweep_lines(
+        &run,
+        state.as_ref(),
+    ));
     let exclusion_lines = format_backlog_exclusion_lines(state.as_ref());
     if !exclusion_lines.is_empty() {
         header.push('\n');

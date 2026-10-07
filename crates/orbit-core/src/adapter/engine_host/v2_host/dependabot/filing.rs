@@ -81,12 +81,7 @@ where
         )));
     }
 
-    let floor_name = input
-        .get("min_severity")
-        .and_then(Value::as_str)
-        .unwrap_or("high")
-        .trim()
-        .to_ascii_lowercase();
+    let (floor_name, floor_source) = severity_floor(runtime, input)?;
     let floor = severity_rank(&floor_name).ok_or_else(|| {
         OrbitError::InvalidInput(
             "input.min_severity must be one of low, moderate, high, or critical".to_string(),
@@ -434,10 +429,44 @@ where
         "skipped_over_cap": skipped_over_cap,
         "excluded_below_min_severity": excluded_below_min_severity,
         "min_severity": floor_name,
+        "min_severity_source": floor_source,
         "skip_when_dependabot_pr_open": skip_pr,
         "max_tasks": max_tasks,
         "code_scanning_group_bounds": code_groups::group_bounds(),
     }))
+}
+
+fn severity_floor(
+    runtime: &OrbitRuntime,
+    input: &Value,
+) -> Result<(String, &'static str), OrbitError> {
+    match input.get("min_severity") {
+        // The job renderer binds an absent optional string input as empty.
+        None | Some(Value::Null) => {}
+        Some(Value::String(value)) if value.trim().is_empty() => {}
+        Some(Value::String(value)) => return Ok((value.trim().to_ascii_lowercase(), "input")),
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "input.min_severity must be one of low, moderate, high, or critical".to_string(),
+            ));
+        }
+    }
+    let key = "security_alert_sweep.min_severity";
+    let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?;
+    let entry = config.values().iter().find(|entry| entry.key == key);
+    entry
+        .and_then(|entry| {
+            entry
+                .value
+                .as_str()
+                .map(|value| (value.to_string(), entry.source.kind().label()))
+        })
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!("{key} is unavailable in the admitted config"))
+        })
 }
 
 /// The open tasks that already own same-cause alerts left out of a group, as

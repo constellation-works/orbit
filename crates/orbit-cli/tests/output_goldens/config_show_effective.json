@@ -219,6 +219,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "security_alert_sweep.min_severity": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "tasks.id_start": {
       "scope": "built-in",
       "state": "unset",

@@ -597,6 +597,32 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 
 ---
 
+## `[security_alert_sweep]` — security finding severity
+
+`security_alert_sweep.min_severity` is a string: `low`, `moderate`, `high` or
+`critical`. The built-in default is `moderate`. It governs Dependabot and Code
+scanning findings filed by `dependabot_alert_sweep_pipeline`; secret scanning
+findings are always filed regardless of this floor.
+
+```toml
+[security_alert_sweep]
+min_severity = "high"
+```
+
+Set it in the workspace `.orbit/config.toml` or global `~/.orbit/config.toml`.
+Precedence is explicit run/job `min_severity` input > workspace config > global
+config > built-in `moderate`. For example,
+`orbit run job dependabot_alert_sweep_pipeline --input min_severity=critical`
+overrides the floor for that run without changing config. Scheduled routines
+use the configured floor without shadowing the job. Invalid config values fail
+validation with `security_alert_sweep.min_severity` named in the error.
+
+The file step records the effective `min_severity` and `min_severity_source`
+(`input`, `workspace`, `global` or `built-in`), plus
+`excluded_below_min_severity`. `orbit run show <RUN_ID>` summarizes the filed
+count, floor with its source, and excluded alert count and numbers even when
+the sweep succeeded.
+
 ## Other sections
 
 | Key | Default | What it does |

@@ -10,6 +10,7 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
     match key {
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
+        "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
         _ => Vec::new(),
     }
 }

@@ -12,6 +12,7 @@ pub mod legacy_logs;
 mod lock_holders;
 mod logs;
 mod readiness;
+mod security_summary;
 pub mod ship;
 mod show;
 mod steps;

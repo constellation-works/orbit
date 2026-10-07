@@ -21,6 +21,7 @@ mod review_continuation;
 mod review_gate_audit;
 mod review_report_revisions;
 mod sandbox_off;
+mod security_alert_sweep;
 mod session_events;
 mod step_recovery;
 
