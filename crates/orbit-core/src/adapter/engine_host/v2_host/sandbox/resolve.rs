@@ -11,7 +11,9 @@ use crate::OrbitRuntime;
 #[cfg(target_os = "linux")]
 use super::provider_state::append_linux_provider_state_roots;
 #[cfg(target_os = "linux")]
-use super::runtime_grants::append_linux_runtime_write_roots;
+use super::runtime_grants::{
+    append_linux_codex_side_write_roots, append_linux_runtime_write_roots,
+};
 #[cfg(target_os = "linux")]
 use super::worktree::active_worktree_subpath;
 #[cfg(target_os = "macos")]
@@ -129,7 +131,7 @@ pub(super) fn resolve_executor_sandbox_on(
                 // Implementer profiles are anchored at the registered checkout
                 // even when the cwd is a worktree, so the policy carve-outs
                 // name the live host-clock stores. Deny them after the Codex
-                // side root and the worktree re-allow.
+                // side roots and the worktree re-allow.
                 deny_registered_checkout_host_stores(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
@@ -167,10 +169,15 @@ pub(super) fn resolve_executor_sandbox_on(
                 // available below; neither overlaps workspace-relative denies.
                 let grants_workspace_modify =
                     resolved.modify.iter().any(|rule| !rule.starts_with('!'));
-                if grants_workspace_modify {
-                    append_codex_side_write_roots(runtime, provider, &mut resolved)?;
-                }
                 let mut runtime_write_authority = Vec::new();
+                if grants_workspace_modify {
+                    append_linux_codex_side_write_roots(
+                        runtime,
+                        provider,
+                        &mut resolved,
+                        &mut runtime_write_authority,
+                    )?;
+                }
                 append_linux_runtime_write_roots(
                     runtime,
                     subprocess_cwd,
@@ -181,7 +188,9 @@ pub(super) fn resolve_executor_sandbox_on(
                 append_linux_provider_state_roots(provider, &mut resolved)?;
                 // A worktree cwd absolutizes the versioned exceptions under
                 // that worktree. The registered checkout does not: the same
-                // carve-outs would grant its live host-clock stores.
+                // carve-outs would grant its live host-clock stores. No grant
+                // above reaches those stores from a worktree cwd: Codex side
+                // roots and runtime grants are path-shaped stores only.
                 if anchored_at_registered_checkout(runtime, subprocess_cwd) {
                     deny_registered_checkout_host_stores(runtime, &mut resolved);
                 }
@@ -332,11 +341,13 @@ pub(super) fn resolve_fs_profile_absolute(
     })
 }
 
-fn append_codex_side_write_roots(
+/// Codex's `--add-dir` side roots from the runtime provider config, as
+/// absolute paths. Each OS grants them only as runtime stores, through
+/// [`side_root_store`].
+pub(super) fn codex_side_write_roots(
     runtime: &OrbitRuntime,
     provider: &str,
-    resolved: &mut ResolvedFsProfile,
-) -> Result<(), DispatchError> {
+) -> Result<Vec<PathBuf>, DispatchError> {
     // Codex is the only `backend: cli` provider that ships its own writable
     // root surface (`--add-dir` fed from `writable_dirs_json`). Claude and
     // Gemini have no analogous CLI flag — their startup-time writes are
@@ -345,21 +356,18 @@ fn append_codex_side_write_roots(
     // provider gains a side-root surface, add a sibling appender. See
     // T20260428-14.
     if provider != "codex" {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let config = RuntimeHost::agent_provider_config(runtime);
     let Some(raw_dirs) = config.get("writable_dirs_json") else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let writable_dirs: Vec<String> = serde_json::from_str(raw_dirs).map_err(|err| {
         DispatchError::CliInvocationFailed(format!(
             "parse codex writable_dirs_json for sandbox: {err}"
         ))
     })?;
-    if writable_dirs.is_empty() {
-        return Ok(());
-    }
 
     let workspace_root = runtime
         .paths()
@@ -367,14 +375,64 @@ fn append_codex_side_write_roots(
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().repo_root.clone());
     let workspace_str = workspace_root.display().to_string();
-    for dir in writable_dirs {
-        let Some(root) = absolutize_side_write_root(&workspace_str, &dir) else {
+    Ok(writable_dirs
+        .iter()
+        .filter_map(|dir| absolutize_side_write_root(&workspace_str, dir))
+        .map(PathBuf::from)
+        .collect())
+}
+
+/// The runtime root holding side root `dir` as one of its stores, and the
+/// store's path below that root.
+///
+/// A bare directory rule grants its whole subtree under both the Bubblewrap
+/// mount compiler and the SBPL `subpath` compiler, so a runtime root itself,
+/// or anything outside the runtime roots, is never a store: granting it would
+/// open host config, the `orbit` binary, the host clock's stores and other
+/// runs' worktrees. [ORB-14538]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn side_root_store<'a>(roots: &[&'a Path], dir: &Path) -> Option<(&'a Path, String)> {
+    let store = roots
+        .iter()
+        .filter_map(|root| {
+            let relative = dir.strip_prefix(root).ok()?;
+            let named = relative.components().next().is_some()
+                && relative
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)));
+            Some((*root, relative.to_str()?.to_string())).filter(|_| named)
+        })
+        .max_by_key(|(root, _)| root.as_os_str().len());
+    if store.is_none() {
+        tracing::warn!(
+            side_root = %dir.display(),
+            "skipping a Codex side-write root that is not an Orbit runtime store"
+        );
+    }
+    store
+}
+
+/// macOS grant for Codex's side roots: each one as a contained runtime store.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+pub(super) fn append_codex_side_write_roots(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    let global_root = canonical_or_lexical(&runtime.paths().global_dir);
+    let workspace_orbit = canonical_or_lexical(&runtime.paths().orbit_dir);
+    for dir in codex_side_write_roots(runtime, provider)? {
+        let Some((root, relative)) = side_root_store(&[&global_root, &workspace_orbit], &dir)
+        else {
+            continue;
+        };
+        let Some(store) = contained_runtime_store(root, &relative) else {
             continue;
         };
         // Append even when the root already appears earlier: SBPL is
         // last-match-wins, and these host-owned roots must land after
         // policy-derived denies such as `.orbit/**`.
-        resolved.modify.push(root);
+        resolved.modify.push(format!("{}/**", store.display()));
     }
     Ok(())
 }
@@ -453,6 +511,15 @@ fn append_contained_runtime_modify_root(
     suffix: &str,
     resolved: &mut ResolvedFsProfile,
 ) {
+    if let Some(physical) = contained_runtime_store(root, relative) {
+        append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
+    }
+}
+
+/// The physical path of runtime store `relative`, or `None` when its
+/// containment in `root` cannot be established.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+fn contained_runtime_store(root: &Path, relative: &str) -> Option<PathBuf> {
     let physical = orbit_exec::physical_with_missing_tail(&root.join(relative));
     let mut ancestor = physical.as_path();
     let contained = physical.starts_with(root)
@@ -474,9 +541,9 @@ fn append_contained_runtime_modify_root(
             store = relative,
             "skipping sandbox grant for a runtime store whose physical containment cannot be established"
         );
-        return;
+        return None;
     }
-    append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
+    Some(physical)
 }
 
 /// Registered-checkout stores the host clock and operator config own.
@@ -557,7 +624,7 @@ fn anchored_at_registered_checkout(runtime: &OrbitRuntime, subprocess_cwd: Optio
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn canonical_or_lexical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
