@@ -19,7 +19,7 @@ const server = http.createServer((req, res) => {
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const pageOverflow = () => document.documentElement.scrollWidth > window.innerWidth + 1;
+const pageOverflow = () => document.scrollingElement.scrollWidth > window.innerWidth;
 const assertNoOverflow = async (label) => {
   const overflow = await page.evaluate(pageOverflow);
   if (overflow) {
@@ -44,6 +44,12 @@ try {
     const workspace = document.getElementById('rail-workspace');
     if (workspace && !document.getElementById('workspace-select')) {
       workspace.innerHTML = '<select class="workspace-select" id="workspace-select" aria-label="Workspace"><option selected>ws_orbit</option></select>';
+      const note = document.createElement('span');
+      note.id = 'workspace-scope-note';
+      note.className = 'workspace-scope-note';
+      note.textContent = 'Fleet-wide on Reliability';
+      note.hidden = true;
+      workspace.appendChild(note);
     }
     const tasks = document.getElementById('tasks-body');
     if (tasks) {
@@ -59,12 +65,17 @@ try {
     let diag = 'runs';
     let operations = 'routines';
     let knowledge = 'frictions';
+    let config = 'effective';
+    let runId = null;
+    let runSubtab = 'steps';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
       getDiagSubtab: () => diag, setDiagSubtab: (value) => { diag = value; },
       getOperationsSubtab: () => operations, setOperationsSubtab: (value) => { operations = value; },
       getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: (value) => { knowledge = value; },
-      getRunId: () => null, setRunId: () => {}, getRunSubtab: () => 'steps', setRunSubtab: () => {},
+      getConfigSubtab: () => config, setConfigSubtab: (value) => { config = value; },
+      getRunId: () => runId, setRunId: (value) => { runId = value; },
+      getRunSubtab: () => runSubtab, setRunSubtab: (value) => { runSubtab = value; },
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
@@ -508,29 +519,106 @@ try {
   await assertNoOverflow('375x812 / tasks');
   await page.screenshot({ path: path.join(evidence, 'tasks-375x812.png'), fullPage: true });
 
-  // The Health views are only shown while Health is the open section (the
-  // router hides the other sections' views), so open it before measuring.
-  await page.click('.tab[data-tab="diagnostics"]');
-  await page.waitForTimeout(200);
-  const navReachable = await page.evaluate(() => {
-    const unique = [...document.querySelectorAll('.rail .tab')];
-    const subtabs = [...document.querySelectorAll('#diag-subtabs .subtab')];
-    const onscreen = (node) => {
-      node.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  // Exercise the real shell and hash router at phone width. The content is
+  // fixture data; navigation, scrolling, keyboard focus and layout are native.
+  await page.evaluate(() => {
+    for (const [id, value] of Object.entries({
+      'rail-count-diag-incidents': '3',
+      'rail-count-ops-routines': '4/5',
+      'rail-count-ops-auto-tasks': '8/16',
+      'rail-count-ops-jobs': '33 running',
+    })) document.getElementById(id).textContent = value;
+  });
+  const mobileEvidence = { routes: [], navigation: [], counts: [] };
+  for (const [route, panel] of [
+    ['tasks', 'tasks-panel'],
+    ['diagnostics/runs', 'diagnostics-panel'],
+    ['runs/jrun-dashboard-fixture', 'run-detail-panel'],
+    ['diagnostics/incidents', 'diagnostics-panel'],
+  ]) {
+    await page.evaluate(hash => { location.hash = hash; }, `#${route}`);
+    await page.waitForFunction(id => document.getElementById(id).closest('.tab-pane').classList.contains('active'), panel);
+    await page.locator(`#${panel}`).evaluate(node => Promise.all(node.closest('.tab-pane').getAnimations().map(animation => animation.finished)));
+    const layout = await page.locator(`#${panel}`).evaluate(node => {
+      node.closest('.tab-pane').scrollTop = 0;
       const box = node.getBoundingClientRect();
-      return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth + 8;
-    };
+      return { top: box.top, width: box.width, scrollWidth: document.scrollingElement.scrollWidth };
+    });
+    if (layout.width <= 0 || layout.top < 0 || layout.top > 200) throw new Error(`First panel too low at #${route}: ${JSON.stringify(layout)}`);
+    await assertNoOverflow(`375x812 / #${route}`);
+    mobileEvidence.routes.push({ route, ...layout });
+    await page.screenshot({ path: path.join(evidence, `shell-${route.replaceAll('/', '-')}-375x812.png`), fullPage: true });
+  }
+  const destinations = await page.locator('.rail .tab').evaluateAll(nodes => nodes.map(node => node.dataset.tab));
+  for (const destination of destinations) {
+    await page.click(`.rail .tab[data-tab="${destination}"]`);
+    const selectors = await page.locator('.rail .tab, .rail-subtabs:not(.dimmed) .subtab').evaluateAll(nodes => nodes.map(node =>
+      node.classList.contains('tab') ? `.rail .tab[data-tab="${node.dataset.tab}"]` : `#${node.parentElement.id} .subtab[data-subtab="${node.dataset.subtab}"]`));
+    // Tab through every visible entry from the workspace selector. Browser
+    // focus must scroll the overflow row without hiding its focus ring.
+    await page.focus('#workspace-select');
+    for (const selector of selectors) {
+      await page.keyboard.press('Tab');
+      const focused = await page.locator(selector).evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const row = document.getElementById('tabs').getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return {
+          active: document.activeElement === node && node.matches(':focus-visible'),
+          ring: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2,
+          onscreen: box.width > 0 && box.height > 0 && box.left >= row.left - 1 && box.right <= row.right + 1,
+          sameRow: box.top >= row.top && box.bottom <= row.bottom,
+          left: box.left, right: box.right, rowLeft: row.left, rowRight: row.right,
+        };
+      });
+      if (!focused.active || !focused.ring || !focused.onscreen || !focused.sameRow) throw new Error(`Unreachable navigation at ${destination} / ${selector}: ${JSON.stringify(focused)}`);
+      await page.click(selector, { trial: true, timeout: 2000 });
+    }
+    const subtabs = selectors.filter(selector => selector.includes('.subtab'));
+    for (const selector of subtabs) {
+      await page.click(selector);
+      await page.waitForFunction(sel => document.querySelector(sel).classList.contains('active'), selector);
+      // Enter must activate the same route through the native button handler.
+      await page.focus(selector);
+      await page.keyboard.press('Enter');
+      const subtab = await page.locator(selector).getAttribute('data-subtab');
+      if (!new URL(page.url()).hash.startsWith(`#${destination}/${subtab}`)) throw new Error(`Subtab did not route at ${selector}: ${page.url()}`);
+      await assertNoOverflow(`375x812 / ${destination}/${subtab}`);
+      const gap = await page.locator(selector).evaluate(node => {
+        const count = node.querySelector('.rail-count');
+        if (!count?.textContent) return null;
+        const label = document.createRange();
+        label.selectNodeContents(node.firstChild);
+        return count.getBoundingClientRect().left - label.getBoundingClientRect().right;
+      });
+      if (gap !== null && gap < 6) throw new Error(`Subtab count touches its label at ${selector}: ${gap}px`);
+      if (gap !== null) mobileEvidence.counts.push({ selector, gap });
+    }
+    await assertNoOverflow(`375x812 / ${destination}`);
+    mobileEvidence.navigation.push({ destination, controls: selectors.length, subtabs: subtabs.length });
+  }
+  const header = await page.evaluate(() => {
+    const workspace = document.getElementById('workspace-select').getBoundingClientRect();
+    const brand = document.querySelector('.rail-brand').getBoundingClientRect();
+    const drain = document.getElementById('global-drain-state').getBoundingClientRect();
+    const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
+    const health = document.getElementById('health-strip');
+    const chips = [...health.querySelectorAll('.kpi')].map(node => node.getBoundingClientRect());
     return {
-      tabs: unique.map((node) => ({ tab: node.dataset.tab, onscreen: onscreen(node) })),
-      subtabs: subtabs.map((node) => ({ subtab: node.dataset.subtab, onscreen: onscreen(node) })),
+      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - workspace.top - workspace.height / 2) < 1),
+      healthSingleRow: chips.every(box => box.width > 0 && Math.abs(box.top - chips[0].top) < 1),
+      healthScrolls: health.scrollWidth > health.clientWidth,
     };
   });
-  for (const tab of navReachable.tabs) {
-    if (!tab.onscreen) throw new Error(`top-level tab ${tab.tab} not reachable at 375px`);
+  if (!header.actionsInHeader || !header.healthSingleRow || !header.healthScrolls) throw new Error(`Phone header or health chips wrapped: ${JSON.stringify(header)}`);
+  for (const selector of ['#refresh-btn', '#global-drain-state', '#tile-failed', '#tile-denials', '#tile-active', '#tile-events', '#host-resource-chips .kpi']) {
+    await page.locator(selector).focus();
+    await page.locator(selector).scrollIntoViewIfNeeded();
+    await page.locator(selector).click({ trial: true });
   }
-  for (const subtab of navReachable.subtabs) {
-    if (!subtab.onscreen) throw new Error(`diagnostics subtab ${subtab.subtab} not reachable at 375px`);
-  }
+  mobileEvidence.header = header;
+  fs.writeFileSync(path.join(evidence, 'mobile-shell.json'), `${JSON.stringify(mobileEvidence, null, 2)}\n`);
+  console.log(`PASS: phone shell panel positions ${JSON.stringify(mobileEvidence.routes)}; all ${destinations.length} destinations and active rail subtabs reachable; count gaps >=6px; no page overflow.`);
 
   await page.click('.tab[data-tab="operations"]');
   await page.click('#operations-subtabs .subtab[data-subtab="auto-tasks"]');
@@ -595,7 +683,7 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

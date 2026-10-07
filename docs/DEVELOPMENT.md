@@ -139,6 +139,19 @@ distributed browser scenarios remain part of the QA sweep, and the Operations
 browser scenario remains available with its shared fixtures under
 `crates/orbit-web/src/tests/`.
 
+The Operations browser fixture also checks the responsive dashboard shell. At
+375×812, the brand, workspace picker, Drain indicator and Refresh icon share
+the header row; destinations and the active section's views share a scrolling
+navigation row, and all health chips remain in one scrolling row. The fixture
+checks panel position on Tasks, Runs, run detail and Incidents, keyboard and
+pointer access with visible focus, count spacing, and page width across routes.
+Run it with an installed Playwright module and put evidence in `.orbit/tmp/`:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/dashboard-browser
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,
