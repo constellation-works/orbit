@@ -7,6 +7,7 @@ mod error;
 mod executor_def;
 mod final_recovery;
 pub mod handoff;
+mod host_evidence;
 mod job;
 mod reconciliation;
 mod review;
@@ -57,6 +58,10 @@ pub use executor_def::{
 pub use final_recovery::{
     FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
     MAX_DECISION_TEXT_CHARS,
+};
+pub use host_evidence::{
+    EvidenceHostOs, HostEvidenceReason, HostEvidenceRecord, HostEvidenceRefusal,
+    HostSandboxCommand, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,

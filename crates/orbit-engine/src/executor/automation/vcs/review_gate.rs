@@ -20,6 +20,7 @@ use super::git::{
     base_sync_mode_from_input, git_command_success, git_failure_error, git_output, git_output_raw,
     git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
+pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";

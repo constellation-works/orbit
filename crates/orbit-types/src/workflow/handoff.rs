@@ -83,6 +83,11 @@ pub struct HandoffReviewEvidence {
     /// Further reviewer evidence (manifest, report) the owner holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<HandoffArtifactRef>,
+    /// [ORB-14478] The result and log of every `host_sandbox_test` the
+    /// leaf's host ran for this verdict, which the owner re-reads and checks
+    /// against the certificate and candidate tree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_evidence: Vec<HandoffArtifactRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

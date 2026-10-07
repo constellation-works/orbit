@@ -146,6 +146,27 @@ command passes, admission lifts the hold. The next delivery resumes the
 preserved candidate (`resumed_validated`) without the implementer and admits
 a fresh review. A claimed leaf's resume runs the implementer again.
 
+A reviewer whose sandbox cannot run a sandbox-gated test names it as
+`host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
+the agent sandbox when it settles
+([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)). The certificate's
+`host_evidence` lists each attempt with its typed `reason`. The run's output
+and validation environment are in the log artifact beside the named result
+(`<artifact>.log.json`):
+
+```bash
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+  | jq '.content | fromjson | .host_evidence'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+```
+
+`sandbox_unavailable` means the host itself cannot apply the sandbox: run the
+test there by hand, outside any sandbox. `self_skipped` and `no_tests_ran`
+mean the command proved nothing: correct the requirement's command or filter.
+A refused command (`shell_metacharacter`, `command_not_allowed`,
+`argument_not_allowed`) never ran. The hold then waits for an operator's
+result, as for any other evidence.
+
 ## 3. Decide a blocked review
 
 Identify the failed step from `orbit run show`, then act:

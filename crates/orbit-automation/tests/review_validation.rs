@@ -375,6 +375,7 @@ fn certificate_with(
         selectors_widened: Vec::new(),
         evidence_carried: None,
         baseline_red: Vec::new(),
+        host_evidence: Vec::new(),
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
     }
 }

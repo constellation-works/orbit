@@ -310,6 +310,15 @@ fn settle(
         )?,
         _ => super::super::evidence::EvidenceCarry::None,
     };
+    // [ORB-14478] A claimed leaf's host runs the sandbox-gated checks its
+    // reviewer named, before the verdict counts the evidence.
+    let host = judgement.fulfil_host_evidence(
+        runtime,
+        context,
+        attempt_id,
+        &final_candidate,
+        &validation_scope,
+    )?;
     judgement.reconcile_external_evidence(
         runtime,
         context,
@@ -317,6 +326,7 @@ fn settle(
         repair.as_ref(),
         &validation_scope,
         carry.carried(),
+        host,
     )?;
     // [ORB-14434] Check the reviewer's red-base claims on the final
     // candidate before the verdict is reconciled: a refused claim settles
@@ -395,6 +405,7 @@ fn settle(
         selectors_widened: judgement.selectors_widened.clone(),
         evidence_carried: judgement.evidence_carried.clone(),
         baseline_red,
+        host_evidence: judgement.host_evidence.clone(),
         issued_at: now,
     };
     if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
@@ -657,6 +668,26 @@ fn handoff_evidence(
             "review_gate_stale: the owner holds no {REVIEW_GATE_ARTIFACT} for task '{task_id}'"
         ))
     })?;
+    // [ORB-14478] Pin every host run the verdict counted: its result, then
+    // its log.
+    let host_evidence = certificate
+        .host_evidence
+        .iter()
+        .filter(|record| record.passed)
+        .flat_map(|record| [record.artifact.as_deref(), record.log_artifact.as_deref()])
+        .map(|path| {
+            let path = path.ok_or_else(|| {
+                OrbitError::Execution(
+                    "review_gate_stale: a passed host run names no result or log".to_string(),
+                )
+            })?;
+            reference(path)?.ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "review_gate_stale: the owner holds no {path} for task '{task_id}'"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(HandoffReviewEvidence {
         attempt_id: certificate.attempt_id.clone(),
         verdict: certificate.verdict,
@@ -676,6 +707,7 @@ fn handoff_evidence(
             .into_iter()
             .flatten()
             .collect(),
+        host_evidence,
     })
 }
 

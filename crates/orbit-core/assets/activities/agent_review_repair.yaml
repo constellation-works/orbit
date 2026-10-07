@@ -309,6 +309,16 @@ spec:
          `not_run` and, when it is the only remaining work, name the run on
          the supported platform that the guidance specifies as external
          evidence. Never accept a run that reported incomplete analysis.
+         A test or required command this sandbox stops because a nested
+         sandbox cannot apply (`sandbox_apply: Operation not permitted`, no
+         Bubblewrap namespaces) or that skipped itself for that reason did
+         not pass: record it `not_run` or `denied` and, when it is the only
+         remaining work, list it with kind `host_sandbox_test` and `os`
+         (`linux` or `macos`, the OS it needs). On a claimed leaf the host
+         runs it outside this sandbox at settlement: either an exact
+         owner-required command, or
+         `cargo test -p <crate> --test <target> [<filter>]` with no other
+         options and no shell syntax. Any other command is refused.
          Failed checks, ambiguous intent, stale candidates
          and unnamed missing checks do not qualify for an evidence hold.
     6. Write the report under `.orbit/tmp/` and attach it with
@@ -331,9 +341,10 @@ spec:
           "external_evidence":{"type":"array","items":{"type":"object",
             "required":["kind","name","command","artifact"],
             "properties":{
-              "kind":{"enum":["hosted_ci","native_os","codeql"]},
+              "kind":{"enum":["hosted_ci","native_os","codeql","host_sandbox_test"]},
               "name":{"type":"string"},"command":{"type":"string"},
-              "artifact":{"type":"string","description":"task artifact path for the external result"}}}},
+              "artifact":{"type":"string","description":"task artifact path for the external result"},
+              "os":{"enum":["linux","macos"],"description":"the OS a host_sandbox_test needs; required for that kind"}}}},
           "findings":{"type":"array","items":{"type":"object",
             "required":["id","severity","summary","disposition"],
             "properties":{

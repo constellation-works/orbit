@@ -101,8 +101,10 @@ pub(super) fn canonical_requirements(
         .iter()
         .map(|required| {
             let artifact = evidence_artifact_path(&required.artifact)?;
+            // [ORB-14478] A host-run check must name the OS it runs on.
             if required.name.trim().is_empty()
                 || required.command.trim().is_empty()
+                || (required.kind == ReviewEvidenceKind::HostSandboxTest && required.os.is_none())
                 || !seen.insert(artifact.clone())
             {
                 return None;
@@ -153,7 +155,9 @@ pub(crate) fn evidence_ready(
 /// An operator may supply every kind; Orbit's own machinery only CodeQL, the
 /// one check owner fulfilment runs. An agent's put, a claimed worker's
 /// evidence and an unclassified artifact never count, so the agent whose
-/// candidate is held can never satisfy the check that holds it.
+/// candidate is held can never satisfy the check that holds it. A claimed
+/// leaf's own `host_sandbox_test` runs [ORB-14478] count only in the
+/// settlement that ran them, never through a later read of the artifact.
 fn accepted_writer(kind: ReviewEvidenceKind, writer: Option<ArtifactWriter>) -> bool {
     match writer {
         Some(ArtifactWriter::Operator) => true,

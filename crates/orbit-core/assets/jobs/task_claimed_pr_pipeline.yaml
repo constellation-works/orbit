@@ -39,7 +39,10 @@
 # as typed evidence the owner checks against its own copies at acceptance.
 # A `reject` or `incomplete` verdict refuses `review_gate_settle`: the leaf
 # fails, and its failure settlement blocks the task on the owner with the
-# findings already there. An evidence-only `incomplete` holds instead: the
+# findings already there. Before that, settlement on this host runs any
+# `host_sandbox_test` the reviewer's sandbox could not, outside the agent
+# sandbox, and counts a passing run (ORB-14478). An evidence-only
+# `incomplete` that remains holds instead: the
 # leaf pushes the held candidate to `orbit-evidence/<branch>` on `origin` and
 # ends `held`, and its settlement releases the claim with the hold, so the
 # owner keeps the task in progress until the named evidence arrives (a Linux

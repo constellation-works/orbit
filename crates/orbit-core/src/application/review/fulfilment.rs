@@ -867,6 +867,7 @@ impl OrbitRuntime {
                     command: run.requirement.command.clone(),
                     outcome: ValidationOutcome::Passed,
                     log_artifact,
+                    os: orbit_types::workflow::EvidenceHostOs::current(),
                 };
                 artifacts.push(json_artifact(&artifact, &evidence)?);
             }
@@ -1092,7 +1093,7 @@ fn log_artifact_path(artifact: &str) -> String {
     }
 }
 
-fn fulfilment_artifact_paths(artifact: &str) -> Result<(String, String), OrbitError> {
+pub(super) fn fulfilment_artifact_paths(artifact: &str) -> Result<(String, String), OrbitError> {
     let refused = || {
         OrbitError::InvalidInput(
             "external evidence and log artifacts must have valid, non-reserved review paths"
