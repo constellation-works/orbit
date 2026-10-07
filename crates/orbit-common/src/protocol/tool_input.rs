@@ -44,7 +44,10 @@ pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(),
 
     let suggestion = unknown
         .iter()
-        .find_map(|key| suggest_tool_field(key, allowed));
+        .filter_map(|key| suggest_tool_field(key, allowed))
+        // Schema order keeps identifier corrections ahead of new artifact
+        // metadata hints, regardless of the JSON object's key ordering.
+        .min_by_key(|suggestion| allowed.iter().position(|name| name == suggestion));
     let message = unknown_tool_field_message(&unknown, suggestion);
     Err(OrbitError::invalid_input_with_suggestions(
         message,
@@ -120,6 +123,8 @@ fn synonym_tool_field(unknown: &str) -> Option<&'static str> {
         "acceptancecriteria" => Some("acceptance_criteria"),
         "contextfiles" => Some("context_files"),
         "requiredtools" => Some("required_tools"),
+        "content" | "file" | "file_path" | "src" => Some("source_path"),
+        "name" => Some("path"),
         _ => None,
     }
 }

@@ -27,8 +27,11 @@ template:
     culprit task and commit in the finding's description and in the evidence
     finding text.
     Complete the supplied evidence template, replace action_id with this task ID,
-    and attach automation-coverage.json through orbit.task.artifact.put in this
-    task's assigned executor run. Supply actual checks (subject, method,
+    write it to `.orbit/tmp/automation-coverage.json`, and attach it in this
+    task's assigned executor run with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"<agent-family>"}'`.
+    `orbit tool show <tool.name>` prints the tool's schema.
+    Supply actual checks (subject, method,
     observation); set examination_complete only after all obligations are examined.
     Task status, summary prose and successful process exit do not certify coverage.
   acceptance_criteria:

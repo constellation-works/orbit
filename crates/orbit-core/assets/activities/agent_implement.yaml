@@ -95,6 +95,11 @@ spec:
       refactor, or chore). Search statuses use `task:rejected` or
       `friction:resolved`, never `status:rejected` or a bare status.
 
+    - To attach a file, write it under `.orbit/tmp/` and call
+      `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'`.
+      `source_path` is the local file; `path` is its stored artifact name.
+      `orbit tool show <tool.name>` prints the tool's schema.
+
     Claimed mode
 
     - When `input.claimed` is true, the pipeline delivers your output to the

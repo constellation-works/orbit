@@ -10,6 +10,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod artifact_tools;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;

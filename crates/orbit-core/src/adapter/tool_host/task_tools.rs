@@ -346,7 +346,14 @@ fn delivery(
 /// that owns it.
 pub(super) fn artifact_get(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
-    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")?;
+    let listing_hint = "list available artifacts with orbit.task.show and field: \"artifacts\"";
+    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")
+        .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
+    if path == "." {
+        return Err(OrbitError::InvalidInput(format!(
+            "`path` must name one artifact, not a directory; {listing_hint}"
+        )));
+    }
     validate_relative_artifact_path(&path)
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     // Resolve the task first so an unknown or foreign id fails as not-found

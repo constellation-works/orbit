@@ -80,10 +80,14 @@ spec:
       calls to the task's owner for you: reads of the manifest, the existing
       report, `review-report-history.json`, `review-evidence-hold.json` and
       the evidence artifacts that hold names, and the report write.
-    - Only the manifest read and the report write are required. The other
-      reads are optional prior evidence: when one is absent (`not_found`) or
-      refused, note it in `summary` and continue the review from the
-      manifest; do not stop or retry around it.
+    - Only the manifest read and the report write are required. List task
+      artifacts once with `orbit.task.show` and `field: "artifacts"`, then
+      fetch optional prior evidence only when its exact path is listed.
+      Never probe optional artifacts by name. If listing is refused, note it
+      in `summary` and continue from the manifest without optional reads.
+      If a listed artifact disappears or its read is refused, note it and
+      continue; do not stop or retry around it.
+    - `orbit tool show <tool.name>` prints the tool's schema.
     - If the manifest read or the report write is refused with
       `review_attempt_stale`, `review_manifest_stale`, `stale_claim` or
       `claimed_review_bridge_refused`, or cannot reach the run's coordinator,
@@ -108,15 +112,23 @@ spec:
        `attempt_id`, that `git rev-parse HEAD` equals `candidate.commit`, and
        that `base.commit` is an ancestor of HEAD. On any mismatch write a
        report with verdict `incomplete` and stop.
-       Read the manifest's optional `previous_report` and the existing report
-       artifact before starting. Continue the recorded findings and checks,
+       List artifacts once before optional reads:
+       `orbit tool run orbit.task.show --input '{"id":"<task-id>","field":"artifacts","model":"<agent-family>"}'`.
+       Use each returned metadata entry's `path` as the available set (the
+       single-field projection is an array; MCP may wrap it in `value`). Read
+       the manifest's embedded optional `previous_report`; fetch the existing
+       report (`report_artifact`, normally `review-report.json`) and
+       `review-report-history.json` only if each path is in that set.
+       Continue the recorded findings and checks,
        verifying them against the pinned candidate. Earlier evidence is advisory:
        when the attempt or candidate changed, repeat affected checks and write a
        report naming the current attempt; never reuse a previous acceptance.
-       Read any `review-evidence-hold.json` and its named result/log artifacts
+       Fetch `review-evidence-hold.json` only if it is listed, then fetch
+       its named result/log artifacts only if those paths are listed too,
        to assess external evidence that arrived since the earlier review.
-       These prior-evidence reads are optional: an absent or refused one is
-       not a mismatch and not a reason to stop; review from the manifest.
+       Skip absent optional paths without an artifact.get call. A refused
+       prior-evidence read is not a mismatch or a reason to stop; review
+       from the manifest.
        The manifest's `satisfied_external_evidence` maps result artifact paths
        to passing external checks whose separate logs the host verified for
        `candidate.tree`. Reuse a matching kind and exact command while the
@@ -273,8 +285,10 @@ spec:
          evidence. Never accept a run that reported incomplete analysis.
          Failed checks, ambiguous intent, stale candidates
          and unnamed missing checks do not qualify for an evidence hold.
-    6. Write the report to a temporary file and attach it with
-       `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`).
+    6. Write the report under `.orbit/tmp/` and attach it with
+       `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/review-report.json","path":"<report_artifact>","model":"<agent-family>"}'`.
+       Substitute the supplied `task_id` and `report_artifact`; `source_path`
+       is the local report file and `path` is its stored artifact name.
        The put validates the report and refuses a malformed one, or one that
        drops an earlier revision's required record id, with the offending
        field or record named; fix the file and put it again until it is

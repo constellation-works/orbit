@@ -260,8 +260,16 @@ Otherwise choose the narrow faithful command from repository instructions and
 code, reproduce at the immutable pre-fix revision and validate at the exact landed
 revision in isolated extracts or fixtures with independent build outputs, and
 capture both outputs as explicitly retrospective records. Attach those records and the structured assessment through
-`orbit.task.artifact.put`; do not invent historical execution artifacts or edit
-run state. Then reassess the same collector snapshot through the filing path.
+`orbit.task.artifact.put`, staging each file under `.orbit/tmp/`:
+
+```bash
+orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+```
+
+`source_path` is the local file; `path` is the stored artifact name.
+`orbit tool show <tool.name>` prints the tool's schema. Do not invent historical
+execution artifacts or edit run state. Then reassess the same collector snapshot
+through the filing path.
 The original insufficient state remains `unresolved` until the referenced proof
 is available. An existing open owner still takes precedence.
 

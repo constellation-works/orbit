@@ -24,6 +24,18 @@ not accepted as aliases. GitHub run tools take `run` despite returning
 Search statuses require the corpus prefix, such as `task:rejected` or
 `friction:resolved`, including when `kind` is supplied separately.
 
+To attach evidence, write a local file under `.orbit/tmp/` and use:
+
+```bash
+orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+```
+
+`source_path` is the local file; `path` is the stored artifact name.
+`orbit tool show <tool.name>` prints the tool's schema. List artifacts with
+`orbit.task.show` and `field: "artifacts"` before fetching optional evidence;
+read only paths present in the returned metadata array (MCP may wrap it in
+`value`).
+
 Read `comments` (chronological, each with `by` and `at`) alongside the
 canonical description. An orchestrator or operator refinement posted after the
 description supersedes a stale "Suggested direction"/"Suggested fix" section
