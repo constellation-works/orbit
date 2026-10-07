@@ -136,6 +136,9 @@ impl TaskCommitBoundary {
                         created_by: actor.into(),
                         created_at: Utc::now(),
                         origin: origin.cloned(),
+                        // A claimed worker authored these bytes; its claim
+                        // grants no trusted writer class.
+                        writer: None,
                     },
                 );
                 stored.push(orbit_types::task::TaskArtifact {

@@ -132,6 +132,7 @@ fn store_report_artifacts(fixture: &Fixture, report_bytes: Vec<u8>, history_byte
         manifest.files.retain(|file| file.path != path);
         manifest.files.push(ArtifactManifestFileV2 {
             origin: None,
+            writer: None,
             path: path.into(),
             blob,
             sha256: digest,

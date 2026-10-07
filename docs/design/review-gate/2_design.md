@@ -491,8 +491,9 @@ meaning, and requirements. The failure handoff records
 `review_awaiting_evidence`, keeps the task in progress and its candidate
 recoverable, and holds publication. Run finalization preserves this decision.
 Admission refuses to continue while the matching hold has missing evidence.
-For each requirement, attach its result through `orbit.task.artifact.put` at
-its named artifact path, plus the separately referenced nonempty log artifact:
+For each requirement, an accepted writer (below) attaches its result at its
+named artifact path, plus the separately referenced nonempty log artifact. An
+operator attaches both with `orbit task artifact put`:
 
 ```json
 {"schema_version":1,"attempt_id":"<held attempt>",
@@ -500,6 +501,29 @@ its named artifact path, plus the separately referenced nonempty log artifact:
  "kind":"hosted_ci","name":"Windows CI job","command":"<exact command>",
  "outcome":"passed","log_artifact":"evidence/windows-log.json"}
 ```
+
+Evidence counts only from the writer class Orbit stamps on the artifact's
+manifest entry (`writer`) from the write path, never from `created_by` or
+tool input. The result and its log must both come from a class accepted for
+the requirement's kind:
+
+| Kind | Accepted writers |
+| --- | --- |
+| `hosted_ci` | `operator` |
+| `native_os` | `operator` |
+| `codeql` | `operator`, or `system` (owner fulfilment, below) |
+
+An `operator` write is a human actor on the bare CLI or the dashboard with no
+agent identity, whose process declares no agent envelope or managed run. A
+`system` write is Orbit's own deterministic machinery. An agent's
+`orbit.task.artifact.put`, a claimed worker's evidence, and an artifact stored
+before writer classes have no class and never count. So the agent whose
+candidate is held cannot satisfy the check that holds it, including an
+implementer that attached a result for its own tree before review. The rule
+holds everywhere evidence is read: hold release, the admission manifest's
+`satisfied_external_evidence`, evidence carried across a rebase, and
+settlement. An agent that re-puts an accepted result replaces its writer, so
+the result stops counting.
 
 Evidence identity is kind, exact command and candidate tree. Attempt, commit,
 display name and artifact path are provenance or locators, so a new commit on
@@ -731,6 +755,9 @@ To roll back, set `review.before_pr = false` (and toggle the
 submissions capture the new value, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
 in-flight gate; drain gated runs with a supporting binary before downgrading.
+External evidence attached before writer classes has none, so an in-flight
+hold waits for an accepted writer to attach it again; owner fulfilment does
+so for a `codeql` hold on its next tick.
 
 ## 10. Concerns & Honest Limitations
 
@@ -751,6 +778,11 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - A failed `review_validate` leaves a certificate that says
   `accept_with_fixes` beside a blocked task. The handoff comment names the
   failure as `reject`; nothing rewrites the recorded certificate.
+- The `operator` writer class rests on the same process identity as other
+  operator decisions: an agent envelope or managed-run marker in the
+  environment excludes it, but the environment is not authentication. A
+  process that removed both and could still write the task store directly
+  would be classed as an operator.
 - Final recovery may `resume` a rejected run from a step of the failed
   phase. That is an operator-grade decision by the recovery crew, not a
   second review round the pipeline schedules.

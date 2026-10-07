@@ -15,7 +15,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::review_continuation::{attach, interrupted_report, manifest, run_review_pipeline};
+use super::review_continuation::{
+    attach, attach_as_operator, interrupted_report, manifest, run_review_pipeline,
+};
 use super::review_gate_audit::Fixture;
 
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -56,7 +58,7 @@ fn hold_and_receive(fixture: &mut Fixture) -> (ReviewEvidenceHold, Value) {
     fixture.put_report(&report);
     run_review_pipeline(fixture);
     let hold: ReviewEvidenceHold = artifact(fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
-    attach(
+    attach_as_operator(
         fixture,
         "evidence/macos.json",
         &json!({
@@ -65,7 +67,7 @@ fn hold_and_receive(fixture: &mut Fixture) -> (ReviewEvidenceHold, Value) {
             "outcome": "passed", "log_artifact": "evidence/macos-log.json",
         }),
     );
-    attach(
+    attach_as_operator(
         fixture,
         "evidence/macos-log.json",
         &json!({"output": "passed"}),
@@ -340,6 +342,32 @@ fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
             "outcome": "rerequested", "reason": "patch_changed",
             "from_tree": hold.candidate.tree, "to_tree": tree(&fixture, "HEAD"),
         })
+    );
+    assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
+}
+
+#[test]
+fn evidence_an_agent_rewrote_does_not_carry_across_a_rebase() {
+    if !super::dispatch_admission::isolated(
+        "review_held_resume::evidence_an_agent_rewrote_does_not_carry_across_a_rebase",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
+    let (hold, _) = hold_and_receive(&mut fixture);
+    commit_on_main(&fixture, "base.txt");
+    next_run(&mut fixture, &hold);
+    resume_onto_main(&fixture, &hold);
+    // [ORB-14530] The implementer re-puts the held tree's result unchanged:
+    // the bytes are the operator's, but the latest writer is an agent.
+    let result: Value = artifact(&fixture, "evidence/macos.json");
+    attach(&fixture, "evidence/macos.json", &result);
+
+    fixture.admit();
+    assert_eq!(
+        fixture.input["admission"]["evidence_carry"],
+        Value::Null,
+        "an agent-written result on the held tree must not carry"
     );
     assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
 }

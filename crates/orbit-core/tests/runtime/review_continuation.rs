@@ -29,6 +29,31 @@ pub(super) fn attach(fixture: &Fixture, path: &str, content: &Value) {
         .unwrap();
 }
 
+/// Attach `content` as an operator does from the bare CLI: a human actor with
+/// no agent identity, a writer review evidence accepts [ORB-14530]. `attach`
+/// is an agent's put, which never counts as evidence.
+pub(super) fn attach_as_operator(fixture: &Fixture, path: &str, content: &Value) {
+    fixture
+        .runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                    path: path.into(),
+                    media_type: "application/json".into(),
+                    content: content.to_string().into_bytes(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+}
+
 pub(super) fn interrupted_report(fixture: &Fixture) -> Value {
     json!({
         "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
@@ -402,8 +427,8 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             if index == 0 {
                 let candidate = evidence["candidate"].clone();
                 evidence["candidate"]["tree"] = json!("different-tree");
-                attach(&fixture, &requirement.artifact, &evidence);
-                attach(
+                attach_as_operator(&fixture, &requirement.artifact, &evidence);
+                attach_as_operator(
                     &fixture,
                     &log,
                     &json!({"captured_output": "passing external check"}),
@@ -415,7 +440,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                 evidence["candidate"] = candidate;
             }
             if index + 1 == hold.requirements.len() {
-                attach(
+                attach_as_operator(
                     &fixture,
                     &log,
                     &json!({"captured_output": "passing external check"}),
@@ -434,7 +459,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                 ] {
                     let mut invalid = evidence.clone();
                     invalid[field] = wrong;
-                    attach(&fixture, &requirement.artifact, &invalid);
+                    attach_as_operator(&fixture, &requirement.artifact, &invalid);
                     assert_eq!(
                         fixture.runtime.get_task(&fixture.task_id).unwrap().status,
                         TaskStatus::InProgress,
@@ -442,14 +467,14 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                     );
                 }
             }
-            attach(&fixture, &requirement.artifact, &evidence);
+            attach_as_operator(&fixture, &requirement.artifact, &evidence);
             if index != 0 && index + 1 != hold.requirements.len() {
                 assert_eq!(
                     fixture.runtime.get_task(&fixture.task_id).unwrap().status,
                     TaskStatus::InProgress,
                     "a result without its attached log cannot release the hold"
                 );
-                attach(
+                attach_as_operator(
                     &fixture,
                     &log,
                     &json!({"captured_output": "passing external check"}),
@@ -574,7 +599,7 @@ fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree()
             .content,
     )
     .unwrap();
-    attach(
+    attach_as_operator(
         &fixture,
         "evidence/macos.json",
         &json!({
@@ -583,7 +608,7 @@ fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree()
             "outcome": "passed", "log_artifact": "evidence/macos-log.json",
         }),
     );
-    attach(
+    attach_as_operator(
         &fixture,
         "evidence/macos-log.json",
         &json!({"output": "passed"}),
@@ -695,7 +720,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
             _ => unreachable!(),
         }
         fixture.put_report(&report);
-        attach(
+        attach_as_operator(
             &fixture,
             "evidence/windows.json",
             &json!({
@@ -705,7 +730,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
                 "log_artifact": "evidence/windows-log.json",
             }),
         );
-        attach(
+        attach_as_operator(
             &fixture,
             "evidence/windows-log.json",
             &json!({"output": "passed"}),

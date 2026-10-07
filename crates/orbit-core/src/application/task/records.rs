@@ -94,6 +94,7 @@ impl TaskRecordService<'_> {
                 TaskArtifactUpdateParams {
                     origin: params.artifact_origin.clone(),
                     owner_run_id: params.artifact_owner_run_id.clone(),
+                    writer: params.artifact_writer,
                     actor: params.actor.clone(),
                     upsert_artifacts: params.upsert_artifacts.clone(),
                 },

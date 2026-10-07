@@ -8,14 +8,14 @@ use orbit_automation::review::{
 };
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ArtifactWriter, Task, TaskStatus};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
     REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
-    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
-    ReviewValidation, ValidationOutcome, ValidationRole,
+    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
+    ReviewExternalEvidence, ReviewValidation, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
@@ -122,19 +122,38 @@ pub(crate) fn evidence_ready(
     }))
 }
 
-/// Collect passing result/log pairs on this tree. Artifact paths and display
-/// names may change between reviews; they are locators, not check identity.
+/// [ORB-14530] Whether `writer` may supply a result of `kind`, or its log.
+/// An operator may supply every kind; Orbit's own machinery only CodeQL, the
+/// one check owner fulfilment runs. An agent's put, a claimed worker's
+/// evidence and an unclassified artifact never count, so the agent whose
+/// candidate is held can never satisfy the check that holds it.
+fn accepted_writer(kind: ReviewEvidenceKind, writer: Option<ArtifactWriter>) -> bool {
+    match writer {
+        Some(ArtifactWriter::Operator) => true,
+        Some(ArtifactWriter::System) => kind == ReviewEvidenceKind::CodeQl,
+        None => false,
+    }
+}
+
+/// Collect passing result/log pairs on this tree from accepted writers.
+/// Artifact paths and display names may change between reviews; they are
+/// locators, not check identity.
 pub(super) fn satisfied_external_evidence(
     runtime: &OrbitRuntime,
     task_id: &str,
     candidate: &SourceRevision,
 ) -> Result<BTreeMap<String, ReviewExternalEvidence>, OrbitError> {
+    let writers: BTreeMap<String, Option<ArtifactWriter>> = runtime
+        .get_task_artifact_manifest(task_id)?
+        .into_iter()
+        .map(|file| (file.path, file.writer))
+        .collect();
     let mut satisfied = BTreeMap::new();
-    for file in runtime.get_task_artifact_manifest(task_id)? {
-        if reserved_artifact(&file.path) {
+    for (path, writer) in &writers {
+        if reserved_artifact(path) || writer.is_none() {
             continue;
         }
-        let Some(artifact) = runtime.get_task_artifact(task_id, &file.path)? else {
+        let Some(artifact) = runtime.get_task_artifact(task_id, path)? else {
             continue;
         };
         let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&artifact.content)
@@ -146,7 +165,12 @@ pub(super) fn satisfied_external_evidence(
             || evidence.candidate.tree != candidate.tree
             || evidence.command.trim().is_empty()
             || evidence.outcome != ValidationOutcome::Passed
-            || evidence.log_artifact == file.path
+            || evidence.log_artifact == *path
+            || !accepted_writer(evidence.kind, *writer)
+            || !orbit_types::task::canonical_artifact_path(&evidence.log_artifact)
+                .ok()
+                .and_then(|log| writers.get(&log))
+                .is_some_and(|log_writer| accepted_writer(evidence.kind, *log_writer))
             || reserved_artifact(&evidence.log_artifact)
             || orbit_types::task::validate_relative_artifact_path(&evidence.log_artifact).is_err()
         {
@@ -158,7 +182,7 @@ pub(super) fn satisfied_external_evidence(
         {
             continue;
         }
-        satisfied.insert(file.path, evidence);
+        satisfied.insert(path.clone(), evidence);
     }
     Ok(satisfied)
 }
