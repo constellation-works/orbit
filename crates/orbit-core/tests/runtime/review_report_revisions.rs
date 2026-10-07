@@ -31,6 +31,7 @@ fn scoped_passes() -> Vec<Value> {
     (1..=9)
         .map(|index| {
             json!({
+                "id": format!("V{}", index),
                 "command": format!("cargo test -p fixture case_{index}"),
                 "outcome": "passed",
                 "role": "required",
@@ -41,7 +42,18 @@ fn scoped_passes() -> Vec<Value> {
 
 fn report(fixture: &Fixture, verdict: &str, extra: Vec<Value>, findings: Value) -> Value {
     let mut validation = scoped_passes();
-    validation.extend(extra);
+    for mut record in extra {
+        if record.get("id").is_none()
+            && record
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("required")
+                == "required"
+        {
+            record["id"] = json!(format!("V{}", validation.len() + 1));
+        }
+        validation.push(record);
+    }
     json!({
         "schema_version": REVIEW_CONTRACT_VERSION,
         "attempt_id": fixture.input["admission"]["attempt_id"],
@@ -59,6 +71,7 @@ fn codeql_failed_report(fixture: &Fixture) -> Value {
         fixture,
         "incomplete",
         vec![json!({
+            "id": "V10",
             "command": CODEQL,
             "outcome": "failed",
             "role": "required",
@@ -114,11 +127,9 @@ fn remove_history_sidecar(fixture: &Fixture) {
 }
 
 /// ORB-14191 attempt rvw-368054c058a1-1: the first report is incomplete with
-/// the required CodeQL run failed, the replacement says `accept_with_fixes`
-/// and silently omits it. No settlement runs between the two writes, the
-/// replacement is retried after a lost response, and the host restarts
-/// before settling; the gate still refuses the false completeness, keeps
-/// both revisions, and the certificate it issues is no coverage.
+/// the required CodeQL run failed. A replacement that omits its id is refused
+/// at attach; a corrected report carries the id on a passing rerun, remains
+/// idempotent on retry, and survives a host restart before settlement.
 #[test]
 fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed() {
     if !super::dispatch_admission::isolated(
@@ -130,9 +141,10 @@ fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed(
     fixture.admit();
     fixture.put_report(&codeql_failed_report(&fixture));
 
-    // The reviewer then fixes a finding and replaces its report.
+    // The reviewer fixes a finding, but first submits a replacement that
+    // mistakenly omits the failed check.
     std::fs::write(fixture.repo.join("candidate.txt"), "after\nfixed\n").unwrap();
-    let replacement = report(
+    let dropped = report(
         &fixture,
         "accept_with_fixes",
         Vec::new(),
@@ -141,6 +153,47 @@ fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed(
             "paths": ["candidate.txt"], "disposition": {"kind": "repaired"},
             "change": "Added the trailing line",
         }]),
+    );
+    let refusal = fixture
+        .try_put_report(&dropped)
+        .expect_err("the dropped required id is refused while the reviewer can fix it");
+    assert!(
+        refusal
+            .to_string()
+            .contains("required validation record `V10` (`scripts/codeql-rust-local.sh"),
+        "the refusal names the missing id and command: {refusal}"
+    );
+    let current = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, REVIEW_REPORT_ARTIFACT)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&current.content).unwrap(),
+        codeql_failed_report(&fixture),
+        "the refusal leaves the earlier report untouched"
+    );
+    let history_before = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, REVIEW_REPORT_HISTORY_ARTIFACT)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        ReviewReportHistory::parse(&history_before.content)
+            .unwrap()
+            .revisions
+            .len(),
+        1,
+        "the refusal does not append a revision"
+    );
+
+    let replacement = report(
+        &fixture,
+        "accept_with_fixes",
+        vec![json!({
+            "id": "V10", "command": CODEQL, "outcome": "passed", "role": "required",
+        })],
+        dropped["findings"].clone(),
     );
     fixture.put_report(&replacement);
     // Its response was lost, so it puts the same bytes again.
@@ -151,20 +204,12 @@ fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed(
     fixture.runtime =
         OrbitRuntime::from_roots(&fixture._root.path().join("global"), &workspace).unwrap();
 
-    let refused = fixture
+    fixture
         .settle()
-        .expect_err("a dropped required check never opens a PR");
+        .expect("the corrected report carries the failed record id");
     let certificate = certificate(&fixture);
-    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete, "{refused}");
-    assert!(!certificate.validation_complete);
-    let escalation = certificate.escalation.clone().unwrap_or_default();
-    assert!(
-        escalation.contains(&format!(
-            "required check `{CODEQL}` was recorded failed by an earlier report revision of this \
-             attempt and the final report omits it"
-        )),
-        "{escalation}"
-    );
+    assert_eq!(certificate.verdict, ReviewVerdict::AcceptWithFixes);
+    assert!(certificate.validation_complete);
     assert_eq!(certificate.retained_obligations.len(), 1);
     let retained = &certificate.retained_obligations[0].validation;
     assert_eq!(
@@ -173,12 +218,9 @@ fn a_replacement_report_cannot_drop_a_required_check_an_earlier_revision_failed(
         "the earlier failure stays visible on the certificate"
     );
     assert!(verdict_comment(&fixture).contains(&format!(
-        "Required checks retained from earlier report revisions: `{CODEQL}` failed"
+        "Required checks retained from earlier report revisions: V10 `{CODEQL}` failed"
     )));
-    assert!(
-        certificate_acceptable(&certificate).is_err(),
-        "coverage refuses the certificate too"
-    );
+    assert_eq!(certificate_acceptable(&certificate), Ok(()));
 
     // Both revisions are retained; the retry added none.
     let history = fixture
@@ -235,7 +277,7 @@ fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
     remove_history_sidecar(&fixture);
 
     std::fs::write(fixture.repo.join("candidate.txt"), "after\nfixed\n").unwrap();
-    let replacement = report(
+    let dropped = report(
         &fixture,
         "accept_with_fixes",
         Vec::new(),
@@ -245,6 +287,31 @@ fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
             "change": "Added the trailing line",
         }]),
     );
+    let refusal = fixture
+        .try_put_report(&dropped)
+        .expect_err("the first replacement imports and preserves the legacy obligation");
+    assert!(
+        refusal
+            .to_string()
+            .contains("required validation record `V10` (`scripts/codeql-rust-local.sh"),
+        "the imported legacy record is named on refusal: {refusal}"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_REPORT_HISTORY_ARTIFACT)
+            .unwrap()
+            .is_none(),
+        "the refused replacement does not create a sidecar"
+    );
+    let replacement = report(
+        &fixture,
+        "accept_with_fixes",
+        vec![json!({
+            "id": "V10", "command": CODEQL, "outcome": "passed", "role": "required",
+        })],
+        dropped["findings"].clone(),
+    );
     fixture.put_report(&replacement);
     fixture.put_report(&replacement);
     let workspace = fixture.repo.join(".orbit");
@@ -253,10 +320,10 @@ fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
 
     fixture
         .settle()
-        .expect_err("a legacy required failure cannot vanish on first replacement");
+        .expect("the corrected first replacement preserves the legacy id");
     let certificate = certificate(&fixture);
-    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
-    assert!(!certificate.validation_complete);
+    assert_eq!(certificate.verdict, ReviewVerdict::AcceptWithFixes);
+    assert!(certificate.validation_complete);
     assert_eq!(certificate.retained_obligations.len(), 1);
     assert_eq!(
         certificate.retained_obligations[0].validation.command,
@@ -274,7 +341,7 @@ fn first_replacement_imports_a_legacy_report_without_a_history_sidecar() {
     let history = ReviewReportHistory::parse(&history.content).unwrap();
     assert_eq!(history.revisions.len(), 2);
     assert_eq!(history.revisions[0].validation[9].command, CODEQL);
-    assert!(certificate_acceptable(&certificate).is_err());
+    assert_eq!(certificate_acceptable(&certificate), Ok(()));
 }
 
 /// ORB-14151's shape: every scoped regression passed and the final-candidate
@@ -297,7 +364,7 @@ fn an_unrelated_diagnostic_failure_passes_the_bounded_task_with_its_limits_discl
         &fixture,
         "accept",
         vec![
-            json!({"command": CODEQL, "outcome": "passed", "role": "required"}),
+            json!({"id": "V10", "command": CODEQL, "outcome": "passed", "role": "required"}),
             json!({
                 "command": WORKSPACE, "outcome": "failed", "role": "diagnostic",
                 "sources": [UNRELATED_FIXTURE],
@@ -453,6 +520,7 @@ fn owner_required_commands_are_bound_at_admission_and_rechecked_by_consumers() {
         &passing,
         "accept",
         vec![json!({
+            "id": "V10",
             "command": "make ci-fast",
             "outcome": "passed",
             "role": "required",

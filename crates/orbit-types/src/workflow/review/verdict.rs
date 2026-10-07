@@ -191,6 +191,17 @@ impl NegativeControl {
 /// One validation record in the reviewer report or the certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewValidation {
+    /// Stable id of a required-check record across the attempt's report
+    /// revisions [ORB-14370], such as `V1`. A later revision carries it
+    /// forward with the record's current command and outcome, or retires it
+    /// in [`ReviewReport::retired_validation`]; earlier records are matched
+    /// by this id, never by command text. A superseded attempt and its
+    /// replacing required pass may share it. Absent in evidence written
+    /// before it existed, which keeps the command-identity rules.
+    ///
+    /// [`ReviewReport::retired_validation`]: super::ReviewReport::retired_validation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub command: String,
     pub outcome: ValidationOutcome,
     /// What the record is evidence of; absent in legacy evidence, which is

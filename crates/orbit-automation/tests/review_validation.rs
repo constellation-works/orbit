@@ -19,9 +19,9 @@ use orbit_automation::review::{
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
-    NegativeControl, REVIEW_CONTRACT_VERSION, RetainedObligation, ReviewBudget, ReviewCertificate,
-    ReviewConsumption, ReviewInvalidation, ReviewValidation, ReviewVerdict, ReviewerIdentity,
-    ValidationOutcome, ValidationRole,
+    NegativeControl, REVIEW_CONTRACT_VERSION, RecordGap, RetainedObligation, RetiredValidation,
+    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewInvalidation, ReviewValidation,
+    ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
 };
 
 const ATTEMPT: &str = "cargo test --package orbit-core";
@@ -288,6 +288,7 @@ fn record(
     note: Option<&str>,
 ) -> ReviewValidation {
     ReviewValidation {
+        id: None,
         command: command.to_string(),
         outcome,
         role,
@@ -357,6 +358,7 @@ fn certificate_with(
         required_validation_commands: Some(vec![]),
         validation_complete: true,
         retained_obligations,
+        retired_validation: Vec::new(),
         validation_scope: validation_scope.to_vec(),
         reviewer: ReviewerIdentity {
             crew: "reviewers".into(),
@@ -535,6 +537,7 @@ fn retained_obligations_match_effective_identities_across_report_revisions() {
         let records = vec![required(final_command, final_check, true)];
         let context = ValidationContext {
             obligations: &obligations,
+            retired: &[],
             ..ValidationContext::default()
         };
         let expected = if matches {
@@ -566,6 +569,177 @@ fn retained_obligations_match_effective_identities_across_report_revisions() {
             exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ()),
             expected_coverage,
             "ORB-14312: {name}: delivery coverage"
+        );
+    }
+}
+
+fn with_id(mut record: ReviewValidation, id: &str) -> ReviewValidation {
+    record.id = Some(id.into());
+    record
+}
+
+fn retire(id: &str, reason: &str) -> RetiredValidation {
+    RetiredValidation {
+        id: id.into(),
+        reason: reason.into(),
+    }
+}
+
+/// An earlier record with an id is accounted for by that id alone
+/// [ORB-14370]: carrying it forward settles whatever the command now reads
+/// (ORB-14360's prose name, ORB-14260's `<workspace>` placeholder), while
+/// omitting, relabeling or improperly retiring it is a dropped record even
+/// when another record runs the identical command. Settlement and coverage
+/// agree on every case.
+#[test]
+fn record_ids_account_for_earlier_records_regardless_of_command_text() {
+    const PROSE: &str = "focused CLI reference invocation verification";
+    const SCRIPT: &str = "python3 .orbit/tmp/verify-reference-examples.py";
+    const PLACEHOLDER: &str = "cargo test --manifest-path <workspace>/Cargo.toml";
+    const ABSOLUTE: &str = "cargo test --manifest-path /srv/checkout/Cargo.toml";
+    let not_run = |command: &str| {
+        with_id(
+            record(
+                command,
+                None,
+                ValidationOutcome::NotRun,
+                ValidationRole::Required,
+                None,
+            ),
+            "V1",
+        )
+    };
+    let failed = |command: &str| with_id(required(command, None, false), "V1");
+    let passed = |command: &str, id: &str| with_id(required(command, None, true), id);
+    let gap = |earlier: &ReviewValidation, gap: RecordGap| {
+        Err(ValidationDefect::RecordDropped {
+            id: "V1".into(),
+            command: earlier.command.clone(),
+            outcome: earlier.outcome,
+            gap,
+        })
+    };
+    type Case = (
+        &'static str,
+        ReviewValidation,
+        Vec<ReviewValidation>,
+        Vec<RetiredValidation>,
+        Result<(), ValidationDefect>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "ORB-14360: prose name to the real command",
+            not_run(PROSE),
+            vec![passed(SCRIPT, "V1")],
+            vec![],
+            Ok(()),
+        ),
+        (
+            "ORB-14260: placeholder to the absolute path",
+            not_run(PLACEHOLDER),
+            vec![passed(ABSOLUTE, "V1")],
+            vec![],
+            Ok(()),
+        ),
+        (
+            "a failed record rerun under its id with a new command",
+            failed("make ci-fast"),
+            vec![
+                with_id(superseded("make ci-fast", None), "V1"),
+                passed("set -o pipefail; make ci-fast | tee log", "V1"),
+            ],
+            vec![],
+            Ok(()),
+        ),
+        (
+            "an unrun record retired with a reason",
+            not_run(PROSE),
+            vec![passed(SCRIPT, "V2")],
+            vec![retire("V1", "folded into V2")],
+            Ok(()),
+        ),
+        (
+            "the same command under another id",
+            not_run(SCRIPT),
+            vec![passed(SCRIPT, "V2")],
+            vec![],
+            gap(&not_run(SCRIPT), RecordGap::Omitted),
+        ),
+        (
+            "the id carried only as a diagnostic",
+            not_run(PROSE),
+            vec![
+                passed("make ci-lint", "V2"),
+                with_id(diagnostic(SCRIPT, ValidationOutcome::Passed, &[]), "V1"),
+            ],
+            vec![],
+            gap(
+                &not_run(PROSE),
+                RecordGap::Reclassified(ValidationRole::Diagnostic),
+            ),
+        ),
+        (
+            "a retirement without a reason",
+            not_run(PROSE),
+            vec![passed(SCRIPT, "V2")],
+            vec![retire("V1", "  ")],
+            gap(&not_run(PROSE), RecordGap::RetirementUnexplained),
+        ),
+        (
+            "a failed record retired",
+            failed("make ci-fast"),
+            vec![passed("make ci-lint", "V2")],
+            vec![retire("V1", "flaky")],
+            gap(&failed("make ci-fast"), RecordGap::FailureRetired),
+        ),
+    ];
+    for (name, earlier, records, retired, expected) in cases {
+        let obligations = vec![retained(earlier)];
+        let context = ValidationContext {
+            obligations: &obligations,
+            retired: &retired,
+            ..ValidationContext::default()
+        };
+        assert_eq!(validation_evidence(&records, &context), expected, "{name}");
+        let mut certificate = certificate_with(records, &scope(), obligations);
+        certificate.retired_validation = retired;
+        assert_eq!(
+            certificate_acceptable(&certificate).is_ok(),
+            expected.is_ok(),
+            "{name}: certificate coverage"
+        );
+    }
+}
+
+/// A certificate issued before record ids, stored without `id` or
+/// `retired_validation`, is read back and spent under the command-identity
+/// rules it was issued under.
+#[test]
+fn certificates_without_record_ids_keep_their_coverage() {
+    let obligations = vec![retained(record(
+        "make ci-fast",
+        None,
+        ValidationOutcome::NotRun,
+        ValidationRole::Required,
+        None,
+    ))];
+    for (current, covered) in [
+        ("TMPDIR=\"$PWD/.orbit/tmp\" make ci-fast", true),
+        ("make ci-lint", false),
+    ] {
+        let issued = certificate_with(
+            vec![required(current, None, true)],
+            &scope(),
+            obligations.clone(),
+        );
+        let stored = serde_json::to_value(&issued).unwrap();
+        assert!(stored.get("retired_validation").is_none());
+        assert!(stored["validation"][0].get("id").is_none());
+        let certificate: ReviewCertificate = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            certificate_acceptable(&certificate).is_ok(),
+            covered,
+            "{current}"
         );
     }
 }
@@ -608,6 +782,7 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
     let context = ValidationContext {
         scope: &scope,
         obligations: &[],
+        retired: &[],
         required_validation_commands: Some(&[]),
     };
     assert_eq!(validation_evidence(&records, &context), Ok(()));
@@ -812,6 +987,7 @@ fn relabeling_or_dropping_a_required_check_never_completes_validation() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &obligations,
+            retired: &[],
             required_validation_commands: Some(&[]),
         };
         assert_eq!(
@@ -931,6 +1107,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &obligations,
+            retired: &[],
             required_validation_commands: Some(&[]),
         };
         assert_eq!(validation_evidence(&records, &context), Ok(()), "{name}");
@@ -998,6 +1175,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &[],
+            retired: &[],
             required_validation_commands: Some(&[]),
         };
         assert_eq!(
@@ -1021,6 +1199,7 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
     let context = ValidationContext {
         scope: &task_scope,
         obligations: &[],
+        retired: &[],
         required_validation_commands: Some(&host_required),
     };
     let cases = [
@@ -1156,6 +1335,7 @@ fn a_leading_env_assignment_satisfies_the_host_required_command() {
     let context = ValidationContext {
         scope: &task_scope,
         obligations: &[],
+        retired: &[],
         required_validation_commands: Some(&host_required),
     };
     let satisfied = [
@@ -1223,6 +1403,7 @@ fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
     let context = ValidationContext {
         scope: &task_scope,
         obligations: &[],
+        retired: &[],
         required_validation_commands: Some(&required_commands),
     };
     let mut records = vec![
@@ -1252,6 +1433,7 @@ fn missing_host_snapshot_is_not_an_empty_requirement_list() {
     let context = ValidationContext {
         scope: &task_scope,
         obligations: &[],
+        retired: &[],
         required_validation_commands: None,
     };
     assert_eq!(

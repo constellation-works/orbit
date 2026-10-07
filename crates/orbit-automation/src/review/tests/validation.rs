@@ -10,6 +10,7 @@ fn record(
     note: Option<&str>,
 ) -> ReviewValidation {
     ReviewValidation {
+        id: None,
         command: command.into(),
         outcome,
         role,

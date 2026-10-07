@@ -34,7 +34,7 @@ fn interrupted_report(fixture: &Fixture) -> Value {
         "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
         "verdict": "incomplete", "summary": "Inspected error paths; platform checks remain.",
         "findings": [],
-        "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+        "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
         "escalation": "External checks pending",
     })
 }
@@ -273,8 +273,12 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
         ]);
         report["verdict"] = json!(verdict);
         report["external_evidence"] = requirements.clone();
-        for command in ["hosted windows", "native macos", "codeql"] {
+        for (index, command) in ["hosted windows", "native macos", "codeql"]
+            .iter()
+            .enumerate()
+        {
             report["validation"].as_array_mut().unwrap().push(json!({
+                "id": format!("V{}", index + 2),
                 "command": command, "outcome": "not_run", "role": "required",
             }));
         }
@@ -557,7 +561,7 @@ fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree()
         "artifact": "evidence/macos.json",
     }]);
     report["validation"].as_array_mut().unwrap().push(json!({
-        "command": "native macos", "outcome": "not_run", "role": "required",
+        "id": "V2", "command": "native macos", "outcome": "not_run", "role": "required",
     }));
     fixture.put_report(&report);
     run_review_pipeline(&fixture);
@@ -660,7 +664,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
         report["validation"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"command": "hosted windows", "outcome": "not_run"}));
+            .push(json!({"id": "V2", "command": "hosted windows", "outcome": "not_run"}));
         match case {
             "reject" => {
                 report["verdict"] = json!("changes_required");
@@ -673,7 +677,7 @@ fn external_requirement_cannot_hide_a_reject_open_defect_or_failed_local_check()
             "unnamed_check" => report["validation"]
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"command": "local required", "outcome": "not_run"})),
+                .push(json!({"id": "V3", "command": "local required", "outcome": "not_run"})),
             "meaning_changed" => {
                 fixture
                     .runtime

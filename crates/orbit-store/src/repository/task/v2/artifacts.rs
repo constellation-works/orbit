@@ -15,12 +15,23 @@ use orbit_types::workflow::{
 /// or neither. A report that does not parse carries no obligations and adds
 /// no revision; settlement refuses it on its own. A held history this build
 /// cannot read refuses the update rather than being overwritten.
+///
+/// With `reviewer_can_correct`, the report must also meet the record-id
+/// contract [ORB-14370]: every required record carries a distinct stable id,
+/// and no earlier revision's required record id of its attempt is dropped.
+/// The reviewer's own put sets it — an ordinary update, or a claimed
+/// reviewer's live update reaching the owner — because the refusal returns
+/// to a reviewer that can still correct and resubmit the report. A claimed
+/// worker's evidence or failure settlement runs after the reviewer stopped,
+/// so it retains the revision and leaves any gap to settlement rather than
+/// discarding the rest of the evidence.
 pub(crate) fn review_report_history(
     bundle_dir: &Path,
     held: &BTreeMap<String, ArtifactManifestFileV2>,
     artifacts: &[TaskArtifact],
     actor: &str,
     now: chrono::DateTime<Utc>,
+    reviewer_can_correct: bool,
 ) -> Result<Option<TaskArtifact>, OrbitError> {
     let Some(report) = artifacts.iter().rev().find(|artifact| {
         normalize_v2_artifact_path(&artifact.path).ok().as_deref() == Some(REVIEW_REPORT_ARTIFACT)
@@ -30,6 +41,10 @@ pub(crate) fn review_report_history(
     let Ok(parsed) = ReviewReport::parse(&report.content) else {
         return Ok(None);
     };
+    if reviewer_can_correct {
+        ReviewReportHistory::check_required_record_ids(&parsed)
+            .map_err(OrbitError::InvalidInput)?;
+    }
     let mut history = match held.get(REVIEW_REPORT_HISTORY_ARTIFACT) {
         Some(file) => {
             let path = resolve_v2_artifact_file_path(bundle_dir, &file.blob)?.ok_or_else(|| {
@@ -75,6 +90,13 @@ pub(crate) fn review_report_history(
             history
         }
     };
+    // Name the dropped record while the reviewer can still correct it; at
+    // settlement nobody could.
+    if reviewer_can_correct {
+        history
+            .check_record_continuity(&parsed)
+            .map_err(OrbitError::InvalidInput)?;
+    }
     let recorded = history
         .record(ReviewReportRevision {
             attempt_id: parsed.attempt_id,
@@ -279,7 +301,7 @@ impl TaskV2Store {
             let now = Utc::now();
             let mut artifacts = artifacts.clone();
             if let Some(history) =
-                review_report_history(&bundle_dir, &by_path, &artifacts, &fields.actor, now)?
+                review_report_history(&bundle_dir, &by_path, &artifacts, &fields.actor, now, true)?
             {
                 artifacts.push(history);
             }

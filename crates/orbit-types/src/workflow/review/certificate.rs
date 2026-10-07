@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::super::automation::SourceRevision;
 use super::{
-    CommitIdentity, RetainedObligation, ReviewAssurance, ReviewBudget, ReviewFinding, ReviewReport,
-    ReviewValidation, ReviewVerdict,
+    CommitIdentity, RetainedObligation, RetiredValidation, ReviewAssurance, ReviewBudget,
+    ReviewFinding, ReviewReport, ReviewValidation, ReviewVerdict,
 };
 
 /// The pinned, immutable input handed to the reviewer.
@@ -106,6 +106,10 @@ pub struct ReviewCertificate {
     /// certificates issued before report revisions were retained.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained_obligations: Vec<RetainedObligation>,
+    /// Retained record ids the final report retired, with their reasons
+    /// [ORB-14370]. Absent on certificates issued before record ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_validation: Vec<RetiredValidation>,
     /// The scope validation sources were judged against: every task selector
     /// plus a `file:` selector for every path the candidate changed from its
     /// base. Absent on certificates issued before scope-bound roles.

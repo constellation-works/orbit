@@ -44,6 +44,7 @@ pub(super) fn evidence_only(
         &ValidationContext {
             scope: &certificate.validation_scope,
             obligations: &certificate.retained_obligations,
+            retired: &certificate.retired_validation,
             required_validation_commands: certificate.required_validation_commands.as_deref(),
         },
     )

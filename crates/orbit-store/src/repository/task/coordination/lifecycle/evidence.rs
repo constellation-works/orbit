@@ -83,6 +83,8 @@ impl TaskCommitBoundary {
                 .collect();
             // A claimed reviewer's report reaches the owner here, not through
             // an ordinary update; retain its revision the same way [ORB-14192].
+            // Only the worker's live update can still be corrected, so only it
+            // is held to the record-id contract at submission [ORB-14370].
             if evidence.artifacts.iter().any(|artifact| {
                 normalize_v2_artifact_path(&artifact.path).ok().as_deref()
                     == Some(REVIEW_REPORT_HISTORY_ARTIFACT)
@@ -95,6 +97,7 @@ impl TaskCommitBoundary {
                 &evidence.artifacts,
                 actor,
                 Utc::now(),
+                effects.worker_update.is_some(),
             )?;
             let mut stored = Vec::with_capacity(evidence.artifacts.len() + 1);
             let mut seen_in_request = BTreeSet::new();

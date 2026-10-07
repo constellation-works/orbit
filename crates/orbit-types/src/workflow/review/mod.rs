@@ -12,6 +12,7 @@ mod admission;
 mod certificate;
 mod history;
 mod ledger;
+mod records;
 mod report;
 mod verdict;
 
@@ -35,6 +36,7 @@ pub use ledger::{
     ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewReservation, ReviewResetDecision,
     ReviewerInvocation, ReviewerInvocationEvent, seconds_between,
 };
+pub use records::{RecordGap, RetiredValidation, record_gap};
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
 pub use verdict::{
     NegativeControl, RetainedObligation, ReviewAssurance, ReviewValidation, ReviewVerdict,

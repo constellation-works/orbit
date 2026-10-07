@@ -1306,7 +1306,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
                     "disposition": {"kind": if repaired { "repaired" } else { "open" }},
                 }])
             } else { json!([]) },
-            "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+            "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
             "escalation": null,
         });
         // The public agent tools share the owner-write helper with the old

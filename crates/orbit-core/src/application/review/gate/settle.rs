@@ -344,6 +344,7 @@ fn settle(
         required_validation_commands: judgement.required_validation_commands.clone(),
         validation_complete: judgement.validation_complete,
         retained_obligations: judgement.retained_obligations.clone(),
+        retired_validation: judgement.retired_validation.clone(),
         validation_scope,
         reviewer,
         // The attempt was reserved under its admission digest. Selector

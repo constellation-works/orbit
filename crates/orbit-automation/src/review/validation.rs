@@ -19,10 +19,16 @@
 //! failures, and a required check an earlier report revision recorded must
 //! still be accounted for. Relabeling a failed required check therefore
 //! contradicts its own sources or its retained history instead of clearing it.
+//!
+//! An earlier record that carries an id is accounted for by that id alone
+//! [ORB-14370]: the final report carries it forward, whatever its command now
+//! reads, or retires it with a reason. Records written without ids keep the
+//! command-identity rules.
 
 use orbit_common::fs::selector::overlaps;
 use orbit_types::workflow::{
-    RetainedObligation, ReviewValidation, ValidationOutcome, ValidationRole,
+    RecordGap, RetainedObligation, RetiredValidation, ReviewValidation, ValidationOutcome,
+    ValidationRole, record_gap,
 };
 
 /// Why a validation set does not establish a validated candidate.
@@ -79,6 +85,14 @@ pub enum ValidationDefect {
         command: String,
         outcome: ValidationOutcome,
         role: Option<ValidationRole>,
+    },
+    /// A required record an earlier report revision filed under `id` that
+    /// the final report neither carries forward nor legitimately retires.
+    RecordDropped {
+        id: String,
+        command: String,
+        outcome: ValidationOutcome,
+        gap: RecordGap,
     },
     /// The certificate has no captured owner validation policy. It must be
     /// re-established under a fresh delivery admission.
@@ -168,6 +182,17 @@ impl ValidationDefect {
                     None => "omits it".to_string(),
                 }
             ),
+            ValidationDefect::RecordDropped {
+                id,
+                command,
+                outcome,
+                gap,
+            } => format!(
+                "validation_incomplete: required validation record `{id}` (`{command}`) was \
+                 recorded {} by an earlier report revision of this attempt and the final report {}",
+                outcome.as_str(),
+                gap.describe()
+            ),
             ValidationDefect::HostContractMissing => "validation_contract_missing: this review has no captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".to_string(),
             ValidationDefect::HostCheckNotEstablished { command } => format!(
                 "validation_incomplete: host-required check `{command}` is not established as a required pass or a valid same-check replacement on the final candidate"
@@ -184,6 +209,8 @@ pub struct ValidationContext<'a> {
     pub scope: &'a [String],
     /// Required-check records earlier report revisions of the attempt made.
     pub obligations: &'a [RetainedObligation],
+    /// Retained record ids the final report retired, with their reasons.
+    pub retired: &'a [RetiredValidation],
     /// Required commands captured by the candidate owner at delivery
     /// admission. `None` is a legacy/ambiguous contract; `Some([])` is an
     /// explicit empty host contract.
@@ -195,6 +222,7 @@ impl Default for ValidationContext<'_> {
         Self {
             scope: &[],
             obligations: &[],
+            retired: &[],
             required_validation_commands: Some(&[]),
         }
     }
@@ -217,8 +245,11 @@ impl Default for ValidationContext<'_> {
 /// reclassification is refused rather than trusted. Every retained
 /// obligation must still be accounted for by a record of the same check that
 /// is `required`, `superseded`, or — when the retained record never ran —
-/// `excluded`. Records carrying no classification are required checks, which
-/// keeps evidence written before this contract conservative.
+/// `excluded`. An obligation with a record id is the same check only as a
+/// record carrying that id, and may instead be retired with a reason unless
+/// it failed; one without an id is matched by effective identity. Records
+/// carrying no classification are required checks, which keeps evidence
+/// written before this contract conservative.
 pub fn validation_evidence(
     records: &[ReviewValidation],
     context: &ValidationContext<'_>,
@@ -263,6 +294,17 @@ pub fn validation_evidence(
 
     for obligation in context.obligations {
         let obligation = &obligation.validation;
+        if let Some(id) = obligation.record_id() {
+            if let Some(gap) = record_gap(id, obligation.outcome, records, context.retired) {
+                return Err(ValidationDefect::RecordDropped {
+                    id: id.to_string(),
+                    command: obligation.command.clone(),
+                    outcome: obligation.outcome,
+                    gap,
+                });
+            }
+            continue;
+        }
         if !obligation_resolved(obligation, records) {
             return Err(ValidationDefect::ObligationDropped {
                 command: obligation.command.clone(),
@@ -506,7 +548,15 @@ fn explained(record: &ReviewValidation) -> bool {
         .is_some_and(|note| !note.trim().is_empty())
 }
 
+/// One check: both records carry the same record id, or they share an
+/// effective identity.
 fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
+    if matches!(
+        (left.record_id(), right.record_id()),
+        (Some(left), Some(right)) if left == right
+    ) {
+        return true;
+    }
     matches!(
         (effective_check_identity(left), effective_check_identity(right)),
         (Some(left), Some(right)) if left == right

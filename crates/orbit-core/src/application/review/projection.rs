@@ -74,6 +74,7 @@ pub fn task_review_projection(
         "validation_complete": certificate.validation_complete,
         "validation_limitations": validation_limitations(&certificate.validation),
         "retained_obligations": certificate.retained_obligations,
+        "retired_validation": certificate.retired_validation,
         "validation_scope": certificate.validation_scope,
         "task_meaning_digest": certificate.task_meaning_digest,
         "budget": certificate.budget,
