@@ -81,6 +81,104 @@ try {
     { name: '390', width: 390, height: 844 },
     { name: '375x812', width: 375, height: 812 },
   ];
+
+  // ORB-14442: task dock breakpoints must not override Health's router-owned
+  // list grid. These checks exercise the shipped CSS and router at the widths
+  // where the shared tasks-layout rules used to leave an empty column.
+  const diagnosticLayout = async (subtab, width) => {
+    await page.setViewportSize({ width, height: 730 });
+    await page.click('.tab[data-tab="diagnostics"]');
+    await page.click(`#diag-subtabs .subtab[data-subtab="${subtab}"]`);
+    const layout = await page.evaluate(() => {
+      const main = document.getElementById('diagnostics-main');
+      const panel = document.getElementById('diagnostics-panel');
+      const side = document.getElementById('diagnostics-side-col');
+      const style = getComputedStyle(main);
+      const mainBox = main.getBoundingClientRect();
+      const panelBox = panel.getBoundingClientRect();
+      const paddingLeft = parseFloat(style.paddingLeft);
+      const contentWidth = mainBox.width - paddingLeft - parseFloat(style.paddingRight);
+      return {
+        tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+        contentWidth,
+        panelWidth: panelBox.width,
+        panelLeft: panelBox.left,
+        contentLeft: mainBox.left + paddingLeft,
+        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
+      };
+    });
+    if (layout.tracks !== 1 || Math.abs(layout.panelWidth - layout.contentWidth) > 1
+      || Math.abs(layout.panelLeft - layout.contentLeft) > 1 || layout.sideVisible) {
+      throw new Error(`Health ${subtab} should fill one column at ${width}px: ${JSON.stringify(layout)}`);
+    }
+  };
+  for (const width of [1073, 1250]) {
+    for (const subtab of ['incidents', 'errors']) await diagnosticLayout(subtab, width);
+    await page.click('#diag-subtabs .subtab[data-subtab="metrics"]');
+    const metrics = await page.evaluate(() => {
+      const main = document.getElementById('diagnostics-main');
+      const side = document.getElementById('diagnostics-side-col');
+      return {
+        tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
+      };
+    });
+    if (metrics.tracks !== 2 || !metrics.sideVisible) {
+      throw new Error(`Health Metrics summary should remain beside the list at ${width}px: ${JSON.stringify(metrics)}`);
+    }
+  }
+
+  await page.setViewportSize({ width: 1073, height: 730 });
+  await page.click('.tab[data-tab="audit"]');
+  const audit = await page.evaluate(() => {
+    const main = document.querySelector('.tab-pane[data-tab="audit"] > main');
+    const first = document.getElementById('audit-pane').getBoundingClientRect();
+    const second = document.getElementById('audit-summary-panel').getBoundingClientRect();
+    return {
+      tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+      sideBySide: first.width > 0 && second.width > 0 && first.right <= second.left,
+    };
+  });
+  if (audit.tracks !== 2 || !audit.sideBySide) throw new Error(`Audit columns should remain side by side at 1073px: ${JSON.stringify(audit)}`);
+
+  await page.click('.tab[data-tab="tasks"]');
+  for (const width of [1251, 1250, 1073, 901, 900]) {
+    await page.setViewportSize({ width, height: 730 });
+    const tasks = await page.evaluate(() => {
+      const main = document.querySelector('.tab-pane[data-tab="tasks"] > main.tasks-layout');
+      const list = document.getElementById('tasks-panel').getBoundingClientRect();
+      const dock = document.getElementById('side-dock').getBoundingClientRect();
+      const style = getComputedStyle(main);
+      const contentWidth = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const available = contentWidth - parseFloat(style.columnGap || '0');
+      const expectedDock = window.innerWidth <= 900
+        ? contentWidth
+        : window.innerWidth > 1250
+          ? Math.min(720, Math.max(336, contentWidth * 0.32))
+          : Math.max(280, available * 1.15 / 3.15);
+      return {
+        tracks: style.gridTemplateColumns.trim().split(/\s+/).length,
+        listWidth: list.width,
+        dockWidth: dock.width,
+        expectedDock,
+        mainWidth: contentWidth,
+        available,
+      };
+    });
+    const expectedTracks = width > 900 ? 2 : 1;
+    if (tasks.tracks !== expectedTracks) throw new Error(`Tasks grid has ${tasks.tracks} tracks at ${width}px, expected ${expectedTracks}: ${JSON.stringify(tasks)}`);
+    if (Math.abs(tasks.dockWidth - tasks.expectedDock) > 2) {
+      throw new Error(`Tasks dock width changed at ${width}px: ${JSON.stringify(tasks)}`);
+    }
+    if (width === 900 && Math.abs(tasks.listWidth - tasks.mainWidth) > 1) {
+      throw new Error(`Tasks layout should stack at 900px: ${JSON.stringify(tasks)}`);
+    }
+    if (width > 900 && Math.abs(tasks.listWidth + tasks.dockWidth - tasks.available) > 2) {
+      throw new Error(`Tasks list and dock should fill both columns at ${width}px: ${JSON.stringify(tasks)}`);
+    }
+  }
+  await page.click('.tab[data-tab="operations"]');
+
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.evaluate(() => {
