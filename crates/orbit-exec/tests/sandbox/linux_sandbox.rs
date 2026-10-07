@@ -16,6 +16,42 @@ use orbit_exec::{
 };
 use orbit_types::policy::ResolvedFsProfile;
 
+/// Credential-mask compilation reads the launcher's HOME/CARGO_HOME, so an
+/// in-process env guard cannot isolate it from parallel tests that only read
+/// those variables. Re-execute exactly one fixture with its own home and env;
+/// keep that home alive until the child (including its Bubblewrap child) exits.
+fn run_in_isolated_environment(test_name: &str, ambient: &[(&str, &str)]) -> bool {
+    const CHILD_ENV: &str = "ORBIT_BWRAP_FIXTURE_CHILD";
+    if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+        return false;
+    }
+
+    // A home under /tmp would disappear behind Bubblewrap's private tmpfs.
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("isolated home");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home.path())
+        .env(CHILD_ENV, test_name)
+        .envs(ambient.iter().copied())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .stdin(Stdio::null());
+    let output = orbit_common::process::run_bounded_capped(
+        &mut command,
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .expect("run isolated Bubblewrap fixture");
+    orbit_common::test_env::assert_child_test_passed(
+        test_name,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
+    true
+}
+
 fn profile(modify: Vec<String>) -> ResolvedFsProfile {
     ResolvedFsProfile {
         name: "test".to_string(),
@@ -26,11 +62,21 @@ fn profile(modify: Vec<String>) -> ResolvedFsProfile {
 
 /// [ORB-10917] Bubblewrap forwards its own environment into the confined
 /// program, so the launcher must hand it exactly the environment the
-/// dispatcher composed. The ambient variables are set here rather than read
-/// from the developer's shell, and none carries a credential-shaped name — a
-/// denylist would forward every one of them.
+/// dispatcher composed. Ambient variables are injected into an isolated test
+/// process rather than the parallel harness or read from the developer's shell.
 #[test]
 fn bwrap_child_gets_only_the_supplied_environment() {
+    if run_in_isolated_environment(
+        "linux_sandbox::bwrap_child_gets_only_the_supplied_environment",
+        &[
+            ("DATABASE_URL", "postgres://svc:hunter2@db.internal"),
+            ("BILLING_ENDPOINT", "https://billing.internal.example"),
+            ("ORB_10917_AMBIENT", "leaked"),
+            ("ANTHROPIC_API_KEY", "sk-ant-000000000000000000000"),
+        ],
+    ) {
+        return;
+    }
     let probe = probe_bwrap();
     if !probe.available {
         println!("skipping real Bubblewrap test: {}", probe.detail);
@@ -43,12 +89,6 @@ fn bwrap_child_gets_only_the_supplied_environment() {
     let plan = compile_linux_bwrap_argv(&resolved, "/usr/bin/env", &[], Some(&workspace), false)
         .expect("compile");
 
-    let _ambient = orbit_common::test_env::scoped([
-        ("DATABASE_URL", Some("postgres://svc:hunter2@db.internal")),
-        ("BILLING_ENDPOINT", Some("https://billing.internal.example")),
-        ("ORB_10917_AMBIENT", Some("leaked")),
-        ("ANTHROPIC_API_KEY", Some("sk-ant-000000000000000000000")),
-    ]);
     let env = [
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ("ORB_10917_SUPPLIED".to_string(), "present".to_string()),
@@ -89,14 +129,21 @@ fn bwrap_child_gets_only_the_supplied_environment() {
 /// tmpfs, which would hide a home created there and prove nothing.
 #[test]
 fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
+    if run_in_isolated_environment(
+        "linux_sandbox::bwrap_child_cannot_read_credential_locations_but_writes_its_worktree",
+        &[],
+    ) {
+        return;
+    }
     let probe = probe_bwrap();
     if !probe.available {
         println!("skipping real Bubblewrap test: {}", probe.detail);
         return;
     }
 
-    let home_dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("home tempdir");
-    let home = home_dir.path().canonicalize().expect("canonical home");
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("isolated home"))
+        .canonicalize()
+        .expect("canonical home");
     std::fs::create_dir_all(home.join(".ssh")).expect("ssh dir");
     std::fs::create_dir_all(home.join(".cargo")).expect("cargo dir");
     std::fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE-KEY").expect("key");
@@ -108,10 +155,6 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         .expect("canonical workspace");
     let resolved = profile(vec![format!("{}/**", workspace.display())]);
 
-    let _home = orbit_common::test_env::scoped([
-        ("HOME", Some(home.to_str().expect("utf-8 home"))),
-        ("CARGO_HOME", None),
-    ]);
     let script = format!(
         "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>/dev/null; \
          echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; echo written > '{ws}/out.txt'",
