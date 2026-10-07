@@ -451,8 +451,7 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
-        .with_automation_machine_identity(Some(machine.to_string()))
-        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
+        .with_automation_machine_identity(Some(machine.to_string()));
     (runtime, repo)
 }
 
