@@ -2,7 +2,7 @@
 //! receives, including claimed-mode tool denial.
 
 use orbit_common::security::child_env::{
-    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
@@ -237,12 +237,15 @@ pub(super) fn activity_policy_env(
 /// run's allowlist [ORB-13427]. Drop those inherited names before this
 /// activity's envelope is stamped. A deny-mode activity restamps its marker,
 /// its list (including an explicit empty list), and the legacy MCP allowlist.
+/// An outer run's activity deadline is dropped too: every invocation stamps
+/// its own.
 pub(super) fn drop_inherited_policy_env(child_env: &mut Vec<(String, String)>) {
     child_env.retain(|(key, _)| {
         ![
             ACTIVITY_TOOL_POLICY_ENV,
             ACTIVITY_TOOLS_DENY_ENV,
             ACTIVITY_NAME_ENV,
+            ACTIVITY_DEADLINE_ENV,
             PROC_ALLOWED_PROGRAMS_ENV,
             PROC_PROGRAM_POLICY_ENV,
             PROC_DISALLOWED_PROGRAMS_ENV,

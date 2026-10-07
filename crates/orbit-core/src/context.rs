@@ -342,6 +342,7 @@ pub(crate) struct OrbitPolicyContext {
     policy: PolicyEngine,
     execution_env_policy: ExecutionEnvPolicy,
     codex_execution_policy: CodexExecutionPolicy,
+    proc_spawn_max_timeout_ms: u64,
 }
 
 impl OrbitPolicyContext {
@@ -349,11 +350,13 @@ impl OrbitPolicyContext {
         policy: PolicyEngine,
         execution_env_policy: ExecutionEnvPolicy,
         codex_execution_policy: CodexExecutionPolicy,
+        proc_spawn_max_timeout_ms: u64,
     ) -> Self {
         Self {
             policy,
             execution_env_policy,
             codex_execution_policy,
+            proc_spawn_max_timeout_ms,
         }
     }
 }
@@ -610,6 +613,10 @@ impl OrbitContext {
 
     pub(crate) fn codex_execution_policy(&self) -> &CodexExecutionPolicy {
         &self.policy.codex_execution_policy
+    }
+
+    pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
+        self.policy.proc_spawn_max_timeout_ms
     }
 
     pub(crate) fn persistence(&self) -> &PersistenceConfig {

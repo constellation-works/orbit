@@ -76,6 +76,20 @@ pub struct WitnessedProgramGrant {
     pub programs: Result<std::collections::BTreeMap<String, PathBuf>, String>,
 }
 
+/// The wall-clock budget a managed activity grants `proc.spawn`.
+///
+/// Built only by the host that dispatched the activity: from the deadline the
+/// CLI runner stamped into the provider's environment, and the operator's
+/// `execution.proc_spawn_max_timeout_minutes`. Tool input never contributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcSpawnBudget {
+    /// When the activity's provider subprocess is stopped.
+    pub deadline: std::time::SystemTime,
+    /// Operator ceiling for one `proc.spawn` call, however long the activity
+    /// has left.
+    pub max_timeout_ms: u64,
+}
+
 #[derive(Clone, Default)]
 pub struct ToolContext {
     pub cwd: Option<String>,
@@ -116,6 +130,10 @@ pub struct ToolContext {
     /// omits the key ([ORB-10959]). Only direct CLI / v1 callers leave it
     /// `false`.
     pub proc_spawn_activity_scoped: bool,
+    /// The managed activity's budget for one `proc.spawn` call. `None` keeps
+    /// the 60 s ceiling: an interactive call, or an activity whose host
+    /// attests no deadline.
+    pub proc_spawn_budget: Option<ProcSpawnBudget>,
     /// Who chose this call. Only a host that dispatches a deterministic step
     /// sets anything but [`ToolCaller::Agent`].
     pub caller: ToolCaller,
@@ -166,6 +184,7 @@ impl std::fmt::Debug for ToolContext {
                 "proc_spawn_activity_scoped",
                 &self.proc_spawn_activity_scoped,
             )
+            .field("proc_spawn_budget", &self.proc_spawn_budget)
             .field("caller", &self.caller)
             .field("has_policy_engine", &self.policy_engine.is_some())
             .field("fs_profile", &self.fs_profile)

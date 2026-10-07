@@ -1899,7 +1899,7 @@
   },
   {
     "name": "proc.spawn",
-    "description": "Spawn a process with timeout and capture output",
+    "description": "Spawn a process with timeout and capture output. The timeout ceiling is 60000 ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most the operator's execution.proc_spawn_max_timeout_minutes (default 45 min)",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1919,7 +1919,7 @@
       },
       {
         "name": "timeout_ms",
-        "description": "Execution timeout in milliseconds (default 15000; larger values are clamped to 60000)",
+        "description": "Execution timeout in milliseconds (default 15000). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: 60000 outside a managed activity, or the smaller of the activity's remaining budget and execution.proc_spawn_max_timeout_minutes inside one",
         "param_type": "u64",
         "required": false
       }

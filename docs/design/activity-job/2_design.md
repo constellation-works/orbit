@@ -738,6 +738,12 @@ containment boundary. Managed CLI agents stamp `ORBIT_PROC_PROGRAM_POLICY=deny`
 and `ORBIT_PROC_DISALLOWED_PROGRAMS` (including an empty value) for nested
 Orbit CLI and MCP calls. Without a complete marker and list, the nested
 server applies `ORBIT_PROC_ALLOWED_PROGRAMS` exactly as before.
+Every managed CLI agent also receives `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, the
+provider's wall-clock deadline. A nested `proc.spawn` may then run up to the
+smaller of the time left and `execution.proc_spawn_max_timeout_minutes`
+(default 45) instead of the 60-second ceiling an interactive call keeps. The
+nested call honors it only behind the managed-run marker, and dispatch strips
+an outer run's value before stamping its own.
 For the six shipped activities, a deny-mode run also stamps each activity's
 last shipped program allowlist as a fallback for an older MCP server. That
 server therefore preserves the pre-migration permissions during a deploy;

@@ -62,8 +62,8 @@ pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
 
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;
 pub use context::{
-    ActivityBinding, DeterministicStepPrograms, ReservationOwnerContext, ToolCaller, ToolContext,
-    WitnessedProgramGrant,
+    ActivityBinding, DeterministicStepPrograms, ProcSpawnBudget, ReservationOwnerContext,
+    ToolCaller, ToolContext, WitnessedProgramGrant,
 };
 pub use fs_audit::{FsAuditLogger, FsCallEvent, FsCallEventKind};
 pub use host::{

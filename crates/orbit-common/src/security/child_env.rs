@@ -59,6 +59,11 @@ pub const ACTIVITY_TOOL_POLICY_ENV: &str = "ORBIT_ACTIVITY_TOOL_POLICY";
 pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
 /// The deny-mode activity's name, used to name it in a denial.
 pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
+/// The managed activity's wall-clock deadline, in milliseconds since the Unix
+/// epoch. The CLI runner stamps it from the provider's own supervision bound,
+/// so a nested `proc.spawn` can run as long as the activity has left, under the
+/// configured ceiling, instead of the 60 s unscoped ceiling.
+pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
 
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
@@ -83,6 +88,7 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_TOOL_POLICY_ENV,
     ACTIVITY_TOOLS_DENY_ENV,
     ACTIVITY_NAME_ENV,
+    ACTIVITY_DEADLINE_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",
@@ -121,7 +127,7 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
 
 /// Envelope families admitted by prefix because the engine treats them as
 /// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_TOOL_POLICY` / `_TOOLS_DENY` /
-/// `_NAME` / `_FS_PROFILE`).
+/// `_NAME` / `_DEADLINE_UNIX_MS` / `_FS_PROFILE`).
 const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
 fn is_orbit_envelope_name(name: &str) -> bool {

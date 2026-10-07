@@ -252,6 +252,11 @@ pub(crate) fn build_context_from_roots(
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
+    let proc_spawn_max_timeout_ms = u64::from(
+        runtime_config
+            .snapshot
+            .execution_proc_spawn_max_timeout_minutes,
+    ) * 60_000;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
     let scoring_enabled = runtime_config.scoring_enabled;
@@ -309,6 +314,7 @@ pub(crate) fn build_context_from_roots(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
             codex_execution_policy,
+            proc_spawn_max_timeout_ms,
         ),
         OrbitRuntimeSettings::new(
             persistence,

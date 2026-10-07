@@ -3,11 +3,13 @@
 
 use std::cell::Cell;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
 use orbit_common::process::identity::process_start_identity_token;
-use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
+use orbit_common::security::child_env::{
+    ACTIVITY_DEADLINE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
@@ -49,6 +51,18 @@ use crate::context::RuntimeHost;
 /// How often a running provider's stdout is sampled for progress. Bounds the
 /// staleness of `last_activity_at` and the progress rows one invocation writes.
 const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The provider's wall-clock deadline, as the `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`
+/// envelope entry.
+fn activity_deadline_env(wall_clock_timeout: Duration) -> (String, String) {
+    let deadline_ms = SystemTime::now()
+        .checked_add(wall_clock_timeout)
+        .and_then(|deadline| deadline.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |since_epoch| {
+            u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX)
+        });
+    (ACTIVITY_DEADLINE_ENV.to_string(), deadline_ms.to_string())
+}
 
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
@@ -364,6 +378,10 @@ pub(crate) fn run_cli_backend_for_step(
         agent_task_id: task_id,
     });
     dispatch_env.push(("ORBIT_TASK_ACTOR_KIND".to_string(), "agent".to_string()));
+    // A nested `proc.spawn` may run as long as this invocation has left. The
+    // supervisor's clock starts at spawn, a moment after this, so the stamped
+    // deadline never outlasts the provider.
+    dispatch_env.push(activity_deadline_env(wall_clock_timeout));
     dispatch_env.extend(activity_policy_env(
         spec,
         activity_name,

@@ -89,6 +89,101 @@ spec:
     );
 }
 
+/// A managed run's nested `orbit tool run proc.spawn` may run as long as the
+/// activity has left, under the operator's ceiling; the deadline is honored
+/// only behind the managed-run envelope.
+#[test]
+fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    init_git_repo(&workspace);
+    workspace_init(&workspace, &home);
+    let output = orbit_command(&workspace, &home)
+        .args([
+            "config",
+            "set",
+            "--global",
+            "execution.proc_spawn_max_timeout_minutes",
+            "3",
+        ])
+        .output()
+        .expect("run config set");
+    assert!(
+        output.status.success(),
+        "config set failed\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("epoch millis fit u64");
+    let input = json!({ "program": "/bin/cat", "args": ["/dev/null"], "timeout_ms": 600_000 });
+    let run = |managed: bool, deadline_ms: Option<u64>| -> Value {
+        let mut command = orbit_command(&workspace, &home);
+        if managed {
+            command
+                .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+                .env("ORBIT_RUN_ID", "jrun-proc-spawn-test")
+                .env("ORBIT_TASK_ACTOR_KIND", "agent")
+                .env("ORBIT_ACTIVITY_TOOLS", "proc.spawn")
+                .env("ORBIT_PROC_ALLOWED_PROGRAMS", "/bin/cat");
+        }
+        if let Some(deadline_ms) = deadline_ms {
+            command.env("ORBIT_ACTIVITY_DEADLINE_UNIX_MS", deadline_ms.to_string());
+        }
+        let output = command
+            .args(["tool", "run", "proc.spawn", "--input", &input.to_string()])
+            .output()
+            .expect("run proc.spawn");
+        assert!(
+            output.status.success(),
+            "proc.spawn failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("JSON output")
+    };
+
+    // An hour left: the configured three minutes bound the call.
+    let value = run(true, Some(now_ms + 3_600_000));
+    assert_eq!(value["timeout_ms"], json!(180_000), "{value}");
+    assert_eq!(
+        value["timeout_ceiling_source"],
+        json!("configured"),
+        "{value}"
+    );
+    assert_eq!(value["timeout_clamped"], json!(true), "{value}");
+
+    // Two minutes left: the activity's remaining budget is the smaller bound.
+    let value = run(true, Some(now_ms + 120_000));
+    let applied = value["timeout_ms"].as_u64().expect("timeout_ms");
+    assert!(applied <= 120_000 && applied > 60_000, "{value}");
+    assert_eq!(
+        value["timeout_ceiling_source"],
+        json!("activity_remaining"),
+        "{value}"
+    );
+
+    // No deadline in the envelope, or no managed envelope at all: the fixed
+    // 60 s ceiling, whatever the environment claims.
+    for (managed, deadline_ms) in [(true, None), (false, Some(now_ms + 3_600_000))] {
+        let value = run(managed, deadline_ms);
+        assert_eq!(value["timeout_ms"], json!(60_000), "{value}");
+        assert_eq!(
+            value["timeout_ceiling_source"],
+            json!("unscoped"),
+            "{value}"
+        );
+    }
+}
+
 /// A task-pilot provider runs in an invocation-owned checkout pinned to the
 /// prepared commit while its Orbit identity stays on the registered
 /// workspace. [ORB-13800] Its nested `orbit tool run proc.spawn` used to fall
