@@ -489,9 +489,10 @@ pub fn serialize_task_artifacts<T: TaskArtifactMetadata>(artifacts: &[T]) -> ser
 
 /// The canonical form of an artifact path: the key the artifact store records.
 ///
-/// [`validate_relative_artifact_path`] accepts surrounding whitespace, a
-/// leading `./`, duplicate or trailing slashes and interior `.` components,
-/// because `Path` components drop them; the store keys the artifact under
+/// [`validate_relative_artifact_path`] accepts surrounding whitespace,
+/// duplicate or trailing slashes and interior `.` components, because `Path`
+/// components drop them, but refuses a leading `./`. This function also strips
+/// leading `./` prefixes before validation; the store keys the artifact under
 /// this canonical form. A guard that decides on an artifact's name must
 /// decide on this form, and forward it, never the raw request string. The
 /// form is a fixpoint: trimming or normalizing it again changes nothing, so

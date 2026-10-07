@@ -22,6 +22,7 @@ mod review_baseline_hold;
 mod review_continuation;
 #[cfg(target_os = "linux")]
 mod review_evidence_fulfilment;
+mod review_evidence_paths;
 mod review_evidence_writers;
 mod review_gate_audit;
 mod review_held_resume;

@@ -13,8 +13,8 @@ use orbit_core::TaskStatus;
 use orbit_core::application::review::{EVIDENCE_FULFILMENT_AUDIT, REVIEW_EVIDENCE_FULFILMENT_JOB};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewExternalEvidence, ValidationOutcome,
+    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewEvidenceHold,
+    ReviewEvidenceKind, ReviewExternalEvidence, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -267,8 +267,16 @@ fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() 
     ) {
         return;
     }
-    let (fixture, hold) = held(Stub::Clean, CODEQL);
+    let (fixture, mut hold) = held(Stub::Clean, CODEQL);
     configure_job(&fixture, 1, None);
+    // A benign legacy spelling must write the same canonical evidence/log
+    // pair as a new hold; suffix derivation must follow normalization.
+    hold.requirements[0].artifact = " evidence//./codeql-rust-linux.json/ ".into();
+    super::review_continuation::attach_as_operator(
+        &fixture,
+        REVIEW_EVIDENCE_HOLD_ARTIFACT,
+        &serde_json::to_value(&hold).unwrap(),
+    );
 
     if !orbit_exec::probe_bwrap().available {
         let deferred = fixture
@@ -408,6 +416,101 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
             again.dispatched.is_empty(),
             "{reason} needs a new decision, not another run: {again:?}"
         );
+    }
+}
+
+#[test]
+fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review",
+    ) {
+        return;
+    }
+    for reserved in [REVIEW_GATE_ARTIFACT, REVIEW_EVIDENCE_HOLD_ARTIFACT] {
+        for alias in [
+            format!(" {reserved}"),
+            format!("{reserved} "),
+            format!("{reserved}/"),
+            format!("./{reserved}"),
+        ] {
+            let (fixture, mut hold) = held(Stub::Clean, CODEQL);
+            configure_job(&fixture, 1, None);
+            // Seed a hostile persisted hold after normal admission. This
+            // reaches the owner's guard independently of the report guard.
+            hold.requirements[0].artifact = alias.clone();
+            super::review_continuation::attach_as_operator(
+                &fixture,
+                REVIEW_EVIDENCE_HOLD_ARTIFACT,
+                &serde_json::to_value(&hold).unwrap(),
+            );
+            let before_gate = fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)
+                .unwrap()
+                .unwrap()
+                .content;
+            let before_hold = fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .unwrap()
+                .unwrap()
+                .content;
+            // Submit the actual owner workflow directly: the unsafe path
+            // must be refused before any sandbox or CodeQL prerequisite.
+            // Unlike a tick, this boundary check also runs on Linux hosts
+            // where user namespaces are unavailable.
+            let run = fixture
+                .runtime
+                .submit_pipeline_run(
+                    REVIEW_EVIDENCE_FULFILMENT_JOB,
+                    json!({
+                        "task_id": fixture.task_id,
+                        "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+                    }),
+                    None,
+                    Some("system"),
+                )
+                .unwrap();
+            execute(&fixture, &run.run_id);
+            let output = fixture
+                .runtime
+                .read_run_state(&run.run_id)
+                .unwrap()
+                .unwrap()
+                .pipeline["fulfil"]
+                .clone();
+            assert_eq!(output["fulfilled"], false, "{alias}: {output}");
+            assert_eq!(
+                output["reason"], "artifact_not_allowed",
+                "{alias}: {output}"
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                before_gate,
+                "ORB-14472: owner evidence must never overwrite the review certificate via {alias}",
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                before_hold,
+                "ORB-14472: owner evidence must never overwrite the hold via {alias}",
+            );
+            assert!(artifact(&fixture, EVIDENCE).is_none());
+            assert!(
+                artifact(&fixture, EVIDENCE_LOG).is_none(),
+                "unsafe requirement attaches no log"
+            );
+            assert_still_held(&fixture, &alias);
+        }
     }
 }
 

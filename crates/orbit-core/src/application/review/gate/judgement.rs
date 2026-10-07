@@ -341,6 +341,12 @@ impl Judgement {
         {
             return Ok(());
         }
+        let Some(requirements) =
+            super::super::evidence::canonical_requirements(&self.external_evidence)
+        else {
+            return Ok(());
+        };
+        self.external_evidence = requirements;
         let Some(validation) = super::super::evidence::with_external_checks_passed(
             &self.validation,
             &self.external_evidence,
