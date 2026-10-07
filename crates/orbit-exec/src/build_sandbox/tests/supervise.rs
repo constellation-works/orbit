@@ -148,6 +148,45 @@ fn a_fast_phase_cannot_exit_with_an_oversized_build_directory() {
     assert_eq!(end, BuildPhaseEnd::BuildDirCapExceeded);
 }
 
+/// A build cannot hide over-cap data behind directory permissions, either
+/// while running or when it exits between size polls.
+#[cfg(unix)]
+#[test]
+fn unreadable_build_content_fails_closed_during_and_after_a_phase() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for tail in ["", "; sleep 30"] {
+        let dir = tempfile::tempdir().expect("build dir");
+        let hidden = dir.path().join("hidden");
+        let env = path_env();
+        let mut log = BuildLog::default();
+        let end = run(
+            shell(&format!(
+                "mkdir hidden && head -c 8192 /dev/zero > hidden/big && chmod 000 hidden{tail}"
+            )),
+            (),
+            &request(dir.path(), Duration::from_secs(20), 4096, &env),
+            &mut log,
+        );
+        let read_error = std::fs::read_dir(&hidden).err().map(|error| error.kind());
+        // Restore access before any assertions so TempDir can remove the data.
+        std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700))
+            .expect("restore hidden directory permissions");
+        // Root can read mode-000 directories; on ordinary hosts verify the
+        // fixture actually reaches the permission-denied traversal path.
+        // SAFETY: geteuid only reads the current process's effective uid.
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(read_error, Some(std::io::ErrorKind::PermissionDenied));
+        }
+        assert!(std::fs::metadata(hidden.join("big")).expect("data").len() > 4096);
+        assert_eq!(
+            end.expect("run"),
+            BuildPhaseEnd::BuildDirCapExceeded,
+            "unreadable build content must refuse the phase (tail: {tail:?})"
+        );
+    }
+}
+
 /// The size walk only counts entries beneath its root; a symlink cannot make
 /// Orbit inspect files outside the build directory.
 #[cfg(unix)]
@@ -163,6 +202,19 @@ fn build_directory_size_does_not_follow_symlinks() {
     assert!(
         !tree_exceeds(dir.path(), 0),
         "an outside file reachable only through a symlink is not part of the build directory"
+    );
+}
+
+/// A path that vanishes while the size walk runs (a live build deleting its
+/// temporary files) holds nothing; only unreadable content fails closed.
+#[test]
+fn a_vanished_path_is_not_counted_as_unmeasurable() {
+    use crate::build_sandbox::supervise::tree_exceeds;
+
+    let dir = tempfile::tempdir().expect("build dir");
+    assert!(
+        !tree_exceeds(&dir.path().join("deleted"), 0),
+        "a path that no longer exists must not refuse a phase"
     );
 }
 

@@ -158,7 +158,7 @@ fn phase_failure(end: BuildPhaseEnd, timeout_ms: u64) -> String {
         BuildPhaseEnd::Signaled(signal) => format!("was killed by signal {signal}"),
         BuildPhaseEnd::TimedOut => format!("ran past its {} s timeout", timeout_ms / 1000),
         BuildPhaseEnd::BuildDirCapExceeded => format!(
-            "outgrew the {} GiB build directory cap",
+            "exceeded the {} GiB build directory cap or could not be measured",
             PLUGIN_BUILD_DIR_CAP_BYTES / (1024 * 1024 * 1024)
         ),
     }
