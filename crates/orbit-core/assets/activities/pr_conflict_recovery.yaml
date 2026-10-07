@@ -191,8 +191,10 @@ spec:
     4. Confirm every supplied conflict file is fully repaired (no conflict
        markers). Run focused tests for the
        crates or modules that own the resolved paths. Then run the
-       repository's `make ci-fast` and `make ci-lint` gates as advisory
-       checks: record each command, its outcome, and whether any failure
+       workspace's required validation commands (`required_validation_commands`
+       in a supplied manifest or `workflow.required_validation_commands`),
+       following the workspace's own AGENTS.md, as advisory checks:
+       record each command, its outcome, and whether any failure
        involves a resolved path in the `gates` field of your result. A gate
        failure on paths you did not touch is baseline state, not evidence
        about your resolution; report it and still return success. Only a

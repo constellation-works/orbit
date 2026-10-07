@@ -198,12 +198,14 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Run the workspace's required affected-test gate (`make ci-test-affected`
-       where provided): full test targets of changed crates and their
-       transitive workspace dependents. `make ci-fast` runs no Rust tests;
-       a formatting/guardrail pass and focused test filters do not replace
-       the affected-test gate. Use `CI_TEST_BASE=<delivery-base-commit>` when
-       the delivery base is pinned; the command includes committed, staged,
+       Run the workspace's required validation commands from a supplied
+       delivery manifest's `required_validation_commands` or
+       `workflow.required_validation_commands`, following its own AGENTS.md.
+       When the workspace requires an affected-test gate, run full test
+       targets of changed crates and their transitive workspace dependents;
+       a formatting/guardrail pass and focused test filters do not replace it.
+       Use the workspace's supported mechanism to pin the comparison base
+       when the delivery base is supplied, and include committed, staged,
        unstaged and untracked candidate paths.
        Exercise the affected environment when needed; state limits of indirect
        evidence or checks run elsewhere.

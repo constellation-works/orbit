@@ -315,9 +315,9 @@ spec:
        preserving both the candidate intent and the base changes, against the
        current tip of the target base. A base that advanced past a recorded
        checkpoint (`base_sha`, `target_base_sha`) is expected on a busy
-       integration branch and is never by itself a stop condition; a red
-       `make ci-fast`/`make ci-lint` on paths you did not touch is baseline
-       state to report, not evidence against the resolution. The checks that
+       integration branch and is never by itself a stop condition; a failed
+       workspace-required validation command on paths you did not touch is
+       baseline state to report, not evidence against the resolution. The checks that
        do stop you are the identity ones: the run is cancelled, a claimed
        task refuses writes, or the checked-out branch / pre-rewrite HEAD does
        not match the failed step's checkpoint.
@@ -325,6 +325,7 @@ spec:
        A failed `validate` step (`candidate_validate`) means a command in
        `workflow.required_validation_commands` did not pass on the committed
        candidate; the error carries its output and the task holds its log.
+       Follow the workspace's own AGENTS.md for validation guidance.
        Repair the candidate so the command passes (for example apply the
        formatter it names), run the command yourself to confirm, and commit
        the repair on the checked-out task branch as a new commit, leaving the
