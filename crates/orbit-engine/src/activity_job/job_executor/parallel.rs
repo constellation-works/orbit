@@ -6,13 +6,6 @@ pub(super) fn run_parallel(
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
     let branches = &block.branches;
-    if branches.is_empty() {
-        return Ok(StepOutcome {
-            success: true,
-            output: Value::Array(Vec::new()),
-            message: None,
-        });
-    }
     let inherited_parent_stack = ctx
         .audit
         .parent_stack_snapshot()
