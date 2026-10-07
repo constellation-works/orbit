@@ -144,7 +144,7 @@ fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     (worktree, 4096)
 }
 
-fn gc_report(result: &orbit_engine::WorktreeGcResult, leaf: &str) -> Value {
+fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
     let result = serde_json::to_value(result).unwrap();
     result["reports"]
         .as_array()
@@ -153,6 +153,158 @@ fn gc_report(result: &orbit_engine::WorktreeGcResult, leaf: &str) -> Value {
         .find(|report| report["run_id"] == leaf)
         .cloned()
         .unwrap_or_else(|| panic!("no report for {leaf}: {result:#}"))
+}
+
+/// Delivery must index other runs before filtering its own cleanup [ORB-14533].
+#[test]
+fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
+    if !isolated(
+        module_path!(),
+        "delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal",
+    ) {
+        return;
+    }
+    for stable_token in [true, false] {
+        for running in [false, true] {
+            let pair = gc_pair(0);
+            let runtime = pair.follower.clone().with_coordination_write_owner(None);
+            let task = local_done_task(&pair);
+            let token = if stable_token {
+                "shared-delivery".to_string()
+            } else {
+                format!("task-{task}")
+            };
+            let (worktree, _) = leaf_worktree(&pair, &token);
+            std::fs::write(worktree.join("retained.rs"), "fn retained() {}\n").unwrap();
+            git(&worktree, &["add", "retained.rs"]);
+            git(&worktree, &["commit", "-q", "-m", "shared work"]);
+            let head = git(&worktree, &["rev-parse", "HEAD"]);
+            let branch = format!("orbit/{token}");
+            let mut input = json!({"task_ids": [task], "crew": "sol"});
+            if stable_token {
+                input["run_id"] = json!(token);
+            }
+            let other_task = if stable_token {
+                local_done_task(&pair)
+            } else {
+                task.clone()
+            };
+            let mut other_input = input.clone();
+            other_input["task_ids"] = json!([other_task]);
+            let job_dir = runtime.global_root().join("resources/jobs");
+            std::fs::create_dir_all(&job_dir).unwrap();
+            let job = job_dir.join("shared_delivery.yaml");
+            std::fs::write(
+                &job,
+                serde_json::to_string(&json!({
+                    "schemaVersion": 2,
+                    "kind": "Job",
+                    "metadata": {"name": "shared_delivery"},
+                    "spec": {"state": "enabled", "owns_task_worktree": true, "steps": []}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let other = pair
+                .follower_jobs
+                .insert_job_run("shared_delivery", 1, Utc::now(), Some(other_input), None)
+                .unwrap();
+            if running {
+                pair.follower_jobs
+                    .mark_job_run_running(&other.run_id, Utc::now(), std::process::id())
+                    .unwrap();
+            }
+            let unrelated_task = local_done_task(&pair);
+            let (unrelated_run, unrelated_path) = terminal_worktree(&pair, &[&unrelated_task]);
+
+            let delivered = runtime.run_job_v2_from_yaml(&job, input.clone()).unwrap();
+            assert!(delivered.success, "{delivered:?}");
+            let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+            let cleanup = &state.pipeline["worktree_cleanup"];
+            assert_eq!(
+                gc_report(cleanup, &delivered.run_id)["action"],
+                "skipped:ambiguous_run_path"
+            );
+            assert!(worktree.join("retained.rs").exists());
+            assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head);
+            assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+            assert!(
+                cleanup["reports"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|report| report["run_id"] == delivered.run_id)
+            );
+            assert!(
+                unrelated_path.exists(),
+                "delivery retains unrelated worktrees"
+            );
+
+            let scheduled = runtime
+                .gc_worktrees(true, None, None, false, false)
+                .unwrap();
+            for run in [&delivered.run_id, &other.run_id] {
+                assert_eq!(
+                    gc_report(&scheduled, run)["action"],
+                    "skipped:ambiguous_run_path"
+                );
+            }
+            assert_eq!(gc_report(&scheduled, &unrelated_run)["action"], "removed");
+            assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+
+            if !running {
+                pair.follower_jobs
+                    .mark_job_run_running(&other.run_id, Utc::now(), std::process::id())
+                    .unwrap();
+            }
+            pair.follower_jobs
+                .finalize_job_run(&other.run_id, JobRunState::Success, Utc::now(), None)
+                .unwrap();
+            if stable_token {
+                // A terminal peer's unsettled task must still protect its
+                // committed work, even though this delivery's task is done.
+                runtime
+                    .force_update_task_with_identity(
+                        &other_task,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Backlog),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                let delivered = runtime.run_job_v2_from_yaml(&job, input.clone()).unwrap();
+                assert!(delivered.success, "{delivered:?}");
+                let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+                let report = gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id);
+                assert_eq!(report["action"], "skipped:ambiguous_run_path");
+                assert_eq!(report["task_status"], "backlog");
+                assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+                assert!(worktree.join("retained.rs").exists());
+                runtime
+                    .force_update_task_with_identity(
+                        &other_task,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Done),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    )
+                    .unwrap();
+            }
+            let delivered = runtime.run_job_v2_from_yaml(&job, input).unwrap();
+            assert!(delivered.success, "{delivered:?}");
+            let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+            assert_eq!(
+                gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id)["action"],
+                "removed"
+            );
+            assert!(!worktree.exists());
+            assert!(git(&pair.follower_repo, &["branch", "--list", &branch]).is_empty());
+        }
+    }
 }
 
 /// [ORB-13920] An accepted handoff is all a follower needs to give back its

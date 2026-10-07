@@ -136,7 +136,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         if !path.exists() {
             continue;
         }
-        if matching_runs.len() > 1 {
+        if matching_runs.len() > 1 && matching_runs.iter().any(|run| !run.state.is_terminal()) {
             reports.extend(selected_runs.into_iter().map(|run| WorktreeGcReport {
                 path: path.clone(),
                 run_id: Some(run.run_id.clone()),
@@ -156,26 +156,59 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         // must not abort the sweep before it reaches every other worktree.
         // Report it and move on; the pass as a whole still succeeds with a
         // partial summary.
-        let report = classify_known(repo_root, path, run, &lookups, options, &registered)
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    path = %path.display(),
-                    run_id = %run.run_id,
-                    %error,
-                    "worktree GC failed to classify or remove a worktree; continuing the sweep"
-                );
-                WorktreeGcReport {
-                    path: path.clone(),
-                    run_id: Some(run.run_id.clone()),
-                    run_state: Some(run.state),
-                    task_id: None,
-                    task_status: None,
-                    pr_status: None,
-                    action: format!("failed:{error}"),
-                    bytes_reclaimed: 0,
-                    detail: None,
+        let report = (|| {
+            // Terminal overlap is collectable only when every mapped run
+            // passes the same safety gates. Preflight without deleting so an
+            // unsettled task or live worker belonging to another run still
+            // protects the shared path. Remove it at most once per sweep.
+            let preflight = WorktreeGcOptions {
+                delete: false,
+                estimate_bytes: false,
+                ..options.clone()
+            };
+            for other in matching_runs
+                .iter()
+                .filter(|other| other.run_id != run.run_id)
+            {
+                let mut report =
+                    classify_known(repo_root, path, other, &lookups, &preflight, &registered)?;
+                let eligible = if options.target_only {
+                    "would_remove_target"
+                } else {
+                    "would_remove"
+                };
+                if report.action != eligible {
+                    report.detail = Some(format!(
+                        "another mapped run retains this path: {}",
+                        report.action
+                    ));
+                    report.run_id = Some(run.run_id.clone());
+                    report.run_state = Some(run.state);
+                    report.action = "skipped:ambiguous_run_path".to_string();
+                    return Ok(report);
                 }
-            });
+            }
+            classify_known(repo_root, path, run, &lookups, options, &registered)
+        })()
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                path = %path.display(),
+                run_id = %run.run_id,
+                %error,
+                "worktree GC failed to classify or remove a worktree; continuing the sweep"
+            );
+            WorktreeGcReport {
+                path: path.clone(),
+                run_id: Some(run.run_id.clone()),
+                run_state: Some(run.state),
+                task_id: None,
+                task_status: None,
+                pr_status: None,
+                action: format!("failed:{error}"),
+                bytes_reclaimed: 0,
+                detail: None,
+            }
+        });
         reports.push(report);
     }
 
