@@ -25,6 +25,10 @@ pub(super) struct RunPartition {
     /// at a different commit, newest first. Whether one of them is at a
     /// descendant commit needs Git, so collection decides the deferral.
     pub(super) in_flight_successors: std::collections::BTreeMap<u64, Vec<Value>>,
+    /// For each run in `in_flight_successors`, the next older completed run
+    /// of the same workflow on the same branch: the run a held failure has
+    /// to have reproduced on to be filed without waiting.
+    pub(super) previous_completed: std::collections::BTreeMap<u64, Value>,
 }
 
 /// Classify repository-wide runs by relevant workflow/ref identity.
@@ -171,6 +175,13 @@ pub(super) fn partition_runs(
                     successors.is_empty(),
                 ) {
                     out.in_flight_successors.insert(run_id, successors);
+                    if let Some(previous) = ref_runs
+                        .iter()
+                        .copied()
+                        .find(|older| run_is_completed(older) && run_order(older) < run_order(run))
+                    {
+                        out.previous_completed.insert(run_id, previous.clone());
+                    }
                 }
                 // A cancelled run is still inspected, but job expansion has to
                 // decide whether it is actionable. Claiming the current slot
@@ -517,6 +528,7 @@ fn run_summary(scanned: Option<&ScannedRef>, run: &Value) -> Value {
         "event": run.get("event"),
         "url": run.get("url"),
         "created_at": run.get("created_at"),
+        "updated_at": run.get("updated_at"),
         "head_branch": run.get("head_branch"),
         "ref_kind": scanned.map(|scanned| scanned.kind.as_str()).unwrap_or("other"),
         "pr_number": scanned.and_then(|scanned| scanned.pr_number.clone()),

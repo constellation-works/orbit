@@ -647,6 +647,17 @@ pub(super) fn job_log_source(failure: &Value) -> Option<String> {
     ))
 }
 
+/// The newer in-flight run a held failure waited on.
+fn pending_run(pending_on: &Value) -> String {
+    format!(
+        "newer run `{}` ({}) at `{}`, still `{}`",
+        display(&value_string(pending_on, "run_id")),
+        display(&value_string(pending_on, "url")),
+        display(&value_string(pending_on, "reported_head_sha")),
+        display(&value_string(pending_on, "status")),
+    )
+}
+
 fn render_run(run: &Value) -> String {
     let mut out = format!(
         "- {} run `{}` ({} on `{}`) — status `{}`, conclusion `{}`\n",
@@ -681,6 +692,30 @@ fn render_run(run: &Value) -> String {
     ));
     if let Some(pr) = run.get("pr_number").and_then(Value::as_u64) {
         out.push_str(&format!("  - pull request: #{pr}\n"));
+    }
+    // Collection files a red run despite a newer run in flight at a descendant
+    // commit only for one of these reasons; name the run either way.
+    if let Some(previous) = run.get("reproduced_on").filter(|value| value.is_object()) {
+        out.push_str(&format!(
+            "  - reproduced on the previous completed run `{}` ({}) at `{}`, which failed the \
+             same job and step; filed without waiting for {}\n",
+            display(&value_string(previous, "run_id")),
+            display(&value_string(previous, "url")),
+            display(&value_string(previous, "event_reported_head_sha")),
+            pending_run(&previous["pending_on"]),
+        ));
+    }
+    if let Some(held) = run
+        .get("held_past_window")
+        .filter(|value| value.is_object())
+    {
+        out.push_str(&format!(
+            "  - held in `pending_supersession` since {} waiting on {}; filed after the \
+             {}-minute window\n",
+            display(&value_string(held, "pending_since")),
+            pending_run(&held["pending_on"]),
+            display(&value_string(held, "window_minutes")),
+        ));
     }
     for line in run
         .get("checkout_evidence")

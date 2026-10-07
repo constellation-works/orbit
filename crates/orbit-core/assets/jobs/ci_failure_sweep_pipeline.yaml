@@ -14,9 +14,10 @@
 #   carrying that evidence inline. Filing is deduped against still-open tasks
 #   by failure key. Completed owners require structured diagnostic, validation,
 #   delivery and branch proof; covered observations never become pilot candidates.
-#   A failure tested before a done repair of the same signature landed, or one
-#   whose workflow is still running on a descendant commit, is held in
-#   `pending_supersession` instead of filed.
+#   A failure tested before a done repair of the same signature landed, or a
+#   lone red run whose workflow is still running on a descendant commit, is
+#   held in `pending_supersession` instead of filed; the latter only until it
+#   reproduces on the previous completed run or outlives a 30-minute window.
 #   Proposed is the quarantine boundary: an active auto-drain
 #   cannot see the finding yet.
 # - `pilots` (bounded fan-out): invokes the existing task_pilot_pipeline once

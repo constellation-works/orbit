@@ -42,10 +42,20 @@ spec:
     (or a landing-branch success, for non-landing noise) does suppress it.
     A red run whose workflow has a newer push run on the same branch still
     queued or in progress at a descendant commit (ancestry from the host
-    checkout, fetching an unseen run commit by id) is moved to
-    `pending_supersession` with `pending_on` naming that run, before any
-    investigation slot is spent; nothing is filed for it this sweep, and the
-    next sweep files only the newest completed run if it still fails. A rerun
+    checkout, fetching an unseen run commit by id) may already be repaired by
+    that run, so a lone red run is moved to `pending_supersession` with
+    `pending_on` naming that run, `pending_since` (its completion time) and
+    `window_minutes`, before any investigation slot is spent; nothing is
+    filed for it this sweep. A pending successor does not hold back a failure
+    that has reproduced: when the previous completed run of the same workflow
+    and branch, at the same or an ancestor commit, is red (not cancelled) and
+    shares at least one failed job and failed step with the held run (compared
+    from both run views, at most 12 view reads per sweep), the held run stays
+    current with `reproduced_on` naming that run, its shared failed steps and
+    the pending run. The hold is also bounded: a run held for
+    `pending_supersession_window_minutes` (default 30) since it completed stays
+    current with `held_past_window` naming the pending run, and filing writes
+    that run into the task description. A rerun
     of the same commit, a successor that is not a proven descendant, or an
     ancestry query that fails leaves the failure current, with a note.
     Only landing-ref pushes of the observed event commit, or job checkouts
@@ -162,6 +172,13 @@ spec:
         description: >
           Global cap on additional checkout reads, each narrowed to the same
           failed job. Default 3, maximum 25.
+      pending_supersession_window_minutes:
+        type: number
+        description: >
+          How long a red run that has not reproduced may be held in
+          `pending_supersession` for an in-flight descendant run, measured
+          from the red run's completion. Default 30, maximum 1440; 0 files it
+          without holding.
   output_schema_json:
     type: object
     required: [phase, ci_evidence]
@@ -200,8 +217,10 @@ spec:
             type: array
             description: >
               Red runs held while a descendant push run of the same workflow
-              and branch is in flight, each with `reason`
-              (`newer_descendant_run_in_flight`), `evidence` and `pending_on`.
+              and branch is in flight and the failure has neither reproduced
+              on the previous completed run nor outlived the window, each
+              with `reason` (`newer_descendant_run_in_flight`), `evidence`,
+              `pending_on`, `pending_since` and `window_minutes`.
           retryable_errors:
             type: array
           persistent_retryable_errors:
