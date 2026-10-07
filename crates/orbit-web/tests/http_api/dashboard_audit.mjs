@@ -11,6 +11,7 @@ class Node {
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return this.text + this.children.map(child => child.textContent ?? child).join(' '); }
+  get childNodes() { return this.children; }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   append(child) { this.appendChild(child); }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parentNode = null; }
@@ -27,11 +28,13 @@ const container = new Node('div'); container.id = 'audit-summary-body';
 const title = new Node('h3');
 const scoreboardBody = new Node('div'); scoreboardBody.id = 'scoreboard-body';
 const scoreboardCount = new Node('span');
+const diagnosticsBody = new Node('div'); diagnosticsBody.id = 'diag-body';
+const diagnosticsCount = new Node('span');
 const document = {
   activeElement: null,
   createElement: tag => new Node(tag),
   createTextNode: text => { const node = new Node('#text'); node.textContent = text; return node; },
-  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount })[id] || null,
+  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount })[id] || null,
   querySelectorAll: () => [],
 };
 const window = { location: { search: '?workspace=ws_fixture&window=24h', hash: '' } };
@@ -41,6 +44,9 @@ const audit = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dash
 await common.link(() => { throw new Error('unexpected common dependency'); });
 await audit.link(name => { assert.equal(name, './common.js'); return common; });
 await audit.evaluate();
+const diagnostics = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/diagnostics.js', import.meta.url), 'utf8'), { context });
+await diagnostics.link(name => ({ './common.js': common, './audit.js': audit })[name]);
+await diagnostics.evaluate();
 const payload = {
   window: '24h',
   duration_by_tool: [
@@ -135,4 +141,52 @@ scoreboard.namespace.renderScoreboard({
 });
 assert.match(incidentRow().children[1].textContent, /unavailable/i, 'read failure still renders missing coverage rather than a zero');
 assert.doesNotMatch(incidentRow().children[0].textContent, /capped/i);
-console.log('audit and scoreboard renderers: callable counts, capped coverage, drill-down and refresh passed');
+
+const findNode = (root, predicate) => descendants(root).find(predicate);
+const expandIncidentAndOpenRawEvents = () => {
+  findNode(diagnosticsBody, node => node.className === 'incident-head').listeners.get('click')();
+  const rawButton = findNode(diagnosticsBody, node => node.tagName === 'button'
+    && node.className === 'chip' && node.textContent === 'Open raw audit events');
+  assert.equal(typeof rawButton?.listeners.get('click'), 'function', 'expanded incident exposes its raw-audit action');
+  rawButton.listeners.get('click')();
+};
+let incidentPayload = {
+  window: '24h', incident_count: 1, raw_failed_events: 65, total_events: 100,
+  incidents: [{
+    incident_id: 'cli-incident', class: 'unexpected', has_tool_identity: false,
+    surface: 'task add', actor: 'codex', event_count: 65, last_ts: '2026-10-07T09:00:00Z',
+    events: Array.from({ length: 65 }, (_, index) => ({
+      id: index + 1, status: 'failure', tool: null, actor: 'codex', ts: '2026-10-07T09:00:00Z',
+    })),
+  }],
+};
+const diagnosticsContext = {
+  getActiveDiagSubtab: () => 'incidents',
+  getLastDiagnostics: () => ({ incidents: incidentPayload }),
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+expandIncidentAndOpenRawEvents();
+let incidentRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(incidentRoute.get('ids'), Array.from({ length: 65 }, (_, index) => index + 1).join(','));
+assert.equal(incidentRoute.has('tool'), false, 'tool-less incidents route by exact event IDs');
+assert.equal(incidentRoute.has('status'), false, 'exact event IDs retain stored failure rows');
+assert.ok(incidentRoute.get('ids').split(',').length >= 65, 'exact route includes at least the incident event count');
+audit.namespace.applyAuditHashQuery(incidentRoute);
+assert.equal(new URLSearchParams(audit.namespace.buildAuditHash().split('?')[1]).get('ids'), incidentRoute.get('ids'));
+
+findNode(diagnosticsBody, node => node.dataset.class === 'all').listeners.get('click')();
+incidentPayload = {
+  window: '24h', incident_count: 1, raw_failed_events: 1, total_events: 1,
+  incidents: [{
+    incident_id: 'denied-failure-row', class: 'denied', has_tool_identity: true,
+    surface: 'orbit.task.add', actor: 'codex', event_count: 1, last_ts: '2026-10-07T09:00:00Z',
+    events: [{ id: 9001, status: 'failure', tool: 'orbit.task.add', actor: 'codex', ts: '2026-10-07T09:00:00Z' }],
+  }],
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+expandIncidentAndOpenRawEvents();
+incidentRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(incidentRoute.get('ids'), '9001', 'denied incident points to its stored failure row');
+assert.equal(incidentRoute.has('status'), false, 'denied classification does not rewrite the stored status');
+assert.equal(incidentRoute.has('tool'), false, 'exact incident rows are not narrowed by surface');
+console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down and refresh passed');

@@ -97,6 +97,17 @@ impl OrbitRuntime {
         self.stores().audit_events().list_audit_events(filter)
     }
 
+    /// Returns exact persistent audit rows by their database IDs, newest first.
+    pub fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        self.stores()
+            .audit_events()
+            .list_audit_events_by_ids(ids, workspace_id)
+    }
+
     pub fn show_audit_event(&self, id: i64) -> Result<AuditEvent, OrbitError> {
         self.stores()
             .audit_events()
