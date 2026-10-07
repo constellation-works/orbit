@@ -185,6 +185,7 @@ impl OrbitRuntime {
             }
             let task = self.get_task(&id)?;
             let mut fields = DesktopTaskFields::default();
+            let mut crew_source = None;
             let mut comment = None;
             let mut status = None;
             match &request.operation {
@@ -217,20 +218,20 @@ impl OrbitRuntime {
                     if let Some(v) = &f.acceptance_criteria {
                         criteria(v)?;
                     }
-                    let v = self
-                        .validate_and_normalize_task_field_edits(
-                            &id,
-                            &task,
-                            TaskUpdateParams {
-                                title: f.title.clone(),
-                                description: f.description.clone(),
-                                acceptance_criteria: f.acceptance_criteria.clone(),
-                                priority: f.priority,
-                                crew: f.crew.clone().map(Some),
-                                ..Default::default()
-                            },
-                        )?
-                        .params;
+                    let validated = self.validate_and_normalize_task_field_edits(
+                        &id,
+                        &task,
+                        TaskUpdateParams {
+                            title: f.title.clone(),
+                            description: f.description.clone(),
+                            acceptance_criteria: f.acceptance_criteria.clone(),
+                            priority: f.priority,
+                            crew: f.crew.clone().map(Some),
+                            ..Default::default()
+                        },
+                    )?;
+                    crew_source = validated.crew_source;
+                    let v = validated.params;
                     fields = DesktopTaskFields {
                         status: None,
                         title: v.title,
@@ -292,6 +293,7 @@ impl OrbitRuntime {
                         payload_digest: digest.clone(),
                         expected_revision: expected_revision.clone(),
                         fields,
+                        crew_source,
                         comment,
                         status,
                     },

@@ -35,6 +35,7 @@ fn envelope(
         pr_status: None,
         job_run_id: None,
         crew: None,
+        crew_source: None,
         orchestrator: None,
         relations,
         tags,

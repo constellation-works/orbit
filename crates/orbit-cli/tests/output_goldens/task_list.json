@@ -25,6 +25,7 @@
     "source_task_id": null,
     "job_run_id": null,
     "crew": null,
+    "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>"
@@ -55,6 +56,7 @@
     "source_task_id": null,
     "job_run_id": null,
     "crew": null,
+    "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>"
@@ -85,6 +87,7 @@
     "source_task_id": null,
     "job_run_id": null,
     "crew": null,
+    "crew_source": null,
     "orchestrator": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>"

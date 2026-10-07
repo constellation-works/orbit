@@ -1077,6 +1077,7 @@ fn task_lock_to_json(task: &TaskEnvelopeV2, context_files: Vec<String>) -> Value
         "status": task.status.to_string(),
         "job_run_id": task.job_run_id,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "context_files": context_files,
     })

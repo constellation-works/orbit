@@ -176,6 +176,7 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         // *unknown*, never "the owner".
         "job_run_machine": task.job_run_machine,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
         "updated_at": task.updated_at.to_rfc3339(),
@@ -475,6 +476,7 @@ pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
         "status": task.status.to_string(),
         "job_run_id": task.job_run_id,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "context_files": task.context_files,
     })

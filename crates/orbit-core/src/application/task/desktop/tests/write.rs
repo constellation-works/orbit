@@ -77,6 +77,7 @@ fn desktop_legacy_edit_receipt_survives_status_contract_extension() {
                 payload_digest: orbit_common::security::release::sha256_hex(old_payload.as_bytes()),
                 expected_revision: snapshot.revision.clone(),
                 fields: fields.clone(),
+                crew_source: None,
                 comment: None,
                 status: None,
             },

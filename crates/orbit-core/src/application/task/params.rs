@@ -35,6 +35,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) source_task_id: Option<Option<String>>,
     pub(crate) job_run_id: Option<Option<String>>,
     pub(crate) crew: Option<Option<String>>,
+    pub(crate) crew_source: Option<Option<String>>,
     pub(crate) orchestrator: Option<Option<String>>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
@@ -71,6 +72,7 @@ impl TaskRecordUpdateParams {
             || self.source_task_id.is_some()
             || self.job_run_id.is_some()
             || self.crew.is_some()
+            || self.crew_source.is_some()
             || self.orchestrator.is_some()
     }
 

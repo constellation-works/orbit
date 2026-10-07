@@ -155,6 +155,7 @@ impl TaskV2Store {
                 pr_status: None,
                 job_run_id: None,
                 crew: params.crew,
+                crew_source: params.crew_source,
                 orchestrator: params.orchestrator,
                 relations,
                 tags: normalize_task_tags(params.tags),

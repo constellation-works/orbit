@@ -403,8 +403,10 @@ impl OrbitRuntime {
                 start_body_field_edits(field_edits.clone(), plan.clone()),
             )?;
             let crew_assignment = validated.crew_assignment;
+            let crew_source = validated.crew_source;
+            let crew_redraw_history = validated.crew_redraw_history;
             let start_edits = validated.params;
-            let resolved_crew_override = if field_edits.crew.is_some() {
+            let resolved_crew_override = if start_edits.crew.is_some() {
                 start_edits.crew.clone().flatten()
             } else {
                 self.canonical_crew_name(crew_override.as_deref())?
@@ -494,10 +496,12 @@ impl OrbitRuntime {
                             .then(|| note.clone())
                             .flatten(),
                         append_comments: append_comments.clone(),
+                        crew_source: crew_source.clone(),
                         append_history: crew_assignment
                             .as_ref()
                             .map(crew_assigned_history)
                             .into_iter()
+                            .chain(crew_redraw_history.clone())
                             .collect(),
                         artifact_owner_run_id: artifact_owner.clone(),
                         expected_status: Some(vec![if approved_from_proposed {

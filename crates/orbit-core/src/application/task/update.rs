@@ -70,9 +70,11 @@ struct LockedTaskUpdate {
 
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
-    /// Set when this write cleared the crew and the pools chose a replacement;
+    /// Set when this write assigned a crew explicitly or drew a replacement;
     /// the caller includes the draw source in the change history [ORB-12717].
     pub(super) crew_assignment: Option<CreationCrewAssignment>,
+    pub(super) crew_source: Option<Option<String>>,
+    pub(super) crew_redraw_history: Option<TaskHistoryEntry>,
 }
 
 impl OrbitRuntime {
@@ -358,6 +360,8 @@ impl OrbitRuntime {
         }
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
         let crew_assignment = validated.crew_assignment;
+        let crew_source = validated.crew_source;
+        let crew_redraw_history = validated.crew_redraw_history;
         params = validated.params;
 
         let actor = self.actor().clone();
@@ -415,10 +419,16 @@ impl OrbitRuntime {
         {
             append_history.push(resolution);
         }
-        if let Some(replacement) = params.crew.as_ref()
-            && replacement.as_deref() != task.crew.as_deref()
+        if let Some(history) = crew_redraw_history {
+            append_history.push(history);
+        } else if let Some(replacement) = params.crew.as_ref()
+            && (replacement.as_deref() != task.crew.as_deref()
+                || crew_source
+                    .as_ref()
+                    .is_some_and(|source| *source != task.crew_source))
         {
             let source = match &crew_assignment {
+                Some(assignment) if assignment.source == "explicit" => "explicit name".to_string(),
                 Some(assignment) => format!("pool draw ({})", assignment.source),
                 None if replacement.is_none() => "pool draw (no crew available)".to_string(),
                 None => "explicit name".to_string(),
@@ -486,6 +496,7 @@ impl OrbitRuntime {
                     artifact_owner_run_id: artifact_owner.clone(),
                     artifact_writer,
                     actor: effective_label.clone(),
+                    crew_source: crew_source.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),
                     status_event: status_event.clone(),
@@ -637,8 +648,9 @@ impl OrbitRuntime {
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —
         // a re-queue after a provider failure lands on a fresh draw instead of
-        // on nothing. Editing the complexity alone never re-routes.
+        // on nothing. A pool assignment from another tier is redrawn too.
         let mut crew_assignment = None;
+        let mut crew_redraw_history = None;
         if let Some(crew) = &mut params.crew {
             *crew = self.canonical_crew_name(crew.as_deref())?;
             if crew.is_none() {
@@ -653,6 +665,26 @@ impl OrbitRuntime {
             } else {
                 // An explicit update must not pin a disabled crew onto a task.
                 self.resolve_crew_for_task(None, crew.as_deref())?;
+                crew_assignment = crew.as_ref().map(|crew| CreationCrewAssignment {
+                    crew: crew.clone(),
+                    source: "explicit".to_string(),
+                });
+            }
+        }
+        let mut crew_source = params.crew.as_ref().map(|_| {
+            crew_assignment
+                .as_ref()
+                .map(|assignment| assignment.source.clone())
+        });
+        if params.crew.is_none()
+            && let Some(complexity) = params.complexity
+            && Some(complexity) != task.complexity
+        {
+            let mut rerated = task.clone();
+            crew_redraw_history = self.rerate_task_crew(&mut rerated, Some(complexity))?;
+            if crew_redraw_history.is_some() {
+                params.crew = Some(rerated.crew);
+                crew_source = Some(rerated.crew_source);
             }
         }
         if let Some(orchestrator) = &mut params.orchestrator {
@@ -675,6 +707,8 @@ impl OrbitRuntime {
         Ok(ValidatedTaskFieldEdits {
             params,
             crew_assignment,
+            crew_source,
+            crew_redraw_history,
         })
     }
 }

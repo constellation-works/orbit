@@ -127,6 +127,7 @@ impl TaskRecordService<'_> {
                     job_run_id: params.job_run_id.clone(),
                     job_run_machine: params.job_run_machine.clone(),
                     crew: params.crew.clone(),
+                    crew_source: params.crew_source.clone(),
                     orchestrator: params.orchestrator.clone(),
                     context_creation: params.context_creation.clone(),
                 },

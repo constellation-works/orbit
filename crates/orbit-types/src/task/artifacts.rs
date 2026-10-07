@@ -99,6 +99,10 @@ pub struct TaskEnvelopeV2 {
     pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
+    /// Absent on legacy records; assignment history can recover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
