@@ -6,4 +6,4 @@ import { getHeadings } from '../../../CHANGELOG.md';
 
 export const latestRelease: string | undefined = getHeadings().find(
   (heading) => heading.depth === 2,
-)?.text;
+)?.text.match(/^\d+\.\d+\.\d+/)?.[0];

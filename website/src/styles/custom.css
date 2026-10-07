@@ -987,32 +987,55 @@ a.orbit-card:focus-visible :is(h2, h3) {
   }
 }
 
-/* The changelog page renders the repository's CHANGELOG.md verbatim. Its own
-   H1 duplicates the page title, so it is hidden rather than edited out — the
-   file stays byte-identical to what a release compiles. */
+/* The changelog's Markdown is transformed at build time into release
+   disclosures. Its own H1 duplicates the page title; the source stays frozen. */
 .orbit-changelog > h1 {
   display: none;
 }
 
-.orbit-changelog > h2 {
+.orbit-release {
   border-top: 1px solid var(--sl-color-hairline-light);
-  font-family: var(--sl-font-mono);
-  margin-top: 2.5rem;
-  padding-top: 1.5rem;
+  margin-top: 0;
 }
 
-/* The newest release is the first H2 (the file's own H1 is hidden above). */
-.orbit-changelog > h2:first-of-type {
+.orbit-release:first-of-type {
   border-top: 0;
-  margin-top: 1rem;
-  padding-top: 0;
 }
 
-.orbit-changelog > h2:first-of-type::after {
+.orbit-release > summary {
+  cursor: pointer;
+  padding: 1rem 0;
+}
+
+.orbit-release > summary::marker {
+  color: var(--sl-color-text-accent);
+}
+
+.orbit-release > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--sl-color-text-accent);
+  outline-offset: 4px;
+}
+
+.orbit-release-heading {
+  display: inline;
+  font-family: var(--sl-font-mono);
+  font-size: 1.35rem;
+  scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
+}
+
+.orbit-release-heading time {
+  color: var(--sl-color-gray-3);
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  margin-inline-start: 0.75rem;
+}
+
+.orbit-release-latest {
   background: var(--sl-color-accent);
   border-radius: 999px;
   color: var(--sl-color-black);
-  content: "Latest";
   font-family: var(--sl-font);
   font-size: 0.75rem;
   font-weight: 600;
@@ -1021,9 +1044,14 @@ a.orbit-card:focus-visible :is(h2, h3) {
   vertical-align: middle;
 }
 
+.orbit-release-body {
+  margin-top: 0;
+  padding-bottom: 1.5rem;
+}
+
 /* Breaking changes are the part of a release a reader must not skim past:
    the heading and the list under it sit in one caution panel. */
-.orbit-changelog > h3[id^='breaking-changes'] {
+.orbit-release-body > h3[id^='breaking-changes'] {
   background: var(--orbit-caution-bg);
   border: 1px solid var(--orbit-caution-line);
   border-bottom: 0;
@@ -1034,7 +1062,7 @@ a.orbit-card:focus-visible :is(h2, h3) {
   padding: 0.875rem 1.125rem 0.25rem;
 }
 
-.orbit-changelog > h3[id^='breaking-changes'] + ul {
+.orbit-release-body > h3[id^='breaking-changes'] + ul {
   background: var(--orbit-caution-bg);
   border: 1px solid var(--orbit-caution-line);
   border-radius: 0 0 10px 10px;
@@ -1043,7 +1071,7 @@ a.orbit-card:focus-visible :is(h2, h3) {
   padding: 0.25rem 1.125rem 0.875rem 2.25rem;
 }
 
-.orbit-changelog > h3[id^='highlights'] {
+.orbit-release-body > h3[id^='highlights'] {
   font-size: 0.95rem;
   margin-top: 1.75rem;
 }
