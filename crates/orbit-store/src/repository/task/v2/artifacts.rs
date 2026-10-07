@@ -84,6 +84,7 @@ pub(crate) fn review_report_history(
                         recorded_by: file.created_by.clone(),
                         verdict: legacy.verdict,
                         validation: legacy.validation,
+                        record_id_contract_checked: None,
                     })
                     .map_err(OrbitError::InvalidInput)?;
             }
@@ -105,6 +106,7 @@ pub(crate) fn review_report_history(
             recorded_by: actor.to_string(),
             verdict: parsed.verdict,
             validation: parsed.validation,
+            record_id_contract_checked: Some(reviewer_can_correct),
         })
         .map_err(OrbitError::InvalidInput)?;
     if !recorded {

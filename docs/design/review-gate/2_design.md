@@ -353,10 +353,13 @@ instead of the gap surfacing at settlement, when nobody can fix it. The
 refused bytes neither replace the report nor enter the history. A claimed
 reviewer's put reaches the owner as a live worker update and is refused the
 same way. The evidence or failure a claim settles runs after the reviewer
-stopped, so it retains such a revision, ids or not, instead of discarding the
-rest of the evidence, and leaves any gap to settlement. Settlement
-reports the same gap as `validation_incomplete: required validation record
-<id> …`. The certificate keeps `retired_validation`, coverage re-derives the
+stopped, so it retains the revision instead of discarding the rest of the
+evidence. The history marks whether its record ids were checked while the
+reviewer could still correct the report. Settlement checks an unchecked
+post-session revision before accepting it: a new report still needs distinct
+required record ids and must account for earlier ids. A revision already
+stored before this marker existed stays on the legacy command-identity rules.
+The certificate keeps `retired_validation`, coverage re-derives the
 rule from it, and the verdict comment shows each retained record's id with its
 retirement reason. Records and certificates written without ids keep the
 command-identity rules above unchanged, so they settle and spend exactly as

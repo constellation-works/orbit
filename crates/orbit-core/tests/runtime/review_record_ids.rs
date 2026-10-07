@@ -75,10 +75,43 @@ fn seed_legacy_reports(fixture: &Fixture, earlier: &Value, current: &Value) {
             recorded_by: "legacy-reviewer".into(),
             verdict: earlier_report.verdict,
             validation: earlier_report.validation,
+            record_id_contract_checked: None,
         })
         .unwrap();
-    let history_bytes = serde_json::to_vec_pretty(&history).unwrap();
+    store_report_artifacts(
+        fixture,
+        current_bytes,
+        serde_json::to_vec_pretty(&history).unwrap(),
+    );
 
+    assert_eq!(current_report.validation[0].id, None);
+}
+
+/// Seed a report delivered only after the claimed reviewer stopped, which
+/// the store retains without an in-session refusal [ORB-14370].
+fn seed_post_session_report(fixture: &Fixture, current: &Value) {
+    let current_bytes = current.to_string().into_bytes();
+    let current_report = ReviewReport::parse(&current_bytes).unwrap();
+    let mut history = ReviewReportHistory::default();
+    history
+        .record(ReviewReportRevision {
+            attempt_id: current_report.attempt_id,
+            sha256: sha256_hex(&current_bytes),
+            observed_at: Utc::now(),
+            recorded_by: "claimed-reviewer".into(),
+            verdict: current_report.verdict,
+            validation: current_report.validation,
+            record_id_contract_checked: Some(false),
+        })
+        .unwrap();
+    store_report_artifacts(
+        fixture,
+        current_bytes,
+        serde_json::to_vec_pretty(&history).unwrap(),
+    );
+}
+
+fn store_report_artifacts(fixture: &Fixture, report_bytes: Vec<u8>, history_bytes: Vec<u8>) {
     let registry =
         TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
     let bundle = registry
@@ -90,7 +123,7 @@ fn seed_legacy_reports(fixture: &Fixture, earlier: &Value, current: &Value) {
         serde_yaml::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
 
     for (path, bytes) in [
-        (REVIEW_REPORT_ARTIFACT, current_bytes),
+        (REVIEW_REPORT_ARTIFACT, report_bytes),
         (REVIEW_REPORT_HISTORY_ARTIFACT, history_bytes),
     ] {
         let digest = sha256_hex(&bytes);
@@ -104,13 +137,11 @@ fn seed_legacy_reports(fixture: &Fixture, earlier: &Value, current: &Value) {
             sha256: digest,
             media_type: "application/json".into(),
             size_bytes: bytes.len() as u64,
-            created_by: "legacy-reviewer".into(),
+            created_by: "reviewer-fixture".into(),
             created_at: Utc::now(),
         });
     }
     std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
-
-    assert_eq!(current_report.validation[0].id, None);
 }
 
 /// ORB-14360 recorded a prose-named check `not_run` and later the real
@@ -386,6 +417,63 @@ fn reports_without_record_ids_keep_the_command_identity_rules() {
                      revision of this attempt and the final report omits it"
                 )),
                 "{escalation}"
+            );
+        }
+    }
+}
+
+/// A claimed worker's Evidence/Fail commit happens after the reviewer stops,
+/// so it must retain the report instead of refusing the write. Settlement
+/// still applies the id contract to a newly received report; pre-change
+/// reports without the contract marker keep their legacy behavior above.
+#[test]
+fn new_post_session_claim_reports_cannot_settle_without_unique_record_ids() {
+    if !super::dispatch_admission::isolated(
+        "review_record_ids::new_post_session_claim_reports_cannot_settle_without_unique_record_ids",
+    ) {
+        return;
+    }
+    let cases = [
+        (
+            "missing id",
+            json!([{"command":"make ci-fast","outcome":"passed","role":"required"}]),
+            false,
+            "needs a stable, non-empty `id`",
+        ),
+        (
+            "duplicate id",
+            json!([
+                {"id":"V1","command":"make ci-fast","outcome":"passed","role":"required"},
+                {"id":"V1","command":"cargo test -p orbit-core","outcome":"passed","role":"required"}
+            ]),
+            false,
+            "validation record id `V1` is used by multiple records",
+        ),
+        (
+            "valid ids",
+            json!([{"id":"V1","command":"make ci-fast","outcome":"passed","role":"required"}]),
+            true,
+            "",
+        ),
+    ];
+    for (name, validation, passes, expected_message) in cases {
+        let mut fixture = Fixture::new();
+        fixture.admit();
+        seed_post_session_report(&fixture, &report(&fixture, "accept", validation, json!([])));
+
+        let settled = fixture.settle();
+        assert_eq!(settled.is_ok(), passes, "{name}: {settled:?}");
+        let certificate = certificate(&fixture);
+        assert_eq!(certificate.validation_complete, passes, "{name}");
+        if passes {
+            assert_eq!(certificate.verdict, ReviewVerdict::Accept, "{name}");
+        } else {
+            assert_eq!(certificate.verdict, ReviewVerdict::Incomplete, "{name}");
+            let escalation = certificate.escalation.unwrap_or_default();
+            assert!(
+                escalation.contains("report_record_ids_invalid")
+                    && escalation.contains(expected_message),
+                "{name}: settlement identifies the bad post-session report: {escalation}"
             );
         }
     }

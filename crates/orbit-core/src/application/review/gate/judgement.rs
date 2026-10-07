@@ -503,10 +503,24 @@ fn retained_revisions(
     let history = ReviewReportHistory::parse(&history.content).map_err(|error| {
         format!("report_history_unreadable: the report history on {task_id}: {error}")
     })?;
-    let current = sha256_hex(current);
+    let current_sha256 = sha256_hex(current);
+    if history
+        .for_attempt(&attempt.attempt_id)
+        .find(|revision| revision.sha256 == current_sha256)
+        .is_some_and(|revision| revision.record_id_contract_checked == Some(false))
+    {
+        let report = ReviewReport::parse(current)
+            .map_err(|error| format!("report_unreadable: the report on {task_id}: {error}"))?;
+        ReviewReportHistory::check_required_record_ids(&report).map_err(|error| {
+            format!("report_record_ids_invalid: the post-session report on {task_id}: {error}")
+        })?;
+        history
+            .check_record_continuity(&report)
+            .map_err(|error| format!("report_record_ids_invalid: {error}"))?;
+    }
     Ok(history
         .for_attempt(&attempt.attempt_id)
-        .filter(|revision| revision.sha256 != current)
+        .filter(|revision| revision.sha256 != current_sha256)
         .cloned()
         .collect())
 }
