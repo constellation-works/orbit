@@ -168,7 +168,12 @@ log feedback, omitted empty knowledge metrics, disabled active replay,
 timeline legend and column labels, and formatted stream-JSON stdout. It
 checks that long log lines wrap inside the panel, malformed lines stay
 readable as text, and each stream's wrap toggle restores horizontal scrolling
-without widening the page. It saves screenshots and `run-detail-result.json`:
+without widening the page. It also drives the full app's cancel/replay actions:
+settlement counts and errors remain visible after refreshes and scheduled
+polls (including a failed detail read and recovery), dismissal and subsequent
+actions clear feedback, and changing run or
+workspace retires it. It saves screenshots, `run-detail-result.json`, and
+`run-actions-result.json`:
 
 ```bash
 node crates/orbit-web/src/tests/dashboard_loading_browser.mjs \

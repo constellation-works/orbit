@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
-import { assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
+import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -851,10 +851,11 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  await assertRunDetailActions(page, evidence);
   if (process.argv[4] === '--run-detail') {
     await assertRunDetailPresentation(page, evidence);
     if (failures.length) throw new Error(failures.join('\n'));
-    console.log('Chromium run-detail presentation and log wrapping passed.');
+    console.log('Chromium run-detail action feedback, scheduled polling, presentation and log wrapping passed.');
   } else {
     await assertFrictionTaskLinks(page);
     await page.evaluate(() => globalThis.showTaskPaginationEvidence());
