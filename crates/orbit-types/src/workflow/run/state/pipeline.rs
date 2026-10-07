@@ -145,6 +145,12 @@ pub struct PipelineState {
     /// Resume clones it, so a resumed run never invokes final recovery again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery: Option<FinalRecoveryCheckpoint>,
+    /// The push this run held at because the forge kept refusing it
+    /// [ORB-14617]. Present only while the run's last outcome is that hold:
+    /// finalization replaces it with the run's own result, and a resume
+    /// seeded from a held run reads it to keep the lineage's `held_since`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge_hold: Option<crate::workflow::ForgeUnavailableHold>,
     /// How this run was submitted [ORB-12255]. Absent on runs recorded before
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,6 +188,7 @@ impl PipelineState {
             rebase_recovery_checkpoints: BTreeMap::new(),
             activity_crew_draws: BTreeMap::new(),
             final_recovery: None,
+            forge_hold: None,
             trigger: None,
             updated_at: Utc::now(),
         }

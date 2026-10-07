@@ -7,7 +7,9 @@ spec:
   description: >
     Push the active worktree branch without overwriting remote-only commits.
     A rewritten branch requires the exact expected remote SHA from the durable
-    pre-rewrite checkpoint.
+    pre-rewrite checkpoint. A push the forge refuses for a server-side reason
+    is retried with exponential backoff; past that budget the run holds at
+    this step (forge_unavailable) for the clock to resume.
   input_schema_json:
     type: object
     properties:
@@ -31,6 +33,17 @@ spec:
         type: string
       expected_remote_sha:
         type: [string, "null"]
+      # Transient push retry budget. Absent means the production default:
+      # 6 attempts, backoff from 10 s doubling to a 160 s cap.
+      forge_retry:
+        type: [object, "null"]
+        properties:
+          max_attempts:
+            type: integer
+          initial_backoff_ms:
+            type: integer
+          backoff_cap_ms:
+            type: integer
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.
@@ -52,5 +65,9 @@ spec:
         type: [string, "null"]
       force_with_lease:
         type: boolean
+      push_attempts:
+        type: integer
+      push_waited_ms:
+        type: integer
   action: git_push
   config: {}

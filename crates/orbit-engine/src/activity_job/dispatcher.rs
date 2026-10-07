@@ -177,6 +177,12 @@ pub enum DispatchError {
     #[error("review_awaiting_evidence: named external checks are pending")]
     ReviewEvidenceHold(Box<orbit_types::workflow::ReviewEvidenceHold>),
 
+    /// The forge kept refusing a delivery push for a server-side reason past
+    /// the push's own backoff [ORB-14617]. End the run held at this step,
+    /// without retry, recovery, or the failure handoff; the clock resumes it.
+    #[error("forge_unavailable: the forge refused the push of {} to {} {} times", .0.head_sha, .0.target_ref, .0.attempts)]
+    ForgeUnavailableHold(Box<orbit_types::workflow::ForgeUnavailableHold>),
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -302,6 +308,7 @@ impl DispatchError {
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
+                | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -445,7 +452,9 @@ fn dispatch_v2_activity_inner(
     let outcome_str = match &result {
         Ok(o) if o.success => "success",
         Ok(_) => "failed",
-        Err(DispatchError::ReviewEvidenceHold(_)) => "held",
+        Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::ForgeUnavailableHold(_)) => {
+            "held"
+        }
         Err(_) => "error",
     };
     input.audit.emit_lossy(
@@ -563,6 +572,15 @@ fn run_deterministic(
                 }
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
+                }
+                // Only the delivery push writes this hold; a refusal text
+                // that merely quotes the marker carries no parseable hold.
+                error
+                    if let Some(hold) = orbit_types::workflow::ForgeUnavailableHold::from_text(
+                        &error.to_string(),
+                    ) =>
+                {
+                    DispatchError::ForgeUnavailableHold(Box::new(hold))
                 }
                 error => DispatchError::DeterministicActionFailed {
                     action: spec.action.clone(),

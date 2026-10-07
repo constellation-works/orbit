@@ -255,8 +255,9 @@ replaced by redaction markers.
 
 The v2 executor checkpoints every completed top-level step into
 `job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
-`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`. Any other state errors
-with `resume requires an interrupted, failed, or timed-out run`.
+`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, and a `held` run whose push the
+forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)). Any
+other state errors with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -390,6 +391,33 @@ move it through another status: any later status change lifts the hold. If a
 provider keeps refusing the content, pin the task to a crew on another
 provider. See
 [CONFIG.md](../CONFIG.md#provider-failure-holds).
+
+## A delivery held for the forge
+
+Sometimes GitHub refuses every push for a while: `! [remote rejected] <branch> ->
+<branch> (Internal Server Error)`, `Service Unavailable`, `Bad Gateway`, `Gateway
+Timeout`, or `remote: Internal Server Error`. Reads and API calls can keep working.
+The push step treats these as transient. It retries up to 6 times, waiting 10 s and
+doubling to a 160 s cap, with jitter: at most about 5 minutes in all. The step's output
+records `push_attempts` and `push_waited_ms`. A refusal that names a policy
+(protected branch, `GH013`, a hook, authentication) is permanent and fails at once.
+
+When the budget runs out, the run does not fail. It ends `held` at that step:
+`orbit run show <run_id>` names `[forge_unavailable]` and the pushed head. Step
+recovery, final recovery and the failure handoff do not run. The task stays
+`in-progress` with one comment explaining the hold. The candidate, its worktree and
+its review are kept. Do not unblock, replay or re-run the task.
+
+Each `orbit clock tick` resumes the held run from its checkpoints. The resumed run
+skips implementation and review, pushes the same head, and continues to the pull
+request. If the forge still refuses, the resumed run holds again, and the next tick
+resumes that one. The clock retries for 2 hours from the first hold. After that, it
+blocks the task with a `forge_unavailable_expired` history event that names the held
+run. Once pushes work again, `orbit job resume <held_run_id>` re-admits the task and
+pushes it. A cancel (`orbit run cancel`) stops a push that is waiting between attempts.
+
+A claimed leaf on a follower that holds this way releases its claim to the owner as a
+`transient` failure; it is not resumed in place.
 
 ## Replay from the beginning
 

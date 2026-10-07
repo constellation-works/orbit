@@ -1,8 +1,11 @@
 use std::path::Path;
 use std::time::Duration;
 
+use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::process::jitter::JitterRng;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
 pub(crate) const PUSH: &str = "push";
@@ -27,8 +30,20 @@ const LONG_TIMEOUT_MS: u64 = 60_000;
 const GITHUB_LOOKUP_TRANSIENT_ATTEMPTS: u32 = 3;
 const GITHUB_LOOKUP_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
-const PUSH_TRANSIENT_ATTEMPTS: u32 = 3;
-const PUSH_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// A forge incident refuses pushes for minutes, not milliseconds
+/// [ORB-14617]: six attempts with exponential backoff of 10 s doubling to a
+/// 160 s cap wait at most 310 s in all. Each wait draws equal jitter (half
+/// fixed, half random), so pushes failing together do not retry in lockstep.
+/// A cancel stops the worker's process group, which ends a wait with it.
+const PUSH_TRANSIENT_ATTEMPTS: u32 = 6;
+const PUSH_TRANSIENT_INITIAL_BACKOFF_MS: u64 = 10_000;
+const PUSH_TRANSIENT_BACKOFF_CAP_MS: u64 = 160_000;
+/// Bounds on a `forge_retry` override, so asset input cannot turn the push
+/// into an unbounded wait.
+const PUSH_TRANSIENT_MAX_ATTEMPTS: u64 = 10;
+const PUSH_TRANSIENT_MAX_BACKOFF_MS: u64 = 600_000;
+/// Largest forge refusal a hold carries.
+const FORGE_HOLD_DIAGNOSTIC_BYTES: usize = 2048;
 
 /// GitHub's reason for refusing a merge because another merge moved the base
 /// between its mergeability check and the mutation (F2026-10-071). The `sha`
@@ -91,17 +106,16 @@ fn push(input: &Value) -> Result<Value, OrbitError> {
         DEFAULT_TIMEOUT_MS,
         "push local head",
     )?;
-    let result = execute_push_with_transient_retry(
+    let pushed = execute_push_with_transient_retry(
         &args,
         Path::new(repo_root),
         &target_ref,
         local_head.stdout.trim(),
         "push",
-    )?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
+        PushBackoff::from_input(input)?,
+    )
+    .map_err(|exhausted| exhausted.into_hold_error())?;
+    Ok(pushed.output())
 }
 
 /// Push `head_sha` to `target_ref` on `origin`, replacing whatever the ref
@@ -122,7 +136,9 @@ fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
              '{CANDIDATE_REF_PREFIX}'"
         )));
     }
-    let result = execute_push_with_transient_retry(
+    // A carried candidate ref is pushed by a failure activity, which has no
+    // later step to hold at: exhausting its budget is an ordinary failure.
+    let pushed = execute_push_with_transient_retry(
         &[
             "push".to_string(),
             "--".to_string(),
@@ -133,11 +149,144 @@ fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
         target_ref,
         head_sha,
         "candidate ref push",
-    )?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
+        PushBackoff::from_input(input)?,
+    )
+    .map_err(PushFailure::into_error)?;
+    Ok(pushed.output())
+}
+
+/// The transient push retry budget: `forge_retry` in the operation input, or
+/// the production default.
+#[derive(Debug, Clone, Copy)]
+struct PushBackoff {
+    attempts: u32,
+    initial_ms: u64,
+    cap_ms: u64,
+}
+
+impl PushBackoff {
+    fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        let Some(retry) = input.get("forge_retry").filter(|value| !value.is_null()) else {
+            return Ok(Self {
+                attempts: PUSH_TRANSIENT_ATTEMPTS,
+                initial_ms: PUSH_TRANSIENT_INITIAL_BACKOFF_MS,
+                cap_ms: PUSH_TRANSIENT_BACKOFF_CAP_MS,
+            });
+        };
+        let bounded = |key: &str, min: u64, max: u64| {
+            retry
+                .get(key)
+                .and_then(Value::as_u64)
+                .filter(|value| (min..=max).contains(value))
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "private automation VCS push forge_retry.{key} must be an integer from \
+                         {min} to {max}"
+                    ))
+                })
+        };
+        let attempts = bounded("max_attempts", 1, PUSH_TRANSIENT_MAX_ATTEMPTS)?;
+        let initial_ms = bounded("initial_backoff_ms", 0, PUSH_TRANSIENT_MAX_BACKOFF_MS)?;
+        let cap_ms = bounded("backoff_cap_ms", initial_ms, PUSH_TRANSIENT_MAX_BACKOFF_MS)?;
+        Ok(Self {
+            attempts: attempts as u32,
+            initial_ms,
+            cap_ms,
+        })
+    }
+
+    /// The wait before attempt `attempt + 1`: exponential, capped, with
+    /// equal jitter.
+    fn delay_ms(self, attempt: u32, jitter: &mut JitterRng) -> u64 {
+        let ceiling = self
+            .initial_ms
+            .saturating_mul(1_u64 << (attempt - 1).min(32))
+            .min(self.cap_ms);
+        let fixed = ceiling / 2;
+        fixed + jitter.full_jitter(ceiling - fixed)
+    }
+}
+
+/// A push that reached the remote, with what its retries cost.
+struct Pushed {
+    result: orbit_exec::ExecutionResult,
+    attempts: u32,
+    waited_ms: u64,
+}
+
+impl Pushed {
+    fn output(&self) -> Value {
+        json!({
+            "stdout": self.result.stdout,
+            "stderr": self.result.stderr,
+            "attempts": self.attempts,
+            "waited_ms": self.waited_ms,
+        })
+    }
+}
+
+/// Why a push did not reach the remote.
+enum PushFailure {
+    /// Not retried: a permanent refusal, a timeout, a failed confirmation.
+    Error(OrbitError),
+    /// Every attempt in the budget was refused for a transient reason.
+    Exhausted(Box<PushExhausted>),
+}
+
+struct PushExhausted {
+    target_ref: String,
+    head_sha: String,
+    attempts: u32,
+    waited_ms: u64,
+    diagnostic: String,
+    error: OrbitError,
+}
+
+impl PushFailure {
+    fn into_error(self) -> OrbitError {
+        match self {
+            Self::Error(error) => error,
+            Self::Exhausted(exhausted) => exhausted.error,
+        }
+    }
+
+    /// An exhausted budget carries a typed [`ForgeUnavailableHold`]: the
+    /// forge, not the candidate, refused the push.
+    fn into_hold_error(self) -> OrbitError {
+        let exhausted = match self {
+            Self::Error(error) => return error,
+            Self::Exhausted(exhausted) => *exhausted,
+        };
+        let now = Utc::now();
+        let hold = ForgeUnavailableHold {
+            target_ref: exhausted.target_ref,
+            head_sha: exhausted.head_sha,
+            attempts: exhausted.attempts,
+            waited_ms: exhausted.waited_ms,
+            diagnostic: bounded_diagnostic(&exhausted.diagnostic),
+            step_id: String::new(),
+            held_at: now,
+            held_since: now,
+        };
+        OrbitError::Execution(hold.text(&format!(
+            "the forge refused the push {} times over {} s: {}",
+            exhausted.attempts,
+            exhausted.waited_ms / 1000,
+            exhausted.error
+        )))
+    }
+}
+
+fn bounded_diagnostic(text: &str) -> String {
+    let text = text.trim();
+    if text.len() <= FORGE_HOLD_DIAGNOSTIC_BYTES {
+        return text.to_string();
+    }
+    let mut end = FORGE_HOLD_DIAGNOSTIC_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 /// Retry only transient push failures, confirming the exact remote ref before
@@ -149,20 +298,28 @@ fn execute_push_with_transient_retry(
     target_ref: &str,
     head_sha: &str,
     operation: &str,
-) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    backoff: PushBackoff,
+) -> Result<Pushed, PushFailure> {
     if !valid_expected_remote_sha(Some(head_sha)) {
-        return Err(OrbitError::Execution(
+        return Err(PushFailure::Error(OrbitError::Execution(
             "private automation VCS push could not resolve the local head SHA".into(),
-        ));
+        )));
     }
+    let mut jitter = JitterRng::from_entropy();
+    let mut waited_ms = 0_u64;
     let mut attempt = 1;
     loop {
-        let result = run_vcs_process("git", args.to_vec(), Some(repo_root), LONG_TIMEOUT_MS)?;
-        if result.success
-            || result.timed_out
-            || !is_transient_push_failure(&format!("{}\n{}", result.stdout, result.stderr))
-        {
-            return succeeded(result, operation);
+        let result = run_vcs_process("git", args.to_vec(), Some(repo_root), LONG_TIMEOUT_MS)
+            .map_err(PushFailure::Error)?;
+        let diagnostic = format!("{}\n{}", result.stdout, result.stderr);
+        if result.success || result.timed_out || !is_transient_push_failure(&diagnostic) {
+            return succeeded(result, operation)
+                .map(|result| Pushed {
+                    result,
+                    attempts: attempt,
+                    waited_ms,
+                })
+                .map_err(PushFailure::Error);
         }
 
         let remote = execute(
@@ -177,7 +334,8 @@ fn execute_push_with_transient_retry(
             Some(repo_root),
             LONG_TIMEOUT_MS,
             "push remote confirmation",
-        )?;
+        )
+        .map_err(PushFailure::Error)?;
         if remote.stdout.lines().any(|line| {
             let mut fields = line.split_whitespace();
             fields
@@ -189,19 +347,44 @@ fn execute_push_with_transient_retry(
             tracing::info!(
                 operation,
                 attempt,
+                waited_ms,
                 "confirmed push landed after a transient failure"
             );
-            return Ok(remote);
+            return Ok(Pushed {
+                result: remote,
+                attempts: attempt,
+                waited_ms,
+            });
         }
-        if attempt == PUSH_TRANSIENT_ATTEMPTS {
-            return succeeded(result, operation);
+        if attempt >= backoff.attempts {
+            tracing::warn!(
+                operation,
+                attempts = attempt,
+                waited_ms,
+                "push retry budget exhausted by transient remote failures"
+            );
+            let error = succeeded(result, operation).err().unwrap_or_else(|| {
+                OrbitError::Execution(format!("private automation VCS {operation} failed"))
+            });
+            return Err(PushFailure::Exhausted(Box::new(PushExhausted {
+                target_ref: target_ref.to_string(),
+                head_sha: head_sha.to_string(),
+                attempts: attempt,
+                waited_ms,
+                diagnostic,
+                error,
+            })));
         }
+        let delay_ms = backoff.delay_ms(attempt, &mut jitter);
         tracing::warn!(
             operation,
             attempt,
+            delay_ms,
+            waited_ms,
             "retrying push after a transient remote failure"
         );
-        std::thread::sleep(PUSH_TRANSIENT_RETRY_DELAY * attempt);
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        waited_ms = waited_ms.saturating_add(delay_ms);
         attempt += 1;
     }
 }
@@ -244,8 +427,23 @@ fn is_transient_push_failure(message: &str) -> bool {
     {
         return false;
     }
-    text.lines()
-        .any(|line| line.contains("[remote rejected]") && line.trim_end().ends_with("(failed)"))
+    // GitHub names a server-side fault in the rejection's reason, as in
+    // `! [remote rejected] head -> head (Internal Server Error)` [ORB-14617].
+    text.lines().any(|line| {
+        let line = line.trim_end();
+        line.contains("[remote rejected]")
+            && [
+                "(failed)",
+                "(internal server error)",
+                "(service unavailable)",
+                "(bad gateway)",
+                "(gateway timeout)",
+            ]
+            .iter()
+            .any(|reason| line.ends_with(reason))
+    }) || text
+        .lines()
+        .any(|line| line.trim() == "remote: internal server error")
         || ["http ", "returned error: "].iter().any(|prefix| {
             text.match_indices(prefix).any(|(index, _)| {
                 let status = &text[index + prefix.len()..];

@@ -10,10 +10,10 @@ use orbit_store::contracts::{
     LocalPullPhase, ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
-    BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FinalRecoveryDecision, JobRunState,
-    OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER,
-    is_baseline_red_failure,
+    BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
+    FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_ROUTE_UNAVAILABLE_MARKER,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
+    TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
 };
 
 use super::candidate::{
@@ -1216,7 +1216,17 @@ fn leaf_failure(
         };
         (class, reason)
     });
-    let mut reason = reason;
+    // [ORB-14617] A forge hold's text leads with its JSON; say it plainly.
+    let mut reason = match ForgeUnavailableHold::from_text(&reason) {
+        Some(hold) => format!(
+            "the forge refused the push of {} to {} {} times over {} s",
+            hold.head_sha,
+            hold.target_ref,
+            hold.attempts,
+            hold.waited_ms / 1000
+        ),
+        None => reason,
+    };
     for marker in FAILURE_MARKERS {
         reason = reason.replace(marker, "");
     }
@@ -1242,7 +1252,8 @@ fn leaf_failure(
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
-const FAILURE_MARKERS: [&str; 6] = [
+const FAILURE_MARKERS: [&str; 7] = [
+    FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER,
     VALIDATION_ENVIRONMENT_MARKER,

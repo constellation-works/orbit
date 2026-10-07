@@ -38,6 +38,8 @@ pub struct V2JobRunResult {
     pub success: bool,
     /// Named external evidence that stopped delivery without a failure.
     pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
+    /// A delivery push the forge kept refusing; the run holds for a resume.
+    pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
     pub pipeline: Value,
     pub message: Option<String>,
     pub events_emitted: u64,
@@ -379,6 +381,7 @@ impl OrbitRuntime {
 
         let (outcome_str, error_message) = match &outcome_res {
             Ok(o) if o.evidence_hold.is_some() => ("held", None),
+            Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.success => ("success", None),
             Ok(o) => ("failed", o.message.clone()),
             Err(err) => ("error", Some(err.to_string())),
@@ -400,6 +403,7 @@ impl OrbitRuntime {
                 job_name: asset.name,
                 success: o.success,
                 evidence_hold: o.evidence_hold,
+                forge_hold: o.forge_hold,
                 pipeline: o.pipeline,
                 message: o.message,
                 events_emitted: events_count,
@@ -498,6 +502,29 @@ impl OrbitRuntime {
                         finished_at,
                         Some("review_awaiting_evidence"),
                         "Delivery awaits named external evidence; receipt queues a fresh review.",
+                        JobRunState::Held,
+                    ),
+                );
+                JobRunState::Held
+            }
+            Ok(result) if result.forge_hold.is_some() => {
+                // [ORB-14617] The forge, not the candidate, refused the push:
+                // no failure step, no task block. The clock resumes the run.
+                log_best_effort(
+                    "persist held run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Held, options),
+                );
+                let fallback = "the forge refused the delivery push past its retry budget";
+                log_best_effort(
+                    "record held step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        Some(orbit_types::workflow::FORGE_UNAVAILABLE_ERROR_CODE),
+                        result.message.as_deref().unwrap_or(fallback),
                         JobRunState::Held,
                     ),
                 );
@@ -628,6 +655,9 @@ impl OrbitRuntime {
             PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone())
         });
         state.sync_pipeline(result.pipeline.clone());
+        // A resumed run starts from its source's hold; its own outcome
+        // replaces it, so only a run that is held carries one.
+        state.forge_hold = result.forge_hold.clone();
         // [ORB-10002] Per-step checkpoints already maintain step records for
         // this run; only fall back to the legacy single-summary step record
         // when no checkpoint was ever written, so a later `resume` never sees

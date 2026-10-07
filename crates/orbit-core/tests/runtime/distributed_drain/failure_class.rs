@@ -5,6 +5,7 @@
 use orbit_core::application::distributed::PullCrewWindow;
 use orbit_types::workflow::{
     BaselineRedHold, ClaimFailureClass, CrewExclusion, CrewExclusionSource,
+    FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold,
 };
 
 use super::*;
@@ -337,6 +338,69 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
     );
     assert_eq!(sol_exclusion(&pair, &drain), None);
     assert_eq!(window(&pair, &drain).host_suppressed, None);
+}
+
+/// [ORB-14617] A claimed leaf whose delivery push the forge kept refusing
+/// ends held, not failed. Its claim recovery cannot resume it the way the
+/// clock resumes a local run, so the settlement releases the task as
+/// `transient` with the refusal as its reason, and the owner hands it out
+/// again rather than blocking it.
+#[test]
+fn a_forge_held_leaf_releases_the_claim_as_transient() {
+    if !isolated(
+        module_path!(),
+        "a_forge_held_leaf_releases_the_claim_as_transient",
+    ) {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let now = Utc::now();
+    let hold = ForgeUnavailableHold {
+        target_ref: format!("refs/heads/{BRANCH}"),
+        head_sha: HEAD.into(),
+        attempts: 6,
+        waited_ms: 301_000,
+        diagnostic: "! [remote rejected] (Internal Server Error)".into(),
+        step_id: "push".into(),
+        held_at: now,
+        held_since: now,
+    };
+    pair.follower_jobs
+        .complete_job_run_step(
+            &leaf,
+            &JobRunStepParams {
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "diagnostic".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Held,
+                error_code: Some(FORGE_UNAVAILABLE_ERROR_CODE.into()),
+                error_message: Some(hold.text("step `push` held: the forge refused the push")),
+            },
+        )
+        .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(&leaf, JobRunState::Held, now, None)
+        .unwrap();
+
+    let pass = settle_only(&pair, &drain);
+
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
+    assert_eq!(failure["class"], "transient", "{failure}");
+    let reason = failure["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("the forge refused the push of") && reason.contains(HEAD),
+        "{failure}"
+    );
+    assert!(!reason.contains('['), "no Orbit marker or JSON: {failure}");
 }
 
 /// The candidate's own failure, and a task its final recovery judged, still
