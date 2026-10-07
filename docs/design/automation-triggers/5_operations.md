@@ -276,6 +276,14 @@ validation reason. Evaluation settles such an action even while its definition
 has changed, so one still reported
 means no evaluation is reaching it; the remediation names `orbit auto-task
 recover <name> --reissue-action --reason <why>` and `orbit auto-task reset`.
+An unminted retry can retain the closed task's failure reason while its own
+action ID is empty. Recovery checks the preceding attempt's durable action
+key and terminal outcome; it does not mistake that scheduled retry for a live
+task. Adoption alone preserves its attempt, backoff and frozen obligations,
+and explicit reissue remains available without discarding any debt. A minted
+retry is checked against its own task, and an unknown or open action still
+refuses recovery. These checks also apply when settings change on a later
+tick, after the original task was reconciled.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
 operation. State read failures are reported separately; corrupted delivery state is

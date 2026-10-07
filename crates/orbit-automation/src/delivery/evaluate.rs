@@ -129,7 +129,9 @@ fn evaluate_pass(
     // A settings-only edit is adopted in place and the pass carries on; any
     // other edit holds the consumer and names why.
     if state.epoch != epoch || state.branch != trigger.branch {
-        match adopt(store, host, &request, &state, retry_scheduled)? {
+        let action_terminal =
+            retry_scheduled || super::reconcile::action_liveness(host, &state, now)?.terminal;
+        match adopt(store, host, &request, &state, action_terminal)? {
             Adoption::Adopted(adopted) => state = *adopted,
             Adoption::Refused(refusals) => {
                 let mut changed = diagnostic(store, consumer, DEFINITION_CHANGED, Some(state))?;

@@ -154,6 +154,8 @@ fn settle_failed(
 /// without acceptable evidence. Reset uses terminal liveness to avoid
 /// refusing a closed task as executing; reissue and diagnostics use the
 /// failure fact so a closed action with valid evidence is not retried.
+/// An unminted automatic retry inherits its preceding action's proven
+/// liveness, while a retry that minted an action uses its own outcome.
 pub fn action_liveness(
     host: &dyn DeliveryHost,
     state: &AutomationState,
@@ -170,7 +172,22 @@ pub fn action_liveness(
     let mut active = active.clone();
     active.action_id = host.action_id(&active)?;
     if active.action_id.is_none() {
-        return Ok(ActionLiveness::default());
+        // Settlement schedules a fresh claim and clears its action id. On a
+        // later pass its key legitimately has no action yet [ORB-14579].
+        // The backoff identifies an automatic retry, but is not itself proof
+        // of terminal liveness: resolve and inspect the preceding action.
+        if active.state != BatchState::Claimed
+            || active.attempt <= 1
+            || active.retry_after.is_none()
+        {
+            return Ok(ActionLiveness::default());
+        }
+        active.attempt -= 1;
+        active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
+        active.action_id = host.action_id(&active)?;
+        if active.action_id.is_none() {
+            return Ok(ActionLiveness::default());
+        }
     }
 
     Ok(match host.outcome(&active)? {
