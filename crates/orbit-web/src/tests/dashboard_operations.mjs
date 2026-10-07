@@ -777,6 +777,8 @@ globalThis.startPendingDrainReadinessRefresh = () => {
 globalThis.drainReadinessRequestPending = () => readinessPending;
 globalThis.drainReadinessConcurrency = () => lastReadiness()?.concurrency;
 globalThis.releasePendingDrainReadinessRefresh = async () => {
+  // Later readiness reads in the scenario must not wait on a release.
+  delayReadiness = false;
   releaseReadiness?.();
   await drainReadinessRefresh;
   drainReadinessRefresh = null;
