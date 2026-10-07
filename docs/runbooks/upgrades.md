@@ -819,6 +819,29 @@ for the removal release; delete them from config.toml. Config get/set reject
 these retired keys with migration guidance. The runtime no longer honors
 `ORBIT_SEARCH_COMPANION*` environment overrides.
 
+## Job run state migration (schema v38)
+
+Store schema v38 (`job_run_states`) moves every run's pipeline state out of
+`job_runs` into a 1:1 side table and drops the old column, so run listings no
+longer read each checkpoint's overflow pages. It is breaking: older binaries
+read the dropped column, so a newer writer waits for them to quiesce (see
+[the quiesce wait](#a-migration-older-processes-cannot-keep-the-quiesce-wait)).
+
+- **Duration.** About 18 s per GB of pipeline state on SSD storage, roughly
+  40 s for a 2.3 GB `job_runs`, longer when its pages are cold. The open that
+  applies it holds the store write lock throughout; another process opening the
+  store meanwhile gives up after the 5 s busy timeout with a SQLite contention
+  error and succeeds once the migration commits.
+- **Disk.** The move runs in one transaction, so the WAL grows by about the
+  size of the moved state before it is checkpointed. Keep at least that much
+  free space beside `orbit.db`. The database file itself barely grows.
+- **Interruption.** An interrupted migration rolls back to v37 with every state
+  still in `job_runs`; the next store open starts it again.
+- **Freelist.** The `orbit.store.sqlite` log line `moved job run pipeline state
+  into job_run_states` reports `moved_runs`, `elapsed_ms` and `freelist_bytes`.
+  The freelist left behind is small (about one 64-run batch); reclaiming it
+  takes `VACUUM`, which needs exclusive access and is never run automatically.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when

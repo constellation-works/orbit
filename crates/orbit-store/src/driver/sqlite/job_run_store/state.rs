@@ -1,11 +1,16 @@
 //! Pipeline-state read, bulk-read, write, and immediate read-modify-write.
+//!
+//! A run's pipeline state lives in `job_run_states`, a 1:1 side table of
+//! `job_runs` (schema v38). Run listings never touch it, so they never walk
+//! a checkpoint's overflow-page chain; a checkpoint write rewrites only the
+//! state row, never the listing row.
 
 use std::collections::HashMap;
 use std::str::FromStr;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workflow::{JobRunState, PipelineState, RunStateUpdate};
-use rusqlite::TransactionBehavior;
+use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use super::queries::STEP_RUN_ID_CHUNK;
 use crate::Store;
@@ -17,15 +22,7 @@ impl Store {
         run_id: &str,
     ) -> Result<Option<PipelineState>, OrbitError> {
         let conn = self.read()?;
-        let raw = match conn.query_row(
-            "SELECT pipeline_state_json FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
-            rusqlite::params![workspace_id, run_id],
-            |row| row.get::<_, Option<String>>(0),
-        ) {
-            Ok(raw) => raw,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(err) => return Err(OrbitError::Store(err.to_string())),
-        };
+        let raw = read_state_json_conn(&conn, workspace_id, run_id)?;
         raw.map(|raw| {
             serde_json::from_str(&raw)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))
@@ -54,8 +51,10 @@ impl Store {
                 .join(", ");
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT run_id, pipeline_state_json FROM job_runs \
-                     WHERE workspace_id = ?1 AND run_id IN ({placeholders})"
+                    "SELECT r.run_id, s.pipeline_state_json FROM job_runs r \
+                     LEFT JOIN job_run_states s \
+                       ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                     WHERE r.workspace_id = ?1 AND r.run_id IN ({placeholders})"
                 ))
                 .map_err(|e| OrbitError::Store(e.to_string()))?;
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
@@ -95,13 +94,7 @@ impl Store {
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let updated = conn
-            .execute(
-                "UPDATE job_runs SET pipeline_state_json = ?3 WHERE workspace_id = ?1 AND run_id = ?2",
-                rusqlite::params![workspace_id, run_id, state_json],
-            )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if updated == 0 {
+        if !write_state_json_conn(&conn, workspace_id, run_id, &state_json)? {
             return Err(OrbitError::not_found(
                 NotFoundKind::JobRun,
                 run_id.to_string(),
@@ -123,8 +116,10 @@ impl Store {
             let updated = tx
                 .tx
                 .execute(
-                    "UPDATE job_runs SET pipeline_state_json = ?3 \
-                 WHERE workspace_id = ?1 AND run_id = ?2 AND pipeline_state_json IS NULL",
+                    "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+                     SELECT ?1, ?2, ?3 WHERE EXISTS(\
+                         SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2) \
+                     ON CONFLICT(workspace_id, run_id) DO NOTHING",
                     rusqlite::params![workspace_id, run_id, state_json],
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
@@ -164,8 +159,10 @@ impl Store {
             let row = tx
                 .tx
                 .query_row(
-                    "SELECT state, pipeline_state_json FROM job_runs \
-                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    "SELECT r.state, s.pipeline_state_json FROM job_runs r \
+                     LEFT JOIN job_run_states s \
+                       ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                     WHERE r.workspace_id = ?1 AND r.run_id = ?2",
                     rusqlite::params![workspace_id, run_id],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
@@ -189,7 +186,7 @@ impl Store {
                 .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
             tx.tx
                 .execute(
-                    "UPDATE job_runs SET pipeline_state_json = ?3 \
+                    "UPDATE job_run_states SET pipeline_state_json = ?3 \
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     rusqlite::params![workspace_id, run_id, state_json],
                 )
@@ -197,4 +194,40 @@ impl Store {
             Ok(RunStateUpdate::Updated)
         })
     }
+}
+
+/// The run's serialized pipeline state, or `None` when the run has none or
+/// does not exist.
+pub(super) fn read_state_json_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    conn.query_row(
+        "SELECT pipeline_state_json FROM job_run_states WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![workspace_id, run_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+/// Insert or replace the run's serialized pipeline state. `false` when the
+/// run does not exist: no state row is ever written without its run.
+pub(super) fn write_state_json_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+    state_json: &str,
+) -> Result<bool, OrbitError> {
+    conn.execute(
+        "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+         SELECT ?1, ?2, ?3 WHERE EXISTS(\
+             SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2) \
+         ON CONFLICT(workspace_id, run_id) DO UPDATE SET \
+             pipeline_state_json = excluded.pipeline_state_json",
+        rusqlite::params![workspace_id, run_id, state_json],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| OrbitError::Store(e.to_string()))
 }

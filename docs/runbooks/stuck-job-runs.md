@@ -254,8 +254,8 @@ replaced by redaction markers.
 ## Resume from checkpoints
 
 The v2 executor checkpoints every completed top-level step into
-`job_runs.pipeline_state_json` in `~/.orbit/orbit.db`; there is no separate checkpoint
-file. Resume accepts runs in `interrupted`, `failed`, or `timeout`. Any other state errors
+`job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
+`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`. Any other state errors
 with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh

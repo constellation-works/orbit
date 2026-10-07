@@ -371,12 +371,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_tool_call_index,
     },
+    // Every run listing walked each run's pipeline-state overflow chain to
+    // reach the columns `ALTER TABLE` had appended after it. The state moves
+    // to a 1:1 side table and the column is dropped.
+    Migration {
+        version: 38,
+        name: "job_run_states",
+        // Drops `job_runs.pipeline_state_json`, which binaries without this
+        // migration read and write for every run's state.
+        compat: MigrationCompatibility::Breaking,
+        apply: super::apply_job_run_states,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 37;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 38;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

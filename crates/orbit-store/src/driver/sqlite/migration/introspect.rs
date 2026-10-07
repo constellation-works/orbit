@@ -1,6 +1,15 @@
 use orbit_common::OrbitError;
 use rusqlite::Connection;
 
+/// Run an `ALTER TABLE ... ADD COLUMN`, tolerating a column already present.
+///
+/// SQLite appends an added column to the end of every stored record, after
+/// all existing columns. Reading a column means walking the overflow-page
+/// chain of every large value stored before it, so a column added to a table
+/// that holds an unbounded payload (a JSON checkpoint, a transcript) makes
+/// every read of the new column pay for the whole payload. Never add a column
+/// a listing reads behind such a payload: keep payloads in a 1:1 side table,
+/// as `job_run_states` holds run pipeline state (schema v38).
 pub(super) fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<(), OrbitError> {
     match conn.execute(sql, []) {
         Ok(_) => Ok(()),

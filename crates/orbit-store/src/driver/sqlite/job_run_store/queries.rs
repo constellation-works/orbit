@@ -10,6 +10,7 @@ use orbit_types::workflow::{
     run_id_minute_stem,
 };
 
+use super::state::write_state_json_conn;
 use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
 
@@ -70,7 +71,12 @@ impl Store {
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        upsert_job_run_for_workspace_conn(&conn, workspace_id, run, pipeline_state)
+        // The run row and its state row commit together.
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+        upsert_job_run_for_workspace_conn(&tx, workspace_id, run, pipeline_state)?;
+        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
     pub fn upsert_job_run_step_for_workspace(
@@ -242,8 +248,8 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             run_id, workspace_id, job_id, attempt, state, scheduled_at,
             started_at, finished_at, duration_ms, created_at, pid, pid_start_time,
             input_json, retry_source_run_id, knowledge_metrics_json, resolved_crew,
-            crew_model, pipeline_state_json, executed_on_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            crew_model, executed_on_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
         ON CONFLICT(workspace_id, run_id) DO UPDATE SET
             job_id = excluded.job_id,
             attempt = excluded.attempt,
@@ -259,8 +265,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             retry_source_run_id = excluded.retry_source_run_id,
             knowledge_metrics_json = excluded.knowledge_metrics_json,
             resolved_crew = excluded.resolved_crew,
-            crew_model = excluded.crew_model,
-            pipeline_state_json = COALESCE(excluded.pipeline_state_json, job_runs.pipeline_state_json)"#,
+            crew_model = excluded.crew_model"#,
         rusqlite::params![
             run.run_id,
             workspace_id,
@@ -279,11 +284,14 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             knowledge_metrics_json,
             run.resolved_crew,
             run.crew_model,
-            pipeline_state_json,
             executed_on_json,
         ],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
+    // `None` keeps whatever state the run already has.
+    if let Some(state_json) = pipeline_state_json {
+        write_state_json_conn(conn, workspace_id, &run.run_id, &state_json)?;
+    }
     // Reserve the id for good: deleting the row must not free it for
     // `next_run_id_conn` while other records still name it.
     conn.execute(
@@ -413,6 +421,11 @@ pub(super) fn job_run_list_sql(
 }
 
 /// Columns [`row_to_job_run`] reads, in its order.
+///
+/// Every listing, show and filter path selects these, so none may sit behind
+/// an unbounded payload in the stored record: SQLite reaches a column only by
+/// walking the overflow-page chain of every large value stored before it.
+/// Pipeline state lives in `job_run_states` for that reason.
 pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
