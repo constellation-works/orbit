@@ -88,16 +88,25 @@ function fixture(url) {
       return healthFixture ? [{ ts: new Date().toISOString(), actor_identity: 'fixture', token_usage: 1379713 }] : [];
     case '/api/audit/incidents': {
       const selectedClass = url.searchParams.get('class');
-      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since'), class: selectedClass });
-      const incidents = [
-        { incident_id: 'expected', class: 'expected', class_label: 'expected negative path', message: 'input validation', last_ts: new Date().toISOString() },
-        { incident_id: 'unexpected', class: 'unexpected', message: 'database failure', last_ts: new Date(Date.now() - 1000).toISOString() },
-      ];
+      const limit = Number(url.searchParams.get('limit'));
+      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since'), class: selectedClass, limit });
+      // Older unexpected incidents fall outside All's recency cap, but remain
+      // reachable when the server filters by class before applying that cap.
+      const incidents = Array.from({ length: limit + 3 }, (_, index) => ({
+        incident_id: `fixture-${index}`,
+        class: index === 1 || index >= limit ? 'unexpected' : 'expected',
+        message: `failure ${index}`,
+        event_count: 1,
+        last_ts: new Date(Date.now() - index * 1000).toISOString(),
+      }));
       const selected = incidents.filter(incident => !selectedClass || incident.class === selectedClass);
-      return { window: url.searchParams.get('since'), class: selectedClass, incident_count: 2,
-        shown_incident_count: selected.length, raw_failed_events: 2, total_events: 10,
-        incidents_by_class: { expected: 1, unexpected: 1 }, raw_events_by_class: { expected: 1, unexpected: 1 },
-        failure_categories: { unexpected: { incidents: 1 } }, incidents: selected };
+      const shown = selected.slice(0, limit);
+      const counts = { expected: limit - 1, unexpected: 4 };
+      return { window: url.searchParams.get('since'), class: selectedClass, incident_count: incidents.length,
+        shown_incident_count: shown.length, matching_incident_count: selected.length,
+        raw_failed_events: incidents.length, total_events: incidents.length * 10, truncated: false,
+        incidents_by_class: counts, raw_events_by_class: counts,
+        failure_categories: { unexpected: { incidents: counts.unexpected } }, incidents: shown };
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
@@ -413,13 +422,34 @@ setActiveTab('diagnostics/metrics'); await settle();
 check(node('diag-body').querySelector('.c-token_usage').textContent === '1,379,713', 'tokens use thousands grouping');
 setActiveTab('diagnostics/incidents'); await settle();
 check(healthQueries.at(-1).class === 'unexpected', 'default incident request isolates unexpected failures before limit');
-check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'default list shows unexpected failures');
+const incidentRows = () => [...node('diag-body').querySelectorAll('.incident-row')];
+const checkIncidentSelection = selectedClass => {
+  const group = node('diag-body').querySelector('.incident-class-chips');
+  check(group.getAttribute('role') === 'group' && group.getAttribute('aria-label'), 'incident filters have a named accessible group');
+  const chips = [...group.querySelectorAll('button')];
+  check(chips.length === 5, 'all incident classes are reachable');
+  for (const chip of chips) {
+    check(chip.getAttribute('type') === 'button', 'class chips have an explicit button type');
+    check(chip.getAttribute('aria-pressed') === String(chip.dataset.class === selectedClass), 'only the active class chip is pressed');
+  }
+  const selected = group.querySelector('[aria-pressed="true"]');
+  const other = group.querySelector('[aria-pressed="false"]');
+  check(getComputedStyle(selected).backgroundColor !== getComputedStyle(other).backgroundColor, 'pressed incident chip renders a distinct selected background');
+};
+check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'default list includes older unexpected failures beyond the All cap');
+checkIncidentSelection('unexpected');
 click(node('diag-body').querySelector('[data-class="all"]')); await settle();
-check(node('diag-body').querySelectorAll('.incident-row').length === 2 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'all classes keep unexpected incidents first');
+const incidentLimit = healthQueries.at(-1).limit;
+check(healthQueries.at(-1).class === null, 'All requests every class within the recency cap');
+check(incidentRows().length === incidentLimit && incidentRows().every((row, index) => row.dataset.key === `incident-fixture-${index}`), 'All preserves server recency order across classes');
+check(text('diag-count').includes(`Newest ${incidentLimit} of ${incidentLimit + 3}`), 'All labels its newest shown and matching counts even without scan truncation');
+checkIncidentSelection('all');
 click(node('diag-body').querySelector('[data-class="expected"]')); await settle();
-check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('expected'), 'one click isolates expected paths');
+check(incidentRows().length === incidentLimit - 1 && incidentRows().every(row => row.classList.contains('expected')), 'one click isolates expected paths');
+checkIncidentSelection('expected');
 click(node('diag-body').querySelector('[data-class="unexpected"]')); await settle();
-check(node('diag-body').querySelectorAll('.incident-row').length === 1 && node('diag-body').querySelector('.incident-row').classList.contains('unexpected'), 'one click isolates unexpected failures');
+check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'one click restores older unexpected failures');
+checkIncidentSelection('unexpected');
 healthFixture = false;
 setWindow('24h');
 setActiveTab('diagnostics/metrics'); await settle();

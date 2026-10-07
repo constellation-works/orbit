@@ -457,9 +457,7 @@ function incidentRowNode(incident, ctx) {
 function renderIncidents(payload, ctx) {
   const body = $("diag-body");
   const incidents = (Array.isArray(payload && payload.incidents) ? payload.incidents : [])
-    .filter(incident => incidentClass === "all" || incident.class === incidentClass)
-    .slice().sort((a, b) => INCIDENT_CLASS_ORDER.indexOf(a.class) - INCIDENT_CLASS_ORDER.indexOf(b.class)
-      || String(b.last_ts || "").localeCompare(String(a.last_ts || "")));
+    .filter(incident => incidentClass === "all" || incident.class === incidentClass);
   const summary = incidentSummaryNode(payload || {}, ctx);
   if (incidents.length === 0) {
     syncNodes(body, [summary, el("div", { class: "empty-state" }, [
@@ -487,7 +485,7 @@ function renderDiagnostics(ctx = {}) {
     const payload = last.incidents || {};
     // Full denominators live in the summary; the header names the displayed range.
     $("diag-count").textContent =
-      `${asCount(payload.shown_incident_count)} shown · window ${payload.window || getWindow()}`;
+      `Newest ${asCount(payload.shown_incident_count)} of ${asCount(payload.matching_incident_count)} incidents · window ${payload.window || getWindow()}`;
     renderIncidents(payload, ctx);
     return;
   }
