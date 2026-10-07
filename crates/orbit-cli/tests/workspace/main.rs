@@ -16,7 +16,11 @@ mod git_repo;
 mod ambient_authority_isolation;
 mod generation_root;
 #[cfg(unix)]
+mod host_fleet;
+#[cfg(unix)]
 mod host_registry;
+#[cfg(unix)]
+mod host_routing;
 mod init_interactive_stdin;
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod init_linux_sandbox;

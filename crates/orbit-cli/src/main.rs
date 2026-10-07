@@ -349,11 +349,13 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
         .try_get_matches_from(&args)
         .unwrap_or_else(|err| {
             let (requested, legacy) = usage_error::pre_parse_format(&args);
-            usage_error::exit(
-                usage_error::suggest_help_flag(repair_crew_flag_suggestion(err)),
-                requested,
-                legacy,
-            )
+            let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
+            let err = if usage_error::is_unknown_host_flag(&err) {
+                usage_error::suggest_host_command(err, host_ssh_command(&args))
+            } else {
+                err
+            };
+            usage_error::exit(err, requested, legacy)
         });
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
@@ -370,6 +372,31 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
             .unwrap_or_else(|err| usage_error::exit(err, requested, legacy)),
     };
     (cli, requested, legacy)
+}
+
+/// `ssh <target> orbit <args without --host>` for a command that rejected
+/// `--host`, when the named host resolves to a remote entry.
+fn host_ssh_command(args: &[std::ffi::OsString]) -> Option<String> {
+    let args = args
+        .iter()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut host = None;
+    let mut rest = Vec::new();
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--host" {
+            host = iter.next();
+        } else if let Some(value) = arg.strip_prefix("--host=") {
+            host = Some(value.to_string());
+        } else {
+            rest.push(arg);
+        }
+    }
+    let global_root = orbit_core::runtime::resolve_global_root().ok()?;
+    let target = orbit_cmd::hosts::host_ssh_target(&global_root, host?.trim()).ok()??;
+    Some(format!("ssh {target} orbit {}", rest.join(" ")))
 }
 
 /// Whether the public tool CLI is asking for one of a claimed worker's owner
@@ -404,7 +431,7 @@ fn run() {
     );
     output::pipe::install_handler();
 
-    let (cli, requested_format, legacy_json) = parse_cli();
+    let (mut cli, requested_format, legacy_json) = parse_cli();
     if command_rotates_jsonl_on_start(&cli.command) {
         orbit_common::observability::logging::rotate_global_jsonl_best_effort();
     }
@@ -428,11 +455,40 @@ fn run() {
     // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
     // managed macOS child joins its parent's host registry pin even when
     // ORBIT_ROOT selects workspace data; update still checks both roots.
+    let actor = ActorIdentity::from_env();
+    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
+    // call, which the callback allowlist gates against the plugin's
+    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
+    // host routing, generation pinning, runtime bootstrap and dispatch — so no
+    // plain command reads governed data around that allowlist.
+    {
+        let operation = cli.command.operation().attribute_to(&actor);
+        if !operation.plugin_callback_entry_point
+            && let Err(error) = refuse_plugin_child_cli(&operation.audit_meta, cli.root.as_deref())
+        {
+            print_error(&error, &sink, operation.json_error_preference);
+            orbit_common::observability::logging::exit(1);
+        }
+    }
+    // A task id another host's prefix names, a selector another host lists,
+    // or `--host` naming one: deliver there and open nothing here. `--host`
+    // naming this machine rewrites the selector and runs on [ORB-14449].
+    match command::host_route::preflight(&mut cli) {
+        Ok(command::host_route::Preflight::Local) => {}
+        Ok(command::host_route::Preflight::Remote(result)) => {
+            let json_error_preference = cli.command.operation().json_error_preference;
+            finish_command(result, &sink, false, json_error_preference);
+            return;
+        }
+        Err(error) => {
+            print_error(&error, &sink, cli.command.operation().json_error_preference);
+            orbit_common::observability::logging::exit(1);
+        }
+    }
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
     let workspace_selector = cli.workspace.clone();
-    let actor = ActorIdentity::from_env();
     let CommandOperation {
         runtime_need,
         task_owner_id,
@@ -441,19 +497,8 @@ fn run() {
         suppress_errors,
         dispatch,
         governed,
-        plugin_callback_entry_point,
+        plugin_callback_entry_point: _,
     } = cli.command.operation().attribute_to(&actor);
-    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
-    // call, which the callback allowlist gates against the plugin's
-    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
-    // generation pinning, runtime bootstrap and dispatch — so no plain command
-    // reads governed data around that allowlist.
-    if !plugin_callback_entry_point
-        && let Err(error) = refuse_plugin_child_cli(&audit_meta, root_override.as_deref())
-    {
-        print_error(&error, &sink, json_error_preference);
-        orbit_common::observability::logging::exit(1);
-    }
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
         clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);

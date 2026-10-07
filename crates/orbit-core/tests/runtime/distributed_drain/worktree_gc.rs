@@ -637,13 +637,15 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
     );
 }
 
-/// Before a pull, workspace mirrors can identify one foreign namespace.
-/// Multiple foreign namespaces need an owner admission to disambiguate them.
+/// Each id is looked up on the host its prefix names [ORB-14449]: this
+/// machine's in the local store, the owner's over the claim route, another
+/// registered host's on that host, and an unregistered prefix nowhere. A
+/// local mirror never stands in for the holder.
 #[test]
-fn replica_gc_learns_the_owner_prefix_from_mirrors_or_claim_admissions() {
+fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     if !isolated(
         module_path!(),
-        "replica_gc_learns_the_owner_prefix_from_mirrors_or_claim_admissions",
+        "replica_gc_looks_each_id_up_on_the_host_its_prefix_names",
     ) {
         return;
     }
@@ -651,57 +653,79 @@ fn replica_gc_learns_the_owner_prefix_from_mirrors_or_claim_admissions() {
 
     let pair = gc_pair(1);
     let owner_task = &pair.tasks[0];
-    let (leaf, path) = terminal_worktree(&pair, &[owner_task]);
-    let unknown = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
-    assert_eq!(
-        gc_report(&unknown, &leaf)["action"],
-        "skipped:task_prefix_unroutable"
-    );
-    assert!(pair.wire.task_reads.lock().unwrap().is_empty());
-
-    mirror_tasks(&pair, &pair.wire.owner);
-    let mirrored = pair
-        .follower
-        .gc_worktrees(false, None, None, false, false)
-        .unwrap();
-    assert_eq!(gc_report(&mirrored, &leaf)["task_status"], "backlog");
-    assert_eq!(pair.wire.task_reads.lock().unwrap().len(), 1);
-
+    let local = local_done_task(&pair);
     let (third, third_repo) = open_runtime(pair._root.path(), "hm_third");
     TaskRegistryStore::open(&task_registry_path(&third.global_root()))
         .unwrap()
         .set_task_prefix("THIRD")
         .unwrap();
     let third_task = backlog_task(&third, &third_repo, "src/third.rs", None);
+    // Mirrors of both remote namespaces sit in the local store; none of them
+    // is ever read in place of its holder.
+    mirror_tasks(&pair, &pair.wire.owner);
     mirror_tasks(&pair, &third);
+    let unregistered = orbit_types::task::format_task_id("NOONE", 1).unwrap();
+    let (owner_leaf, owner_path) = terminal_worktree(&pair, &[owner_task]);
+    let (local_leaf, _) = terminal_worktree(&pair, &[&local]);
     let (third_leaf, third_path) = terminal_worktree(&pair, &[&third_task]);
-    pair.wire.task_reads.lock().unwrap().clear();
-    let ambiguous = pair
+    let (unregistered_leaf, unregistered_path) = terminal_worktree(&pair, &[&unregistered]);
+
+    // Before the host file registers THIRD, its ids are unroutable too.
+    let unknown = pair
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    for run in [&leaf, &third_leaf] {
+    for leaf in [&third_leaf, &unregistered_leaf] {
         assert_eq!(
-            gc_report(&ambiguous, run)["action"],
+            gc_report(&unknown, leaf)["action"],
             "skipped:task_prefix_unroutable"
         );
     }
-    assert!(pair.wire.task_reads.lock().unwrap().is_empty());
+    assert!(pair.wire.by_id_reads.lock().unwrap().is_empty());
+    pair.wire.task_reads.lock().unwrap().clear();
 
-    let drain = pair.start_drain();
-    pair.pass(&drain);
-    let claimed = pair
+    pair.wire
+        .prefix_hosts
+        .lock()
+        .unwrap()
+        .insert("THIRD".into(), ("hm_third".into(), third.clone()));
+    let routed = pair
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    assert_eq!(gc_report(&claimed, &leaf)["task_status"], "backlog");
+    assert_eq!(gc_report(&routed, &owner_leaf)["task_status"], "backlog");
+    assert_eq!(gc_report(&routed, &local_leaf)["task_status"], "done");
+    assert_eq!(gc_report(&routed, &third_leaf)["task_status"], "backlog");
     assert_eq!(
-        gc_report(&claimed, &third_leaf)["action"],
+        gc_report(&routed, &unregistered_leaf)["action"],
         "skipped:task_prefix_unroutable"
     );
-    assert_eq!(pair.wire.task_reads.lock().unwrap().len(), 1);
-    assert!(path.exists() && third_path.exists());
+    let selector = format!("{OWNER}/{}", pair.wire.owner.workspace_id().unwrap());
+    assert_eq!(
+        *pair.wire.task_reads.lock().unwrap(),
+        vec![selector],
+        "only the owner's id goes over the owner route"
+    );
+    assert_eq!(
+        *pair.wire.by_id_reads.lock().unwrap(),
+        vec![third_task.clone()],
+        "the third host's id goes to that host; the unregistered id goes nowhere"
+    );
+    assert!(owner_path.exists() && third_path.exists() && unregistered_path.exists());
+
+    // An unreachable third host is that host's outage, not a missing task.
+    *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
+    let outage = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    assert_eq!(
+        gc_report(&outage, &owner_leaf)["action"],
+        "skipped:owner_unreachable"
+    );
+    assert_eq!(
+        gc_report(&outage, &third_leaf)["task_status"],
+        "backlog",
+        "one holder's outage does not poison another's lookups"
+    );
 }

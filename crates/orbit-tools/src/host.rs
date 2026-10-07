@@ -39,6 +39,24 @@ pub trait DrainOwnerTransport: Send + Sync {
     /// surface instead [ORB-13920].
     fn show_task(&self, selector: &str, input: Value) -> Result<Value, OrbitError>;
 
+    /// The `machine_id` of the registered host whose task prefix is
+    /// `prefix`, read from the host file; `None` when no host claims it
+    /// [ORB-14449]. A transport without a host file knows no prefixes.
+    fn task_prefix_host(&self, _prefix: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    /// Read `orbit.task.show` id-only from the host the id's prefix names.
+    ///
+    /// The call carries no selector; the destination resolves the id through
+    /// its own task registry.
+    fn show_task_by_id(&self, _input: Value) -> Result<Value, OrbitError> {
+        Err(OrbitError::host_registry(
+            orbit_common::HostRegistryCode::UnknownTaskPrefix,
+            "this transport does not route task ids by prefix",
+        ))
+    }
+
     /// The coordinator a claimed leaf bound to this transport's owner routes
     /// its worker reads and writes through.
     fn worker_coordinator(&self) -> std::sync::Arc<dyn OwnerCoordinator>;

@@ -157,6 +157,15 @@ pub enum HostRegistryCode {
     HostInUse,
     /// A legacy destination row did not answer during migration.
     LegacyHostUnreachable,
+    /// A task id's prefix is neither this host's nor a registered host's
+    /// [ORB-14449].
+    UnknownTaskPrefix,
+    /// A server that does not relay was asked, by id only, for a task whose
+    /// prefix names a registered remote host.
+    TaskPrefixRemote,
+    /// The host a task id's prefix names did not answer before the call was
+    /// delivered.
+    OwnerUnreachable,
 }
 
 impl HostRegistryCode {
@@ -172,6 +181,9 @@ impl HostRegistryCode {
             Self::UnknownHost => "unknown_host",
             Self::HostInUse => "host_in_use",
             Self::LegacyHostUnreachable => "legacy_host_unreachable",
+            Self::UnknownTaskPrefix => "unknown_task_prefix",
+            Self::TaskPrefixRemote => "task_prefix_remote",
+            Self::OwnerUnreachable => "owner_unreachable",
         }
     }
 }

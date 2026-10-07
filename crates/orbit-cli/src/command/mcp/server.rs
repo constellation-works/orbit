@@ -139,10 +139,17 @@ pub(super) fn serve_mcp_federated_stdio(
             authority,
         )),
     );
-    let host: Arc<dyn McpHost> = Arc::new(federated::FederatedMcpHost::new(
-        destinations,
-        Arc::new(probe),
-    ));
+    // An id-only task call goes to the host its prefix names [ORB-14449].
+    // The table is the same host file membership came from.
+    let task_prefixes = orbit_registry::hosts::load_task_prefix_table(&global_root_for_bridge)?;
+    let mirror_root = global_root_for_bridge.clone();
+    let host: Arc<dyn McpHost> = Arc::new(
+        federated::FederatedMcpHost::new(destinations, Arc::new(probe))
+            .with_task_prefix_routing(task_prefixes)
+            .with_local_mirror_hint(Arc::new(move |task_id| {
+                orbit_cmd::hosts::local_mirror_workspace(&mirror_root, task_id)
+            })),
+    );
     let host = with_claimed_owner_bridge(
         host,
         &identity.session_context,
@@ -679,6 +686,9 @@ impl ServerMcpHost {
     /// addressing an ID. Linked-worktree runtime identities are also ambient
     /// and must not become a filter. An explicit per-call `workspace` stays a
     /// filter on every tool, so a task owned elsewhere is not found there.
+    /// The other id-routed task tools resolve their id the same way when the
+    /// session is unbound, which is how a federated route that carries only
+    /// the id lands [ORB-14449].
     fn workspace_selection(
         &self,
         name: &str,
@@ -686,9 +696,22 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let explicit = call_workspace_selector(input)?;
-        if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name) && explicit.is_none() {
+        if explicit.is_none() && federated::is_id_routed_tool(name) {
             let task_id = required_string(input, &["id"], "id")?;
-            return task_owner::resolve_task_owner(&self.global_root, &task_id);
+            // A v1 server does not relay [ORB-14449]: an id another
+            // registered host writes is refused with where it lives, never
+            // answered from a local mirror or reported as not found.
+            if let Some(holder) = orbit_cmd::hosts::remote_task_holder(&self.global_root, &task_id)?
+            {
+                return Err(orbit_cmd::hosts::task_prefix_remote(&task_id, &holder));
+            }
+            // An unbound session — including a federated route that carried
+            // only the id — resolves it through this host's task registry.
+            if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name)
+                || Self::workspace_selector(None, context).is_none()
+            {
+                return task_owner::resolve_task_owner(&self.global_root, &task_id);
+            }
         }
         let selector = Self::workspace_selector(explicit, context)
             .ok_or_else(|| self.workspace_required(name))?;

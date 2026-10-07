@@ -50,13 +50,24 @@ Plugins install once per machine; a checkout pins the plugins it uses in
 
 ### Tasks
 
+A task ID's prefix names the host that holds it. A command that addresses one
+task by ID (`show`, `update`, `artifact get` and `put`, `review-reset`,
+`reconcile-review`, and `orbit tool run` of those tools) goes to that host when
+it names no `--workspace`. An ID with this machine's prefix runs here; a
+registered host's prefix is answered by that host; any other prefix is refused
+with `unknown_task_prefix`. If the holder does not answer, the command fails
+with `owner_unreachable` rather than reading a local copy. To read a local
+mirror, pass `--workspace` explicitly. `--host <host>` names the host for
+`--workspace`, by name or machine ID, so you can write `--host alpha
+--workspace orbit` instead of the selector `alpha` lists.
+
 | Command | Purpose |
 |---|---|
 | `orbit task add` | Create a task. `--title` and `--complexity` are required. |
 | `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`). `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules); `--force` overrides it. |
 | `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
 | `orbit task eligible` | List `backlog` and `proposed` tasks whose context-file lock surface overlaps no `in-progress` or `review` task, by the same lock test automatic dispatch uses. Nothing else is checked: not dependencies, complexity, groups, crew, or overlap between candidates. `--status backlog\|proposed`, `--path`, `--limit`; `--explain` also lists held-back candidates with the overlapping file and the task holding it. Read-only. JSON shape: [Response shapes](../../how-to/mcp-integration/#response-shapes). |
-| `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` selects specific fields. |
+| `orbit task show <id>` | Show one task: on this machine, found by ID across registered workspaces, or on the host its prefix names. `--fields` selects specific fields. |
 | `orbit task archive <id>` | Archive a task from any status. Archived is terminal; restore with `task update <id> --status <status> --force`. |
 | `orbit task artifact` | Manage task artifact files. |
 | `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Without an ID, sweeps active tasks; `--status` narrows the sweep. `--restore-pruned` re-declares `context_files` entries that an earlier prune recorded in task history. |
@@ -86,7 +97,7 @@ Plugins install once per machine; a checkout pins the plugins it uses in
 | `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
 | `orbit run auto [--for <duration>]` | Drain the backlog for a time window. `--concurrency`; `--allow-crew`; `--low-complexity-crews`, `--medium-complexity-crews`, `--hard-complexity-crews`, `--xhard-complexity-crews` (crew pools for tasks with no crew, as `crew` or `crew:weight`, overriding the `[workflow]` pools); `--strict-worker-containment` (require a systemd user scope for the coordinator and every worker, overriding `machine.worker_containment_strict` for this drain); `--claim-token` when another operator holds the workspace claim; `--json`. |
 | `orbit run auto --approve-proposed` | Authorize every pass of a local drain to pilot and approve qualifying `proposed` tasks, including tasks filed during the window. Qualifies with `no-diff-expected`, or context files and an assessed complexity; duplicate, already-landed, conflict or warning findings keep it proposed. `no-auto-approve` opts out. Off by default; approval is separate from `--complete`. See [Authorize the backlog](../../how-to/continuous-delivery/#2-authorize-the-backlog). |
-| `orbit run auto --pull <SELECTOR>` | On a replica checkout, pull work from the owner named by the host-qualified selector. Each claim runs as a leaf that ends at a pull request handed back to the owner, which keeps landing authority. Takes `--for` and `--concurrency`; `--allow-crew` limits which crews' tasks are claimed. Conflicts with `--complete`, `--approve-proposed`, `--strict-worker-containment`, the crew-pool flags, `--claim-token`, and `--stop`. See [Set Up a Distributed Drain](../../how-to/distributed-drain/). |
+| `orbit run auto --pull <SELECTOR>` | On a replica checkout, pull work from the owner named by the host-qualified selector, or by `--pull <workspace> --host <owner>`. Each claim runs as a leaf that ends at a pull request handed back to the owner, which keeps landing authority. Takes `--for` and `--concurrency`; `--allow-crew` limits which crews' tasks are claimed. Conflicts with `--complete`, `--approve-proposed`, `--strict-worker-containment`, the crew-pool flags, `--claim-token`, and `--stop`. See [Set Up a Distributed Drain](../../how-to/distributed-drain/). |
 | `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Admitted workers keep running; this is not cancellation. On a replica it also delivers any recorded pull settlements to the owner, even with no active drain. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Also authorize the run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit run readiness [task_id ...]` | Explain, read-only, why backlog tasks can or cannot start. `--concurrency`, `--allow-crew`, `--limit`. |

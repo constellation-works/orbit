@@ -77,6 +77,12 @@ Run `orbit task <COMMAND> --help` for a command's own options and examples.";
     after_help = TASK_AFTER_HELP
 )]
 pub struct TaskCommand {
+    /// Host that `--workspace` names, by registered host name or `machine_id`
+    /// (see `orbit host list`). Orbit reads that host's live workspace list and
+    /// uses the selector it lists for the workspace. Without it, a task id goes
+    /// to the host its prefix names.
+    #[arg(long, global = true, value_name = "HOST")]
+    pub host: Option<String>,
     #[command(subcommand)]
     pub command: TaskSubcommand,
 }

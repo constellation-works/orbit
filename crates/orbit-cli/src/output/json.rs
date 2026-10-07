@@ -105,6 +105,10 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
         OrbitError::UnreachableDestination(_) => "unreachable_destination",
+        // `--host` resolution reads a host's live list: the same codes the
+        // federated route reports [ORB-14449].
+        OrbitError::StaleRoute(_) => "stale_route",
+        OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",

@@ -18,7 +18,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -193,6 +193,11 @@ struct Wire {
     /// owner-local drain's does, and a settlement reaches the owner's real
     /// observation of its own checkout.
     local: Mutex<bool>,
+    /// Hosts other than the owner the host file registers, by task prefix:
+    /// their machine id and the runtime that answers for them.
+    prefix_hosts: Mutex<BTreeMap<String, (String, OrbitRuntime)>>,
+    /// The id of every task read routed by prefix to a non-owner host.
+    by_id_reads: Mutex<Vec<String>>,
 }
 
 impl Wire {
@@ -376,6 +381,31 @@ impl DrainOwnerTransport for Wire {
         self.owner.run_tool("orbit.task.show", input)
     }
 
+    fn task_prefix_host(&self, prefix: &str) -> Result<Option<String>, OrbitError> {
+        if let Some((machine, _)) = self.prefix_hosts.lock().unwrap().get(prefix) {
+            return Ok(Some(machine.clone()));
+        }
+        let owner_prefix = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(&self.owner.global_root()),
+        )?
+        .local_task_prefix()
+        .unwrap_or_else(|_| "ORB".to_string());
+        Ok((prefix == owner_prefix).then(|| OWNER.to_string()))
+    }
+
+    fn show_task_by_id(&self, input: Value) -> Result<Value, OrbitError> {
+        let id = input["id"].as_str().unwrap_or_default().to_string();
+        self.by_id_reads.lock().unwrap().push(id.clone());
+        let prefix = orbit_types::task::task_id_prefix(&id).unwrap_or_default();
+        let host = self.prefix_hosts.lock().unwrap().get(prefix).cloned();
+        match host {
+            Some((_, runtime)) => runtime.run_tool("orbit.task.show", input),
+            None => Err(OrbitError::UnreachableDestination(format!(
+                "no host answers for prefix {prefix}"
+            ))),
+        }
+    }
+
     fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
         Arc::new(NoWorkerRoute)
     }
@@ -544,6 +574,8 @@ impl Pair {
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
+            prefix_hosts: Mutex::default(),
+            by_id_reads: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower

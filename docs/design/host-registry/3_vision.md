@@ -85,6 +85,6 @@ crash-safe writes, future-version rejection checks and rollback classification.
 - [ORB-11008] recorded the federated multi-host MCP policy later specified in federated-mcp
 - [ORB-11009] moved that contract out of this vision and into `docs/design/federated-mcp/`
 - [ORB-14448] host file and `orbit host` commands
-- [ORB-14449] task-prefix routing and `--host` selection (specified)
+- [ORB-14449] task-prefix routing and `--host` selection
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

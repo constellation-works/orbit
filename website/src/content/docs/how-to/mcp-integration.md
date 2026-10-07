@@ -75,8 +75,12 @@ orbit mcp init --federated --client codex --scope home
 This adds a separate `orbit-federated` entry beside any existing `orbit` one.
 In that session, `orbit_workspace_list` returns host-qualified selectors such
 as `hm_alpha/ws_orbit`; pass one unchanged as the `workspace` of a call. Task
-reads go to the owner's selector. There is no automatic failover: a call
-reaches only the machine you select.
+reads go to the owner's selector. A call that addresses one task by ID, such
+as `orbit_task_show` or `orbit_task_update`, can omit `workspace`: it goes to
+the host the ID's prefix names. There is no automatic failover: a call reaches
+only the machine you select or the one its task ID names. A plain
+`orbit mcp serve` session does not relay. Given another host's task ID without
+`workspace`, it answers `task_prefix_remote` and names that host.
 
 Operator authority travels over SSH. A client started with `--operator` serves
 operator on every destination it opens, because an SSH login to a machine is

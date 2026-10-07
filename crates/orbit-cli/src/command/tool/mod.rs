@@ -13,4 +13,4 @@ mod support;
 
 pub use command::{ToolCommand, ToolSubcommand};
 pub use run::ToolRunArgs;
-pub(crate) use run::ToolRunBootstrap;
+pub(crate) use run::{ToolRunBootstrap, request_write_sidecars_from_cli_fields, shape_tool_output};

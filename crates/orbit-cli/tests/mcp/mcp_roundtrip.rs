@@ -2275,15 +2275,14 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
 }
 
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
-/// whose schema advertises `workspace` as resolved-globally-by-default text
-/// must actually resolve globally when a session carries no selector, and a
-/// tool that does not carry that wording must still fail closed. Walking the
-/// full canonical MCP surface keeps a future addition from drifting the same
-/// way `orbit.task.artifact.get` did.
+/// whose advertised schema leaves `workspace` optional in an unbound session
+/// must actually resolve without one, and a tool that requires it must still
+/// fail closed. Walking the full canonical MCP surface keeps a future
+/// addition from drifting the same way `orbit.task.artifact.get` did. The
+/// id-routed task tools resolve an id-only call through the host task
+/// registry [ORB-14449], so their selector is optional here.
 #[test]
-fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
-    const ID_RESOLVED_SELECTOR_MARKER: &str = "resolved globally by default";
-
+fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirement() {
     let workspace = McpWorkspace::init();
     let scratch = workspace.home.join("scratch");
     std::fs::create_dir_all(&scratch).expect("create non-workspace launch dir");
@@ -2299,26 +2298,30 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
         child,
         McpClient::initialize_params("selector-wording-audit", None),
     );
+    let listed = client.request("tools/list", Value::Null);
+    let advertised = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .clone();
 
     let definitions = orbit_mcp::canonical_mcp_tool_definitions()
         .expect("canonical MCP tool definitions must build");
 
     // Global-scope tools never go through the session-selector gate at all;
-    // only `WorkspaceRequired` tools carry the id-resolution contract this
-    // test checks.
+    // only `WorkspaceRequired` tools carry the selector contract this test
+    // checks.
     for definition in definitions
         .iter()
         .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
     {
         let name = definition.schema.name.as_str();
-        let advertises_global_id_resolution = definition
-            .schema
-            .parameters
-            .iter()
-            .find(|param| param.name == "workspace")
-            .is_some_and(|param| param.description.contains(ID_RESOLVED_SELECTOR_MARKER));
-
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
+        let requires_selector = advertised
+            .iter()
+            .find(|tool| tool["name"] == json!(advertised_name))
+            .and_then(|tool| tool["inputSchema"]["required"].as_array())
+            .is_some_and(|required| required.contains(&json!("workspace")));
+
         let result = client.call_tool(&advertised_name, json!({}));
         let message = result
             .get("structuredContent")
@@ -2329,9 +2332,9 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
             && message.contains("requires an explicit workspace selector");
 
         assert_eq!(
-            refused_for_missing_selector, !advertises_global_id_resolution,
-            "{name}: schema advertises globally-resolved-by-default={advertises_global_id_resolution} \
-             but an unbound session's behavior disagrees (refused_for_missing_selector={refused_for_missing_selector}): {message}"
+            refused_for_missing_selector, requires_selector,
+            "{name}: the unbound schema requires workspace={requires_selector} but the \
+             session's behavior disagrees (refused_for_missing_selector={refused_for_missing_selector}): {message}"
         );
     }
 }
@@ -3496,17 +3499,12 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         );
     }
 
+    // An id-only call routes by the id's prefix [ORB-14449]; it is never
+    // read as a minted selector.
     let omitted = client.call_tool_err("orbit_task_show", json!({ "id": "ORB-00001" }));
-    assert_ne!(
-        omitted["code"], "unknown_selector",
-        "omitting the selector is a missing-argument refusal, not a minted token: {omitted}"
-    );
-    assert!(
-        omitted["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("host-qualified")
-                || message.contains("requires a workspace selector")),
-        "federated task.show without a selector is refused: {omitted}"
+    assert_eq!(
+        omitted["code"], "unknown_task_prefix",
+        "an id-only call is routed by prefix, not refused as a selector: {omitted}"
     );
 
     let bare_show = client.call_tool_err(
