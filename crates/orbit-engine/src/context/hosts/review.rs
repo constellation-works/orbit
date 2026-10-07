@@ -37,3 +37,17 @@ pub struct ReviewerInvocationRequest {
     pub attempt_id: String,
     pub event: ReviewerInvocationEvent,
 }
+
+/// A before-PR reviewer that returned, asking whether its report holds a
+/// defect it can still correct before settlement judges it [ORB-14616].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReportCorrectionRequest {
+    /// The run executing the reviewer step.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+    /// Every task of the reviewed bundle.
+    pub task_ids: Vec<String>,
+    /// The reviewed worktree.
+    pub workspace_path: std::path::PathBuf,
+}

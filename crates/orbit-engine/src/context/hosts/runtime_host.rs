@@ -28,8 +28,9 @@ use super::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
     PluginBrokerHandle, PluginBrokerRun, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest,
-    ScratchGcReport, StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport,
+    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
@@ -311,6 +312,18 @@ pub trait RuntimeHost: Send + Sync {
         &self,
         _request: &ReviewerInvocationRequest,
     ) -> Result<Option<u64>, OrbitError> {
+        Ok(None)
+    }
+
+    /// The defect settlement would find in the report of a reviewer that
+    /// just returned, when the reviewer can correct it without rerunning a
+    /// check [ORB-14616]. The engine then asks that reviewer, once, to
+    /// correct the report before settlement. Hosts without review evidence
+    /// have nothing to judge.
+    fn review_report_correction(
+        &self,
+        _request: &ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
 

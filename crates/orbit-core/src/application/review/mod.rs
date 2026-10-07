@@ -44,6 +44,7 @@ pub use fulfilment::{
 };
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
+    review_report_correction,
 };
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach

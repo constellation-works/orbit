@@ -167,7 +167,8 @@ pub enum NegativeControl {
     /// An assertion the change deliberately retires, run on the candidate.
     SupersededAssertion,
     /// A deliberately broken input or mutation the candidate's checks must
-    /// reject, run on the candidate.
+    /// reject, run on the candidate. Files it temporarily changed and then
+    /// restored are its `mutation_target`, not its `sources` [ORB-14616].
     Counterfactual,
 }
 
@@ -230,6 +231,14 @@ pub struct ReviewValidation {
     /// candidate's scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
+    /// [ORB-14616] Repository-relative paths a counterfactual control
+    /// temporarily changed to break the candidate, such as the production
+    /// file a test-only change guards. They may lie outside the candidate's
+    /// scope, unlike `sources` (the candidate's checks that rejected the
+    /// mutation), but settlement refuses the record unless each one is
+    /// byte-identical in the final candidate to the reviewed candidate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutation_target: Vec<String>,
     /// [ORB-14434] On a failed `required` record: the reviewer's claim that
     /// the pinned base fails the check the same way, so the candidate did not
     /// cause it. `sources` then names where the failures lie, every one

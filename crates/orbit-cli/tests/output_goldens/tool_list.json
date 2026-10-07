@@ -1007,7 +1007,7 @@
   },
   {
     "name": "orbit.task.artifact.put",
-    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match.",
+    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change.",
     "enabled": true,
     "active": true,
     "status": "active",

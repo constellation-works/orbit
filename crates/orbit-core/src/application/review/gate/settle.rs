@@ -292,7 +292,13 @@ fn settle(
         None => judgement.commit_repairs(runtime, context, &reviewer, &attempt)?,
     };
 
-    let validation_scope = validation_scope(context, &reviewed.commits, repair.as_ref())?;
+    let validation_scope = validation_scope(context, &reviewed.commits, repair.as_ref(), &[])?;
+    // [ORB-14616] What the review changed on the reviewed candidate: a file a
+    // control mutated must not be among it.
+    let review_changed = match &repair {
+        Some(commit) => committed_paths(&context.workspace_path, &commit.commit)?,
+        None => Vec::new(),
+    };
     let final_candidate = match &repair {
         Some(commit) => SourceRevision {
             commit: commit.commit.clone(),
@@ -338,7 +344,7 @@ fn settle(
         &context.base_ref(),
         &validation_scope,
     )?;
-    judgement.reconcile_verdict(repair.as_ref(), &validation_scope);
+    judgement.reconcile_verdict(repair.as_ref(), &validation_scope, &review_changed);
     let now = Utc::now();
 
     let settled = match recorded {
@@ -466,11 +472,14 @@ fn publish_held_candidate(context: &GateContext, commit: &str) {
 
 /// What validation sources are judged against: every bundle task's
 /// selectors, as widened for reviewer repairs, plus a `file:` selector for
-/// every path the implementation and repair commits changed.
-fn validation_scope(
+/// every path the implementation and repair commits changed. `pending` adds
+/// reviewer edits settlement has not committed yet, which it would commit
+/// as the repair.
+pub(super) fn validation_scope(
     context: &GateContext,
     implementation: &[CommitIdentity],
     repair: Option<&CommitIdentity>,
+    pending: &[String],
 ) -> Result<Vec<String>, OrbitError> {
     let mut scope = context
         .tasks
@@ -484,6 +493,7 @@ fn validation_scope(
                 .map(|path| format!("file:{path}")),
         );
     }
+    scope.extend(pending.iter().map(|path| format!("file:{path}")));
     scope.sort();
     scope.dedup();
     Ok(scope)

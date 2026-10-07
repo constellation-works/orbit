@@ -312,6 +312,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::review::record_reviewer_invocation(self, request)
     }
 
+    fn review_report_correction(
+        &self,
+        request: &orbit_engine::ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        crate::application::review::review_report_correction(self, request)
+    }
+
     fn handoff_landing_context(
         &self,
         handoff_id: &str,

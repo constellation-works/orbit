@@ -22,7 +22,10 @@ pub use recovery::{
     StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
-pub use review::{ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest};
+pub use review::{
+    ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
+    ReviewerInvocationRequest,
+};
 pub use runtime_host::RuntimeHost;
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
