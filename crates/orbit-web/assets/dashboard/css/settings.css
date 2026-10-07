@@ -12,6 +12,7 @@
   margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--hair);
   color: var(--fg-dim); font-size: 12px; background: var(--bg);
 }
+#config-explainer[hidden], #config-controls[hidden] { display: none; }
 .config-filter {
   flex: 1 1 200px; min-width: 160px; background: var(--bg-elev); color: var(--fg);
   border: 1px solid var(--border); border-radius: 2px; padding: 5px 8px;
@@ -32,6 +33,28 @@
 .config-strip {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev);
+}
+.config-review-status {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+  padding: 8px 10px; border-left: 3px solid var(--border); background: var(--bg);
+}
+.config-review-status.healthy { border-left-color: var(--state-success); }
+.config-review-status.inactive { border-left-color: var(--border); }
+.config-review-status.alert {
+  border: 1px solid var(--state-failed); border-left-width: 4px; border-radius: 2px;
+  background: rgba(255, 90, 90, 0.08); color: var(--fg);
+}
+.config-review-switch { font-size: 12px; font-weight: 600; }
+.config-review-status.alert .config-review-switch { color: var(--state-failed); }
+.config-review-reason { color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.config-review-remedy { color: var(--fg); font-size: 12px; }
+.config-review-remedy code { color: inherit; font: 11px/1.4 var(--font-mono); }
+.config-review-details { color: var(--fg-dim); font-size: 11px; }
+.config-review-details summary { width: fit-content; cursor: pointer; }
+.config-review-diagnostic {
+  margin: 6px 0 0; padding: 8px; border: 1px solid var(--hair); border-radius: 2px;
+  color: var(--fg-dim); background: var(--bg); font: 11px/1.5 var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .config-registry { flex-direction: row; justify-content: space-between; flex-wrap: wrap; align-items: center; }
 .config-registry-facts, .config-layer-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -90,7 +113,7 @@
 .config-key-name { color: var(--fg); }
 .config-value { color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
 .config-description { color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
-.config-shadow, .config-referenced { color: var(--status-open); }
+.config-shadow { color: var(--status-open); }
 .config-options { color: var(--fg-mute); }
 .config-row.state-unset .config-value { color: var(--fg-mute); }
 
@@ -133,11 +156,21 @@
 
 .config-crew-cells {
   display: grid;
-  grid-template-columns: minmax(90px, 0.8fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(80px, 0.9fr) 92px minmax(140px, 1.4fr) 28px;
+  grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 28px;
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
+.config-crew-head {
+  align-items: center; border-bottom: 1px solid var(--hair); color: var(--fg-dim);
+  background: var(--bg); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.config-crew-head [role="columnheader"] { min-width: 0; }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
 .config-crew-row.disabled .config-crew-cells { color: var(--fg-mute); }
+.config-crew-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.config-crew-description { color: var(--fg-mute); font-size: 11px; overflow-wrap: anywhere; }
+.config-crew-usage { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.config-crew-use { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
+.config-crew-row.disabled .config-crew-use { color: var(--fg-mute); }
 .config-crew-disabled {
   margin-left: 6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 2px;
   color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -154,6 +187,7 @@
 
 @media (max-width: 900px) {
   .config-row-main, .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .config-crew-head { display: none; }
   .config-paths { grid-template-columns: minmax(0, 1fr); }
 }
 

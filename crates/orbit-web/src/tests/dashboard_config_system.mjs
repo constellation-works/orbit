@@ -1,7 +1,6 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
-// the System sub-view's render, provenance, workspace-override marker, edit
-// round-trip, refused write, and a key row that stays read-only when
-// config_set.authorized is false.
+// review health and crew table rendering, sub-view chrome, plus the System
+// view's provenance, override marker, edit round-trip, and refused write.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -114,8 +113,14 @@ assert.deepEqual(subtabs.slice(-3), ['crews', 'keys', 'system'], 'System sits be
 
 const body = Object.assign(new Node('div'), { id: 'config-body' });
 const controls = Object.assign(new Node('div'), { id: 'config-controls' });
+const explainer = Object.assign(new Node('p'), { id: 'config-explainer' });
 const count = Object.assign(new Node('span'), { id: 'config-count' });
-const byId = { 'config-body': body, 'config-controls': controls, 'config-count': count };
+const byId = {
+  'config-body': body,
+  'config-controls': controls,
+  'config-explainer': explainer,
+  'config-count': count,
+};
 const document = { activeElement: null, body: new Node('body'), createElement: tag => new Node(tag), getElementById: id => byId[id] || null };
 
 // ---- fixture API ----
@@ -139,9 +144,30 @@ const globalFile = () => ({
 });
 const effective = () => ({
   scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
-  sections: [{ token: 'delivery', keys: Object.keys(defaults).map(name => name in workspaceSet
-    ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
-    : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')) }],
+  sections: [
+    { token: 'delivery', title: 'Delivery', blurb: 'delivery settings', key_prefix: 'workflow', kind: 'keys', counts: { set: 1, unset: 0, total: 1 }, keys: [
+      ...Object.keys(defaults).map(name => name in workspaceSet
+        ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
+        : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
+      { ...row('low_complexity_crews', ['astra:2'], true, 'workspace'), key: 'workflow.low_complexity_crews', label: 'low_complexity_crews' },
+    ] },
+    { token: 'crews', title: 'Crews', blurb: 'named crews', key_prefix: 'crews', kind: 'crews', counts: { set: 0, unset: 0, total: 0 }, keys: [] },
+  ],
+  crews: [{ name: 'astra', provider: 'codex', model: 'gpt-6-astra', effort: 'high', tags: [], description: 'review and implementation crew', source: 'global', enabled: true, referenced_by: ['workflow.default_crew'] }],
+  review: {
+    healthy: false,
+    before_pr: { enabled: false, line: 'off (built-in)', problems: [] },
+    after_landing: {
+      enabled: true,
+      line: "on (auto-task delivery-code-review); unhealthy: consumer state is 'definition_changed'",
+      health: {
+        healthy: false,
+        problems: ["consumer state is 'definition_changed' (not adopted automatically: active_execution)"],
+        line: "unhealthy: consumer state is 'definition_changed' (not adopted automatically: active_execution)",
+      },
+    },
+  },
+  paths: [],
 });
 let hostPayload = {
   cpu: { percent: 97.2, severity: 'critical' }, memory: { percent: 40, severity: 'ok' },
@@ -160,6 +186,7 @@ const fetch = async (path, options = {}) => {
   requests.push({ path: url.pathname + url.search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
   if (url.pathname === '/api/config/file') return response(globalFile());
   if (url.pathname === '/api/config/effective') return response(effective());
+  if (url.pathname === '/api/config/keys') return response({ keys: [] });
   if (url.pathname === '/api/host/resources') return hostPayload ? response(hostPayload) : response({ error: 'down' }, 503);
   if (options.method === 'PUT' && url.pathname.startsWith('/api/config/keys/')) {
     const name = decodeURIComponent(url.pathname.slice('/api/config/keys/'.length)).slice(KEY.length);
@@ -313,4 +340,43 @@ setConfigSubtab('system');
 await fetchAndRenderConfig();
 assert.equal(named(body, 'config-pencil').length, 0, 'system key cells stay read-only without operator authority');
 assert.equal(named(body, 'config-editor').length, 0, 'the system view does not open an editor without operator authority');
-console.log('settings system tab: render, provenance, workspace override, edit round-trip, refused write, live readings and unauthorized key rows passed');
+
+// ---- effective review status, crew headers and sub-view chrome ----
+setConfigSubtab('effective');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, false, 'the shared explainer appears on Effective');
+const reviewCard = named(body, 'config-review')[0];
+assert.ok(reviewCard, 'Effective renders the review health card');
+assert.equal(reviewCard.children[0].getAttribute('role'), 'alert', 'the unhealthy enabled switch leads with an alert');
+assert.ok(classesOf(reviewCard.children[0]).includes('alert'), 'the unhealthy status has the alert treatment');
+assert.match(reviewCard.children[0].textContent, /After-landing review: on · unhealthy/);
+assert.match(reviewCard.children[0].textContent, /definition_changed/);
+assert.match(reviewCard.children[0].textContent, /orbit doctor/);
+const diagnosticDisclosure = named(reviewCard, 'config-review-details')[0];
+assert.ok(diagnosticDisclosure, 'raw diagnostics have a disclosure');
+assert.equal(diagnosticDisclosure.getAttribute('open'), null, 'raw diagnostics start collapsed');
+assert.match(textOf(diagnosticDisclosure, 'config-review-diagnostic')[0], /not adopted automatically/);
+
+setConfigSubtab('crews');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, true, 'Crews does not repeat the generic explainer');
+assert.equal(controls.hidden, true, 'Crews hides the empty controls band');
+const crewHead = named(body, 'config-crew-head')[0];
+assert.ok(crewHead, 'Crews has a header row');
+assert.deepEqual(crewHead.children.map(cell => cell.textContent).slice(0, 7), [
+  'Name', 'Provider', 'Model', 'Effort', 'Tags / fallbacks', 'Layer', 'Used by',
+]);
+const crewCells = named(body, 'config-crew-cells').find(node => !classesOf(node).includes('config-crew-head'));
+assert.ok(crewCells, 'the crew row is present');
+assert.doesNotMatch(crewCells.textContent, /\[\]/, 'empty crew arrays use the em dash placeholder');
+assert.equal(crewCells.children[4].textContent, '—', 'an empty crew array uses an em dash');
+assert.match(crewCells.textContent, /workflow\.default_crew/);
+assert.match(crewCells.textContent, /Low complexity pool/);
+assert.equal(named(body, 'config-referenced').length, 0, 'informational crew usage is not warning-colored');
+
+setConfigSubtab('keys');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, true, 'Keys does not repeat the generic explainer');
+assert.equal(controls.hidden, false, 'Keys keeps its populated controls');
+assert.ok(named(controls, 'config-filter').length > 0, 'Keys has a filter instead of an empty controls band');
+console.log('settings views: review health alert, collapsed diagnostics, crew headers and pool usage, sub-view chrome, and system behavior passed');

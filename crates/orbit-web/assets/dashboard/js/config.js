@@ -17,6 +17,7 @@ const $ = (id) => document.getElementById(id);
 
 /// Rendered in place of a value that does not exist, matching `config show`.
 const NO_VALUE = "–";
+const EMPTY_ARRAY = "—";
 
 /// Which file a sub-view reads and writes. `effective` never writes global:
 /// the layered view's edits go to the workspace file, which is the per-user,
@@ -69,6 +70,7 @@ export function setConfigSubtab(name) {
     lastPayload = null;
   }
   activeSubtab = name;
+  updateConfigChrome();
 }
 
 export function getConfigSubtab() {
@@ -112,6 +114,7 @@ function render(payload) {
 
 function renderPanels(payload, body) {
   body.replaceChildren();
+  updateConfigChrome();
   renderControls(payload);
   if (activeSubtab === "keys") {
     renderKeyReference(body, payload);
@@ -158,7 +161,8 @@ function renderControls(payload) {
   const controls = $("config-controls");
   if (!controls) return;
   controls.replaceChildren();
-  if (activeSubtab === "crews") return;
+  controls.hidden = activeSubtab === "crews";
+  if (controls.hidden) return;
 
   if (activeSubtab === "system") {
     controls.appendChild(reloadButton());
@@ -314,24 +318,84 @@ function reviewStrip(payload) {
   if (!review) return null;
   const strip = el("div", { class: "config-strip config-review" });
   if (review.error) {
-    strip.appendChild(el("span", { class: "config-match warn", text: `review: ${review.error}` }));
+    strip.appendChild(reviewAlert("Review status is unavailable", review.error));
+    strip.appendChild(reviewDiagnostics([`Review status: ${review.error}`]));
     return strip;
   }
-  for (const [label, line] of [
-    ["before-PR review", review.before_pr?.line],
-    ["after-landing review", review.after_landing?.line],
-  ]) {
-    strip.appendChild(fact(label, line));
+
+  const before = review.before_pr || {};
+  const beforeProblems = Array.isArray(before.problems) ? before.problems : [];
+  const after = review.after_landing || {};
+  const afterHealth = after.health || null;
+  const afterProblems = Array.isArray(afterHealth?.problems) ? afterHealth.problems : [];
+  const statuses = [
+    reviewSwitchStatus(
+      "Before-PR review",
+      before.enabled === true,
+      beforeProblems,
+      "It can gate delivery before PR creation.",
+    ),
+    reviewSwitchStatus(
+      "After-landing review",
+      after.enabled === true,
+      afterProblems,
+      "It can review landed deliveries on this host.",
+    ),
+  ];
+  statuses.sort((left, right) => Number(right.unhealthy) - Number(left.unhealthy));
+  for (const status of statuses) strip.appendChild(status.node);
+
+  if (review.healthy === false && !statuses.some((status) => status.unhealthy)) {
+    strip.insertBefore(reviewAlert("Review is unhealthy", "The review switches could not be confirmed healthy."), strip.firstChild);
   }
-  if (review.healthy === false) {
-    strip.appendChild(
-      el("span", {
-        class: "config-match warn",
-        text: "a review switch is on but cannot run here — see orbit doctor",
-      }),
-    );
-  }
+  const diagnostics = [
+    before.line ? `Before-PR review: ${before.line}` : null,
+    after.line ? `After-landing review: ${after.line}` : null,
+    afterHealth?.line ? `After-landing health: ${afterHealth.line}` : null,
+  ].filter(Boolean);
+  if (diagnostics.length) strip.appendChild(reviewDiagnostics(diagnostics));
   return strip;
+}
+
+function reviewSwitchStatus(label, enabled, problems, healthyReason) {
+  const unhealthy = enabled && problems.length > 0;
+  const row = el("div", { class: `config-review-status ${unhealthy ? "alert" : enabled ? "healthy" : "inactive"}` });
+  if (unhealthy) row.setAttribute("role", "alert");
+  row.appendChild(el("span", {
+    class: "config-review-switch",
+    text: `${label}: ${enabled ? "on" : "off"} · ${unhealthy ? "unhealthy" : enabled ? "healthy" : "inactive"}`,
+  }));
+  row.appendChild(el("span", {
+    class: "config-review-reason",
+    text: unhealthy ? `${String(problems[0]).replace(/[.!?]+$/, "")}.` : enabled ? healthyReason : "This switch is disabled.",
+  }));
+  if (unhealthy) {
+    row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
+  }
+  return { node: row, unhealthy };
+}
+
+function reviewAlert(title, reason) {
+  const row = el("div", { class: "config-review-status alert" });
+  row.setAttribute("role", "alert");
+  row.appendChild(el("span", { class: "config-review-switch", text: title }));
+  row.appendChild(el("span", { class: "config-review-reason", text: reason }));
+  row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
+  return row;
+}
+
+function reviewDiagnostics(lines) {
+  const details = el("details", { class: "config-review-details" });
+  details.appendChild(el("summary", { text: "Full review diagnostics" }));
+  details.appendChild(el("pre", { class: "config-review-diagnostic", text: lines.join("\n") }));
+  return details;
+}
+
+function updateConfigChrome() {
+  const explainer = $("config-explainer");
+  if (explainer) explainer.hidden = activeSubtab !== "effective";
+  const controls = $("config-controls");
+  if (controls && activeSubtab === "crews") controls.hidden = true;
 }
 
 function fact(label, value) {
@@ -472,7 +536,7 @@ function editButton(onClick, title) {
 
 function displayValue(value) {
   if (value == null) return NO_VALUE;
-  if (Array.isArray(value)) return value.length ? value.join(" ") : "[]";
+  if (Array.isArray(value)) return value.length ? value.join(" ") : EMPTY_ARRAY;
   if (typeof value === "string") return value === "" ? '""' : value;
   return String(value);
 }
@@ -954,6 +1018,15 @@ function crewsPanel(payload, { standalone }) {
     ]),
   );
   const body = el("div", { class: "config-section-body" });
+  const headings = ["Name", "Provider", "Model", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+  const head = el("div", { class: "config-crew-cells config-crew-head" });
+  head.setAttribute("role", "row");
+  for (const label of headings) {
+    const cell = el("span", { text: label });
+    cell.setAttribute("role", "columnheader");
+    head.appendChild(cell);
+  }
+  body.appendChild(head);
   if (!crews.length && !(editing && editing.kind === "crew" && editing.name === "")) {
     body.appendChild(
       el("div", {
@@ -992,7 +1065,7 @@ function crewRow(crew, payload) {
     node.appendChild(crewEditor(crew, payload, false));
     return node;
   }
-  const cells = el("div", { class: "config-crew-cells" }, [
+  const identity = el("span", { class: "config-crew-identity" }, [
     el("span", { class: "config-key mono" }, [
       el("span", { text: crew.name }),
       disabled
@@ -1003,23 +1076,49 @@ function crewRow(crew, payload) {
           })
         : null,
     ]),
+    crew.description ? el("span", { class: "config-crew-description", text: crew.description }) : null,
+  ]);
+  const uses = [
+    ...referenced.map((key) => ({ className: "config-crew-use", text: key })),
+    ...crewPoolMembership(payload, crew.name).map((pool) => ({
+      className: "config-crew-use",
+      text: `${pool} complexity pool`,
+    })),
+  ];
+  const usedBy = el("span", { class: "config-crew-usage" }, uses.length
+    ? uses.map((use) => el("span", { class: use.className, text: use.text }))
+    : [el("span", { class: "config-crew-use", text: NO_VALUE })]);
+  const cells = el("div", { class: "config-crew-cells" }, [
+    identity,
     providerCell(crew.provider),
     el("span", { class: "config-value mono", text: displayValue(crew.model) }),
     el("span", { class: "config-value mono", text: displayValue(crew.effort) }),
     el("span", { class: "config-value mono", text: displayValue(crew.tags) }),
     el("span", { class: `config-source ${crew.source}`, text: crew.source }),
-    el("span", { class: "config-description" }, [
-      crew.description ? el("span", { text: crew.description }) : null,
-      referenced.length
-        ? el("span", { class: "config-referenced", text: `referenced by ${referenced.join(", ")}` })
-        : null,
-    ]),
+    usedBy,
     editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : null,
   ]);
   node.appendChild(cells);
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
+}
+
+const CREW_POOL_KEYS = [
+  ["workflow.low_complexity_crews", "Low"],
+  ["workflow.medium_complexity_crews", "Medium"],
+  ["workflow.hard_complexity_crews", "Hard"],
+  ["workflow.xhard_complexity_crews", "X-hard"],
+];
+
+function crewPoolMembership(payload, name) {
+  const keys = (payload.sections || []).flatMap((section) => section.keys || []);
+  return CREW_POOL_KEYS
+    .filter(([key]) => {
+      const pool = keys.find((row) => row.key === key)?.value;
+      return Array.isArray(pool) && pool.some((entry) => String(entry).split(":", 1)[0] === name);
+    })
+    .map(([, label]) => label);
 }
 
 function providerCell(provider) {
