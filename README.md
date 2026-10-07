@@ -78,7 +78,7 @@ orbit doctor
 orbit web serve
 ```
 
-Review and commit the checkout files listed by `workspace init` before the first ship. Local delivery requires a clean base checkout; the list includes MCP client files.
+Review and commit the checkout files listed by `workspace init` before the first ship. Local delivery refuses tracked changes and merge conflicts in the base checkout, and untracked paths that overlap the incoming changes; the list includes MCP client files.
 
 `orbit doctor` reports missing CLIs for crews selected by the default, system,
 or complexity routing and warns when no Orbit MCP client is registered for this
