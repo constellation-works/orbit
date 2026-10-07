@@ -179,6 +179,15 @@ node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/dashboard-browser
 ```
 
+The Health browser fixture checks unexpected-only incident filtering, visible targets,
+collapsed agent stderr, shortened paths, selected-window requests and headers,
+grouped token counts and unclipped summary tables at desktop and phone widths:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_health_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/health-browser
+```
+
 The Audit browser fixture exercises the shipped event and summary tables at
 1440, 1024, 1920 and mobile widths, keyboard expansion, duplicate targets and
 the Policy count explanation with filtered and independent-window views:

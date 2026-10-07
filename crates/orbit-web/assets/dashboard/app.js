@@ -7,7 +7,7 @@ import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWin
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
@@ -155,6 +155,8 @@ function diagnosticsContext() {
   return {
     getLastDiagnostics: () => lastDiagnostics,
     getActiveDiagSubtab: () => activeDiagSubtab,
+    limit: DIAG_LIMIT,
+    refreshDiagnostics: refreshDashboard,
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
@@ -1420,9 +1422,10 @@ function activeRefreshJobs() {
     } else {
       const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
+      const classQuery = getIncidentClass() === "all" ? "" : `&class=${encodeURIComponent(getIncidentClass())}`;
       const path = subtab === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`
-        : `/api/diagnostics/${subtab}?limit=${DIAG_LIMIT}`;
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}${classQuery}`
+        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`;
       jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
         if (activeDiagSubtab === subtab && getWindow() === selectedWindow) renderDiagnostics(diagnosticsContext());
@@ -1603,7 +1606,7 @@ function renderHealthStrip(data) {
   const failed = $("tile-failed");
   if (failed) {
     failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Recent Runs' Failed filter uses the same outcomes with no time window. Errors lists step and event failures this month. Opens those runs.`;
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Recent Runs' Failed filter uses the same outcomes with no time window. Errors lists step and event failures in the selected window. Opens those runs.`;
   }
   const windowTag = $("kpi-window");
   if (windowTag) windowTag.textContent = windowLabel;

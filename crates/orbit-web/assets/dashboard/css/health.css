@@ -53,7 +53,7 @@ td .rel-rate { font-size: 12px; }
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 600;
-  text-transform: capitalize;
+  text-transform: none;
   letter-spacing: 0;
   color: var(--fg);
   margin-bottom: 10px;
@@ -209,6 +209,7 @@ td .rel-rate { font-size: 12px; }
       "source ts"
       "run run"
       "provider step"
+      "target target"
       "message message";
   }
   table.diag-table td.c-source { grid-area: source; color: var(--state-failed); font-weight: 600; }
@@ -216,5 +217,14 @@ td .rel-rate { font-size: 12px; }
   table.diag-table td.c-job_run { grid-area: run; font-family: var(--font-mono); color: var(--fg); }
   table.diag-table td.c-provider { grid-area: provider; color: var(--fg-dim); }
   table.diag-table td.c-step { grid-area: step; text-align: right; color: var(--fg-dim); }
+  table.diag-table td.c-target { grid-area: target; overflow-wrap: anywhere; color: var(--fg-dim); }
   table.diag-table td.c-message { grid-area: message; font-size: 12px; }
 }
+
+.incident-class-chip { background: var(--bg-elev); cursor: pointer; }
+.incident-class-chip[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); }
+.incident-class-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.diag-stderr-group > summary { padding: 12px; cursor: pointer; color: var(--fg-dim); font: 12px/1.5 var(--font-sans); }
+#diag-implement-one-body .card-title { text-transform: none; overflow-wrap: anywhere; }
+#diag-implement-one-body .summary-table th:first-child { width: 25%; }
+#diag-implement-one-body .summary-table td { white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: clip; }

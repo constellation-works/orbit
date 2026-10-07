@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
+use crate::parse::parse_since;
 use crate::runtime_memo::{DIAGNOSTICS_ERRORS_TTL, DIAGNOSTICS_FRICTION_TTL};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use orbit_cmd::DiagnosticsCommands;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
@@ -21,25 +22,44 @@ use super::{
     map_runtime_error, month_bounds_utc, validate_year_month,
 };
 use crate::log_format::{
-    Filters as LogFilters, format_message_html, format_source, read_recent_matching_events,
-    resolve_log_path,
+    Filters as LogFilters, format_message_html, read_recent_matching_events, resolve_log_path,
 };
 
 pub(super) async fn list_diagnostics_metrics(
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
-    let month = q.month.unwrap_or_else(current_year_month_utc);
-    if let Err(e) = validate_year_month(&month) {
-        return map_runtime_error(e);
-    }
+    let (since, until) = match diagnostics_bounds(&q, true) {
+        Ok(bounds) => bounds,
+        Err(e) => return map_runtime_error(e),
+    };
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     match super::blocking("diagnostics metrics", move || {
-        let mut entries = runtime.read_metrics_entries_limited(&month, limit)?;
+        let mut entries = Vec::new();
+        for month in runtime.list_metrics_months()? {
+            let (month_start, month_end) = month_bounds_utc(&month)?;
+            if since.is_some_and(|since| month_end <= since) || month_start >= until {
+                continue;
+            }
+            entries.extend(
+                runtime
+                    .read_metrics_entries(&month)?
+                    .into_iter()
+                    .filter(|entry| {
+                        since.is_none_or(|since| entry.ts >= since) && entry.ts < until
+                    }),
+            );
+        }
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
         entries.truncate(limit);
         if entries.is_empty() {
-            diagnostics_metrics_from_invocations(&runtime, &month, limit).map(Value::Array)
+            let records = runtime.invocation_records(InvocationQuery {
+                since,
+                until: Some(until),
+                limit,
+                ..InvocationQuery::default()
+            })?;
+            Ok(Value::Array(diagnostics_metrics_values(records)))
         } else {
             serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
         }
@@ -51,20 +71,26 @@ pub(super) async fn list_diagnostics_metrics(
     }
 }
 
-fn diagnostics_metrics_from_invocations(
-    runtime: &OrbitRuntime,
-    month: &str,
-    limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let (since, until) = month_bounds_utc(month)?;
-    let records = runtime.invocation_records(InvocationQuery {
-        since: Some(since),
-        until: Some(until),
-        limit,
-        ..InvocationQuery::default()
-    })?;
-
-    Ok(diagnostics_metrics_values(records))
+// Explicit since wins over the legacy metrics month. Errors without a range
+// retain the unbounded recent feed; the dashboard always supplies its window.
+fn diagnostics_bounds(
+    q: &DiagnosticsQuery,
+    default_month: bool,
+) -> Result<(Option<DateTime<Utc>>, DateTime<Utc>), orbit_core::OrbitError> {
+    if let Some(raw) = q.since.as_deref() {
+        let since = if raw == "all" {
+            None
+        } else {
+            Some(parse_since(raw)?)
+        };
+        return Ok((since, Utc::now()));
+    }
+    if q.month.is_some() || default_month {
+        let month = q.month.clone().unwrap_or_else(current_year_month_utc);
+        let (since, until) = month_bounds_utc(&month)?;
+        return Ok((Some(since), until));
+    }
+    Ok((None, Utc::now()))
 }
 
 // Widened to pub(super) so tests under api/tests/ (per-module layout ORB-00224) can
@@ -311,6 +337,15 @@ pub(super) async fn list_diagnostics_errors(
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
+    let (since, until) = match diagnostics_bounds(&q, false) {
+        Ok(bounds) => bounds,
+        Err(e) => return map_runtime_error(e),
+    };
+    let key = (
+        q.since.clone(),
+        q.month.clone(),
+        bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT),
+    );
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     // Reads up to 50k audit rows and a blob per agent invocation, and every
     // Errors tab polls it: memoized so overlapping polls share one scan, and
@@ -318,8 +353,8 @@ pub(super) async fn list_diagnostics_errors(
     let compute_runtime = Arc::clone(&runtime);
     match state
         .diagnostics_errors_memo()
-        .get_or_compute(&runtime, limit, DIAGNOSTICS_ERRORS_TTL, move || {
-            diagnostics_errors(&compute_runtime, limit).map(Value::Array)
+        .get_or_compute(&runtime, key, DIAGNOSTICS_ERRORS_TTL, move || {
+            diagnostics_errors(&compute_runtime, limit, since, until).map(Value::Array)
         })
         .await
     {
@@ -331,39 +366,95 @@ pub(super) async fn list_diagnostics_errors(
 fn diagnostics_errors(
     runtime: &OrbitRuntime,
     limit: usize,
+    since: Option<DateTime<Utc>>,
+    until: DateTime<Utc>,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let mut rows = global_error_rows(limit)?;
-    rows.extend(agent_stderr_error_rows(runtime, limit)?);
+    let events = v2_audit_values(runtime, since, Some(until), 50_000)?;
+    let mut rows = global_error_rows(limit, since, until)?;
+    for row in &mut rows {
+        if row["target"] != "orbit.job.step_finished"
+            || !row["job_run"].is_string()
+            || !row["step"].is_string()
+        {
+            continue;
+        }
+        // Run + step alone is ambiguous across retries. Pick the finish event
+        // nearest this process record, rather than another attempt's failure.
+        let ts = row["ts"]
+            .as_str()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+        let nearest = events
+            .iter()
+            .filter(|event| {
+                event["body_kind"] == "step_finished"
+                    && event["run_id"] == row["job_run"]
+                    && event["step_id"] == row["step"]
+                    && event["error_message"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty())
+            })
+            .min_by_key(|event| {
+                event["ts"]
+                    .as_str()
+                    .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+                    .zip(ts)
+                    .map_or(i64::MAX, |(event_ts, ts)| {
+                        (event_ts - ts).num_milliseconds().saturating_abs()
+                    })
+            });
+        if let Some(event) = nearest {
+            row["message"] = json!(redact_all(
+                event["error_message"].as_str().unwrap_or_default()
+            ));
+            row["event_id"] = event["event_id"].clone();
+        }
+    }
+    rows.extend(agent_stderr_error_rows(
+        runtime, &events, limit, since, until,
+    )?);
+    rows.retain(|row| {
+        row["ts"]
+            .as_str()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+            .is_some_and(|ts| since.is_none_or(|since| ts >= since) && ts < until)
+    });
     rows.sort_by(|a, b| {
         let left = a.get("ts").and_then(Value::as_str).unwrap_or("");
         let right = b.get("ts").and_then(Value::as_str).unwrap_or("");
         right.cmp(left)
     });
+    let mut seen = HashSet::new();
+    rows.retain(|row| {
+        row["event_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .is_none_or(|id| seen.insert(id.to_string()))
+    });
     rows.truncate(limit);
     Ok(rows)
 }
 
-fn global_error_rows(limit: usize) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let path = resolve_log_path(None)?;
-    global_error_rows_from_path(&path, limit)
-}
-
-// Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn global_error_rows_from_path(
-    path: &std::path::Path,
+fn global_error_rows(
     limit: usize,
+    since: Option<DateTime<Utc>>,
+    until: DateTime<Utc>,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let filters = LogFilters::from_query_parts(None, Some("error".to_string()), None)?;
-    // Read the raw JSONL events so run/task/step/provider survive; the
-    // rendered log-tail shape drops those fields.
-    let events = read_recent_matching_events(path, &filters, limit)
+    let path = resolve_log_path(None)?;
+    let filters = LogFilters::new(None, Some(crate::log_format::LevelFilter::Error), since);
+    let events = read_recent_matching_events(&path, &filters, limit.saturating_mul(2))
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
     Ok(events
-        .into_iter()
-        .map(|event| process_error_row(&event))
+        .iter()
+        .filter(|event| {
+            event["timestamp"]
+                .as_str()
+                .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+                .is_some_and(|ts| ts < until)
+        })
+        .map(process_error_row)
         .collect())
 }
 
@@ -382,15 +473,16 @@ fn process_error_row(event: &Value) -> Value {
     json!({
         "ts": ts,
         "source": "process",
-        "message": strip_htmlish(&format_message_html(target, fields)),
-        "event_id": null,
+        "message": optional_log_field(fields, &["error_message"]).map(redact_all)
+            .unwrap_or_else(|| strip_htmlish(&format_message_html(target, fields))),
+        "event_id": optional_log_field(fields, &["event_id"]),
         "job_run": job_run,
         "step": optional_log_field(fields, &["step_id", "step", "activity_id"]),
         "step_index": null,
         "task_id": optional_log_field(fields, &["task_id"]),
         "provider": optional_log_field(fields, &["provider"]),
         "blob_ref": null,
-        "target": format_source(target, fields),
+        "target": target,
         "affiliation": affiliation,
     })
 }
@@ -414,19 +506,27 @@ pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
 
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
+    events: &[Value],
     limit: usize,
+    since: Option<DateTime<Utc>>,
+    until: DateTime<Utc>,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let events = v2_audit_values(runtime, None, None, 50_000)?;
-    let by_id = events_by_id(&events);
-    let step_index_by_id = step_index_by_id(&events);
+    let by_id = events_by_id(events);
+    let step_index_by_id = step_index_by_id(events);
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
     let mut blobs_read = 0usize;
+    let mut seen = HashSet::new();
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
     // `2 * limit` rows and the caller keeps only the newest `limit` of them.
     for event in events.iter().rev() {
         if event.get("body_kind").and_then(Value::as_str) != Some("cli_invocation_finished") {
+            continue;
+        }
+        if let Some(id) = event["event_id"].as_str()
+            && !seen.insert(id)
+        {
             continue;
         }
         let Some(blob_ref) = event.get("stderr_blob_ref").and_then(Value::as_str) else {
@@ -446,11 +546,30 @@ fn agent_stderr_error_rows(
         let step_index = step
             .as_ref()
             .and_then(|step| step_index_by_id.get(step).copied());
-        for parsed in parse_structured_error_lines(&stderr, &fallback_ts) {
+        let parsed: Vec<_> = parse_structured_error_lines(&stderr, &fallback_ts)
+            .into_iter()
+            .filter(|line| {
+                line.ts
+                    .parse::<DateTime<Utc>>()
+                    .ok()
+                    .is_some_and(|ts| since.is_none_or(|since| ts >= since) && ts < until)
+            })
+            .collect();
+        if let Some(first) = parsed.first() {
+            let mut messages = Vec::new();
+            let mut targets = Vec::new();
+            for line in &parsed {
+                if !messages.contains(&line.message) {
+                    messages.push(line.message.clone());
+                }
+                if !targets.contains(&line.target) {
+                    targets.push(line.target.clone());
+                }
+            }
             rows.push(json!({
-                "ts": parsed.ts,
+                "ts": first.ts,
                 "source": "agent-stderr",
-                "message": redact_all(&parsed.message),
+                "message": redact_all(&messages.join("\n")),
                 "job_run": event.get("run_id").and_then(Value::as_str),
                 "step": step,
                 "step_index": step_index,
@@ -458,7 +577,7 @@ fn agent_stderr_error_rows(
                 "provider": event.get("provider").and_then(Value::as_str),
                 "blob_ref": blob_ref,
                 "event_id": event.get("event_id").and_then(Value::as_str),
-                "target": parsed.target,
+                "target": targets.join(", "),
             }));
             if rows.len() >= limit.saturating_mul(2) {
                 return Ok(rows);
@@ -498,7 +617,7 @@ pub(super) fn parse_structured_error_line(
     } else {
         (fallback_ts.to_string(), trimmed.strip_prefix("ERROR ")?)
     };
-    let (target, message) = rest.rsplit_once(": ")?;
+    let (target, message) = rest.split_once(": ")?;
     let target = target.trim();
     let message = message.trim();
     if target.is_empty() || message.is_empty() {

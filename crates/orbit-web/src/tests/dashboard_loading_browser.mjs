@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
+import { assertHealthTriage } from './dashboard_health_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -669,6 +670,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
+  await assertHealthTriage(page, evidence, path);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {

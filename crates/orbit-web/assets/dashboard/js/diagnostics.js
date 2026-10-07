@@ -27,6 +27,10 @@ const $ = (id) => document.getElementById(id);
 // audit.js's expandedAuditIds) so a refresh tick does not collapse the row
 // someone is reading.
 const expandedIncidents = new Set();
+let incidentClass = "unexpected";
+let stderrExpanded = false;
+
+export function getIncidentClass() { return incidentClass; }
 
 function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
@@ -69,7 +73,7 @@ function getDiagMetricsColumns(ctx) {
       key: "token_usage",
       label: "tokens",
       num: true,
-      render: (v) => (v == null ? "-" : String(v)),
+      render: (v) => (v == null ? "-" : Number(v).toLocaleString("en-US")),
     },
     { key: "tool_invocations", label: "tools", num: true },
     {
@@ -92,6 +96,7 @@ function getDiagErrorsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
     { key: "source", label: "source", num: false },
+    { key: "target", label: "target", num: false, render: (v) => v || "-" },
     {
       key: "job_run",
       label: "run",
@@ -108,14 +113,26 @@ function getDiagErrorsColumns(ctx) {
       render: (v, row, td) => {
         const full = v || "";
         td.title = row.target ? `${row.target}: ${full}` : full;
-        return truncateValue(ctx, full, 220);
+        return truncateValue(ctx, shortenWorktreePaths(full), 220);
       },
     },
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false } = {}) {
-  const body = $("diag-body");
+// Keep unknown/fatal stderr visible. Only the known patch-verification and
+// model-manager retry noise belongs in the collapsible internal group.
+function internalStderr(row) {
+  return row.source === "agent-stderr"
+    && String(row.target || "").split(", ").every(target => /apply_patch|model_manager/.test(target))
+    && String(row.message || "").split("\n").every(message => /Failed to find expected lines|verification failed|request timed out/.test(message));
+}
+
+function shortenWorktreePaths(message) {
+  return String(message).replace(/(?:~|\/)[^\s"'<>]*\/\.orbit\/state\/worktrees\/[^/\s"'<>]+\//g, "…/");
+}
+
+function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, container = $("diag-body") } = {}) {
+  const body = container;
   
   if (!rows || rows.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
@@ -199,7 +216,7 @@ function eventCountLabel(value) {
 
 const INCIDENT_CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic"];
 
-function incidentSummaryNode(payload) {
+function incidentSummaryNode(payload, ctx) {
   const incidents = asCount(payload.incident_count);
   const failed = asCount(payload.raw_failed_events);
   const total = asCount(payload.total_events);
@@ -228,17 +245,25 @@ function incidentSummaryNode(payload) {
   const eventsByClass = payload.raw_events_by_class || {};
   const labels = payload.class_labels || {};
   const chips = el("div", { class: "incident-class-chips" });
+  const addChip = (key, text, title) => {
+    const chip = el("button", { class: `incident-class-chip ${key}`, text, title });
+    chip.type = "button";
+    chip.dataset.class = key;
+    chip.setAttribute("aria-pressed", String(incidentClass === key));
+    chip.addEventListener("click", () => {
+      incidentClass = key;
+      renderDiagnostics(ctx);
+      if (hasCtx(ctx, "refreshDiagnostics")) ctx.refreshDiagnostics();
+    });
+    chips.appendChild(chip);
+  };
+  addChip("all", `All: ${incidents}`, "Show every incident class");
   for (const key of INCIDENT_CLASS_ORDER) {
     const count = asCount(byClass[key]);
     const events = asCount(eventsByClass[key]);
     const category = categories[key] || {};
     const categoryRuns = asCount(category.affected_runs);
-    if (count === 0 && events === 0) continue;
-    chips.appendChild(el("span", {
-      class: `incident-class-chip ${key}`,
-      title: `${labels[key] || key}: ${count} incidents from ${events} raw events affecting ${categoryRuns} runs (window ${window})`,
-      text: `${labels[key] || key}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
-    }));
+    addChip(key, `${labels[key] || key}: ${count}`, `${count} incidents from ${events} raw events affecting ${categoryRuns} runs (window ${window})`);
   }
 
   const children = [head];
@@ -415,12 +440,14 @@ function incidentRowNode(incident, ctx) {
 
 function renderIncidents(payload, ctx) {
   const body = $("diag-body");
-  const incidents = Array.isArray(payload && payload.incidents) ? payload.incidents : [];
-  const summary = incidentSummaryNode(payload || {});
+  const incidents = (Array.isArray(payload && payload.incidents) ? payload.incidents : [])
+    .filter(incident => incidentClass === "all" || (incident.class || "unexpected") === incidentClass)
+    .sort((a, b) => INCIDENT_CLASS_ORDER.indexOf(a.class || "unexpected") - INCIDENT_CLASS_ORDER.indexOf(b.class || "unexpected"));
+  const summary = incidentSummaryNode(payload || {}, ctx);
   if (incidents.length === 0) {
     syncNodes(body, [summary, el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: "No failure incidents in this window." }),
+      el("div", { class: "text", text: `No ${incidentClass === "all" ? "failure" : incidentClass} incidents in this window.` }),
     ])]);
     return;
   }
@@ -441,36 +468,39 @@ function renderDiagnostics(ctx = {}) {
 
   if (sub === "incidents") {
     const payload = last.incidents || {};
-    // Both counts in the header: grouped incidents, and the raw failed events
-    // they were derived from. Neither is inferable from the other.
-    $("diag-count").textContent =
-      `${asCount(payload.failure_categories && payload.failure_categories.unexpected && payload.failure_categories.unexpected.incidents)} unexpected / ${asCount(payload.incident_count)} all incidents / ${asCount(payload.raw_failed_events)} failed events`;
+    $("diag-count").textContent = `window ${payload.window || getWindow()}`;
+    $("diag-count").title = "Counts below cover all classes; chips filter the incident list.";
     renderIncidents(payload, ctx);
     return;
   }
 
   const rows = last[sub] || [];
   const count = $("diag-count");
-  if (sub === "errors") {
-    count.textContent = `${rows.length} error events this month`;
-    count.title = `Step and event failures for the current month, capped at the diag URL parameter (default 50). Distinct from header Failed runs and Recent Runs, which both include Failed, Timeout, and Interrupted job runs (${getWindow()} window on the header, no window on Recent Runs).`;
-  } else {
-    count.textContent = `${rows.length} metric entries this month`;
-    count.title = "Invocation metrics for the current month.";
+  const range = getWindow() === "all" ? "all time" : `last ${getWindow()}`;
+  count.textContent = `${rows.length} ${sub === "errors" ? "error events" : "metric entries"} · ${range}`;
+  count.title = `Newest ${ctx.limit || 50} entries at most; window ${getWindow()}.`;
+  const columns = sub === "metrics" ? getDiagMetricsColumns(ctx) : getDiagErrorsColumns(ctx);
+  if (sub !== "errors") {
+    renderDiagnosticsTable(rows, columns, ctx, "No metric entries in this window.");
+    return;
   }
-  const columns =
-    sub === "metrics"
-      ? getDiagMetricsColumns(ctx)
-      : getDiagErrorsColumns(ctx);
-  renderDiagnosticsTable(
-    rows,
-    columns,
-    ctx,
-    sub === "errors"
-      ? "No error events this month (step/event failures, not job-run states)."
-      : "No metric entries this month.",
-    { cards: sub === "errors" },
-  );
+  const internal = rows.filter(internalStderr);
+  const processRows = rows.filter(row => !internalStderr(row));
+  const main = keyed(el("div", { class: "diag-process-group" }), "diag-process", [range, processRows]);
+  renderDiagnosticsTable(processRows, columns, ctx,
+    "No error events outside internal agent stderr in this window.", { cards: true, container: main });
+  const sections = [main];
+  if (internal.length) {
+    const details = keyed(el("details", { class: "diag-stderr-group" }), "diag-stderr", [range, internal]);
+    details.open = stderrExpanded;
+    details.addEventListener("toggle", () => { if (details.isConnected) stderrExpanded = details.open; });
+    details.appendChild(el("summary", { text: `Internal agent stderr (${internal.length}) · patch verification and model retries` }));
+    const container = el("div");
+    renderDiagnosticsTable(internal, columns, ctx, "", { cards: true, container });
+    details.appendChild(container);
+    sections.push(details);
+  }
+  syncNodes($("diag-body"), sections);
 }
 
 // ORB-11655: keyed cards, so the 30 s refresh replaces only what moved.

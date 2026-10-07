@@ -652,3 +652,121 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
         },
     );
 }
+
+#[test]
+fn health_errors_and_metrics_scope_windows_and_preserve_failure_evidence() {
+    isolated(
+        "projections::health_errors_and_metrics_scope_windows_and_preserve_failure_evidence",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let mut process = String::new();
+            for (index, age) in [
+                (0, Duration::hours(2)),
+                (1, Duration::days(2)),
+                (2, Duration::days(40)),
+                (3, Duration::hours(-2)),
+            ] {
+                let ts = now - age;
+                let dir = fixture
+                    .runtime
+                    .data_root()
+                    .join("state/diagnostics/metrics")
+                    .join(ts.format("%Y-%m").to_string());
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(dir.join(format!("health-{index}.jsonl")), format!("{}\n", json!({
+                "ts": ts, "job_run": "jrun-health", "step": format!("step-{index}"),
+                "actor_identity": "http-health", "tool_invocations": 1, "token_usage": 1379713,
+                "step_duration_ms": 100, "retry_count": 0,
+            }))).unwrap();
+                // Two process copies of the same step finish must collapse after joining its event ID.
+                let line = format!(
+                    "{}\n",
+                    json!({"timestamp": ts, "level":"ERROR", "target":"orbit.job.step_finished",
+                "fields":{"job_run_id":"jrun-health", "step_id":format!("step-{index}"), "outcome":"error", "success":false}})
+                );
+                process.push_str(&line);
+                process.push_str(&line);
+                fixture.runtime.insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id:fixture.runtime.workspace_id().unwrap(), event_id:format!("health-{index}"),
+                source:"v2_envelope".into(), schema_version:1, event_type:"step_finished".into(), ts,
+                run_id:"jrun-health".into(), agent_identity:"http-health".into(), parent_event_id:None,
+                workspace_path:None, payload_json:json!({"event_id":format!("health-{index}"), "ts":ts,
+                    "body_kind":"step_finished", "run_id":"jrun-health", "step_id":format!("step-{index}"),
+                    "outcome":"error", "error_message":format!("failure detail {index}: invalid candidate")}).to_string(),
+            }).unwrap();
+            }
+            fs::write(fixture.path("process.log"), process).unwrap();
+            let blob = blobs.write(b"ERROR model_manager: request timed out: retrying\nERROR apply_patch: Failed to find expected lines\nERROR apply_patch: Failed to find expected lines\n").unwrap();
+            seed_cli_failure(&fixture, "stderr-health", now - Duration::hours(1), &blob);
+            let server = fixture.server(false);
+            for (window, expected_steps) in [("24h", 1), ("7d", 2), ("all", 3), ("24h", 1)] {
+                let errors = json_ok(server.get(&format!(
+                    "/api/diagnostics/errors?since={window}&limit=20&workspace=ws_http_fixture"
+                )));
+                let rows = errors.as_array().unwrap();
+                assert_eq!(
+                    rows.len(),
+                    expected_steps + 1,
+                    "Errors range and memo must match {window}"
+                );
+                let mut ids = std::collections::HashSet::new();
+                for row in rows {
+                    assert!(
+                        ids.insert(row["event_id"].as_str().unwrap()),
+                        "one row per event ID"
+                    );
+                    if row["source"] == "process" {
+                        let index = row["step"].as_str().unwrap().strip_prefix("step-").unwrap();
+                        assert_eq!(
+                            row["message"],
+                            format!("failure detail {index}: invalid candidate")
+                        );
+                        assert_eq!(row["target"], "orbit.job.step_finished");
+                    } else {
+                        assert_eq!(
+                            row["message"],
+                            "request timed out: retrying\nFailed to find expected lines"
+                        );
+                        assert_eq!(row["target"], "model_manager, apply_patch");
+                    }
+                }
+                let metrics = json_ok(server.get(&format!(
+                    "/api/diagnostics/metrics?since={window}&limit=20&workspace=ws_http_fixture"
+                )));
+                assert_eq!(
+                    metrics.as_array().unwrap().len(),
+                    expected_steps,
+                    "Metrics range {window}"
+                );
+                assert_eq!(metrics[0]["token_usage"], 1379713);
+            }
+            for endpoint in ["errors", "metrics"] {
+                assert_eq!(
+                    server
+                        .get(&format!(
+                            "/api/diagnostics/{endpoint}?since=bogus&workspace=ws_http_fixture"
+                        ))
+                        .status()
+                        .as_u16(),
+                    400
+                );
+            }
+            let limited = json_ok(
+                server.get("/api/diagnostics/errors?since=7d&limit=1&workspace=ws_http_fixture"),
+            );
+            assert_eq!(limited.as_array().unwrap().len(), 1);
+            assert_eq!(limited[0]["event_id"], "stderr-health");
+            let previous_month = (now - Duration::days(40)).format("%Y-%m").to_string();
+            let legacy = json_ok(server.get(&format!(
+                "/api/diagnostics/metrics?month={previous_month}&workspace=ws_http_fixture"
+            )));
+            assert_eq!(
+                legacy.as_array().unwrap().len(),
+                1,
+                "legacy month API remains available"
+            );
+        },
+    );
+}
