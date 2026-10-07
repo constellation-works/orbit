@@ -65,6 +65,7 @@
   --state-active: #5ad8a0;
   --state-running: #5cc8de;
   --state-pending: #f2b35e;
+  --state-held: #c4a7ff;
   --state-failed: #ff8a80;
   --state-error: #ff8a80;
   --state-cancelled: #e0a39d;
@@ -118,6 +119,7 @@
 [data-state="success"], [data-state="active"] { --dot: var(--state-success); }
 [data-state="running"] { --dot: var(--state-running); }
 [data-state="pending"], [data-state="retrying"] { --dot: var(--state-pending); }
+[data-state="held"] { --dot: var(--state-held); }
 [data-state="failed"], [data-state="error"], [data-state="timeout"] { --dot: var(--state-failed); }
 [data-state="cancelled"] { --dot: var(--state-cancelled); }
 [data-state="interrupted"] { --dot: var(--state-interrupted); }

@@ -162,6 +162,21 @@ distributed browser scenarios remain part of the QA sweep, and the Operations
 browser scenario remains available with its shared fixtures under
 `crates/orbit-web/src/tests/`.
 
+The loading browser fixture also renders run detail at 1440px: held-state
+color and hold reason, one-based step numbering and singular counts, empty
+log feedback, omitted empty knowledge metrics, disabled active replay,
+timeline legend and column labels, and formatted stream-JSON stdout. It
+checks that long log lines wrap inside the panel, malformed lines stay
+readable as text, and each stream's wrap toggle restores horizontal scrolling
+without widening the page. It saves screenshots and `run-detail-result.json`:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_loading_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/loading-browser --run-detail
+```
+
+Omit `--run-detail` to include the full loading and responsive-layout suite.
+
 The Operations browser fixture also checks the responsive dashboard shell. At
 375×812, the brand, workspace picker, Drain indicator and Refresh icon share
 the header row; destinations and the active section's views share a scrolling

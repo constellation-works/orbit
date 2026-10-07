@@ -1,9 +1,10 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
+import { assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -642,81 +643,88 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
-  await assertFrictionTaskLinks(page);
-  await page.evaluate(() => globalThis.showTaskPaginationEvidence());
-  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
-  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
-    await page.setViewportSize({ width: viewport.width, height: 900 });
+  if (process.argv[4] === '--run-detail') {
+    await assertRunDetailPresentation(page, evidence);
+    if (failures.length) throw new Error(failures.join('\n'));
+    console.log('Chromium run-detail presentation and log wrapping passed.');
+  } else {
+    await assertFrictionTaskLinks(page);
+    await page.evaluate(() => globalThis.showTaskPaginationEvidence());
+    await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
+    for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+      await page.setViewportSize({ width: viewport.width, height: 900 });
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.getElementById('tasks-body').scrollTop = 0;
+      });
+      const pager = page.locator('.task-pagination');
+      if (!(await pager.isVisible())) throw new Error(`Task pagination invisible at ${viewport.width}px`);
+      if (!(await page.locator('#tasks-next').isEnabled())) throw new Error('First task page must enable Next');
+      if (await page.locator('#tasks-previous').isEnabled()) throw new Error('First task page must disable Previous');
+      await assertVisibleTaskRow(page, viewport, 'page 1');
+      await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}.png`), fullPage: true });
+    }
+    await page.evaluate(() => { document.getElementById('tasks-body').scrollTop = 120; });
+    await page.locator('#tasks-next').click();
+    await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '21–40 of 55');
+    if (await page.locator('#tasks-body').evaluate((body) => body.scrollTop !== 0)) throw new Error('Task page navigation must reset the task-body scroll position');
+    if (!(await page.locator('#tasks-previous').isEnabled())) throw new Error('Second task page must enable Previous');
+    for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+      await page.setViewportSize({ width: viewport.width, height: 900 });
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.getElementById('tasks-body').scrollTop = 0;
+      });
+      await assertVisibleTaskRow(page, viewport, 'page 2');
+      await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}-page-2.png`), fullPage: true });
+    }
+    await page.locator('#task-filter .chip[data-status="done"]').click();
+    await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
+    await page.locator('#task-filter .chip[data-role="all"]').click();
+    const firstTask = page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').first();
+    // Open it the way a person does, by its title: on a narrow row the centre
+    // of the box is the crew select, which takes the click for itself.
+    await firstTask.locator('.title').click();
+    const detail = page.locator('#tasks-body .row-detail').first();
+    await detail.waitFor({ state: 'visible' });
+    const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
+    await assertNarrowTableLayouts(page);
+    await page.evaluate(() => globalThis.showDiagnosticsEvidence());
+    // Hold a real visible panel in refresh, then inspect its rendered accessible
+    // feedback and retry affordance at desktop and narrow widths.
     await page.evaluate(() => {
-      window.scrollTo(0, 0);
-      document.getElementById('tasks-body').scrollTop = 0;
+      globalThis.fetch = (_path, options) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')));
+      });
+      document.getElementById('refresh-btn').click();
     });
-    const pager = page.locator('.task-pagination');
-    if (!(await pager.isVisible())) throw new Error(`Task pagination invisible at ${viewport.width}px`);
-    if (!(await page.locator('#tasks-next').isEnabled())) throw new Error('First task page must enable Next');
-    if (await page.locator('#tasks-previous').isEnabled()) throw new Error('First task page must disable Previous');
-    await assertVisibleTaskRow(page, viewport, 'page 1');
-    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}.png`), fullPage: true });
-  }
-  await page.evaluate(() => { document.getElementById('tasks-body').scrollTop = 120; });
-  await page.locator('#tasks-next').click();
-  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '21–40 of 55');
-  if (await page.locator('#tasks-body').evaluate((body) => body.scrollTop !== 0)) throw new Error('Task page navigation must reset the task-body scroll position');
-  if (!(await page.locator('#tasks-previous').isEnabled())) throw new Error('Second task page must enable Previous');
-  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
-    await page.setViewportSize({ width: viewport.width, height: 900 });
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const feedback = page.locator('#diag-body [role="status"]');
+      if (!(await feedback.isVisible())) throw new Error(`Refresh feedback invisible at ${width}px`);
+      if (!(await feedback.textContent()).includes('Refreshing')) throw new Error('Missing retained-data feedback');
+      if (await feedback.getAttribute('aria-live') !== 'polite') throw new Error('Missing accessible live feedback');
+      if (!(await page.locator('#refresh-btn').isEnabled())) throw new Error('Retry disabled');
+      await page.screenshot({ path: path.join(evidence, `refresh-${width}.png`) });
+    }
+    await assertScoreboardLayout(page);
+    await assertRunStepLayout(page);
+    await assertRunDetailPresentation(page, evidence);
+    await assertCrewWindow(page);
+    await assertStillWaiting(page);
+    await assertTopbarSingleRow(page);
+    await assertProtocolSkewFailure(page);
+    await new Promise(resolve => server.close(resolve));
     await page.evaluate(() => {
-      window.scrollTo(0, 0);
-      document.getElementById('tasks-body').scrollTop = 0;
+      globalThis.fetch = globalThis.nativeFetch;
+      document.getElementById('refresh-btn').click();
     });
-    await assertVisibleTaskRow(page, viewport, 'page 2');
-    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}-page-2.png`), fullPage: true });
+    await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
+    if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
-  await page.locator('#task-filter .chip[data-status="done"]').click();
-  await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
-  await page.locator('#task-filter .chip[data-role="all"]').click();
-  const firstTask = page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').first();
-  // Open it the way a person does, by its title: on a narrow row the centre
-  // of the box is the crew select, which takes the click for itself.
-  await firstTask.locator('.title').click();
-  const detail = page.locator('#tasks-body .row-detail').first();
-  await detail.waitFor({ state: 'visible' });
-  const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
-  await assertNarrowTableLayouts(page);
-  await page.evaluate(() => globalThis.showDiagnosticsEvidence());
-  // Hold a real visible panel in refresh, then inspect its rendered accessible
-  // feedback and retry affordance at desktop and narrow widths.
-  await page.evaluate(() => {
-    globalThis.fetch = (_path, options) => new Promise((_resolve, reject) => {
-      options?.signal?.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')));
-    });
-    document.getElementById('refresh-btn').click();
-  });
-  for (const width of [1280, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    const feedback = page.locator('#diag-body [role="status"]');
-    if (!(await feedback.isVisible())) throw new Error(`Refresh feedback invisible at ${width}px`);
-    if (!(await feedback.textContent()).includes('Refreshing')) throw new Error('Missing retained-data feedback');
-    if (await feedback.getAttribute('aria-live') !== 'polite') throw new Error('Missing accessible live feedback');
-    if (!(await page.locator('#refresh-btn').isEnabled())) throw new Error('Retry disabled');
-    await page.screenshot({ path: path.join(evidence, `refresh-${width}.png`) });
-  }
-  await assertScoreboardLayout(page);
-  await assertRunStepLayout(page);
-  await assertCrewWindow(page);
-  await assertStillWaiting(page);
-  await assertTopbarSingleRow(page);
-  await assertProtocolSkewFailure(page);
-  await new Promise(resolve => server.close(resolve));
-  await page.evaluate(() => {
-    globalThis.fetch = globalThis.nativeFetch;
-    document.getElementById('refresh-btn').click();
-  });
-  await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
-  if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
-  console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();
   if (server.listening) await new Promise(resolve => server.close(resolve));
