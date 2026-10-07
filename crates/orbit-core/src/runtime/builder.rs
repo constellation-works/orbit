@@ -96,20 +96,14 @@ pub(crate) fn build_context_from_roots(
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
-    let workspace_id = if is_explicit_data_dir(global_root, &paths.orbit_dir) {
-        binding
-            .map(|binding| binding.logical_workspace_id.clone())
-            .or_else(|| {
-                configured
-                    .as_ref()
-                    .map(|config| config.workspace_id.clone())
-            })
-    } else {
-        configured
-            .as_ref()
-            .map(|config| config.workspace_id.clone())
-    }
-    .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+    let workspace_id = selected_explicit_root_workspace_id(global_root, &paths.orbit_dir, binding)
+        .map(str::to_owned)
+        .or_else(|| {
+            configured
+                .as_ref()
+                .map(|config| config.workspace_id.clone())
+        })
+        .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
     let import_report = if write_free || configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
@@ -608,6 +602,19 @@ fn stored_checkout_repo_root(
     Ok(registry
         .find_checkout_by_orbit_dir(workspace_root)?
         .map(|checkout| checkout.repo_root))
+}
+
+/// A shared explicit root's compatibility config names only its first
+/// workspace. The selected logical binding is authoritative there; ordinary
+/// checkout roots retain their persisted partition identity.
+pub(super) fn selected_explicit_root_workspace_id<'a>(
+    global_root: &Path,
+    orbit_dir: &Path,
+    binding: Option<&'a WorkspaceRuntimeBinding>,
+) -> Option<&'a str> {
+    binding
+        .filter(|_| is_explicit_data_dir(global_root, orbit_dir))
+        .map(|binding| binding.logical_workspace_id.as_str())
 }
 
 fn is_explicit_data_dir(global_root: &Path, orbit_dir: &Path) -> bool {
