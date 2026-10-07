@@ -124,17 +124,15 @@ spec:
        result path changed. Record it as `required` and `passed`, naming its
        result and log artifacts in `note`; do not request that check again.
        A repair that changes the tree needs evidence for the repaired tree.
-       Before starting a fresh local Rust CodeQL extraction, inspect the
-       implementer's retained database and evidence. Reuse that database and
-       its results only when extraction checks passed and source verification
-       (the validated source tree, `codeql resolve files` listing, and
-       `database/src.zip` paths and contents) matches the candidate, with the
-       same query selector, CodeQL version, and effective configuration. Cite
-       the evidence in the required validation record. If it is absent,
-       incomplete, mismatched, or a reviewer repair changes Rust sources,
-       CodeQL configuration, or model extensions, run local CodeQL on the
-       final tree; use Linux external evidence when this host cannot perform a
-       complete extraction.
+       Before repeating an expensive workspace-required check, inspect the
+       implementer's retained evidence and the workspace's reuse guidance.
+       Reuse it only when workspace guidance permits, the check completed
+       successfully, and its verified inputs, tool versions, and effective
+       configuration match the final candidate. Cite the evidence in the
+       required validation record. If it is absent, incomplete, mismatched,
+       or invalidated by a reviewer repair, rerun the check on the final tree;
+       follow workspace guidance for evidence from a supported platform when
+       this host cannot perform the check.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
        and the implementer's execution summary in the manifest. A green summary
@@ -170,10 +168,9 @@ spec:
        an open finding rejects the candidate and blocks the task.
     4. Satisfy the manifest's `required_validation_commands` and the validation
        required by the workspace's own AGENTS.md on the final worktree state.
-       For local Rust CodeQL, an implementer result may satisfy the command
-       without a fresh extraction only when its source verification matches
-       this exact tree. A reviewer change to Rust sources, CodeQL configuration,
-       or model extensions requires a fresh run on the repaired tree.
+       Reuse verified implementer evidence only under the workspace's reuse
+       rules and when it covers this exact candidate. Rerun every required
+       check whose evidence a reviewer repair invalidates on the repaired tree.
        Use the workspace's supported mechanism to pin any comparison base to
        the manifest's `base.commit`. Formatting and focused test filters do
        not replace a full affected-test gate when the workspace requires one.
@@ -269,8 +266,8 @@ spec:
          Keep its validation record `required` and `not_run` or `denied`.
          External checks belong in this list; substantive open findings still
          reject the candidate. A required command that repository guidance
-         says cannot run on this host's platform (such as local CodeQL off
-         Linux) and that refused without running did not run: record it
+         says cannot run on this host's platform and that refused without
+         running did not run: record it
          `not_run` and, when it is the only remaining work, name the run on
          the supported platform that the guidance specifies as external
          evidence. Never accept a run that reported incomplete analysis.
