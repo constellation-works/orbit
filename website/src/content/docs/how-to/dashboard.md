@@ -215,7 +215,7 @@ interrupted run opens on the step it stopped at and the error it recorded.
 | Action | Available for | Effect |
 |---|---|---|
 | **cancel** | `pending` or `running` | Cancels the run. |
-| **Resume** | `failed`, `interrupted`, or `timeout` | Restarts from the first step that did not succeed. |
+| **Resume** | `failed`, `interrupted`, or `timeout` | Restarts from the first step that did not succeed. A run authorized to mark tasks done requires an operator session to resume. |
 | **Replay run** | Any run (asks first if it is still running) | Submits a new run of the same job. |
 
 A refused action shows its error above the list until you dismiss it or start
@@ -413,10 +413,15 @@ An unauthorized control is disabled and shows the reason, and the panel says
 how to get operator access. A request that reaches the API anyway gets `403`
 with `code: authorization_denied`.
 
-Task **ship**, **approve**, **reject**, and **archive**, and run **cancel**,
-**Resume**, and **Replay run**, do not need operator capability. They need a
+Task **ship**, **approve**, **reject**, and **archive**, plus run **cancel**
+and review-only **Resume**, do not need operator capability. They need a
 concrete active workspace, and they fail closed on conflicts such as an
 in-flight ship or a held workspace claim.
+
+**Resume** keeps the source run's completion policy. If that policy marks
+tasks done, resuming requires operator capability and otherwise returns
+`403` with `code: authorization_denied` and `operation: auto_drain.complete`.
+**Replay run** requires operator capability for any source run.
 
 ## Troubleshooting
 

@@ -162,6 +162,79 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
 
 const WS: &str = "ws_http_fixture";
 
+#[test]
+fn resume_requires_current_completion_authority_and_preserves_review_only_admission() {
+    isolated(
+        "workflows::resume_requires_current_completion_authority_and_preserves_review_only_admission",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("resume_fixture");
+            let mut source =
+                fixture.seed_run("jrun-resume-done", "resume_fixture", JobRunState::Failed);
+            source.input = Some(json!({"completion":"done","marker":"preserved"}));
+            fixture.save_run(&source);
+            let uri = format!("/api/job-runs/{}/resume?workspace={WS}", source.run_id);
+            let agent = fixture.server(false);
+            let before = listed_runs(&fixture);
+            // Authority follows the persisted input, even if a caller tries to
+            // downgrade completion in the body or omits the body altogether.
+            for response in [
+                agent.send("POST", &uri, json!({})),
+                agent.send("POST", &uri, json!({"completion":"review"})),
+                send_raw(&agent, "POST", &uri, None, None),
+            ] {
+                let denied = error_code(response, 403, "authorization_denied");
+                assert_eq!(denied["operation"], "auto_drain.complete");
+                assert_eq!(
+                    listed_runs(&fixture),
+                    before,
+                    "denied completion resume must not create or change a run"
+                );
+            }
+
+            let operator = fixture.server(true);
+            let receipt = json_ok(operator.send("POST", &uri, json!({})));
+            assert_eq!(receipt["retry_source_run_id"], source.run_id);
+            let resumed = listed_runs(&fixture)
+                .into_iter()
+                .find(|run| run.run_id == receipt["run_id"].as_str().unwrap())
+                .expect("operator resume must persist its receipt");
+            assert_eq!(resumed.input, source.input);
+            assert_eq!(
+                resumed.retry_source_run_id.as_deref(),
+                Some(source.run_id.as_str())
+            );
+            assert_eq!(resumed.attempt, 2);
+            assert_eq!(listed_runs(&fixture).len(), before.len() + 1);
+
+            for (id, input) in [
+                ("jrun-resume-review", json!({"completion":"review"})),
+                ("jrun-resume-default", json!({"marker":"no completion"})),
+            ] {
+                let mut review = fixture.seed_run(id, "resume_fixture", JobRunState::Failed);
+                review.input = Some(input);
+                fixture.save_run(&review);
+                let before = run_ids(&fixture);
+                let receipt = json_ok(agent.send(
+                    "POST",
+                    &format!("/api/job-runs/{id}/resume?workspace={WS}"),
+                    json!({}),
+                ));
+                let resumed = listed_runs(&fixture)
+                    .into_iter()
+                    .find(|run| run.run_id == receipt["run_id"].as_str().unwrap())
+                    .expect("review-only resume must persist its receipt");
+                assert_eq!(resumed.input, review.input);
+                assert_eq!(resumed.retry_source_run_id.as_deref(), Some(id));
+                assert_eq!(resumed.attempt, 2);
+                let mut expected = before;
+                assert!(expected.insert(resumed.run_id));
+                assert_eq!(run_ids(&fixture), expected);
+            }
+        },
+    );
+}
+
 /// An absent body reached the handler: a 4xx whose text is not a JSON parse error.
 fn assert_handler_reached(response: reqwest::blocking::Response, label: &str) {
     let status = response.status().as_u16();

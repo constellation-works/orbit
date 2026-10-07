@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
+use orbit_core::JobRunState;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated};
 
 /// Ordinary writes intentionally outside the exceptional-operation registry.
 /// New methods/paths default to operator-only, so a new unguarded route fails.
+/// Resume is ordinary only when the source input does not request completion.
 const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/tasks"),
     ("PATCH", "/tasks/:id"),
@@ -72,12 +74,30 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
         "guards::every_router_mutation_enforces_origin_and_operator_policy",
         || {
             let fixture = Fixture::new();
+            fixture.job("resume_guard_fixture");
+            for completion in ["review", "done"] {
+                let mut source = fixture.seed_run(
+                    &format!("jrun-resume-{completion}"),
+                    "resume_guard_fixture",
+                    JobRunState::Failed,
+                );
+                source.input = Some(json!({"completion":completion}));
+                fixture.save_run(&source);
+            }
             let operator = fixture.server(true);
             let agent = fixture.server(false);
             let mut mutations = BTreeSet::new();
-            for path in registered_paths() {
+            for (path, id) in registered_paths().flat_map(|path| {
+                // Resume inherits completion from saved input, not the HTTP body.
+                let ids: &[&str] = if path == "/job-runs/:id/resume" {
+                    &["jrun-resume-review", "jrun-resume-done"]
+                } else {
+                    &["missing"]
+                };
+                ids.iter().map(move |&id| (path, id))
+            }) {
                 let concrete = path
-                    .replace(":id", "missing")
+                    .replace(":id", id)
                     .replace(":key", "workflow.base_branch")
                     .replace(":name", "missing")
                     .replace(":namespace", "missing")
@@ -131,7 +151,9 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                     let response = agent.send(method, &uri, body(path));
                     let status = response.status().as_u16();
                     let payload: Value = response.json().unwrap();
-                    if ORDINARY_WRITES.contains(&(method, path)) {
+                    let completion_resume =
+                        path == "/job-runs/:id/resume" && id == "jrun-resume-done";
+                    if ORDINARY_WRITES.contains(&(method, path)) && !completion_resume {
                         assert_ne!(
                             payload["code"], "authorization_denied",
                             "ordinary write must preserve agent admission: {method} {path}: {status} {payload}"
@@ -145,6 +167,9 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             payload["code"], "authorization_denied",
                             "{method} {path}: {payload}"
                         );
+                        if completion_resume {
+                            assert_eq!(payload["operation"], "auto_drain.complete");
+                        }
                     }
                 }
             }
