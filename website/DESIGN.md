@@ -117,7 +117,8 @@ pipeline → audit → agents), laid out for this column at 6:5 and drawn at 2x 
 the captures stay sharp at ~660px. Source and screenshots live in
 `marketing/media/video/orbit-dashboard-tour`; the site serves a web re-encode
 at `public/media/orbit-dashboard-tour.mp4` with a poster frame from the
-approve beat. It autoplays muted with native controls; under
+approve beat, whose side rails are masked so no panel is cut through its
+label. It autoplays muted with native controls; under
 `prefers-reduced-motion: reduce` it stays on the poster. The `figcaption`
 dates the capture, so its counts read as a snapshot rather than a live metric,
 and the `aria-label` narrates the tour. Below 54rem the columns stack.
@@ -139,7 +140,8 @@ Below the hero, in order:
 5. **Go further** — a list of five guides beside the section head, with the
    CLI reference linked from the head.
 6. **Quickstart** — a closing panel with the three setup commands, then
-   `orbit web serve` to open the dashboard, and CTAs.
+   `orbit web serve` to open the dashboard, and CTAs. Each command row has a
+   copy button that copies exactly the command text.
 
 Sections open on a two-column head — mono eyebrow and a one-sentence heading
 on the left, a short lede on the right. The footer, not the page, carries the
