@@ -153,7 +153,7 @@ impl Fixture {
             "attempt_id": self.input["admission"]["attempt_id"],
             "verdict": verdict, "summary": "Checked candidate.",
             "findings": [],
-            "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+            "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
             "escalation": if verdict == "accept" { None } else { Some("Reviewer cannot accept candidate.") },
         }));
     }
@@ -161,12 +161,18 @@ impl Fixture {
     /// Attach `report` the way the reviewer does: through the public
     /// `orbit.task.artifact.put` tool from a scratch file.
     pub(super) fn put_report(&self, report: &Value) {
+        self.try_put_report(report).unwrap();
+    }
+
+    /// [`Self::put_report`], returning the tool's refusal instead of
+    /// panicking on it.
+    pub(super) fn try_put_report(&self, report: &Value) -> Result<Value, orbit_common::OrbitError> {
         let path = self.repo.join(".orbit/tmp").join(REVIEW_REPORT_ARTIFACT);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, report.to_string()).unwrap();
         self.runtime.run_tool("orbit.task.artifact.put", json!({
             "id": self.task_id, "model": "codex", "path": REVIEW_REPORT_ARTIFACT, "source_path": path,
-        })).unwrap();
+        }))
     }
 
     /// Run the deterministic settlement for the admitted attempt.

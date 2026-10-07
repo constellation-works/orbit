@@ -1911,6 +1911,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         validation: ["build", "test"]
             .into_iter()
             .map(|command| ReviewValidation {
+                id: None,
                 command: command.into(),
                 outcome: ValidationOutcome::Passed,
                 role: ValidationRole::Required,
@@ -1934,6 +1935,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         budget: ReviewBudget { minutes: 45 },
         escalation: None,
         retained_obligations: vec![],
+        retired_validation: vec![],
         validation_scope: vec![],
         selectors_widened: vec![],
         issued_at: Utc::now(),
@@ -2453,10 +2455,14 @@ fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
 }
 
 fn review_report(verdict: &str) -> TaskArtifact {
+    review_report_with(verdict, r#"{"command":"make ci-fast","outcome":"passed"}"#)
+}
+
+fn review_report_with(verdict: &str, validation: &str) -> TaskArtifact {
     TaskArtifact {
         path: REVIEW_REPORT_ARTIFACT.to_string(),
         content: format!(
-            r#"{{"schema_version":1,"attempt_id":"rvw-1","verdict":"{verdict}","summary":"Checked.","validation":[{{"command":"make ci-fast","outcome":"passed"}}],"escalation":"decide"}}"#
+            r#"{{"schema_version":1,"attempt_id":"rvw-1","verdict":"{verdict}","summary":"Checked.","validation":[{validation}],"escalation":"decide"}}"#
         )
         .into_bytes(),
         media_type: "application/json".to_string(),
@@ -2464,10 +2470,137 @@ fn review_report(verdict: &str) -> TaskArtifact {
     }
 }
 
+/// [ORB-14370] A claimed reviewer's live report put reaches the owner as a
+/// worker update, while it can still correct the report: it is held to the
+/// record-id contract and its refusal names the record. The evidence a claim
+/// settles after the reviewer stopped is retained without that check (see
+/// `racing_report_writers_each_retain_their_revision`).
+#[test]
+fn a_claimed_reviewers_live_report_put_is_held_to_record_ids() {
+    if !isolated("a_claimed_reviewers_live_report_put_is_held_to_record_ids") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let task = owner.create_task("claimed review report");
+    let request = owner_request("report");
+    let claim = owner.pull(&request).claim.expect("claim");
+    let unbound = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        None,
+    );
+    let worker = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(leaf_run(&claim)),
+    );
+    let mutate = |auth: &ClaimInvocation, id: &str, mutation: &ClaimMutation| {
+        owner
+            .backends
+            .commit_boundary
+            .mutate_execution_claim(Some(auth), id, mutation)
+    };
+    mutate(
+        &unbound,
+        "bind",
+        &ClaimMutation::Bind {
+            run: leaf_run(&claim),
+            ship: request.ship,
+        },
+    )
+    .expect("bind");
+    let put = |id: &str, artifact: TaskArtifact| {
+        mutate(
+            &worker,
+            id,
+            &ClaimMutation::Update(ClaimWorkerUpdate {
+                evidence: ClaimEvidence {
+                    artifacts: vec![artifact],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )
+    };
+
+    let refused = put(
+        "update-without-id",
+        review_report_with(
+            "incomplete",
+            r#"{"command":"make ci-fast","outcome":"not_run","role":"required"}"#,
+        ),
+    )
+    .expect_err("a live required record without an id");
+    let message = invalid_input(refused);
+    assert!(
+        message.contains("`make ci-fast` -> `\"id\": \"V1\"`"),
+        "the refusal names the record and an id to give it: {message}"
+    );
+    assert!(
+        owner
+            .backends
+            .task
+            .artifact
+            .get_task_artifact(&task.id, REVIEW_REPORT_ARTIFACT)
+            .unwrap()
+            .is_none(),
+        "a refused put stores no report"
+    );
+
+    put(
+        "update-with-id",
+        review_report_with(
+            "incomplete",
+            r#"{"id":"V1","command":"make ci-fast","outcome":"not_run","role":"required"}"#,
+        ),
+    )
+    .expect("the corrected report");
+    let dropped = put(
+        "update-dropping-id",
+        review_report_with(
+            "accept",
+            r#"{"id":"V2","command":"cargo test","outcome":"passed","role":"required"}"#,
+        ),
+    )
+    .expect_err("a live revision dropping V1");
+    let message = invalid_input(dropped);
+    assert!(
+        message.contains("required validation record `V1` (`make ci-fast`)"),
+        "the refusal names the dropped record: {message}"
+    );
+    put(
+        "update-carrying-id",
+        review_report_with(
+            "accept",
+            r#"{"id":"V1","command":"TMPDIR=.orbit/tmp make ci-fast","outcome":"passed","role":"required"}"#,
+        ),
+    )
+    .expect("the revision carrying V1 forward");
+    let history = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifact(&task.id, REVIEW_REPORT_HISTORY_ARTIFACT)
+        .unwrap()
+        .expect("history");
+    assert_eq!(
+        ReviewReportHistory::parse(&history.content)
+            .unwrap()
+            .for_attempt("rvw-1")
+            .count(),
+        2,
+        "only the accepted revisions are retained"
+    );
+}
+
 /// Two compositions commit a claimed reviewer's report revisions at the same
 /// instant (a retry racing its replacement): the commit boundary serializes
 /// them, the report history retains both, and no writer may supply the
-/// history itself.
+/// history itself. Settled evidence arrives after the reviewer stopped, so
+/// its id-less records are retained rather than refused [ORB-14370].
 #[test]
 fn racing_report_writers_each_retain_their_revision() {
     if !isolated("racing_report_writers_each_retain_their_revision") {

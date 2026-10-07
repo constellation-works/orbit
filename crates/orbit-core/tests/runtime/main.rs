@@ -19,6 +19,7 @@ mod relation_auto_close;
 mod retired_stubs;
 mod review_continuation;
 mod review_gate_audit;
+mod review_record_ids;
 mod review_report_revisions;
 mod sandbox_off;
 mod security_alert_sweep;

@@ -167,6 +167,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             Vec::new()
         },
         validation: vec![ReviewValidation {
+            id: Some("V1".to_string()),
             command: "make ci-fast".to_string(),
             outcome: ValidationOutcome::Passed,
             role: ValidationRole::Required,
@@ -175,6 +176,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             control: None,
             sources: Vec::new(),
         }],
+        retired_validation: Vec::new(),
         escalation: (verdict == ReviewVerdict::Reject)
             .then(|| "decide whether the note is required".to_string()),
     }

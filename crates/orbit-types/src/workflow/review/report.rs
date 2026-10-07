@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    NegativeControl, REVIEW_CONTRACT_VERSION, ReviewValidation, ReviewVerdict, ValidationOutcome,
-    ValidationRole,
+    NegativeControl, REVIEW_CONTRACT_VERSION, RetiredValidation, ReviewValidation, ReviewVerdict,
+    ValidationOutcome, ValidationRole,
 };
 
 /// How a finding was closed, if at all.
@@ -53,6 +53,10 @@ pub struct ReviewReport {
     pub findings: Vec<ReviewFinding>,
     #[serde(default)]
     pub validation: Vec<ReviewValidation>,
+    /// Earlier revisions' required-record ids this report deliberately no
+    /// longer carries, each with its reason [ORB-14370].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_validation: Vec<RetiredValidation>,
     /// Why the review stopped when the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
@@ -146,7 +150,7 @@ fn normalize_report(report: &mut Value) {
     if matches!(report.get("summary"), None | Some(Value::Null)) {
         report.insert("summary".to_string(), Value::String(String::new()));
     }
-    for list in ["findings", "validation"] {
+    for list in ["findings", "validation", "retired_validation"] {
         if report.get(list).is_some_and(Value::is_null) {
             report.remove(list);
         }
@@ -170,10 +174,14 @@ fn normalize_report(report: &mut Value) {
                     ("skipped", "not_run"),
                 ],
             );
-            for optional in ["role", "control", "sources"] {
+            for optional in ["id", "role", "control", "sources"] {
                 if record.get(optional).is_some_and(Value::is_null) {
                     record.remove(optional);
                 }
+            }
+            if let Some(Value::Number(id)) = record.get("id") {
+                let id = id.to_string();
+                record.insert("id".to_string(), Value::String(id));
             }
             normalize_label_field(record, "role", &[]);
             normalize_label_field(record, "control", &[]);

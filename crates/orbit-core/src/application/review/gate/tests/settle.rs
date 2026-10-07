@@ -101,7 +101,7 @@ fn a_drifted_report_on_a_later_bundle_task_still_settles() {
             "paths": "src.txt",
             "disposition": "repaired",
         }],
-        "validation": [{"command": "make ci-fast", "outcome": "PASS"}],
+        "validation": [{"id": 1, "command": "make ci-fast", "outcome": "PASS"}],
     });
     write_report_bytes(
         &gated.fixture.runtime,

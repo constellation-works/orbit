@@ -14,6 +14,7 @@ fn revision(attempt: &str, sha: &str) -> ReviewReportRevision {
         recorded_by: "reviewer".to_string(),
         verdict: ReviewVerdict::Incomplete,
         validation: Vec::new(),
+        record_id_contract_checked: None,
     }
 }
 

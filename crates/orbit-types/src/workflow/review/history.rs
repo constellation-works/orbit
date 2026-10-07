@@ -27,6 +27,12 @@ pub struct ReviewReportRevision {
     pub verdict: ReviewVerdict,
     #[serde(default)]
     pub validation: Vec<ReviewValidation>,
+    /// Whether this revision's stable record ids were checked while the
+    /// reviewer could still correct it [ORB-14370]. `Some(false)` marks a
+    /// post-session claim write that settlement must check before accepting;
+    /// `None` preserves reports retained before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id_contract_checked: Option<bool>,
 }
 
 /// The report revisions of one task, oldest first.
