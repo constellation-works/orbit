@@ -3,15 +3,15 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: design
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access]
-related_artifacts: []
+related_artifacts: [ORB-14448, ORB-14449]
 ---
 
 # Host Registry — Design
@@ -60,7 +60,7 @@ machine.name is the changeable display name. `orbit config set --global machine.
 
 RegisteredRuntimeFactory projects task_prefix into the global task allocator before opening a runtime. A pristine legacy allocator may adopt the configured prefix. Once allocation or task bindings have begun, a conflicting prefix fails closed rather than renaming issued IDs.
 
-The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md).
+The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md). The prefix is also specified as the routing key: an id-addressed task call goes to the host its prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449], not yet implemented).
 
 ## 3. Workspace catalog
 
@@ -127,9 +127,9 @@ RegisteredRuntimeFactory also carries replica ownership into Core's coordination
 
 ### CLI
 
-The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` is the one exception, on both the human subcommand and `orbit tool run orbit.task.show`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, publication, remove and teardown are the current workspace CLI surface. There is no top-level host command; change the machine display name with `orbit config set --global machine.name <value>`.
+The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` is the one exception, on both the human subcommand and `orbit tool run orbit.task.show`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, publication, remove and teardown are the current workspace CLI surface. There is no top-level host command yet; change the machine display name with `orbit config set --global machine.name <value>`. The specified `orbit host add|list|show|rename|remove` manages remote hosts only and leaves `[machine]` alone ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]).
 
-There is no active v1 CLI surface for fleet host registration, enumeration or retirement, and no workspace owner-link command.
+Remote host registration, listing and removal are specified in [specs/host-commands.md](./specs/host-commands.md) and not yet implemented. Until then, remote membership is the hand-edited `~/.orbit/mcp-destinations.toml` that federated MCP reads. There is no workspace owner-link command.
 
 ### Web
 
@@ -161,3 +161,10 @@ Older databases may retain tables and migration records from the removed fleet-r
 | task prefix conflicts after allocation | Runtime construction refused |
 | Web refresh cannot load registry | Last valid in-memory snapshot retained |
 | initial Web registry load fails | Server startup fails |
+
+## Task References
+
+- [ORB-14448] host file and `orbit host` commands (specified)
+- [ORB-14449] task-prefix routing and `--host` selection (specified)
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

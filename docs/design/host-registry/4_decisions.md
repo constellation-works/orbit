@@ -3,15 +3,15 @@ summary: "Host Registry — Decisions"
 type: design
 title: "Host Registry — Decisions"
 owner: codex
-last_updated: 2026-09-21
-last_validated: 2026-09-21
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: decisions
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
-paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-config/src/registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**"]
+paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-config/src/registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**", "crates/orbit-mcp/src/federated/**", "crates/orbit-core/src/application/gc.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11008, ORB-11009, ORB-12725]
+related_artifacts: [ORB-11008, ORB-11009, ORB-12725, ORB-14447, ORB-14448, ORB-14449]
 ---
 
 # Host Registry — Decisions
@@ -86,6 +86,8 @@ must not become a replica protocol. The federated MCP contract itself lives in
 
 ## V1 has no fleet control plane
 
+**Superseded by:** [The host registry is operator configuration, not a fleet control plane](#the-host-registry-is-operator-configuration-not-a-fleet-control-plane). The rule that the legacy fleet-registry tables carry no authority continues there unchanged.
+
 **Context.** Older databases can contain fleet-registry tables, but their command, publication and cache paths are absent from the live application.
 
 **Decision.** Do not treat those tables as identity, catalog, routing, health or authorization authority. V1 has no host register/list/retire, workspace-link, presence, durable fleet execution-profile publication, snapshot, cache-refresh, placement or lease workflow.
@@ -123,6 +125,8 @@ here and must follow the federated-mcp link.
 ## Machine identity lives in `[machine]` in the global config.toml
 
 **Recorded:** 2026-09-21 · [ORB-12725].
+
+**Partly superseded by:** [The host registry is operator configuration, not a fleet control plane](#the-host-registry-is-operator-configuration-not-a-fleet-control-plane). `orbit host` returns as the command for remote hosts. The local identity stays in `[machine]` as decided here.
 
 **Supersedes** "persist identity in host.toml" and the renameable `host_id`
 display name recorded elsewhere in this folder. The folder keeps its name for
@@ -203,10 +207,94 @@ release rather than failing every command on an existing catalog; it is never
 written back. Cost: an offline listing can name a remote owner only by its
 stable id until a federated list observes it.
 
+## The host registry is operator configuration, not a fleet control plane
+
+**Recorded:** 2026-10-07 · [ORB-14448] · decided by Daniel during on-call ORB-14441.
+
+**Context.** V1 refused host register, list and retire so that the dead fleet-registry
+tables, with their presence, publication and placement paths, would not come back. Remote
+membership went instead into a hand-edited `~/.orbit/mcp-destinations.toml` with two keys
+per row. By 2026-10 it had three consumers: federated serve, pull drains and replica
+worktree GC. Five error messages told the operator to edit it. Nothing recorded a remote
+host's task prefix, Orbit version or pull protocol. A replica's worktree GC asked the wrong
+host about one of its own tasks every hour (DANI-10433, [ORB-14447]). Owner/follower
+protocol skew showed up only when admission refused.
+
+**Decision.** The operator registers remote hosts one at a time with `orbit host add`, which
+reads the host's identity from the host itself
+([host-commands](./specs/host-commands.md)). An entry stores the operator's name, the SSH
+target, and two facts the host cannot change: `machine_id` and `task_prefix`. Everything
+else is read live when asked and never persisted: reachability, version, protocol and
+workspaces. The legacy fleet-registry tables stay unread.
+
+Apply this to every future host-level feature:
+
+- A fact that can change on the remote is read live, or the feature doesn't have it.
+- A feature that needs a background process, a heartbeat, a database table, or a choice
+  between hosts is a fleet control plane and needs its own decision.
+
+The operator-facing noun is *host*. *Machine* remains the identity vocabulary (`[machine]`,
+`machine_id`, `hm_`).
+
+Rejected alternatives:
+
+- Keep the hand-edited destinations file. The prefix, version and protocol gaps would stay,
+  as would every "edit this TOML" error.
+- Revive the database fleet registry with presence. That brings stale health, a second
+  source of truth, and the dead tables' migration debt.
+
+**Consequences.** One command adds a host and another reports skew, so neither an operator
+nor an agent edits TOML or copies selectors by hand, and prefix routing gets an offline
+table. Cost:
+
+- Every live column of `orbit host list` costs one SSH session per host, and an unreachable
+  host holds the listing for its full probe budget.
+- An offline host shows only cached identity.
+- An entry for a reinstalled host fails closed (`host_identity_mismatch`) until it is
+  removed and added again.
+
+## A task id routes to the host its prefix names
+
+**Recorded:** 2026-10-07 · [ORB-14449] · [ORB-14447].
+
+**Context.** The prefix already names a task's only writer ([2_design.md](./2_design.md) §2).
+Lookups nonetheless went wherever the caller's workspace pointed. A replica's worktree GC
+asked its workspace owner about a task the replica had minted itself. CLI and federated
+callers needed an explicit selector or an `ssh` hop to reach another host's task.
+
+**Decision.** Resolve a task call that addresses one task by id, and carries no explicit
+workspace selector, by the id's prefix:
+
+- the local prefix runs locally;
+- a registered host's prefix goes to that host;
+- anything else fails closed with `unknown_task_prefix`.
+
+Never search hosts, never fall back to a local mirror, and never route by workspace
+ownership. An explicit selector keeps its current meaning
+([host-routing](./specs/host-routing.md)). Apply this to every future call that addresses a
+task by id, including new task tools and id-bearing fields such as relation targets.
+
+Rejected alternatives:
+
+- Route by the caller's workspace owner. That is the DANI-10433 failure.
+- Fan out to every host and take the first answer. It adds latency, is ambiguous whenever a
+  mirror exists, and lets a write land on a mirror.
+
+**Consequences.** Any host reaches any registered host's task in one hop, and the replica GC
+stops asking the wrong host. Cost:
+
+- Prefixes must be unique across registered hosts, so two installations that both kept the
+  legacy `ORB` prefix cannot both be registered.
+- An unreachable host's tasks cannot be read from elsewhere, even when a local mirror
+  exists, unless the caller names the mirror's workspace explicitly.
+
 ## Task References
 
 - [ORB-11008] recorded the federated multi-host MCP policy
 - [ORB-11009] moved the implementable contract to federated-mcp and left this entry as the host-registry standing constraint
 - [ORB-12725] folded host.toml into `[machine]`, deleted `orbit host`, removed `owner_host_ids`, and renamed host -> machine across the codebase
+- [ORB-14447] replica worktree GC resolves a task id with the local prefix from the local store (interim fix for DANI-10433)
+- [ORB-14448] host file and `orbit host` commands
+- [ORB-14449] task-prefix routing and `--host` selection
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

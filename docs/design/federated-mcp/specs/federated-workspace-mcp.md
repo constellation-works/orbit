@@ -1,14 +1,14 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-06
+last_validated: 2026-10-07
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
 feature: federated-mcp
 tags: [federated-mcp, mcp, spec]
 related_features: [federated-mcp, host-registry, mcp-bridge]
-related_artifacts: [ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-14449, ORB-14448, ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Spec: Federated workspace MCP
@@ -21,13 +21,15 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Mux, not fleet registry
 
-1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records.
+1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. Once [ORB-14448] ships, the operator registers them with `orbit host add` into the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)). The gateway reads that file and still registers, probes or retires nothing itself.
 2. The accepting machine is an implicit local destination, using its existing stable `machine_id` and workspace registry. That is this host's own membership, not fleet discovery.
 3. The gateway does not auto-discover the owner checkout of a repository and does not perform placement.
 4. The gateway must not reinterpret a selector against its own local catalog. A copied `hm_*/ws_*` selector is delivered to the destination encoded in the token: the local in-process host when that destination is this machine, otherwise the configured SSH remote.
 5. A caller that chooses one host and speaks v1 MCP (local stdio, direct SSH stdio, or `orbit mcp listen`) never enters this mux.
 
 ## Destination membership file
+
+**Specified replacement ([ORB-14448]).** The host file `~/.orbit/hosts.toml`, written by `orbit host add` ([host-commands](../../host-registry/specs/host-commands.md)), becomes the membership source. Each of its entries supplies the same `ssh` and `machine_id` pair. The legacy file below is read for one release, and both files present is `host_file_conflict`. Until then, the rest of this section is current behavior.
 
 Remote federated membership is declared only in the machine-global operator file `~/.orbit/mcp-destinations.toml`. It is not part of workspace `config.toml`, `workspaces.json`, or host-registry. Local workspaces require no destination row: federated serve always includes the accepting machine. A missing file or an empty `destinations` list is a valid local-only configuration.
 
@@ -53,7 +55,7 @@ If a valid configured row already names the accepting machine's `machine_id`, th
 2. Callers must not parse the token and must not construct it from `machine.name` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
 3. Display names such as `orbit-linux/ws_orbit` are not selectors.
 4. The selector is addressing data, not a path, URL, logical-only workspace ID, or authorization credential. Possession of a selector is not authorization.
-5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector and does not inherit the v1 id-only default.
+5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector and does not inherit the v1 id-only default. Specified amendment ([ORB-14449]): an id-only call to an id-routed task tool is delivered to the host its task-id prefix names ([host-routing](../../host-registry/specs/host-routing.md)). A call that carries a selector keeps this rule.
 6. A token that is not uniquely host-qualified (a bare `ws_*`, a display host name, a v1 session-defaulted `ws_*`, or any other form that does not match the normative encoding) is `unknown_selector` **before forwarding**, not `ambiguous_destination`.
 7. Duplicate `machine_id` across configured destinations is a **config-load** `ambiguous_destination`. The mux must not treat that collision as a per-call routing outcome.
 8. Federated serve does not take `--workspace ws_*`. A bound session, if any, may only hold a host-qualified selector. v1 `orbit mcp serve --workspace` and the v1 `tools/list` snapshot stay unchanged.

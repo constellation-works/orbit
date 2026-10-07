@@ -3,22 +3,22 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-09-25
-last_validated: 2026-09-25
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-config/src/registry/settings.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11009]
+related_artifacts: [ORB-11009, ORB-14448, ORB-14449]
 ---
 
 # Host Registry — Overview
 
 The live host-registry feature is a machine-local identity and workspace catalog. It tells an Orbit process who the accepting machine is, which logical workspaces this installation knows, and which local checkout may be opened for each workspace.
 
-It is not a fleet router. V1 has no host-registration, host-list, host-retirement, workspace-link, presence, placement, lease, or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
+It is not a fleet router. Two operator-facing additions are specified but not yet implemented. First, the operator registers remote hosts with `orbit host add` into a CLI-owned host file that stores only identity the host cannot change ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Second, task ids route to the host their prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
 
 ## Ownership
 
@@ -40,6 +40,7 @@ orbit-types does not read machine files. orbit-registry does not dispatch Core t
   `orbit init` creates it. A legacy `~/.orbit/host.toml` is migrated into
   `[machine]` and removed on first identity load.
 - ~/.orbit/workspaces.json is schema v1. It separates logical workspace records from this machine's checkout paths and owner or replica role.
+- Specified, not yet live: `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. It replaces the hand-edited `~/.orbit/mcp-destinations.toml` after one release of compatibility ([specs/host-commands.md](./specs/host-commands.md)).
 - A workspace runtime is opened only from a local checkout binding. A checkoutless logical catalog entry can be listed but cannot execute.
 
 The accepting machine is authoritative for its files and runtime. Remote MCP simply carries MCP stdio over SSH to that machine; it does not copy or interpret registry state locally.

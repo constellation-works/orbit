@@ -3,15 +3,15 @@ summary: "Glossary — Host Registry"
 type: design
 title: "Glossary — Host Registry"
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: reference
 tags: [host-registry, glossary]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**"]
 related_features: [host-registry, federated-mcp]
-related_artifacts: []
+related_artifacts: [ORB-14448, ORB-14449]
 ---
 
 # Glossary — Host Registry
@@ -22,6 +22,10 @@ related_artifacts: []
 | machine_id | Generated, stable hm_-namespaced logical machine identifier; not an IP address, SSH target, path or credential. A forwarded label using it is audit metadata. |
 | machine.name | Changeable human display name for the local machine, set through global config |
 | machine.task_prefix | Immutable machine-local namespace projected into task allocation |
+| Host | Operator-facing noun for one Orbit installation, identified by its `[machine] id`. The local host runs the command; a remote host is reached over SSH. See [host-commands](../specs/host-commands.md). |
+| Host file | Specified `~/.orbit/hosts.toml`. It holds operator-registered remote hosts (name, ssh, machine_id, task_prefix) and nothing that can change on the host. It replaces `mcp-destinations.toml`. See [host-commands](../specs/host-commands.md). |
+| Host name | The operator's name for a host. For the local host it is `machine.name`; for a remote it is the entry's `name`. `--host` and `orbit host show` resolve it. |
+| Prefix table | Per-process map from task prefix to host, built from the local `machine.task_prefix` and the host file. It is the key for task-id routing. See [host-routing](../specs/host-routing.md). |
 | Machine identity implementation | MachineIdentity lifecycle in orbit-registry; persistence-neutral machine ID and name validators in orbit-types |
 | Workspace registry | The machine-local ~/.orbit/workspaces.json catalog owned by orbit-registry |
 | Logical workspace | Path-independent workspace record containing identity, ownership and ship metadata |

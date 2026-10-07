@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Standing rules for the federated MCP mux: destinations are configured, 
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
@@ -21,6 +21,8 @@ Record non-obvious decisions here by title. These are Door 2 standing rules. Cod
 ## Federated MCP is a mux of operator-configured destinations
 
 **Recorded:** 2026-08 · [ORB-11009] · [ORB-11010] (PR #1139)
+
+**Amended by:** host-registry [The host registry is operator configuration, not a fleet control plane](../host-registry/4_decisions.md#the-host-registry-is-operator-configuration-not-a-fleet-control-plane). Membership is written by `orbit host add` ([ORB-14448]). The gateway still does not register, probe or place hosts.
 
 ### Context
 
@@ -57,6 +59,8 @@ Rejected alternatives: treating a machine-id-only TOML row as local membership (
 ## Host-qualified selectors are structured and caller-uninterpreted
 
 **Recorded:** 2026-08 · [ORB-11009] · [ORB-11010] (PR #1139)
+
+**Amended by:** host-registry [A task id routes to the host its prefix names](../host-registry/4_decisions.md#a-task-id-routes-to-the-host-its-prefix-names). An id-only call to an id-routed task tool goes to its prefix's host ([ORB-14449], specified). Selector-bearing calls keep this rule, and `--host` resolves by copying the host's listed `selector`, never by concatenation.
 
 ### Context
 
@@ -221,5 +225,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-11184] — kernel-protected Tier 2 exec boundary before userspace startup
 - [ORB-12564] — argv-propagated remote operator; destination-side caller authorization removed
 - [ORB-12563] — the same rationale applied to the dashboard
+- [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (specified in host-registry)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
