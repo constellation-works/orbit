@@ -179,8 +179,9 @@ therefore the gate's `review-gate.json`, never an ordinary artifact.
 A `review-*` artifact (the prefix matched without ASCII case) is the review gate's and keeps its
 stricter scope. The broker carries it only for the reviewer activity (`agent_review_repair`),
 and only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer
-is running in this run before its deadline. A read may name the review contract's `review-manifest.json`, `review-report.json`,
-`review-report-history.json` or `review-evidence-hold.json`, or a `review-*` evidence artifact
+is running in this run before its deadline. A read may name the review contract's
+`review-manifest.json`, `review-report.json`, `review-report-history.json` or
+`review-evidence-hold.json`, or a `review-*` evidence artifact
 the owner's current evidence hold names: a requirement's result, or the log that result names
 for that requirement. The broker resolves which evidence paths are readable from the owner's
 hold and results, never from the request; with no hold, none is. Evidence outside the `review-*`
