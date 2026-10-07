@@ -12,6 +12,7 @@
 mod git_repo;
 
 mod error_output;
+mod help_examples;
 mod help_goldens;
 mod help_skips_log_io;
 mod json_output_stability;

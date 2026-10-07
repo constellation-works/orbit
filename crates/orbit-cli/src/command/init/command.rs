@@ -35,9 +35,8 @@ pub struct InitCommand {
     #[arg(long)]
     pub force: bool,
 
-    /// Internal installer entry point: prepare the Linux host without creating
-    /// a machine identity or writing Orbit state.
-    #[arg(long, hide = true)]
+    /// Prepare the Linux host without creating a machine identity or writing Orbit state.
+    #[arg(long)]
     pub host_prerequisites_only: bool,
 
     /// On Linux, leave Bubblewrap packages and AppArmor profiles to the host's
