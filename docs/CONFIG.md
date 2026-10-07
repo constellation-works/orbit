@@ -41,7 +41,9 @@ Each value in `show` reports one state: `workspace`, `global` or `environment` (
 
 In `--json`, each key's provenance carries `scope`, `path`, `section`, `description`, `state` (`set`/`default`/`unset`) and `shadowed_by` (`[{layer, value, reason}]`, reason `overridden`, `not-inherited` or `preset-reset`). A top-level `workspace_binding` reports the registered base branch and ship mode, or `null`.
 
-`--scope global` or `--scope workspace` resolves one file in isolation, still filling built-in defaults for omitted keys. In scoped `config get --json`, `exists` says whether the key is present in that file. In scoped `config show --json`, `source.exists` says whether the file exists.
+`--scope global` or `--scope workspace` displays one file's values, still filling built-in defaults for omitted keys. Workspace `config show` and the dashboard's Workspace file view validate crew references against global and workspace crew definitions, including partial workspace crew overrides. They do not inherit other global settings into the displayed values. A crew absent from both layers is still reported by name and key. A dashboard file validation error includes the file path and asks you to correct the configuration before reloading.
+
+In scoped `config get --json`, `exists` says whether the key is present in that file. In scoped `config show --json`, `source.exists` says whether the file exists.
 
 ---
 

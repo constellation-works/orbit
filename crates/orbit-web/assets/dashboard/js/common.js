@@ -261,7 +261,8 @@ function panelMessage(bodyId, state) {
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";
   if (state.error) {
     const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
-    note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
+    const remedy = state.error.remedy || "Use Refresh to retry.";
+    note.textContent = `${label}: ${state.error.message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {

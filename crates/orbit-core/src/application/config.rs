@@ -147,9 +147,9 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
     }))
 }
 
-/// One physical file resolved in isolation, mirroring `orbit config show
-/// --scope global|workspace`: the same grouping without layering, shadowed
-/// values, or crews (a scoped snapshot admits registry keys only).
+/// One physical file's settings and defaults, mirroring `orbit config show
+/// --scope global|workspace`. Workspace crew references use layered crew
+/// definitions, while displayed settings retain their scoped values.
 pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue, OrbitError> {
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
@@ -157,8 +157,17 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
         ConfigScope::Global => &global_file,
         ConfigScope::Workspace => &workspace_file,
     };
-    let store = ConfigStore::open(scope, file.path.clone())?;
-    let snapshot = store.snapshot()?;
+    let file_error = |error| match error {
+        OrbitError::InvalidInput(reason) => OrbitError::InvalidInput(format!(
+            "config file '{}': {reason}",
+            redact_home_dir(&file.path.display().to_string())
+        )),
+        other => other,
+    };
+    let store = ConfigStore::open(scope, file.path.clone()).map_err(file_error)?;
+    let snapshot = store
+        .snapshot_with_global(&runtime.global_root())
+        .map_err(file_error)?;
     let settings = snapshot.all_values();
     let sections = file_sections(&store, &settings);
 

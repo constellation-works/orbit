@@ -180,11 +180,12 @@ let hostPayload = {
   ],
 };
 const requests = [];
+let fileFailure = null;
 const response = (payload, status = 200) => ({ ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 const fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   requests.push({ path: url.pathname + url.search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
-  if (url.pathname === '/api/config/file') return response(globalFile());
+  if (url.pathname === '/api/config/file') return fileFailure ? response(fileFailure.body, fileFailure.status) : response(globalFile());
   if (url.pathname === '/api/config/effective') return response(effective());
   if (url.pathname === '/api/config/keys') return response({ keys: [] });
   if (url.pathname === '/api/host/resources') return hostPayload ? response(hostPayload) : response({ error: 'down' }, 503);
@@ -379,4 +380,21 @@ await fetchAndRenderConfig();
 assert.equal(explainer.hidden, true, 'Keys does not repeat the generic explainer');
 assert.equal(controls.hidden, false, 'Keys keeps its populated controls');
 assert.ok(named(controls, 'config-filter').length > 0, 'Keys has a filter instead of an empty controls band');
+
+// ---- file validation errors keep the path, key, and a corrective remedy ----
+setConfigSubtab('workspace-file');
+fileFailure = { status: 400, body: { error: "config file '/ws/.orbit/config.toml': workflow.low_complexity_crews: crew 'missing' is not defined in [crews.*]" } };
+await assert.rejects(fetchAndRenderConfig());
+const validationMessage = body.textContent;
+assert.ok(validationMessage.includes('/ws/.orbit/config.toml'), 'a cold error shows the file path');
+assert.ok(validationMessage.includes('workflow.low_complexity_crews'), 'a validation error names the failing key');
+assert.ok(validationMessage.includes('missing'), 'a validation error names the dangling crew');
+assert.doesNotMatch(validationMessage, /Use Refresh to retry/i, 'validation requires correcting the file');
+assert.match(validationMessage, /correct.*configuration/i, 'the remedy asks for a configuration correction');
+fileFailure = null;
+await fetchAndRenderConfig();
+fileFailure = { status: 503, body: { error: 'temporarily unavailable' } };
+await assert.rejects(fetchAndRenderConfig());
+assert.match(body.textContent, /Use Refresh to retry/i, 'a transient HTTP failure still offers a retry');
+fileFailure = null;
 console.log('settings views: review health alert, collapsed diagnostics, crew headers and pool usage, sub-view chrome, and system behavior passed');
