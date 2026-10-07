@@ -235,6 +235,8 @@ import json, os, shlex, subprocess, sys
 args = sys.argv[1:]
 split = args.index('--')
 target, command = args[split + 1], args[split + 2]
+with open({calls}, 'a') as calls:
+    calls.write(target + '\n')
 host = json.load(open({routes})).get(target)
 if host is None:
     sys.stderr.write('ssh: Could not resolve hostname %s\n' % target)
@@ -265,6 +267,7 @@ for line in child.stdout:
 sys.exit(child.wait())
 "#,
         routes = json!(routes),
+        calls = json!(routes.with_extension("calls")),
         binary = json!(env!("CARGO_BIN_EXE_orbit")),
     );
     fs::write(bin.join("ssh"), script).expect("write fake ssh");
@@ -503,6 +506,106 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     assert_eq!(list["hosts"].as_array().map(Vec::len), Some(2), "{list}");
     let (code, _) = fleet.refused(&["host", "remove", "local-box"]);
     assert_eq!(code, "host_is_local");
+}
+
+#[test]
+fn doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning() {
+    let fleet = Fleet::new();
+    let alpha = fleet.install("alpha", "alpha", "AL");
+    fleet.route("alpha", &alpha, "plain");
+    fs::write(
+        fleet.legacy_file(),
+        format!(
+            "[[destinations]]\nssh = \"alpha\"\nmachine_id = \"{}\"\n",
+            alpha.machine_id
+        ),
+    )
+    .expect("write legacy file");
+
+    let doctor = fleet.doctor_hosts_row();
+    assert_eq!(doctor["status"], "warning", "{doctor}");
+    let command = doctor["remediation"]
+        .as_str()
+        .expect("doctor offers remediation")
+        .split('`')
+        .find(|part| part.starts_with("orbit host add "))
+        .expect("doctor names a concrete migration command");
+    let args = command.split_whitespace().skip(1).collect::<Vec<_>>();
+    let migrated = fleet.orbit_ok(&fleet.local.home, &args);
+    let output = String::from_utf8_lossy(&migrated.stdout);
+    assert!(output.contains("migrated alpha"), "{output}");
+    let written = fs::read_to_string(fleet.hosts_file()).expect("hosts.toml written");
+    let parsed: toml::Value = written.parse().expect("hosts.toml parses");
+    assert_eq!(parsed["hosts"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        parsed["hosts"][0]["machine_id"].as_str(),
+        Some(alpha.machine_id.as_str())
+    );
+    assert!(!fleet.legacy_file().exists(), "legacy file retired");
+    let doctor = fleet.doctor_hosts_row();
+    assert_eq!(doctor["status"], "ok", "migration clears warning: {doctor}");
+
+    let before = fleet.hosts_bytes();
+    let (code, message) = fleet.refused(&["host", "add", "alpha"]);
+    assert_eq!(code, "host_exists", "{message}");
+    assert_eq!(
+        fleet.hosts_bytes(),
+        before,
+        "duplicate keeps identical bytes"
+    );
+}
+
+#[test]
+fn legacy_removal_never_probes_the_removed_host_and_requires_retained_hosts() {
+    for force in [false, true] {
+        let fleet = Fleet::new();
+        let alpha = fleet.install("alpha", "alpha", "AL");
+        let beta = fleet.install("beta", "beta", "BE");
+        let legacy = format!(
+            "[[destinations]]\nssh = \"alpha\"\nmachine_id = \"{}\"\n\n\
+             [[destinations]]\nssh = \"dead.invalid\"\nmachine_id = \"{}\"\n",
+            alpha.machine_id, beta.machine_id
+        );
+        fs::write(fleet.legacy_file(), &legacy).expect("write legacy file");
+        let selector = if force {
+            &beta.machine_id
+        } else {
+            "dead.invalid"
+        };
+        let mut args = vec!["host", "remove", selector];
+        if force {
+            args.push("--force");
+        }
+        let before_hosts = fleet.hosts_bytes();
+        let before_legacy = fs::read(fleet.legacy_file()).expect("legacy bytes");
+        let (code, message) = fleet.refused(&args);
+        assert_eq!(code, "legacy_host_unreachable", "{message}");
+        assert!(message.contains(&alpha.machine_id), "{message}");
+        assert_eq!(fleet.hosts_bytes(), before_hosts);
+        assert_eq!(fs::read(fleet.legacy_file()).ok(), Some(before_legacy));
+
+        fleet.route("alpha", &alpha, "plain");
+        args.push("--json");
+        let removed = fleet.json(&args);
+        assert_eq!(removed["action"], "removed", "{removed}");
+        assert_eq!(removed["entry"]["machine_id"], beta.machine_id.as_str());
+        assert!(removed["entry"]["task_prefix"].is_null(), "{removed}");
+        assert_eq!(removed["migrated"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            removed["migrated"][0]["machine_id"],
+            alpha.machine_id.as_str()
+        );
+        let list = fleet.json(&["host", "list", "--no-probe", "--json"]);
+        assert_eq!(list["hosts"].as_array().map(Vec::len), Some(2), "{list}");
+        assert_eq!(host_row(&list, "alpha")["task_prefix"], "AL");
+        assert!(!fleet.legacy_file().exists(), "legacy file retired");
+        let calls = fs::read_to_string(fleet.routes.with_extension("calls"))
+            .expect("fake SSH records probes");
+        assert!(
+            calls.lines().all(|target| target == "alpha"),
+            "removal only probes retained rows: {calls}"
+        );
+    }
 }
 
 #[test]

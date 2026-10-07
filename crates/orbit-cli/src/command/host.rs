@@ -45,7 +45,11 @@ pub enum HostSubcommand {
 
 #[derive(Args)]
 #[command(
-    after_help = "Examples:\n  orbit host add dk-server-2\n  orbit host add daniel@10.0.0.7 --name build-box"
+    after_help = "Examples:\n  orbit host add dk-server-2\n  orbit host add daniel@10.0.0.7 --name build-box\n\n\
+        With only mcp-destinations.toml, this migrates every legacy host to hosts.toml. \
+        Adding a host already in the legacy file succeeds and reports the migration, preserving \
+        its SSH target and migrated name (--name applies only to a new host). Every retained \
+        legacy host must answer. A host already in hosts.toml still refuses with host_exists."
 )]
 pub struct HostAddArgs {
     /// SSH alias or user@host that reaches the remote host
@@ -93,6 +97,11 @@ pub struct HostRenameArgs {
 }
 
 #[derive(Args)]
+#[command(
+    after_help = "With only mcp-destinations.toml, removal migrates the retained rows to hosts.toml. \
+        The removed legacy host is never contacted, even without --force; every retained host \
+        must answer. --force only overrides dependent replica checkouts and pull drains."
+)]
 pub struct HostRemoveArgs {
     /// Host name (case-insensitive) or machine_id
     #[arg(value_name = "HOST")]
@@ -179,6 +188,11 @@ fn change_payload(change: HostChange) -> CommandOut {
     }
     let entry = &change.entry;
     match change.action {
+        "migrated" => {
+            if let Some(host) = &change.host {
+                text.push_str(&host_block(host));
+            }
+        }
         "renamed" => {
             let _ = writeln!(
                 text,

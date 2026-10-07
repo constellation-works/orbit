@@ -28,7 +28,7 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckoutRole, WorkspaceRegistry
 use serde::Serialize;
 
 pub use doctor::doctor_hosts_row;
-pub use mutate::{HostChange, add_host, remove_host, rename_host};
+pub use mutate::{HostChange, HostChangeEntry, add_host, remove_host, rename_host};
 pub use probe::local_host_facts;
 use probe::{LiveHost, error_class, in_parallel, local_binary_version, local_protocol_fingerprint};
 
