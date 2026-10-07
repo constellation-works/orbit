@@ -25,7 +25,9 @@
 # Under a routine claim, a task whose selector material the branch head changed
 # since the claim froze its source settles superseded_by_source: prepare sets
 # it aside, apply skips it, and its member is claimed afresh at the head.
-# An agent snapshot mismatch without a durable edit still fails validation.
+# Superseded members are observed and prepared afresh without failure records
+# or retrying the stale snapshot. A run with applied and superseded tasks succeeds.
+# The host-prepared before list is authoritative; legacy agent echoes are ignored.
 # Active successful preparation checkpoints withhold their tasks from local
 # delivery selection and owner pull admission until the pilot run terminates.
 # Bare relative file and

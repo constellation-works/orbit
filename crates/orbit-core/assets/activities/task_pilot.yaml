@@ -69,10 +69,6 @@ spec:
           properties:
             task_id:
               type: string
-            context_files_before:
-              type: array
-              items:
-                type: string
             context_files_after:
               type: array
               items:
@@ -187,7 +183,8 @@ spec:
        Keep each one exactly as recorded even though it does not exist yet.
        Never propose any other missing path; deterministic apply keeps
        declared targets you omit and rejects every undeclared missing anchor.
-       Preserve the exact current list as `context_files_before`.
+       Apply uses the host's prepared snapshot as `context_files_before`;
+       do not echo that list in your assessment.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the
        files that actually reference the symbol — enumerate them
@@ -323,7 +320,6 @@ spec:
       "task_ids":["ORB-NNNNN"],
       "tasks":[{
         "task_id":"ORB-NNNNN",
-        "context_files_before":[],
         "context_files_after":["file:path/to/target"],
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",

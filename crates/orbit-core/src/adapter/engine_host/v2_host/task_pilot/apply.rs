@@ -540,22 +540,6 @@ pub(in super::super) fn apply(
                     continue;
                 }
             }
-            let reported_before =
-                match required_string_array(assessment, "context_files_before", action) {
-                    Ok(before) => before,
-                    Err(error) => {
-                        outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
-                        continue;
-                    }
-                };
-            if reported_before != snapshot.context_files {
-                outcomes.push(stale_task(
-                    task_id,
-                    "reported_context_snapshot_mismatch",
-                    "agent context_files_before does not match this run's prepared snapshot",
-                ));
-                continue;
-            }
             let disposition = match required_string(assessment, "disposition", action) {
                 Ok(value) => value,
                 Err(error) => {
@@ -684,6 +668,12 @@ pub(in super::super) fn apply(
             // host's.
             let mut assessment = (*assessment).clone();
             if let Value::Object(fields) = &mut assessment {
+                // The host owns the before snapshot. An optional legacy agent
+                // echo cannot override it or change audit/replay identity.
+                fields.insert(
+                    "context_files_before".to_string(),
+                    json!(snapshot.context_files),
+                );
                 fields.insert(
                     VALIDATION_TOOL_WARNINGS.to_string(),
                     json!(snapshot.validation_tool_warnings),

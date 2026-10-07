@@ -719,17 +719,19 @@ impl MemberHost for Host<'_> {
                         .and_then(Value::as_str)
                         .is_some_and(|task_id| member.task_ids.iter().any(|id| id == task_id))
                 });
-            if let Some(outcome) = outcome.filter(|outcome| {
-                outcome.get("reason").and_then(Value::as_str) == Some(SUPERSEDED_BY_SOURCE)
-            }) {
+            // The deterministic apply also supersedes durable task edits and
+            // ownership changes. Release those members for fresh observation,
+            // just as for a source move, without recording a failed pilot.
+            if let Some(outcome) = outcome.filter(|outcome| outcome["outcome"] == "superseded") {
+                let reason = outcome
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("superseded");
                 let detail = outcome
                     .get("detail")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                superseded.insert(
-                    member.key.clone(),
-                    format!("{SUPERSEDED_BY_SOURCE}: {detail}"),
-                );
+                superseded.insert(member.key.clone(), format!("{reason}: {detail}"));
                 continue;
             }
             let reason = outcome

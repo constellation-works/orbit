@@ -195,17 +195,71 @@ fn human_material_edits_supersede_preparation_without_writes() {
             assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), edited);
         }
     }
-    let task = workspace.task("unchanged task, false reported snapshot");
-    let prepared = workspace.prepare(&[&task.id]);
-    let mut input = apply_input(&workspace, &prepared);
-    input["results"][0]["tasks"][0]["context_files_before"] = json!(["file:README.md"]);
-    let output = workspace.action("apply_task_pilot_results", input);
-    assert_eq!(output["status"], "failed", "{output}");
-    assert_eq!(
-        output["task_outcomes"][0]["reason"],
-        "reported_context_snapshot_mismatch"
-    );
-    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+}
+
+#[test]
+fn agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::races::agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.commit_file("src/lib.rs", "fn fixture() {}\n", "add source");
+    for (case, echo) in [
+        ("reordered", Some(json!(["dir:src", "file:README.md"]))),
+        ("normalized", Some(json!(["./README.md", "file:src"]))),
+        ("different", Some(json!(["file:other.rs"]))),
+        ("omitted", None),
+    ] {
+        let task = workspace.task(case);
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    context_files: Some(vec!["file:README.md".into(), "dir:src".into()]),
+                    ..Default::default()
+                },
+                "fixture".into(),
+            )
+            .unwrap();
+        let prepared = workspace.prepare(&[&task.id]);
+        let mut input = apply_input(&workspace, &prepared);
+        let assessment = &mut input["results"][0]["tasks"][0];
+        if let Some(echo) = echo {
+            assessment["context_files_before"] = echo;
+        } else {
+            assessment
+                .as_object_mut()
+                .unwrap()
+                .remove("context_files_before");
+        }
+        let output = workspace.action("apply_task_pilot_results", input);
+        assert_eq!(output["status"], "succeeded", "{case}: {output}");
+        assert_eq!(output["applied_count"], 1, "{case}: {output}");
+        assert_eq!(
+            output["tasks"][0]["context_files_before"],
+            prepared["tasks"][0]["context_files_before"]
+        );
+        let applied = workspace.runtime.get_task(&task.id).unwrap();
+        assert_eq!(applied.context_files, ["file:README.md"]);
+        let history = workspace.runtime.get_task_history(&task.id).unwrap();
+        let mut replay = apply_input(&workspace, &prepared);
+        replay["results"][0]["tasks"][0]["context_files_before"] = json!(["a different echo"]);
+        let replayed = workspace.action("apply_task_pilot_results", replay);
+        assert_eq!(replayed["status"], "succeeded", "{case}: {replayed}");
+        assert_eq!(replayed["tasks"][0]["outcome"], "already_applied");
+        assert_eq!(
+            replayed["tasks"][0]["operation_id"],
+            output["tasks"][0]["operation_id"]
+        );
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), applied);
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap(),
+            history
+        );
+    }
 }
 
 #[test]

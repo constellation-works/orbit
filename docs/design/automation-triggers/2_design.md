@@ -372,7 +372,21 @@ The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
 retained for audit. They do not invalidate their own assessment. External edits
-still do. A blocked-by-decision, duplicate, or low-utility verdict is a fresh
+still do. Apply owns the prepared `context_files_before` snapshot and fills it
+into the persisted assessment; an agent need only return `context_files_after`.
+Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
+echo cannot invalidate a fresh assessment or change its replay receipt.
+A durable task edit or ownership change settles as a typed `superseded` skip,
+with no pilot write. A context edit is named `material_changed` with a selectors
+component, or `context_files_changed` when selectors are outside the configured
+freshness fields. The run
+succeeds when every partition applied or was superseded, and records each skip
+in `partition_decisions` and `task_outcomes`. The state consumer releases these
+members for observation and preparation under their current eligibility and
+fingerprint, without a failure record or spending retry budget. Retired or
+active tasks therefore leave the eligible set; an edited eligible task is
+prepared afresh. Invalid assessments and unresolved write failures still fail.
+A blocked-by-decision, duplicate, or low-utility verdict is a fresh
 assessment with `ready=false`; do not rerun it every clock tick. Invalid or failed
 assessments retry within budget, then wait for material change or explicit reset.
 
