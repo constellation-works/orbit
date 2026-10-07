@@ -13,7 +13,10 @@ spec:
     plugin. A selection whose plugin is disabled or uninstalled, a job that
     does not deliver this mode, or bundled tasks selecting different jobs
     fail the Run, naming the plugin when one is installed. There is no
-    fallback to the default pipeline.
+    fallback to the default pipeline. In `pr` mode a
+    `delivery:task_local_pipeline` tag delivers that bundle locally, and the
+    default `task_pr_pipeline` is refused with `pr_forge_remote_missing` when
+    no Git remote of the checkout names a network host.
   input_schema_json:
     type: object
     required: [task_ids, mode]

@@ -136,7 +136,9 @@ impl OrbitRuntime {
     /// tag is refused here, before any run exists, when that job cannot
     /// deliver it in `mode` — including when the plugin contributing it is
     /// disabled or uninstalled. The gate resolves the same selection again
-    /// before it reserves anything.
+    /// before it reserves anything. A task the PR pipeline would deliver is
+    /// refused with [`OrbitError::PrForgeRemoteMissing`] when no Git remote of
+    /// the checkout names a network host, since `pr_open` could never succeed.
     ///
     /// [ORB-11187] `completion` is the caller's explicit authorization for this
     /// run to finish delivery and perform the guarded `review -> done`
@@ -231,6 +233,7 @@ impl OrbitRuntime {
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
+        let forge = crate::application::job::delivery::PrForgeCheck::default();
         for task_id in task_ids {
             // A task the pipeline cannot start from (`blocked`, `review`,
             // `done`, `proposed`, ...) would only be discovered after the
@@ -265,7 +268,7 @@ impl OrbitRuntime {
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
-            self.resolve_delivery_route(std::slice::from_ref(&task), mode)?;
+            self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);

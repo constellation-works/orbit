@@ -117,7 +117,8 @@ session when the orchestrating crew changes.
 
 Choose the real integration branch; do not assume the product default `main`
 is the repository's landing branch. `--ship-mode local` selects worktree-based
-local merge delivery instead of opening PRs. For another host's workspace, use
+local merge delivery instead of opening PRs; change it later with
+`orbit workspace ship-mode local|pr`. For another host's workspace, use
 `--role replica --owner <owner-machine-id>` rather than creating another owner.
 See [multi-host.md](multi-host.md).
 

@@ -31,6 +31,7 @@ impl Commands {
                             ("source-remote-rebind", RuntimeNeed::Required, false)
                         }
                     },
+                    WorkspaceSubcommand::ShipMode(_) => ("ship-mode", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Role(_) => ("role", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Publication(command) => match &command.command {
                         WorkspacePublicationSubcommand::Bind(_) => {

@@ -43,10 +43,17 @@ spec:
     plugin disabled or uninstalled, or the mode undeclared — is withheld as
     `delivery_job_unavailable`, with the refusal in `detail`, rather than
     dispatched to a gate that would refuse it on every pass.
+    In PR mode a task the PR pipeline would deliver is withheld as
+    `pr_forge_remote_missing` when no Git remote of the checkout names a
+    network host, since its pull request could never be opened; `detail`
+    names the remotes, `orbit workspace ship-mode local`, and the
+    `delivery:task_local_pipeline` tag. A task carrying that tag is
+    delivered locally even in a PR-mode drain.
     When `mode` is `local` and effective `review.before_pr` is on, a task
     that cleared the per-task gates is withheld as `local_route_before_pr`,
     with the deciding config layer and the remedy in `detail`. A PR-mode
-    delivery does not take that hold. The local-route pipeline admission
+    delivery does not take that hold, except a task its
+    `delivery:task_local_pipeline` tag routes locally. The local-route pipeline admission
     still refuses the same combination if a delivery is submitted anyway.
     A critical or high-priority task excluded only for a context-lock
     conflict reserves its own surface: a task that the automatic order below
@@ -146,6 +153,7 @@ spec:
                 - pilot_duplicate
                 - pilot_already_landed
                 - operator_validation_handoff
+                - pr_forge_remote_missing
             detail:
               type: string
             conflicts:

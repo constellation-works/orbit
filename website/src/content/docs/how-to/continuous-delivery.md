@@ -154,8 +154,15 @@ Common reasons a backlog task waits:
   plugin delivery job whose plugin is disabled or uninstalled, or that does not
   declare the drain's ship mode. The detail names the plugin. Enable it or
   remove the tag.
+- **`pr_forge_remote_missing`**: the workspace ships through pull requests,
+  but no Git remote of the checkout names a network host (only a local bare
+  repository, say), so `pr_open` could never succeed. The detail names the
+  remotes. Run `orbit workspace ship-mode local`, add a remote on the forge
+  host, or tag the task `delivery:task_local_pipeline` to deliver it locally.
+  `orbit doctor` reports the same verdict on its `forge-remote` row.
 - **`local_route_before_pr`**: `review.before_pr` is on and this workspace
-  ships locally. Before-PR review holds pull-request creation and does not run
+  ships locally, or the task's `delivery:task_local_pipeline` tag routes it
+  locally. Before-PR review holds pull-request creation and does not run
   on the local-only route, so the task stays in the backlog instead of failing
   after dispatch. The detail names whether the global or workspace config
   turned the switch on. Turn `review.before_pr` off, or ship through the PR

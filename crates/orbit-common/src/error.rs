@@ -393,6 +393,16 @@ pub enum OrbitError {
         "task {task_id} already has an in-flight run ({run_id}); wait for it to finish or cancel it"
     )]
     ShipRunInFlight { task_id: String, run_id: String },
+    /// PR delivery was refused at admission because no Git remote of the
+    /// checkout names a network host, so `pr_open` could never find a forge.
+    /// Raised before any run, worktree or crew exists; `remotes` describes
+    /// what the checkout does have.
+    #[error(
+        "PR delivery needs a Git remote on a forge host, but {remotes}; nothing was dispatched. \
+         Switch this workspace to local delivery with `orbit workspace ship-mode local`, or tag \
+         the task `delivery:task_local_pipeline` to deliver it locally"
+    )]
+    PrForgeRemoteMissing { remotes: String },
     /// Completion cannot overtake the linked implementation run while its
     /// recorded PID and start-time identity still name a running owner.
     #[error(
