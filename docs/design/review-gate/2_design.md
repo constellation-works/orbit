@@ -491,7 +491,12 @@ the unchanged tree. Settlement re-reads the artifacts against the final tree
 and resolves any repeated unavailable requirement, including a renamed result
 path, before judging the verdict. An otherwise complete evidence-only report
 settles as passing once all its requirements are satisfied. Reviewer repairs
-that change the tree require new evidence. Every publication and validation
+that change the tree require new evidence. The next delivery run resumes the
+held candidate rather than implementing again (`resumed_held`). When that
+resume or a completion rebase moves the candidate onto a new base, the
+evidence still counts while `git patch-id --stable` of the whole base..head
+change is unchanged, recorded as `evidence_carried` on the manifest and
+certificate; a changed patch re-requests it with a typed reason. Every publication and validation
 gate still applies. An operator block or later review decision
 is never undone by a late artifact attachment.
 Passing grants no lifecycle transition; `completion: review` still stops at

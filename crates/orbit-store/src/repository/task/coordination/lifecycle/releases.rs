@@ -103,12 +103,10 @@ impl TaskCommitBoundary {
                 detail,
             }))
         };
-        if preserved.task_spec_digest != task.spec_digest() {
+        if !task.spec_digest_matches(&preserved.task_spec_digest) {
             return fresh(
                 CandidateFreshReason::SpecChanged,
-                "the task's description, acceptance criteria or selectors changed since it was \
-                 kept"
-                    .into(),
+                "the task's description or acceptance criteria changed since it was kept".into(),
             );
         }
         let discarded = self

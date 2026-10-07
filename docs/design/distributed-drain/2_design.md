@@ -547,8 +547,8 @@ owns delivery:
   A claimed-local leaf runs only on the owner, in the owner's repository, so its candidate needs
   no push. The owner keeps the reference with the task's spec digest and the machine that
   committed it, on a `Fail` as on a `Release`. Admission attaches the latest one to the claim
-  (`task.resume_candidate`) unless the task's description, acceptance criteria or selectors
-  changed, an operator discarded the candidate since, or the candidate is neither published nor
+  (`task.resume_candidate`) unless the task's description or acceptance criteria changed (a
+  selector edit keeps it), an operator discarded the candidate since, or the candidate is neither published nor
   carried and the claim runs on another machine, which could not fetch it. Each of those is
   recorded in the task's history in the admission transaction, as a `candidate_resume` event
   whose note starts `fresh:` and names the claim, machine, source candidate and typed reason

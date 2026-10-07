@@ -86,8 +86,9 @@ pub use review::{
     ValidationOutcome, ValidationRole, record_gap, seconds_between,
 };
 pub use review_evidence::{
-    REVIEW_EVIDENCE_HOLD_ARTIFACT, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewEvidenceRequirement, ReviewExternalEvidence,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceCarried,
+    ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement,
+    ReviewEvidenceRerequestReason, ReviewExternalEvidence,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,

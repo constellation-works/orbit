@@ -17,6 +17,9 @@
 # - An evidence-only verdict ends the run as `held`, before recovery or the
 #   failure handoff. The task stays in-progress awaiting named artifacts;
 #   matching evidence queues a fresh review rather than approving delivery.
+#   The next run resumes the held candidate without implementing it again
+#   (ORB-14450); the review gate counts that evidence on the resumed tree, or
+#   on a rebase of it whose patch is unchanged.
 # - When the run itself terminalizes before PR completion, its recoverable
 #   candidate is published and the task is blocked for reconciliation. A
 #   required command its base fails the same way (`baseline_red`) is one
@@ -114,7 +117,9 @@ spec:
     # candidate and that output to repair. A candidate preserved from
     # `implement_bundle` or any step before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
-    # a changed spec or a bundle implements fresh.
+    # a changed spec or a bundle implements fresh. ORB-14450: a candidate held
+    # on named evidence whose receipt arrived resumes as `resumed_held`,
+    # skipping `implement_bundle`; selector edits keep any candidate.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:

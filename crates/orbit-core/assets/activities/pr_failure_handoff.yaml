@@ -87,7 +87,7 @@ spec:
       task_spec_digest:
         type: string
         description: >
-          Digest of the task's description, acceptance criteria and selectors
+          Digest of the task's description and acceptance criteria
           at handoff. `candidate_resume` resumes the preserved candidate on a
           later run only while the task still matches it.
   action: pr_failure_handoff

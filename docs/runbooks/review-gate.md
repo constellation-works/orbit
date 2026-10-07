@@ -71,10 +71,19 @@ typed reason. Each attempt is audited as `review.evidence_fulfilment`. See
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review. It does not approve the candidate
-or resume the terminal held run. Fresh admission includes verified result/log
+or resume the terminal held run. The next delivery run resumes the held
+candidate instead of implementing again: its `resume_candidate` step reports
+`resumed_held` (see the orchestrate skill's preserved-candidate reference).
+Fresh admission includes verified result/log
 pairs in `satisfied_external_evidence`; settlement re-reads them on the final
 tree and satisfies repeated unavailable checks without another hold. A repair
-that changes the tree needs new evidence. An operator status decision or changed task
+that changes the tree needs new evidence. A candidate rebased onto a moved
+base, by that resume or by completion before landing, keeps the evidence only
+while its whole patch over the base is unchanged (`git patch-id --stable`):
+the manifest and certificate record `evidence_carried` (`from_tree`,
+`to_tree`, `patch_id`). Otherwise the admission output's `evidence_carry` is
+`rerequested` with the reason (`patch_changed`, `source_unavailable`) and the
+review holds again for evidence on the new tree. An operator status decision or changed task
 meaning prevents automatic receipt from overriding that decision. Held runs
 are settled outcomes for pipeline waits and are excluded from reliability's
 success/failure denominator.

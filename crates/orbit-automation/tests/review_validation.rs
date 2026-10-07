@@ -372,6 +372,7 @@ fn certificate_with(
         budget: ReviewBudget::default(),
         escalation: None,
         selectors_widened: Vec::new(),
+        evidence_carried: None,
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
     }
 }

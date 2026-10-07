@@ -16,8 +16,8 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    base_sync_mode_from_input, git_command_success, git_output, git_output_raw, git_success,
-    resolve_worktree_start_point,
+    base_sync_mode_from_input, git_command_success, git_failure_error, git_output, git_output_raw,
+    git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
@@ -318,6 +318,53 @@ pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<Str
         &["push", "--quiet", "origin", &format!("+{commit}:{target}")],
     )?;
     Ok(target)
+}
+
+/// [ORB-14450] The stable patch id of the whole change from `base` to
+/// `head`, taken as one diff so a squash or a rebase of the same change
+/// yields the same id; `None` when the range changes nothing.
+pub fn patch_id(
+    workspace_path: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Option<String>, OrbitError> {
+    let run = |args: &[&str], stdin: Option<&[u8]>| {
+        let outcome = git_run_bytes(workspace_path, args, stdin)?;
+        if outcome.timed_out {
+            return Err(git_timeout_error(
+                workspace_path,
+                args,
+                outcome.timeout_ms,
+                &outcome.stderr,
+            ));
+        }
+        if !outcome.success {
+            return Err(git_failure_error(workspace_path, args, &outcome.stderr));
+        }
+        Ok(outcome.stdout)
+    };
+    let diff = run(
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--full-index",
+            "--binary",
+            "--end-of-options",
+            base,
+            head,
+        ],
+        None,
+    )?;
+    if diff.is_empty() {
+        return Ok(None);
+    }
+    let id = run(&["patch-id", "--stable"], Some(&diff))?;
+    Ok(String::from_utf8_lossy(&id)
+        .split_whitespace()
+        .next()
+        .map(ToOwned::to_owned))
 }
 
 /// Fetch the landed commit from `origin` so it can be read locally. A

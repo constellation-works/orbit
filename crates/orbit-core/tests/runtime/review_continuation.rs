@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
-fn attach(fixture: &Fixture, path: &str, content: &Value) {
+pub(super) fn attach(fixture: &Fixture, path: &str, content: &Value) {
     let source = fixture.repo.join(".orbit/tmp").join(path);
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
     std::fs::write(&source, content.to_string()).unwrap();
@@ -29,7 +29,7 @@ fn attach(fixture: &Fixture, path: &str, content: &Value) {
         .unwrap();
 }
 
-fn interrupted_report(fixture: &Fixture) -> Value {
+pub(super) fn interrupted_report(fixture: &Fixture) -> Value {
     json!({
         "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
         "verdict": "incomplete", "summary": "Inspected error paths; platform checks remain.",
@@ -64,7 +64,7 @@ fn fresh_review(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
     next.run_id
 }
 
-fn manifest(fixture: &Fixture) -> ReviewManifest {
+pub(super) fn manifest(fixture: &Fixture) -> ReviewManifest {
     serde_json::from_slice(
         &fixture
             .runtime

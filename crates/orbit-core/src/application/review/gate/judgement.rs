@@ -18,8 +18,9 @@ use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, RetainedObligation, RetiredValidation, ReviewAttempt,
-    ReviewCertificate, ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewValidation,
-    ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
+    ReviewCertificate, ReviewExternalEvidence, ReviewReport, ReviewReportHistory,
+    ReviewReportRevision, ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome,
+    ValidationRole,
 };
 
 use super::super::automation_error;
@@ -45,6 +46,9 @@ pub(super) struct Judgement {
     summary: String,
     pub(super) task_meaning_digest: String,
     pub(super) selectors_widened: Vec<String>,
+    /// [ORB-14450] Set when a requirement was satisfied by evidence on an
+    /// earlier tree whose patch the final candidate carries unchanged.
+    pub(super) evidence_carried: Option<orbit_types::workflow::ReviewEvidenceCarried>,
 }
 
 impl Judgement {
@@ -75,6 +79,7 @@ impl Judgement {
             summary: String::new(),
             task_meaning_digest: task_meaning_digest.clone(),
             selectors_widened: Vec::new(),
+            evidence_carried: None,
         };
         let mut reports = Vec::new();
         let mut revisions = Vec::new();
@@ -145,6 +150,7 @@ impl Judgement {
             summary: report.summary,
             task_meaning_digest,
             selectors_widened: Vec::new(),
+            evidence_carried: None,
         })
     }
 
@@ -313,7 +319,8 @@ impl Judgement {
     }
 
     /// Resolve a repeated evidence-only report from durable result/log pairs
-    /// on the final tree, never from the admission's advisory snapshot.
+    /// on the final tree, never from the admission's advisory snapshot. Pairs
+    /// on an earlier tree count through `carry` only: its patch is unchanged.
     pub(super) fn reconcile_external_evidence(
         &mut self,
         runtime: &OrbitRuntime,
@@ -321,6 +328,7 @@ impl Judgement {
         candidate: &SourceRevision,
         repair: Option<&CommitIdentity>,
         scope: &[String],
+        carry: Option<&orbit_types::workflow::ReviewEvidenceCarried>,
     ) -> Result<(), OrbitError> {
         if context.task_ids.len() != 1
             || self.external_evidence.is_empty()
@@ -352,18 +360,39 @@ impl Judgement {
             &context.task_ids[0],
             candidate,
         )?;
+        let carried = super::super::evidence::carried_external_evidence(
+            runtime,
+            &context.task_ids[0],
+            candidate,
+            carry,
+        )?;
+        let mut used_carry = false;
         self.external_evidence.retain(|required| {
-            let Some((artifact, evidence)) = satisfied
-                .iter()
-                .find(|(_, evidence)| evidence.matches_requirement(required, candidate))
-            else {
-                return true;
+            let matching = |(_, evidence): &(&String, &ReviewExternalEvidence)| {
+                evidence.matches_requirement(required, candidate)
             };
+            let (found, via_carry) = match satisfied.iter().find(matching) {
+                Some(found) => (found, None),
+                None => match carried.iter().find(matching) {
+                    Some(found) => (found, carry),
+                    None => return true,
+                },
+            };
+            let (artifact, evidence) = found;
+            used_carry |= via_carry.is_some();
             for record in &mut self.validation {
                 if record.command == required.command && record.role == ValidationRole::Required {
                     record.outcome = ValidationOutcome::Passed;
+                    let carried = via_carry
+                        .map(|carry| {
+                            format!(
+                                " (carried from tree {} by unchanged patch {})",
+                                carry.from_tree, carry.patch_id
+                            )
+                        })
+                        .unwrap_or_default();
                     let note = format!(
-                        "External result {artifact}; log {}; tree {}",
+                        "External result {artifact}; log {}; tree {}{carried}",
                         evidence.log_artifact, candidate.tree,
                     );
                     record.note = Some(match record.note.take() {
@@ -374,6 +403,9 @@ impl Judgement {
             }
             false
         });
+        if used_carry {
+            self.evidence_carried = carry.cloned();
+        }
         if self.external_evidence.is_empty() {
             self.verdict = if repair.is_some() {
                 ReviewVerdict::AcceptWithFixes

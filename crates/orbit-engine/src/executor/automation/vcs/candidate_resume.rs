@@ -23,7 +23,22 @@
 //!   runs; the delivery's own validation decides;
 //! - there is no usable candidate (none preserved, an operator discarded it,
 //!   the spec changed, a bundle, the commit is gone): `fresh`, with the
-//!   reason.
+//!   reason and its `reason_code`.
+//!
+//! "The spec" is the task's description and acceptance criteria. Context
+//! selectors are preparation hints, so a selector edit keeps the candidate;
+//! the resumed review reads the current selectors [ORB-14450].
+//!
+//! [ORB-14450] A run held on named external evidence ends before the failure
+//! handoff, so it records no checkpoint. When the task's latest decision is
+//! the evidence receipt for that held run, its candidate — the exact commit
+//! the task's evidence hold names — is resumed instead: a clean apply is
+//! `resumed_held`, and no implementation step or owner validation runs here,
+//! so the run goes on to commit, validation and the fresh review that finds
+//! the evidence. On the hold's own base the squash reproduces the held tree;
+//! on a moved base the review gate counts the evidence only while the patch
+//! is unchanged. A conflict hands the implementer the conflict, after which
+//! the gate requests the evidence again.
 //!
 //! Whenever a candidate was found, the outcome, source run and SHA are also
 //! written to the task's history.
@@ -50,7 +65,12 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT, Task};
+use orbit_types::task::{
+    CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT, Task, TaskHistoryEntry, TaskStatus,
+};
+use orbit_types::workflow::{
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceHold,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -132,20 +152,41 @@ struct Candidate {
     durable_ref: Option<String>,
     failed_step_id: String,
     needs_review_repair: bool,
+    /// [ORB-14450] The candidate an evidence hold kept, whose evidence
+    /// arrived: resumed without the implementer or owner validation.
+    held: bool,
 }
 
 /// What the task's last run left to resume.
 enum Preserved {
     /// No candidate, and why.
-    None(String),
+    None(Fresh),
     /// A candidate that must not be resumed, and why.
-    Refused(Candidate, String),
+    Refused(Candidate, Fresh),
     Usable(Candidate),
 }
 
+/// Why the implementer starts from scratch: a stable `code` for consumers and
+/// the operator-facing detail.
+struct Fresh {
+    code: &'static str,
+    detail: String,
+}
+
+impl Fresh {
+    fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+}
+
 enum Outcome {
-    Fresh(String),
+    Fresh(Fresh),
     Validated,
+    /// [ORB-14450] A held candidate applied cleanly; review decides.
+    Held,
     Unjudged(String),
     Repair(Value),
 }
@@ -169,7 +210,10 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         .unwrap_or_default();
     let [task_id] = task_ids.as_slice() else {
         return Ok(output(
-            &Outcome::Fresh("a bundle run implements every task fresh".to_string()),
+            &Outcome::Fresh(Fresh::new(
+                "bundle",
+                "a bundle run implements every task fresh",
+            )),
             None,
             &base_sha,
         ));
@@ -219,7 +263,10 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
         preserved.and_then(|value| input_string_field(value, "head_sha")),
     ) else {
         return Ok(output(
-            &Outcome::Fresh("the claim carries no preserved candidate".to_string()),
+            &Outcome::Fresh(Fresh::new(
+                "no_candidate",
+                "the claim carries no preserved candidate",
+            )),
             None,
             base_sha,
         ));
@@ -238,6 +285,7 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
             .filter(|reference| valid_candidate_ref(reference)),
         needs_review_repair: failed_step_id == REVIEW_VERDICT_STEP,
         failed_step_id,
+        held: false,
     };
     let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
     tracing::info!(
@@ -250,16 +298,18 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
 }
 
 /// The candidate recorded by the failure handoff of the run the task was last
-/// linked to, or why there is none to resume.
+/// linked to, or else the one its evidence hold kept, or why there is none to
+/// resume.
 fn preserved_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
     prior_run_id: Option<String>,
 ) -> Result<Preserved, OrbitError> {
     let Some(prior_run_id) = prior_run_id else {
-        return Ok(Preserved::None(
-            "no earlier run is linked to the task".to_string(),
-        ));
+        return Ok(Preserved::None(Fresh::new(
+            "no_prior_run",
+            "no earlier run is linked to the task",
+        )));
     };
     let checkpoint = host
         .read_run_state(&prior_run_id)?
@@ -273,17 +323,16 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
                 .is_some_and(|decision| PRESERVING_DECISIONS.contains(&decision))
             && checkpoint.output.get("task_id").and_then(Value::as_str) == Some(task.id.as_str())
     }) else {
-        return Ok(Preserved::None(format!(
-            "run '{prior_run_id}' preserved no candidate for the task"
-        )));
+        return held_candidate(host, task, &prior_run_id);
     };
     let evidence = &checkpoint.output;
     let (Some(branch), Some(head_sha)) = (
         input_string_field(evidence, "branch"),
         input_string_field(evidence, "head_sha"),
     ) else {
-        return Ok(Preserved::None(format!(
-            "run '{prior_run_id}' recorded no candidate branch and head"
+        return Ok(Preserved::None(Fresh::new(
+            "no_candidate",
+            format!("run '{prior_run_id}' recorded no candidate branch and head"),
         )));
     };
     let candidate = Candidate {
@@ -293,33 +342,137 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         durable_ref: None,
         failed_step_id: checkpoint.failed_step_id,
         needs_review_repair: evidence["decision"] == "blocked_review_gate",
+        held: false,
     };
+    let recorded = input_string_field(evidence, "task_spec_digest");
+    refuse_stale(host, task, candidate, Some(recorded.as_deref()))
+}
 
+/// [ORB-14450] The candidate the task's evidence hold kept from run
+/// `prior_run_id`, when the task's latest decision is that hold's evidence
+/// receipt. A held run ends before the failure handoff, so the hold artifact
+/// is what names the exact commit the evidence was checked against.
+fn held_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    prior_run_id: &str,
+) -> Result<Preserved, OrbitError> {
+    let none = || {
+        Ok(Preserved::None(Fresh::new(
+            "no_candidate",
+            format!("run '{prior_run_id}' preserved no candidate for the task"),
+        )))
+    };
+    let hold = host
+        .get_task_artifacts(&task.id)?
+        .into_iter()
+        .find(|artifact| {
+            artifact.path == REVIEW_EVIDENCE_HOLD_ARTIFACT
+                && artifact.created_by.as_deref() == Some("system")
+        })
+        .and_then(|artifact| serde_json::from_slice::<ReviewEvidenceHold>(&artifact.content).ok())
+        .filter(|hold| {
+            hold.schema_version == 1
+                && hold.run_id == prior_run_id
+                && !hold.candidate.commit.trim().is_empty()
+        });
+    let Some(hold) = hold else {
+        return none();
+    };
+    if !evidence_received(&host.get_task_history(&task.id)?, prior_run_id) {
+        return none();
+    }
+    let branch = host
+        .read_run_state(prior_run_id)?
+        .and_then(|state| {
+            state
+                .pipeline
+                .get("worktree")
+                .and_then(|worktree| input_string_field(worktree, "head_ref"))
+        })
+        .unwrap_or_default();
+    let candidate = Candidate {
+        run_id: prior_run_id.to_string(),
+        branch,
+        head_sha: hold.candidate.commit,
+        durable_ref: None,
+        failed_step_id: REVIEW_VERDICT_STEP.to_string(),
+        needs_review_repair: false,
+        held: true,
+    };
+    // A hold from before spec provenance was released by a receipt that
+    // checked the task's whole meaning; the fresh review reads the task as
+    // it is now.
+    let recorded = hold.task_spec_digest.as_deref().map(Some);
+    refuse_stale(host, task, candidate, recorded)
+}
+
+/// Whether the latest status decision in `history` is the evidence receipt
+/// for held run `run_id`. Admission into this run is not a decision.
+fn evidence_received(history: &[TaskHistoryEntry], run_id: &str) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|entry| {
+            entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
+                || entry
+                    .to_status
+                    .is_some_and(|status| status != TaskStatus::InProgress)
+        })
+        .is_some_and(|entry| {
+            entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.starts_with(&format!("run={run_id};")))
+        })
+}
+
+/// Refuse `candidate` when an operator discarded it since its run began, or
+/// the task's description or acceptance criteria changed since
+/// `recorded_spec` was taken. `Some(None)` is a record that should carry a
+/// spec digest and does not; `None` is one that never did.
+fn refuse_stale<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    candidate: Candidate,
+    recorded_spec: Option<Option<&str>>,
+) -> Result<Preserved, OrbitError> {
+    let (run_id, head_sha) = (&candidate.run_id, &candidate.head_sha);
     // The operator escape hatch: a discard recorded since that run began.
-    let source_started = host.get_job_run(&prior_run_id)?.map(|run| run.created_at);
+    let source_started = host.get_job_run(run_id)?.map(|run| run.created_at);
     let discarded = host.get_task_history(&task.id)?.iter().any(|entry| {
         entry.event == CANDIDATE_DISCARDED_EVENT
             && source_started.is_none_or(|started| entry.at >= started)
     });
     if discarded {
-        let reason =
-            format!("an operator discarded candidate {head_sha} from run '{prior_run_id}'");
+        let reason = Fresh::new(
+            "candidate_discarded",
+            format!("an operator discarded candidate {head_sha} from run '{run_id}'"),
+        );
         return Ok(Preserved::Refused(candidate, reason));
     }
-    let refusal = match input_string_field(evidence, "task_spec_digest") {
-        None => Some(format!(
-            "candidate {head_sha} from run '{prior_run_id}' predates spec provenance"
-        )),
-        Some(digest) if digest != task.spec_digest() => Some(format!(
-            "the task's description, acceptance criteria or selectors changed since run \
-             '{prior_run_id}' produced candidate {head_sha}"
-        )),
-        Some(_) => None,
-    };
-    Ok(match refusal {
-        Some(reason) => Preserved::Refused(candidate, reason),
-        None => Preserved::Usable(candidate),
-    })
+    if recorded_spec == Some(None) {
+        let reason = Fresh::new(
+            "spec_unrecorded",
+            format!("candidate {head_sha} from run '{run_id}' predates spec provenance"),
+        );
+        return Ok(Preserved::Refused(candidate, reason));
+    }
+    if recorded_spec
+        .flatten()
+        .is_some_and(|digest| !task.spec_digest_matches(digest))
+    {
+        let reason = Fresh::new(
+            "spec_changed",
+            format!(
+                "the task's description or acceptance criteria changed since run '{run_id}' \
+                 produced candidate {head_sha}"
+            ),
+        );
+        return Ok(Preserved::Refused(candidate, reason));
+    }
+    Ok(Preserved::Usable(candidate))
 }
 
 /// [ORB-14261] Resume the candidate a repair claim carries: the one whose
@@ -348,6 +501,7 @@ fn claim_repair_resume(
         durable_ref: None,
         failed_step_id: "landing".to_string(),
         needs_review_repair: false,
+        held: false,
     };
     let outcome = match apply(&candidate, workspace_path, base_sha)? {
         Applied::Refused(reason) => {
@@ -488,14 +642,28 @@ fn resume<H: RuntimeHost + ?Sized>(
     claimed: bool,
 ) -> Result<Outcome, OrbitError> {
     match apply(candidate, workspace_path, base_sha)? {
-        Applied::Refused(reason) => return Ok(Outcome::Fresh(reason)),
+        Applied::Refused(reason) => {
+            return Ok(Outcome::Fresh(Fresh::new("candidate_missing", reason)));
+        }
         Applied::AlreadyPresent => {
-            return Ok(Outcome::Fresh(format!(
-                "candidate {}'s changes are already on base {base_sha}",
-                candidate.head_sha
+            return Ok(Outcome::Fresh(Fresh::new(
+                "already_on_base",
+                format!(
+                    "candidate {}'s changes are already on base {base_sha}",
+                    candidate.head_sha
+                ),
             )));
         }
         Applied::Conflict { paths, output } => {
+            let output = if candidate.held {
+                format!(
+                    "{output}\n\nThis candidate was held on named external evidence; once the \
+                     conflict is resolved its patch differs, so the review gate requests that \
+                     evidence again."
+                )
+            } else {
+                output
+            };
             return Ok(Outcome::Repair(json!({
                 "trigger": "conflict",
                 "conflicting_paths": paths,
@@ -503,6 +671,11 @@ fn resume<H: RuntimeHost + ?Sized>(
             })));
         }
         Applied::Clean => {}
+    }
+    // The held candidate is the one the review held and the evidence was
+    // checked on: the pipeline's own validation and fresh review judge it.
+    if candidate.held {
+        return Ok(Outcome::Held);
     }
     // A clean apply of work that never reached `commit` is not an
     // implementation. Owner validation, including an empty command list,
@@ -591,10 +764,12 @@ fn candidate_available(workspace_path: &Path, candidate: &Candidate) -> Result<b
     if git_command_success(workspace_path, &["cat-file", "-e", &object])? {
         return Ok(true);
     }
-    let refspec = candidate
-        .durable_ref
-        .clone()
-        .unwrap_or_else(|| format!("refs/heads/{}", candidate.branch));
+    let refspec = match (&candidate.durable_ref, candidate.branch.as_str()) {
+        (Some(reference), _) => reference.clone(),
+        // A held run's checkout may be gone with no branch on record.
+        (None, "") => return Ok(false),
+        (None, branch) => format!("refs/heads/{branch}"),
+    };
     let _ = git_run(workspace_path, &["fetch", "--no-tags", "origin", &refspec])?;
     git_command_success(workspace_path, &["cat-file", "-e", &object])
 }
@@ -608,12 +783,13 @@ fn record<H: RuntimeHost + ?Sized>(
     outcome: &Outcome,
 ) -> Result<(), OrbitError> {
     let detail = match outcome {
-        Outcome::Fresh(reason) | Outcome::Unjudged(reason) => format!("; {reason}"),
+        Outcome::Fresh(reason) => format!("; reason_code={}; {}", reason.code, reason.detail),
+        Outcome::Unjudged(reason) => format!("; {reason}"),
         Outcome::Repair(repair) => format!(
             "; repair trigger: {}",
             repair["trigger"].as_str().unwrap_or("unknown")
         ),
-        Outcome::Validated => String::new(),
+        Outcome::Validated | Outcome::Held => String::new(),
     };
     let note = format!(
         "{}: run={run_id}, source_run={}, source_branch={}, source_sha={}{detail}",
@@ -638,22 +814,25 @@ fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Fresh(_) => "fresh",
         Outcome::Validated => "resumed_validated",
+        Outcome::Held => "resumed_held",
         Outcome::Unjudged(_) => "resumed_unjudged",
         Outcome::Repair(_) => "resumed_repaired",
     }
 }
 
 fn output(outcome: &Outcome, candidate: Option<&Candidate>, base_sha: &str) -> Value {
-    let (reason, repair) = match outcome {
-        Outcome::Fresh(reason) | Outcome::Unjudged(reason) => (Some(reason.as_str()), Value::Null),
-        Outcome::Repair(repair) => (None, repair.clone()),
-        Outcome::Validated => (None, Value::Null),
+    let (reason, reason_code, repair) = match outcome {
+        Outcome::Fresh(reason) => (Some(reason.detail.as_str()), Some(reason.code), Value::Null),
+        Outcome::Unjudged(reason) => (Some(reason.as_str()), None, Value::Null),
+        Outcome::Repair(repair) => (None, None, repair.clone()),
+        Outcome::Validated | Outcome::Held => (None, None, Value::Null),
     };
     json!({
         "phase": "candidate_resume",
         "outcome": outcome_name(outcome),
         "implement": matches!(outcome, Outcome::Fresh(_) | Outcome::Repair(_)),
         "reason": reason,
+        "reason_code": reason_code,
         "repair": repair,
         "source_run_id": candidate.map(|candidate| candidate.run_id.as_str()),
         "source_branch": candidate.map(|candidate| candidate.branch.as_str()),
