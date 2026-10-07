@@ -47,6 +47,11 @@ already found to have no in-workspace targets while that assessment is fresh;
 editing the task's description, criteria, status, or source makes it eligible
 again, and naming its ID always audits it again.
 
+When preparation selects no tasks, the run skips agent dispatch and applies
+an empty result collection successfully, retaining any held-task skip details.
+For a nonempty selection, at least one pilot partition must succeed before
+apply runs; valid partitions can still apply when a sibling pilot fails.
+
 Before you approve, check the pilot run (in **Runs**) and the selectors it
 applied (the task's **context files** in **Tasks**). From the CLI:
 

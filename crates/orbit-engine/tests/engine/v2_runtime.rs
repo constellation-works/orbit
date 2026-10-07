@@ -17,6 +17,7 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,10 +31,10 @@ use orbit_engine::{
     V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::ReviewerInvocationEvent;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, DeterministicSpec, V2AuditEvent, V2AuditEventKind,
 };
+use orbit_types::workflow::{JobRunState, PipelineState, ReviewerInvocationEvent};
 use serde_json::{Value, json};
 
 #[test]
@@ -267,6 +268,8 @@ pub(crate) fn workspace_root() -> PathBuf {
 #[test]
 fn parallel_join_policy_decides_the_block_from_its_branches() {
     let cases = [
+        ("all, no branches", json!({"mode": "all"}), "", true),
+        ("any, no branches", json!({"mode": "any"}), "", false),
         (
             "all, every branch succeeds",
             json!({"mode": "all"}),
@@ -319,17 +322,24 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
         let job = job_asset(json!([{
             "id": "fan",
             "parallel": { "join": join, "branches": branch_steps },
-        }]));
+        }, probe_step("after", json!({"label": "after"}))]));
         let run = run_graph_job(&job, Value::Null);
 
         assert_eq!(run.succeeded(), expect_success, "{case}: {:?}", run.result);
+        assert_eq!(
+            run.host.labels().iter().any(|label| label == "after"),
+            expect_success,
+            "{case}: only a successful join runs the next step"
+        );
         let joined = run
             .events
             .iter()
             .find_map(|event| match &event.kind {
                 V2AuditEventKind::StepJoin {
-                    branch_outcomes, ..
-                } => Some(
+                    step_id,
+                    mode,
+                    branch_outcomes,
+                } if step_id == "fan" && mode == join["mode"].as_str().unwrap() => Some(
                     branch_outcomes
                         .iter()
                         .map(|branch| (branch.branch_id.clone(), branch.outcome.clone()))
@@ -350,6 +360,15 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
             joined, expected,
             "{case}: branch outcomes in declaration order"
         );
+        if branches.is_empty() {
+            assert_eq!(run.outcome().pipeline["fan"], json!([]), "{case}");
+            assert_eq!(
+                run.host.calls().len(),
+                usize::from(expect_success),
+                "{case}"
+            );
+            assert_empty_join_resume(&job, Value::Null, &run, "fan", expect_success);
+        }
     }
 }
 
@@ -393,6 +412,20 @@ fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
 #[test]
 fn fan_in_join_policy_decides_the_block_from_its_workers() {
     let cases = [
+        ("all, no workers", json!({"mode": "all"}), "", true),
+        ("any, no workers", json!({"mode": "any"}), "", false),
+        (
+            "quorum 1, no workers",
+            json!({"mode": "quorum", "n": 1}),
+            "",
+            false,
+        ),
+        (
+            "all, every worker succeeds",
+            json!({"mode": "all"}),
+            "+++",
+            true,
+        ),
         (
             "all, one worker fails",
             json!({"mode": "all"}),
@@ -404,6 +437,30 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
             json!({"mode": "any"}),
             "-+-",
             true,
+        ),
+        (
+            "any, every worker fails",
+            json!({"mode": "any"}),
+            "---",
+            false,
+        ),
+        (
+            "quorum 1, one worker succeeds",
+            json!({"mode": "quorum", "n": 1}),
+            "+",
+            true,
+        ),
+        (
+            "quorum 1, one worker fails",
+            json!({"mode": "quorum", "n": 1}),
+            "-",
+            false,
+        ),
+        (
+            "quorum exceeds runtime count",
+            json!({"mode": "quorum", "n": 2}),
+            "+",
+            false,
         ),
         (
             "quorum 2 met",
@@ -430,24 +487,62 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
             .enumerate()
             .map(|(index, kind)| probe_input(kind, index))
             .collect();
-        let job = job_asset(json!([fan_out_step(4, join)]));
-        let run = run_graph_job(&job, json!({ "items": items }));
+        let job = job_asset(json!([
+            fan_out_step(4, join),
+            probe_step("after", json!({"label": "after"})),
+        ]));
+        let input = json!({ "items": items });
+        let run = run_graph_job(&job, input.clone());
 
         assert_eq!(run.succeeded(), expect_success, "{case}: {:?}", run.result);
+        assert_eq!(
+            run.host.labels().iter().any(|label| label == "after"),
+            expect_success,
+            "{case}: only a successful join runs the next step"
+        );
+        let worker_count = workers.len() as u32;
+        assert!(
+            run.events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::FanoutDispatched { step_id, worker_count: dispatched }
+                    if step_id == "scatter" && *dispatched == worker_count
+            )),
+            "{case}: fanout.dispatched records the runtime item count"
+        );
         let failed = workers.chars().filter(|kind| *kind != '+').count() as u32;
         assert!(
             run.events.iter().any(|event| matches!(
                 &event.kind,
                 V2AuditEventKind::FaninJoined { collected, failed: joined_failed, .. }
-                    if *collected == 3 - failed && *joined_failed == failed
+                    if *collected == worker_count - failed && *joined_failed == failed
             )),
             "{case}: fanin.joined counts collected and failed workers"
         );
         if let Ok(outcome) = &run.result {
             let collected = outcome.pipeline["scatter"].as_array().expect("collected");
+            assert_eq!(collected.len(), workers.len(), "{case}");
+            assert_eq!(
+                outcome.pipeline["results"], outcome.pipeline["scatter"],
+                "{case}"
+            );
             for (kind, output) in workers.chars().zip(collected) {
                 assert_eq!(output.is_null(), kind != '+', "{case}: {collected:?}");
             }
+        }
+        if workers.is_empty() {
+            assert_eq!(run.outcome().pipeline["scatter"], json!([]), "{case}");
+            assert_eq!(
+                run.host.calls().len(),
+                usize::from(expect_success),
+                "{case}"
+            );
+            assert!(
+                !run.events
+                    .iter()
+                    .any(|event| matches!(event.kind, V2AuditEventKind::WorkerState { .. })),
+                "{case}: no worker audit events for an empty fan-out"
+            );
+            assert_empty_join_resume(&job, input, &run, "scatter", expect_success);
         }
     }
 }
@@ -725,10 +820,18 @@ impl GraphRun {
 }
 
 fn run_graph_job(job: &orbit_types::workflow::JobV2, input: Value) -> GraphRun {
+    run_graph_job_with_resume(job, input, None)
+}
+
+fn run_graph_job_with_resume(
+    job: &orbit_types::workflow::JobV2,
+    input: Value,
+    resume: Option<&PipelineState>,
+) -> GraphRun {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), "graph-run");
     let host = GraphHost::default();
-    let result = execute_job_with_resume(job, input, "graph-run", writer.clone(), &host, None);
+    let result = execute_job_with_resume(job, input, "graph-run", writer.clone(), &host, resume);
     let events = writer.events_snapshot().expect("persisted audit events");
     GraphRun {
         host,
@@ -737,11 +840,52 @@ fn run_graph_job(job: &orbit_types::workflow::JobV2, input: Value) -> GraphRun {
     }
 }
 
+/// Empty successful joins checkpoint their outputs; unsuccessful joins must
+/// be evaluated again on resume rather than allowing later steps to run.
+fn assert_empty_join_resume(
+    job: &orbit_types::workflow::JobV2,
+    input: Value,
+    run: &GraphRun,
+    step_id: &str,
+    success: bool,
+) {
+    let checkpoints = run.host.checkpoints.lock().expect("checkpoints");
+    assert_eq!(
+        checkpoints.contains_key(&0),
+        success,
+        "{step_id}: checkpoint only successful joins"
+    );
+    let mut resume = PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+    if let Some(output) = checkpoints.get(&0) {
+        resume.step_outputs.insert(0, output.clone());
+        resume.step_states.insert(0, JobRunState::Success);
+    }
+    let resumed = run_graph_job_with_resume(job, input, Some(&resume));
+    assert_eq!(
+        resumed.succeeded(),
+        success,
+        "{step_id}: resumed join outcome"
+    );
+    assert_eq!(resumed.outcome().pipeline[step_id], json!([]));
+    if step_id == "scatter" {
+        assert_eq!(resumed.outcome().pipeline["results"], json!([]));
+    }
+    assert_eq!(resumed.host.calls().len(), usize::from(success));
+    assert_eq!(
+        resumed.events.iter().any(|event| matches!(
+            &event.kind, V2AuditEventKind::StepSkipped { step_id: skipped, .. } if skipped == step_id
+        )),
+        success,
+        "{step_id}: resume skips only a successful empty join"
+    );
+}
+
 /// Runs the single `probe` action every graph fixture uses. Its input says
 /// what to do: sleep `sleep_ms`, then panic, fail or echo the input back.
 #[derive(Default)]
 struct GraphHost {
     calls: Mutex<Vec<Value>>,
+    checkpoints: Mutex<BTreeMap<u32, Value>>,
     in_flight: AtomicUsize,
     peak_in_flight: AtomicUsize,
 }
@@ -764,6 +908,21 @@ impl GraphHost {
 }
 
 impl RuntimeHost for GraphHost {
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        _step_id: &str,
+        output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
+    ) -> Result<(), DispatchError> {
+        self.checkpoints
+            .lock()
+            .expect("checkpoints")
+            .insert(step_index, output.clone());
+        Ok(())
+    }
+
     fn run_deterministic(
         &self,
         action: &str,

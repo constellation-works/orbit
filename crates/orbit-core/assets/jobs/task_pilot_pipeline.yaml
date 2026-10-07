@@ -13,6 +13,9 @@
 # Prepare resolves an omitted base branch through the owning workspace's
 # `workflow.base_branch`; a non-empty run input remains an explicit override.
 # Any successful partition reaches apply even if another agent failed.
+# With no partitions, an explicit empty all join records both collection
+# outputs and reaches apply without dispatching a pilot; any joins run only
+# when preparation selected work.
 # Apply rejects untrusted partition envelopes, then isolates stale or malformed
 # assessments by task and applies every independently valid sibling. The guard
 # fails the total run while any task remains unresolved. Targets admitted to
@@ -81,7 +84,20 @@ spec:
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
 
+    - id: pilot_results
+      when: "{{ steps.prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_pilot
+          target: activity:task_pilot
+      fan_in:
+        join: { mode: all }
+        collect: pilots
+
     - id: pilots
+      when: "{{ steps.prepare.output.partition_count }} != 0"
       fan_out:
         items: "{{ steps.prepare.output.partitions }}"
         max_workers: 5
