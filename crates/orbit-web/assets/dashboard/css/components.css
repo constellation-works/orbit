@@ -154,6 +154,9 @@
 .status-dot.red { background: var(--state-failed); box-shadow: 0 0 8px var(--state-failed); }
 .status-dot.orange { background: var(--state-pending); box-shadow: 0 0 8px var(--state-pending); }
 
+/* Retained dashboard counts and drain state belong to the last clean refresh. */
+.refresh-stale { opacity: .55; }
+
 /* ORB-11658: expandable rows and the collapsible field headers are
    keyboard-operable (role="button" plus Enter/Space), so focus has to be
    visible on them as well. The ring is inset because an outward one on a

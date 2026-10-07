@@ -218,6 +218,7 @@
   cursor: pointer;
 }
 .kpi:hover { border-color: #3a3a44; color: var(--fg); }
+.kpi.refresh-stale { border-style: dashed; }
 .kpi .k { color: inherit; }
 .kpi .v { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
 .kpi.tile-alert { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }

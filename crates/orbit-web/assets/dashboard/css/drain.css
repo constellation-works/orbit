@@ -33,6 +33,8 @@
 .global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); }
 .dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
 .global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.global-drain-state.refresh-stale { border-style: dashed; }
+.global-drain-state.refresh-stale > .drain-dot { animation: none; box-shadow: none; }
 #auto-drain-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
 
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;

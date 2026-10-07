@@ -302,7 +302,7 @@ const priorSummaryReads = summaryReads;
 setActiveTab('diagnostics/metrics');
 await settle();
 check(text('diag-body').includes('Metrics fixture failure'), 'HTTP failure visible in Metrics panel');
-check(node('conn-status').className.includes('green') && !text('meta-text').includes('offline'), 'one HTTP panel error does not imply offline');
+check(node('conn-status').className.includes('orange') && text('meta-text').includes('Metrics') && !text('meta-text').includes('offline'), 'one HTTP panel error is amber, names the failing panel, and does not imply offline');
 check(summaryReads > priorSummaryReads && text('tile-events-value') === String(summaryReads), 'audit summary renders updated data independently of failed panel');
 networkDown = true;
 refresh(); await settle();
