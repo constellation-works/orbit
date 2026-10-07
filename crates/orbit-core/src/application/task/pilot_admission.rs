@@ -74,6 +74,25 @@ impl OperatorValidationHold {
     }
 }
 
+/// Typed operator requirements derived directly from positive mentions of registered tools
+/// that are governed operations reserved for non-agent capabilities.
+pub(crate) fn operator_validation_requirements(
+    task: &Task,
+    registered: &[String],
+) -> Vec<OperatorValidationRequirement> {
+    positive_validation_tools(task, registered)
+        .into_iter()
+        .filter(|(_, tool)| {
+            governed_tool(tool)
+                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
+        })
+        .map(|(criterion, tool)| OperatorValidationRequirement {
+            criterion,
+            tool: tool.into(),
+        })
+        .collect()
+}
+
 /// Status, priority, attribution, comments and execution evidence are not
 /// assessed validation material; editing them must not release a hold.
 fn validation_material(task: &Task) -> String {
@@ -186,28 +205,9 @@ impl OrbitRuntime {
                     event.at > comment.at && matches!(event.event.as_str(), "updated" | "renamed")
                 });
                 if !edited {
-                    let tools = assessment["validation_tool_warnings"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .filter_map(|warning| {
-                            let rest = warning.strip_prefix("acceptance criterion requires `")?;
-                            let (tool, rest) = rest.split_once('`')?;
-                            (rest.starts_with(", a governed operation reserved for the ")
-                                && governed_tool(tool).is_some_and(|operation| {
-                                    !operation.allowed.contains(&McpCapability::Agent)
-                                }))
-                            .then(|| tool.to_string())
-                        })
-                        .collect::<Vec<_>>();
-                    let requirements = positive_validation_tools(&task, &tools)
-                        .into_iter()
-                        .map(|(criterion, tool)| OperatorValidationRequirement {
-                            criterion,
-                            tool: tool.into(),
-                        })
-                        .collect::<Vec<_>>();
+                    let mut registered = self.allowlist_known_tool_names();
+                    registered.sort();
+                    let requirements = operator_validation_requirements(&task, &registered);
                     if !requirements.is_empty() {
                         return Ok(Some(PilotAdmissionHold::OperatorValidation(
                             OperatorValidationHold::new(&task, requirements),
