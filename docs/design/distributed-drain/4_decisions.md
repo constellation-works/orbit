@@ -2,7 +2,7 @@
 title: Distributed Drain — Decisions
 owner: claude
 last_updated: 2026-10-06
-last_validated: 2026-09-19
+last_validated: 2026-10-06
 status: Draft
 feature: distributed-drain
 doc_role: decisions
@@ -184,7 +184,7 @@ claims to be. Fields are additive and nullable; absent means unknown.
 ## Epic is a tag, not a pipeline
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`, `crates/orbit-core/assets/jobs/epic_pipeline.yaml`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
 
 ### Context
 
@@ -212,7 +212,7 @@ top-tier crew*, read by crew selection and ignored by admission.
 ## Blocked tasks wait for a reader, not a classifier
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/assets/jobs/task_triage_pipeline.yaml`, `crates/orbit-core/src/application/automation/incidents.rs`
+**Code anchors:** `crates/orbit-core/src/application/automation/incidents.rs`, `crates/orbit-core/src/application/task/final_recovery.rs::apply_final_recovery`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`
 
 ### Context
 
@@ -270,7 +270,7 @@ No heartbeat or automatic reclamation is introduced. Age and TTL support inspect
 ## Owner ordering does not require a materialized queue
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
+**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
 
 ### Context
 
