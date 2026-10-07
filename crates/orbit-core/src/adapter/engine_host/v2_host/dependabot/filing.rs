@@ -725,9 +725,10 @@ fn dependabot_title_package(title: &str) -> Option<String> {
 }
 
 /// Dependabot head refs follow `dependabot/<ecosystem>/<manifest path…>/<package>-<version>`.
-/// Require the ecosystem segment to agree and the final path segment to name
-/// the package followed by a version-like suffix. Checking that suffix avoids
-/// treating a hyphenated sibling package (e.g. `time-core`) as `time`.
+/// Require the ecosystem segment to agree (alert ecosystems use API names, branches
+/// use package-manager names) and the path tail to name the package followed by a
+/// version-like suffix. Checking that suffix avoids treating a hyphenated sibling
+/// package (e.g. `time-core`) as `time`.
 fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: &str) -> bool {
     let mut segments = head_branch.split('/');
     if segments.next() != Some("dependabot") {
@@ -736,22 +737,42 @@ fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: 
     let Some(branch_ecosystem) = segments.next() else {
         return false;
     };
-    if !branch_ecosystem.eq_ignore_ascii_case(ecosystem) {
+    let expected_branch_ecosystem = if ecosystem.eq_ignore_ascii_case("npm") {
+        "npm_and_yarn"
+    } else if ecosystem.eq_ignore_ascii_case("rust") {
+        "cargo"
+    } else if ecosystem.eq_ignore_ascii_case("actions") {
+        "github_actions"
+    } else if ecosystem.eq_ignore_ascii_case("go") {
+        "go_modules"
+    } else if ecosystem.eq_ignore_ascii_case("rubygems") {
+        "bundler"
+    } else {
+        ecosystem
+    };
+    if !branch_ecosystem.eq_ignore_ascii_case(expected_branch_ecosystem) {
         return false;
     }
-    let Some(last) = segments.next_back() else {
-        return false;
-    };
-    let last = last.to_ascii_lowercase();
-    if last == package {
+    // Everything after the ecosystem segment is `<manifest path…>/<package>-<version>`.
+    // Package names can themselves contain slashes (`actions/checkout`,
+    // `@babel/core`, `github.com/org/module`), so match the whole name at a
+    // path-segment boundary rather than only the final segment.
+    let remainder = segments.collect::<Vec<_>>().join("/").to_ascii_lowercase();
+    let name_start = |index: usize| index == 0 || remainder[..index].ends_with('/');
+    if remainder == package || remainder.ends_with(&format!("/{package}")) {
         return true;
     }
-    last.strip_prefix(&format!("{package}-"))
-        .is_some_and(|version| {
-            version
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_digit())
+    let versioned_prefix = format!("{package}-");
+    remainder
+        .match_indices(&versioned_prefix)
+        .any(|(index, _)| {
+            let version = &remainder[index + versioned_prefix.len()..];
+            name_start(index)
+                && !version.contains('/')
+                && version
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_digit())
         })
 }
 

@@ -164,3 +164,60 @@ backend = "cli"
     assert_eq!(task.crew.as_deref(), Some("fixture"));
     assert!(task.tags.contains(&format!("dependabot:{key}")));
 }
+
+#[test]
+fn dependabot_alert_ecosystems_match_open_pr_branch_names() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &dependabot_alert_ecosystems_match_open_pr_branch_names,
+    )) {
+        return;
+    }
+
+    let (_root, runtime, _repo) = runtime_with_workspace_layout();
+    for (ecosystem, branch_ecosystem, package, manifest_path) in [
+        (
+            "npm",
+            "npm_and_yarn",
+            "@babel/core",
+            "website/package-lock.json",
+        ),
+        ("rust", "cargo", "serde", "Cargo.lock"),
+        (
+            "actions",
+            "github_actions",
+            "actions/checkout",
+            ".github/workflows/ci.yml",
+        ),
+        ("go", "go_modules", "github.com/example/module", "go.mod"),
+        ("rubygems", "bundler", "rack", "Gemfile.lock"),
+    ] {
+        let mut snapshot = expanded_snapshot(
+            vec![json!({
+                "number": 100,
+                "state": "open",
+                "severity": "high",
+                "ecosystem": ecosystem,
+                "package": package,
+                "manifest_path": manifest_path,
+                "vulnerable_range": "<1.2.2",
+                "first_patched_version": "1.2.2"
+            })],
+            Vec::new(),
+            Vec::new(),
+        );
+        snapshot["open_dependabot_pull_requests"] = json!([{
+            "title": format!("chore(deps): update {package}"),
+            "head_branch": format!(
+                "dependabot/{branch_ecosystem}/{manifest_path}/{package}-1.2.2"
+            )
+        }]);
+
+        let output = file(&runtime, snapshot, json!({}));
+        assert_eq!(output["filed_count"], 0, "alert ecosystem {ecosystem}");
+        assert_eq!(
+            output["skipped_dependabot_pr"].as_array().map(Vec::len),
+            Some(1),
+            "alert ecosystem {ecosystem} should match its Dependabot branch"
+        );
+    }
+}
