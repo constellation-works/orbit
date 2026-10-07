@@ -178,17 +178,17 @@ fn dependabot_alert_ecosystems_match_open_pr_branch_names() {
         (
             "npm",
             "npm_and_yarn",
-            "source-map-js",
+            "@babel/core",
             "website/package-lock.json",
         ),
         ("rust", "cargo", "serde", "Cargo.lock"),
         (
             "actions",
             "github_actions",
-            "actions-checkout",
+            "actions/checkout",
             ".github/workflows/ci.yml",
         ),
-        ("go", "go_modules", "go-example", "go.mod"),
+        ("go", "go_modules", "github.com/example/module", "go.mod"),
         ("rubygems", "bundler", "rack", "Gemfile.lock"),
     ] {
         let mut snapshot = expanded_snapshot(
