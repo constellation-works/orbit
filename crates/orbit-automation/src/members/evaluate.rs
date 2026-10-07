@@ -78,7 +78,7 @@ pub fn evaluate(
     let mut state = match store.automation_state(consumer)? {
         Some(state) => state,
         None => {
-            if !enabled && !dry_run {
+            if !enabled {
                 return diagnostic(store, consumer, "disabled", None);
             }
 
