@@ -157,25 +157,20 @@ spec:
        redesign, non-release `CHANGELOG.md` edits, and anything you are
        unsure about stay open findings: there is no second review round, so
        an open finding rejects the candidate and blocks the task.
-    4. Run the manifest's required host commands and the repository's required validation on the final worktree state
-       (for this repository `make ci-fast`, `make ci-test-affected`,
-       `make ci-lint`, and `make goldens`, plus focused checks where needed).
-       `make ci-fast` runs no Rust tests: it checks formatting and repository
-       guardrails. The required `make ci-test-affected` gate runs full test
-       targets of changed crates and their transitive workspace dependents;
-       focused test filters do not replace it. Pin its comparison to the
-       manifest's `base.commit` with `CI_TEST_BASE=<base.commit>` and record
-       `check: "make ci-test-affected"` when using that environment assignment.
+    4. Run the manifest's `required_validation_commands` and the validation
+       required by the workspace's own AGENTS.md on the final worktree state.
+       Use the workspace's supported mechanism to pin any comparison base to
+       the manifest's `base.commit`. Formatting and focused test filters do
+       not replace a full affected-test gate when the workspace requires one.
        Record every command you ran or could not
        run with outcome `passed`, `failed`, `denied` (the runner refused it), or
        `not_run`. Never record a skipped or denied command as passed, and never
        drop a record to make the set look clean.
 
        When you run a host-required command in any wrapped form, set `check`
-       to that host-required command string — the manifest's command, such as
-       `make ci-fast`, not the wrapped text. A leading `NAME=value` assignment
-       (`TMPDIR="$PWD/.orbit/tmp" make ci-fast`) is the same command as the
-       host requirement. Every other wrap (`env`, a shell prefix, a changed
+       to that host-required command string from the manifest, not the wrapped
+       text. A leading `NAME=value` environment assignment is the same command
+       as the host requirement. Every other wrap (`env`, a shell prefix, a changed
        argument) is a different command, so `check` is what identifies it as
        that host-required command.
 
