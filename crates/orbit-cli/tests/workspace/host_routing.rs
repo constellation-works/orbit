@@ -346,7 +346,9 @@ fn a_routed_call_carries_the_callers_authority_and_no_more() {
         &reset,
         &[
             ("ORBIT_OPERATOR", "1"),
-            ("ORBIT_AGENT_NAME", "routing-test"),
+            // A canonical family: a non-canonical name logs an attribution
+            // warning on stderr, which is not the refusal JSON this parses.
+            ("ORBIT_AGENT_NAME", "codex"),
         ],
     );
     let dialed = routed.take_remote_argv();
