@@ -31,7 +31,10 @@ pub(crate) fn resolve_path_value(
                 "cannot expand '~' because HOME/USERPROFILE is not set".to_string(),
             )
         })?;
-        let suffix = value.trim_start_matches("~/");
+        let suffix = value.strip_prefix("~/").unwrap_or("");
+        // A second slash belongs to the suffix, but must not make `join`
+        // replace the home directory with an absolute path.
+        let suffix = suffix.trim_start_matches('/');
         return Ok(normalize_path_components(&home.join(suffix)));
     }
     let path = PathBuf::from(value);
