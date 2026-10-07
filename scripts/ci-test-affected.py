@@ -43,6 +43,18 @@ def changed_paths(base):
     return {os.fsdecode(path) for path in (tracked + untracked).split(b"\0") if path}
 
 
+# Files that a crate's tests read at run time from outside its own directory:
+# another crate's assets, or a repository-root file. Cargo metadata cannot see
+# these edges, so each is declared here as (path prefix, reading crates). A
+# changed path under a prefix selects the readers and their reverse dependents.
+FILE_READERS = (
+    (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
+    (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
+    (Path("plugin/hooks"), ("orbit-cli",)),
+    (Path("server.json"), ("orbit-cli",)),
+)
+
+
 def affected_packages(metadata, paths):
     members = set(metadata["workspace_members"])
     packages = {package["name"]: package for package in metadata["packages"]
@@ -63,6 +75,12 @@ def affected_packages(metadata, paths):
             # A removed member no longer appears in current Cargo metadata.
             return sorted(packages)
         selected.update(owners)
+        for prefix, readers in FILE_READERS:
+            if path.is_relative_to(prefix):
+                missing = [name for name in readers if name not in packages]
+                if missing:
+                    raise ValueError(f"FILE_READERS names unknown workspace crates: {', '.join(missing)}")
+                selected.update(readers)
 
     reverse = {name: set() for name in packages}
     for name, package in packages.items():
