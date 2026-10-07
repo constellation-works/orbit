@@ -2111,6 +2111,15 @@ function buildStatusUpdateControl(task, context) {
 
 function buildCrewUpdateControl(task, context) {
   const cell = el("span", { class: "crew-cell" });
+  if (isAggregateView()) {
+    // The aggregate task list has no single crew registry to validate against.
+    // Keep the task's own crew visible without marking it missing or offering
+    // a workspace-scoped edit control.
+    cell.textContent = explicitCrewValue(task) || resolvedCrewName(task);
+    cell.title = "Crew settings are workspace-specific; select a workspace to edit.";
+    return cell;
+  }
+
   const mutable = canMutateTask(task);
   const feedback = crewFeedback.get(task.id);
   const label = `Update crew for ${task.id}`;

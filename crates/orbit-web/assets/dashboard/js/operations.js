@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -1413,17 +1413,22 @@ function autoDrainTimeLeft(endsAt) {
 }
 
 function updateDrainIndicators(phase, label) {
+  const aggregate = isAggregateView();
+  const indicatorPhase = aggregate ? "per-workspace" : phase;
+  const indicatorLabel = aggregate ? "Per-workspace drain status" : label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
-  if (tab) tab.dataset.drainState = phase;
-  if (tabState) tabState.textContent = phase === "idle" ? "" : label;
+  if (tab) tab.dataset.drainState = indicatorPhase;
+  if (tabState) tabState.textContent = aggregate ? "per workspace" : phase === "idle" ? "" : label;
   const global = $("global-drain-state");
   if (global) {
-    global.hidden = phase === "idle";
-    global.dataset.drainState = phase;
-    global.setAttribute("aria-label", `${label}. Open Drain card`);
+    global.hidden = phase === "idle" && !aggregate;
+    global.dataset.drainState = indicatorPhase;
+    global.setAttribute("aria-label", aggregate
+      ? "Drain status is per workspace. Select a workspace to inspect its live status."
+      : `${label}. Open Drain card`);
     const text = global.querySelector?.('.global-drain-label');
-    if (text) text.textContent = label;
+    if (text) text.textContent = indicatorLabel;
     if (!global.dataset.wired) {
       global.addEventListener("click", () => setActiveTab("auto-drain"));
       global.dataset.wired = "true";
