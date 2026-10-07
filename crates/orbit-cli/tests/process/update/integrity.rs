@@ -3,7 +3,8 @@
 //! The installed executable is a copy of this test's `orbit` binary in a
 //! managed directory. Release bytes are a shell stand-in signed by a throwaway
 //! key the child is told to trust. Refusals leave that copy and a seeded
-//! generation record untouched.
+//! generation record untouched. Admission waits for an in-flight clock tick,
+//! and a candidate that hangs while it is probed releases every authority.
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -15,6 +16,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
+use orbit_cmd::update::converge::PROBE_TIMEOUT_ENV;
+use orbit_common::fs::generation::{
+    Access, GenerationGuard, Participant, ParticipantRole, QUIESCE_TIMEOUT_ENV,
+};
 use orbit_common::test_env;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -486,6 +491,167 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
         "stale writer left a staging file"
     );
     let _ = child;
+}
+
+/// Hold the installation's host-global authority the way an in-flight
+/// `orbit clock tick` does: registered as a clock tick, for as long as the
+/// guard lives.
+fn clock_tick(install: &Install) -> GenerationGuard {
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "c".repeat(64);
+    let participant = Participant {
+        digest: &digest,
+        identity: &identity,
+        role: ParticipantRole::Clock,
+        access: Access::Write,
+        handover: None,
+    };
+    GenerationGuard::join(
+        &install.home.join(".orbit"),
+        &participant,
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the clock tick joins")
+}
+
+#[test]
+fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
+    let install = Install::new(None);
+    let script = candidate_script("99.0.0");
+    install.publish("99.0.0", Some(&tar_gz(&script)), true);
+    let tick = clock_tick(&install);
+    let hold = Duration::from_secs(3);
+
+    let began = Instant::now();
+    let finishing = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        drop(tick);
+    });
+    let mut command = install.command();
+    command
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(["update", "--json"]);
+    let output = output_of(&mut command).expect("run orbit update");
+    let waited = began.elapsed();
+    finishing.join().expect("clock tick thread");
+
+    assert!(
+        output.status.success(),
+        "an update beside an in-flight tick must wait for it, not refuse\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated");
+    assert!(
+        waited >= hold,
+        "the update replaced the executable before the tick finished ({waited:?})"
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("updated bytes"),
+        script
+    );
+}
+
+#[test]
+fn an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound() {
+    let install = Install::new(None);
+    install.publish("99.0.0", Some(&tar_gz(&candidate_script("99.0.0"))), true);
+    let _tick = clock_tick(&install);
+
+    let began = Instant::now();
+    let mut command = install.command();
+    command.env(QUIESCE_TIMEOUT_ENV, "1").arg("update");
+    let output = output_of(&mut command).expect("run orbit update");
+
+    assert_refused(
+        &output,
+        "outlasting tick",
+        &format!("pid {} (clock tick, started", std::process::id()),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("after waiting 1s"), "{stderr}");
+    assert!(stderr.contains("orbit clock pause"), "{stderr}");
+    assert!(
+        began.elapsed() >= Duration::from_secs(1),
+        "the update refused before its bound"
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("installed bytes"),
+        install.before,
+        "a refused update replaced the binary"
+    );
+    install.assert_no_backup("outlasting tick");
+}
+
+/// A candidate whose `--version` never returns is killed at the probe
+/// timeout. Until then every authority is held, so a command is refused as an
+/// upgrade in progress; afterwards nothing is held.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_hanging_candidate_probe_times_out_and_releases_every_authority() {
+    let install = Install::new(None);
+    let probing = install._root.path().join("probe-started");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then : > '{}'; exec sleep 600; fi\n\
+         exit 0\n",
+        probing.display()
+    );
+    install.publish("99.0.0", Some(&tar_gz(script.as_bytes())), true);
+
+    let stderr_path = install._root.path().join("hung.stderr");
+    let child = install
+        .std_command()
+        .env(PROBE_TIMEOUT_ENV, "8")
+        .arg("update")
+        .stdout(File::create(install._root.path().join("hung.stdout")).expect("stdout"))
+        .stderr(File::create(&stderr_path).expect("stderr"))
+        .spawn()
+        .expect("spawn update");
+    let mut child = ReapedChild { child: Some(child) };
+    let deadline = Instant::now() + STALE_SLICE_DEADLINE;
+    while !probing.exists() {
+        assert_waiting(
+            child.child.as_mut().expect("child"),
+            deadline,
+            "probe the candidate",
+        );
+        std::thread::sleep(WAIT_SLICE);
+    }
+
+    let held = install.run(&["task", "list"]);
+    assert_refused(
+        &held,
+        "a command during the hung probe",
+        "upgrade is in progress",
+    );
+
+    let status = wait_exit(
+        child.child.as_mut().expect("child"),
+        Instant::now() + UPDATE_TIMEOUT,
+    );
+    child.child = None;
+    let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("did not finish within 8s"), "{stderr}");
+    assert!(stderr.contains("nothing was replaced"), "{stderr}");
+    install.assert_untouched("hung candidate");
+    install.assert_no_backup("hung candidate");
+
+    let after = install.run(&["task", "list"]);
+    let after_stderr = String::from_utf8_lossy(&after.stderr);
+    assert!(
+        !after_stderr.contains("upgrade admission refused"),
+        "the timed-out update kept an authority: {after_stderr}"
+    );
+    let preflight = install.run(&["update", "--preflight", "--json"]);
+    assert!(
+        preflight.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preflight.stderr)
+    );
 }
 
 pub(super) struct ReapedChild {

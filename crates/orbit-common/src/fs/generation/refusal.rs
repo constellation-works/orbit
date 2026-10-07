@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use super::QUIESCE_TIMEOUT_ENV;
-use super::registry::{ParticipantRecord, PendingSwitch};
+use super::handoff::HandoverCandidate;
+use super::registry::{ParticipantRecord, ParticipantRole, PendingSwitch};
+use super::update::{Standing, standing};
 use crate::OrbitError;
 
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
@@ -89,9 +91,91 @@ pub(super) fn quiesce_timeout(
     ))
 }
 
+const UNREGISTERED: &str = "processes that did not register (executable-generation-v1 \
+     binaries, or sandboxed children that cannot write the Orbit root)";
+
+/// Live participants keep an updater out: each named with its role and what
+/// would end its hold. With none registered, the holder never registered.
+pub(super) fn holders_refused(
+    holders: &[ParticipantRecord],
+    candidate: Option<&HandoverCandidate>,
+) -> OrbitError {
+    refusal(format!(
+        "Orbit clients or commands are still running: {}",
+        describe_holders(holders, candidate)
+    ))
+}
+
+/// Short-lived participants did not finish within `bound`.
+pub(super) fn holders_outlasted(
+    bound: Duration,
+    holders: &[ParticipantRecord],
+    candidate: Option<&HandoverCandidate>,
+) -> OrbitError {
+    refusal(format!(
+        "Orbit clients or commands are still running after waiting {}s for them to finish \
+         ({QUIESCE_TIMEOUT_ENV}): {}",
+        bound.as_secs(),
+        describe_holders(holders, candidate)
+    ))
+}
+
+fn describe_holders(
+    holders: &[ParticipantRecord],
+    candidate: Option<&HandoverCandidate>,
+) -> String {
+    if holders.is_empty() {
+        return format!(
+            "{UNREGISTERED} — they neither register a role nor hand over; retry once they \
+             exit, or stop them through their owners"
+        );
+    }
+    let mut listed = holders
+        .iter()
+        .map(|holder| format!("{holder} — {}", remedy(holder, candidate)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    listed.push_str(&format!("; and any {UNREGISTERED}"));
+    listed
+}
+
+/// What ends `holder`'s hold on the generation.
+fn remedy(holder: &ParticipantRecord, candidate: Option<&HandoverCandidate>) -> String {
+    let capability = holder.handover.as_deref();
+    match (standing(holder, candidate), holder.role, capability) {
+        (Standing::HandsOver, ..) => "hands over to the candidate after the rename".into(),
+        (_, ParticipantRole::Command, _) => "let the command finish".into(),
+        (_, ParticipantRole::Clock, _) => {
+            "let the tick finish, or pause scheduled ticks with `orbit clock pause`".into()
+        }
+        (_, ParticipantRole::McpServe, Some(capability)) => match candidate {
+            Some(_) => format!(
+                "the candidate does not report the {capability} resume capability this session \
+                 needs; close its MCP client"
+            ),
+            None => format!(
+                "it hands over ({capability}) only when a candidate is renamed over the \
+                 executable: admit that with `orbit update --preflight --candidate <path>`, \
+                 or close its MCP client"
+            ),
+        },
+        (_, ParticipantRole::McpServe, None) => {
+            "this mcp serve cannot hand over (its stdin cannot be polled, it proxies a remote \
+             host, or its build predates handover); close its MCP client"
+                .into()
+        }
+        (_, ParticipantRole::McpListen, _) => {
+            "the TCP listener is never handed over; stop it and start it again after the upgrade"
+                .into()
+        }
+        (_, ParticipantRole::Dashboard, _) => {
+            "stop the dashboard and start it again after the upgrade".into()
+        }
+        (_, ParticipantRole::Drain, _) => "let its run finish, or cancel it".into(),
+    }
+}
+
 pub(super) fn describe_blockers(blockers: &[ParticipantRecord]) -> String {
-    const UNREGISTERED: &str = "processes that did not register (executable-generation-v1 \
-         binaries, or sandboxed children that cannot write the Orbit root)";
     if blockers.is_empty() {
         return UNREGISTERED.to_string();
     }

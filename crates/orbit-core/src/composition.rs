@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    Access, GenerationGuard, ParticipantRole, process_participation,
+    Access, GenerationGuard, ParticipantRole, process_handover, process_participation,
 };
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::Store;
@@ -235,15 +235,15 @@ impl OrbitRuntime {
     }
 }
 
-/// Join `root`'s generation before bootstrap, in the role this process
-/// already joined as (a plain command otherwise). See
-/// [`pin_executable_generation_as`].
+/// Join `root`'s generation before bootstrap, in the role and with the
+/// handover capability this process already joined with (a plain command
+/// otherwise). See [`pin_executable_generation_as`].
 pub fn pin_executable_generation(
     root: &Path,
     read_only: bool,
 ) -> Result<GenerationGuard, OrbitError> {
     let role = process_participation().map_or(ParticipantRole::Command, |(_, role)| role);
-    pin_executable_generation_as(root, read_only, role)
+    pin_executable_generation_as(root, read_only, role, process_handover())
 }
 
 /// Join `root`'s generation before bootstrap under
@@ -252,19 +252,29 @@ pub fn pin_executable_generation(
 /// admitted, whatever its executable digest. A read-only caller that meets a
 /// v1-owned generation still joins it when the compiled store schema equals
 /// the store's current schema.
+///
+/// `handover` is the resume capability this process hands over with when a
+/// candidate is renamed over its executable, if it can; an updater admitting
+/// that candidate then admits beside it.
 pub fn pin_executable_generation_as(
     root: &Path,
     read_only: bool,
     role: ParticipantRole,
+    handover: Option<&str>,
 ) -> Result<GenerationGuard, OrbitError> {
     let access = if read_only {
         Access::ReadOnly
     } else {
         Access::Write
     };
-    GenerationGuard::for_process(root, &compiled_compatibility(), role, access, || {
-        Store::open_read_only(&root.join("orbit.db"))?.schema_version()
-    })
+    GenerationGuard::for_process(
+        root,
+        &compiled_compatibility(),
+        role,
+        handover,
+        access,
+        || Store::open_read_only(&root.join("orbit.db"))?.schema_version(),
+    )
 }
 
 fn build_runtime(

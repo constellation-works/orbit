@@ -64,6 +64,10 @@ pub struct UpdateCommand {
     /// Check whether running Orbit processes prevent an upgrade, without opening stores
     #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "local_candidate"])]
     pub preflight: bool,
+    /// With --preflight: the executable an installer will rename over this one.
+    /// Live processes that hand over to it after the rename are admitted and named
+    #[arg(long, value_name = "PATH", requires = "preflight")]
+    pub candidate: Option<PathBuf>,
     /// Install this locally built executable instead of a published release
     /// (operator-attested, never a signed release)
     #[arg(long, value_name = "PATH", requires = "source_commit")]
@@ -143,7 +147,13 @@ impl UpdateCommand {
                 root_override,
                 workspace.as_ref().map(|workspace| workspace.root.as_path()),
             )?;
-            let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
+            let handover = match &self.candidate {
+                Some(path) => orbit_cmd::update::candidate_preflight(&roots, path)?,
+                None => {
+                    let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
+                    Vec::new()
+                }
+            };
             let quiesce = generation::quiesce_bound().as_secs();
             return Ok(Payload::detail(
                 serde_json::json!({
@@ -156,10 +166,18 @@ impl UpdateCommand {
                     "admission_contract": generation::GENERATION_CONTRACT,
                     "compatibility": orbit_core::composition::compiled_compatibility(),
                     "quiesce_timeout_secs": quiesce,
+                    "candidate": self.candidate,
+                    "handover": handover.iter().map(|holder| serde_json::json!({
+                        "pid": holder.pid,
+                        "role": holder.role,
+                        "started_at": holder.started_at,
+                        "resume": holder.handover,
+                    })).collect::<Vec<_>>(),
                 }),
                 format!(
-                    "Upgrade admission available on {}. This observation does not reserve admission; use orbit update for guarded replacement. Admission follows {}: builds with compatible state versions run side by side, and a breaking migration waits up to {quiesce}s for live Orbit processes to yield.",
+                    "Upgrade admission available on {}.{} This observation does not reserve admission; use orbit update for guarded replacement. Admission follows {}: builds with compatible state versions run side by side, and a breaking migration waits up to {quiesce}s for live Orbit processes to yield.",
                     describe_authorities(&roots),
+                    describe_handover(&handover),
                     generation::GENERATION_CONTRACT,
                 ),
             ).into());
@@ -246,6 +264,21 @@ fn local_candidate(
     Ok(Payload::detail(doc, format_report(&report, false))
         .with_exit_code(exit_code)
         .into())
+}
+
+/// The processes that hand over once the candidate is renamed into place.
+fn describe_handover(handover: &[generation::ParticipantRecord]) -> String {
+    if handover.is_empty() {
+        return String::new();
+    }
+    format!(
+        " After the candidate is renamed over the executable, these will hand over to it: {}.",
+        handover
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// Name every authority the probe locked, in the order `orbit update` takes them.

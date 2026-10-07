@@ -21,7 +21,7 @@ use super::registry::{
     pending_switch,
 };
 use super::update::GenerationUpdate;
-use super::{DEFAULT_QUIESCE_TIMEOUT, QUIESCE_TIMEOUT_ENV};
+use super::{DEFAULT_QUIESCE_TIMEOUT, MAX_QUIESCE_TIMEOUT, QUIESCE_TIMEOUT_ENV};
 use crate::OrbitError;
 
 const QUIESCE_POLL: Duration = Duration::from_millis(200);
@@ -30,7 +30,7 @@ const ADMISSION_POLL: Duration = Duration::from_millis(10);
 /// upgrade holds it. Ordinary holders release it within milliseconds.
 const UPGRADE_PROBE: Duration = Duration::from_secs(1);
 /// How long an [`upgrade_holding`] probe can hold the generation lock.
-const PROBE_SETTLE: Duration = Duration::from_millis(20);
+pub(super) const PROBE_SETTLE: Duration = Duration::from_millis(20);
 
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
@@ -52,14 +52,20 @@ pub struct Participant<'a> {
     pub identity: &'a CompatibilityIdentity,
     pub role: ParticipantRole,
     pub access: Access,
+    /// The resume capability it hands over with when a candidate is renamed
+    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
+    pub handover: Option<&'a str>,
 }
 
-/// The configured wait for a breaking upgrade (see [`QUIESCE_TIMEOUT_ENV`]).
+/// The configured wait for a breaking upgrade, and for an updater waiting
+/// on short-lived participants (see [`QUIESCE_TIMEOUT_ENV`]), at most
+/// [`MAX_QUIESCE_TIMEOUT`].
 pub fn quiesce_bound() -> Duration {
     std::env::var(QUIESCE_TIMEOUT_ENV)
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map_or(DEFAULT_QUIESCE_TIMEOUT, Duration::from_secs)
+        .min(MAX_QUIESCE_TIMEOUT)
 }
 
 /// How a process holds `.generation-admission.lock`.
@@ -97,7 +103,7 @@ pub(super) fn admission(
         None
     };
     let started = Instant::now();
-    let deadline = started + wait;
+    let deadline = started + wait.min(MAX_QUIESCE_TIMEOUT);
     let mut probe_at = started + UPGRADE_PROBE;
     loop {
         let attempt = match mode {
@@ -185,6 +191,7 @@ struct Participation {
     root: PathBuf,
     identity: CompatibilityIdentity,
     role: ParticipantRole,
+    handover: Option<String>,
 }
 
 static PARTICIPATION: OnceLock<Participation> = OnceLock::new();
@@ -194,6 +201,12 @@ pub fn process_participation() -> Option<(&'static Path, ParticipantRole)> {
     PARTICIPATION
         .get()
         .map(|participation| (participation.root.as_path(), participation.role))
+}
+
+/// The resume capability this process registered to hand over with, once it
+/// has joined.
+pub fn process_handover() -> Option<&'static str> {
+    PARTICIPATION.get()?.handover.as_deref()
 }
 
 /// A switch this process should yield to at its next safe point: pending on
@@ -225,6 +238,7 @@ impl GenerationGuard {
                 access: participant.access,
                 digest: participant.digest.to_string(),
                 identity: participant.identity.clone(),
+                handover: participant.handover.map(str::to_string),
             },
         );
         self
@@ -237,11 +251,14 @@ impl GenerationGuard {
     }
 
     /// Join `root` for this process's lifetime, before runtime bootstrap, and
-    /// remember the participation for [`pending_switch_for_this_process`].
+    /// remember the participation for [`pending_switch_for_this_process`] and
+    /// [`process_handover`]. `handover` is the resume capability this process
+    /// hands over with, if it can.
     pub fn for_process<F>(
         root: &Path,
         identity: &CompatibilityIdentity,
         role: ParticipantRole,
+        handover: Option<&str>,
         access: Access,
         store_schema: F,
     ) -> Result<Self, OrbitError>
@@ -253,12 +270,14 @@ impl GenerationGuard {
             identity,
             role,
             access,
+            handover,
         };
         let guard = Self::join(root, &participant, quiesce_bound(), store_schema)?;
         let _ = PARTICIPATION.set(Participation {
             root: validated_generation_root(root)?,
             identity: identity.clone(),
             role,
+            handover: handover.map(str::to_string),
         });
         Ok(guard)
     }
@@ -469,7 +488,7 @@ impl GenerationGuard {
         reason: &str,
     ) -> Result<Self, OrbitError> {
         let requested_at = Utc::now();
-        let deadline = Instant::now() + bound;
+        let deadline = Instant::now() + bound.min(MAX_QUIESCE_TIMEOUT);
         let switch = PendingSwitch {
             pid: std::process::id(),
             role: participant.role,

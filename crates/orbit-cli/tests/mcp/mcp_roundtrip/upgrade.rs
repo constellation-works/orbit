@@ -44,6 +44,14 @@ fn preflight(workspace: &McpWorkspace) -> std::process::Output {
         .expect("preflight")
 }
 
+fn candidate_preflight(workspace: &McpWorkspace, candidate: &Path) -> std::process::Output {
+    McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["update", "--preflight", "--json", "--candidate"])
+        .arg(candidate)
+        .output()
+        .expect("candidate preflight")
+}
+
 fn assert_refused(output: &std::process::Output) {
     assert!(!output.status.success(), "unexpected success: {output:?}");
     assert!(
@@ -173,6 +181,7 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
         identity: &old_identity,
         role: ParticipantRole::McpServe,
         access: Access::Write,
+        handover: None,
     };
     let _old_client = GenerationGuard::join(
         &authority_root(&workspace),
@@ -219,8 +228,13 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
     assert_eq!(added["title"], "Written after the old client quiesced");
 }
 
+/// An idle stdio MCP server refuses a plain preflight and `orbit update`
+/// untouched, but admits an installer that renames a candidate it can hand
+/// over to: that preflight names it, and after the rename it re-execs into the
+/// candidate and keeps serving the same session.
 #[test]
-fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candidate() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
     std::fs::create_dir_all(&install).expect("installation");
@@ -262,7 +276,27 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
     let report: Value = serde_json::from_slice(&contract.stdout).expect("contract JSON");
     assert_eq!(report["contract"], "executable-generation-v1");
     assert_eq!(report["admission_contract"], "compatibility-generation-v2");
-    assert_refused(&preflight(&workspace));
+    // Nothing would hand the session over without a candidate to rename in.
+    let plain = preflight(&workspace);
+    assert_refused(&plain);
+    let refusal = String::from_utf8_lossy(&plain.stderr);
+    assert!(
+        refusal.contains(&format!("pid {pid} (mcp serve")),
+        "{refusal}"
+    );
+    assert!(refusal.contains("--candidate"), "{refusal}");
+    let candidate = distinct_candidate(&workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    let admitted = candidate_preflight(&workspace, &candidate);
+    assert!(admitted.status.success(), "{admitted:?}");
+    let report: Value = serde_json::from_slice(&admitted.stdout).expect("preflight JSON");
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["reservation"], false);
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], pid, "{report}");
+    assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
+    assert_eq!(handover[0]["resume"], "mcp-stdio-v1", "{report}");
     // Exercise ordinary update admission, not just the observation helper. An
     // explicit target avoids network access; refusal must precede staging.
     let output = McpWorkspace::orbit_program_command(&old, &workspace.work, &workspace.home)
@@ -308,6 +342,21 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
     );
     assert_eq!(audit_count(&workspace, "orbit.task.show"), 1);
     assert_eq!(audit_count(&workspace, "orbit.task.update"), 2);
+
+    // The installer renames the admitted candidate over the executable; the
+    // idle server re-execs into it and the client's session goes on.
+    install_over(&candidate, &old);
+    wait_until(
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+        "the idle MCP server to hand over to the renamed candidate",
+    );
+    assert_eq!(client.child.id(), pid);
+    let after = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the candidate rename", "description":"Same session, new image", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(after["title"], "After the candidate rename");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 2);
     drop(client);
     let ready = preflight(&workspace);
     assert!(ready.status.success(), "{ready:?}");
@@ -471,6 +520,7 @@ fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() 
         identity: &breaking,
         role: ParticipantRole::Command,
         access: Access::Write,
+        handover: None,
     };
     let root = authority_root(&workspace);
 
@@ -739,6 +789,15 @@ fn listener_retains_admission_until_process_exit() {
     drop(listener);
     let mut client = workspace.listen(addr);
     assert_refused(&preflight(&workspace));
+    // The listener is never handed over, so even a candidate cannot admit it.
+    let refused = candidate_preflight(&workspace, Path::new(env!("CARGO_BIN_EXE_orbit")));
+    assert_refused(&refused);
+    let refusal = String::from_utf8_lossy(&refused.stderr);
+    assert!(refusal.contains("(mcp listen, started"), "{refusal}");
+    assert!(
+        refusal.contains("TCP listener is never handed over"),
+        "{refusal}"
+    );
     client.call_tool_ok("orbit_workspace_list", json!({}));
     drop(client);
     assert!(preflight(&workspace).status.success());

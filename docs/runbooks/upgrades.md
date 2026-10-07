@@ -40,8 +40,10 @@ The check downloads no release archive and does not converge workspace state.
    sequence instead — uninstall the legacy formula, then install the canonical one — because the
    two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
    upgrade.
-3. Acquire generation admission against the same resolved authorities `--preflight` uses,
-   refusing while any participating Orbit process is live, then take the exclusive
+3. Acquire generation admission against the same resolved authorities `--preflight` uses —
+   waiting up to `ORBIT_UPGRADE_QUIESCE_SECS` for one-shot commands and clock ticks to
+   finish, and refusing while any long-lived Orbit process is live (see
+   [`--contract` and `--preflight`](#--contract-and---preflight)) — then take the exclusive
    install-directory lock so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
    running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
@@ -53,7 +55,10 @@ The check downloads no release archive and does not converge workspace state.
    into a staging file beside the installed one. Run the staged executable's `--version`
    and require it to match the requested release before copying a backup or replacing
    anything. A mislabeled release, failed version probe, or unparseable version is refused
-   with the installed executable untouched.
+   with the installed executable untouched. Each `--version` and `update --contract` probe
+   is killed after `ORBIT_UPDATE_PROBE_TIMEOUT_SECS` seconds (default 30): the probes run
+   while every authority is held, so a candidate that hangs fails the update and releases
+   them instead of leaving every Orbit command refused as an upgrade in progress.
 6. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
    version. If it does not, the previous executable is copied into a complete sibling staging
@@ -267,12 +272,61 @@ the authority it came from. Exit 0 returns:
 
 Exit 1 with `upgrade admission refused` on stderr means stop before installation;
 `--json` emits the CLI's normal JSON error envelope on stderr. This is an observation,
-**not a reservation**. `orbit update` itself still takes each authority **exclusively**:
-it refuses while any participant is live or a switch is pending, retains admission
+**not a reservation**.
+
+Both the probe and `orbit update` take each authority's admission exclusively, so no
+Orbit process joins behind them, and then treat each live participant by its role:
+
+- A **one-shot command** or **clock tick** finishes on its own. Admission waits for it,
+  polling, up to `ORBIT_UPGRADE_QUIESCE_SECS` (default 120, at most one day); past that
+  it refuses with `still running after waiting <N>s for them to finish` and names it.
+  While admission waits, a new Orbit process queues behind it, and refuses as an
+  upgrade in progress once the update holds the generation.
+- A **long-lived** process — `mcp serve`, `mcp listen`, the dashboard, a drain or pipeline
+  worker — refuses at once, unless the probe names a candidate it will hand over to
+  (below).
+- A holder that **never registered** (an `executable-generation-v1` binary, or a
+  sandboxed child that cannot write the root) refuses at once: it cannot be named by
+  role or asked to hand over.
+
+Each refusal names every blocker by pid, role and start time with the remedy for its
+role — let a command finish; let a tick finish or `orbit clock pause`; close the MCP
+client of a server that cannot hand over; stop and restart `mcp listen` or the
+dashboard; let a run finish or cancel it — for example:
+
+```text
+upgrade admission refused: Orbit clients or commands are still running: pid 3772 (mcp serve,
+started 2026-10-07T06:14:52Z) — it hands over (mcp-stdio-v1) only when a candidate is renamed
+over the executable: admit that with `orbit update --preflight --candidate <path>`, or close its
+MCP client; and any processes that did not register (…); leave the installation and stores
+unchanged. …
+```
+
+**Candidate-aware preflight.** `orbit update --preflight --candidate <path>` is the probe
+for an installer that will rename `<path>` over the executable. It first asks the
+candidate for its `update --contract` (refusing a candidate that does not report
+`compatibility-generation-v2`). A stdio `orbit mcp serve` whose stdin can be polled
+registers that it hands over with `mcp-stdio-v1`; when the candidate reports that
+capability, the server is admitted beside and listed in `handover`, the processes that
+re-exec into the candidate once it is renamed into place:
+
+```json
+{"schema_version":1,"admitted":true,"reservation":false,"candidate":"/srv/build/orbit","handover":[{"pid":3772,"role":"mcp_serve","started_at":"2026-10-07T06:14:52Z","resume":"mcp-stdio-v1"}],…}
+```
+
+Without `--candidate`, `handover` is empty and such a server refuses like any other
+long-lived process. A server whose stdin cannot be polled (a regular file,
+`/dev/null`), a `--mode remote` proxy, and a build that predates this registration do
+not hand over and still refuse, as do `mcp listen`, the dashboard and drains. The
+admission is only as good as the rename that follows: install by writing the candidate
+beside the executable and renaming it over, so the running inode is left for the
+handing-over server.
+
+`orbit update` itself names no candidate when it admits — the release is staged only
+after admission — so a live MCP server refuses it; close the client, or install
+through a renaming installer after a candidate-aware preflight. It retains admission
 across staging and replacement, and pins the candidate's generation (with the
-candidate's reported identity, so compatible builds may join once it releases). Use
-`--preflight` to learn whether it would be admitted now; use an installer that renames
-over the executable when long-lived processes should stay up and hand over instead.
+candidate's reported identity, so compatible builds may join once it releases).
 `--check` only checks release availability and is not this probe.
 
 Admission also requires each authority's `.generation.lock` to be *writable*, and
@@ -462,7 +516,7 @@ Then the ordinary update order applies, with the candidate in place of a downloa
 
 1. Inspect the install target, acquire generation admission for the invocation,
    host-global, and selected workspace roots (each distinct authority is locked;
-   a live client on any of them refuses the update), then acquire the
+   a live long-lived client on any of them refuses the update), then acquire the
    install-directory lock. Workspace discovery follows the current directory
    independently of `HOME`: run from the intended workspace, and for isolated
    smoke checks use an isolated checkout as well as isolated `HOME` and install
@@ -484,12 +538,13 @@ Then the ordinary update order applies, with the candidate in place of a downloa
 Every refusal before step 5 leaves the executable, its backup, the generation record
 and every store untouched.
 
-**Clients.** Live stdio MCP sessions, the dashboard, clock ticks and drain coordinators
-make the update refuse with `upgrade admission refused`; they keep running on the
-installed build and a claimed run is not interrupted or reset. Stop them (close the
-MCP client or its window and confirm the backend exited, stop the dashboard, pause the
-clock, let or cancel drains finish), run the update, and reconnect: they start from the
-installed candidate.
+**Clients.** A clock tick or one-shot command in flight is waited for (see
+[`--contract` and `--preflight`](#--contract-and---preflight)). Live stdio MCP sessions,
+the dashboard and drain coordinators make the update refuse with `upgrade admission
+refused`; they keep running on the installed build and a claimed run is not interrupted
+or reset. Stop them (close the MCP client or its window and confirm the backend exited,
+stop the dashboard, let or cancel drains finish), run the update, and reconnect: they
+start from the installed candidate.
 
 **Replay and recovery.** Re-running the same command once the target already holds the
 accepted digest skips replacement, re-pins and re-runs convergence (`outcome:
