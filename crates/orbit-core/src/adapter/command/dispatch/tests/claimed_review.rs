@@ -132,7 +132,7 @@ pub(super) struct Fixture {
     pub(super) worktree: PathBuf,
     pub(super) owner: Arc<Owner>,
     pub(super) runtime: OrbitRuntime,
-    attempt_id: String,
+    pub(super) attempt_id: String,
     pub(super) binding: WorkerInvocation,
 }
 

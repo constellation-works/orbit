@@ -340,9 +340,18 @@ pub(super) fn require_claimed_task(
     Ok(())
 }
 
-/// Refuse an artifact path that would leave the claimed task's artifacts.
-fn require_artifact_path(path: &str) -> Result<(), OrbitError> {
-    orbit_types::task::validate_relative_artifact_path(path)
+/// The canonical form of an artifact call's path, the key the owner stores it
+/// under, or a refusal for a path that would leave the claimed task's
+/// artifacts. Every check on the path, and the call the owner receives, uses
+/// this form: the raw string can carry whitespace, `./` or duplicate slashes
+/// the owner drops, so ` review-gate.json` would otherwise pass a check on its
+/// raw name and land as `review-gate.json`.
+fn canonical_artifact_path(object: &Map<String, Value>) -> Result<String, OrbitError> {
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    orbit_types::task::canonical_artifact_path(path)
         .map_err(|error| denied(&format!("the artifact path is not the task's own: {error}")))
 }
 
@@ -399,13 +408,13 @@ pub(super) fn execute_brokered(
     let object = input
         .as_object()
         .ok_or_else(|| OrbitError::InvalidInput("request input must be an object".into()))?;
-    let path = object
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if matches!(tool, GET | PUT) && super::claimed_review::is_review_artifact(path) {
+    let path = match tool {
+        GET | PUT => canonical_artifact_path(object)?,
+        _ => String::new(),
+    };
+    if matches!(tool, GET | PUT) && super::claimed_review::is_review_artifact(&path) {
         return super::claimed_review::execute_brokered(
-            runtime, run, binding, tool, object, session,
+            runtime, run, binding, tool, object, &path, session,
         );
     }
     let owner_input = match tool {
@@ -417,14 +426,14 @@ pub(super) fn execute_brokered(
         GET => {
             accept_fields(object, &["id", "path", "model"])?;
             require_claimed_task(object, binding)?;
-            require_artifact_path(path)?;
-            input.clone()
+            let mut input = input.clone();
+            input["path"] = Value::String(path);
+            input
         }
         PUT => {
             accept_fields(object, &["id", "path", "content_base64", "model"])?;
             require_claimed_task(object, binding)?;
-            require_artifact_path(path)?;
-            artifact_put_input(binding, path, put_content(object)?, object.get("model"))
+            artifact_put_input(binding, &path, put_content(object)?, object.get("model"))
         }
         TASK_ADD => {
             if let Some(field) = object.keys().find(|key| key.starts_with('_')) {
