@@ -1,7 +1,9 @@
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 
+use orbit_types::workflow::AgentBlocker;
 use orbit_types::workflow::activity_job::StepRecoveryDecisionRecord;
 
+use super::recovery_observation::{RecoveryObservation, recovery_base_ref};
 use super::*;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
@@ -74,6 +76,35 @@ impl StepFailure {
             Self::Outcome(outcome) => Ok(outcome),
         }
     }
+
+    /// [ORB-14268] Fail the step as the blocker its recovery declared. The
+    /// marker leads the message, so final recovery skips it and the failure
+    /// handoff blocks the task with the kind, as for an implementer blocker.
+    fn into_blocked(self, blocker: &AgentBlocker) -> Result<StepOutcome, DispatchError> {
+        let message = format!(
+            "{}\noriginal error before recovery: {}",
+            orbit_types::workflow::task_blocked_by_agent_message(blocker),
+            self.diagnostic()
+        );
+        match self {
+            Self::Error(_) => Err(DispatchError::JobExecution(message)),
+            Self::Outcome(outcome) => Ok(StepOutcome {
+                success: false,
+                output: outcome.output,
+                message: Some(message),
+            }),
+        }
+    }
+}
+
+/// What a recovery invocation admits for its failed step.
+pub(super) enum RecoveryAdmission {
+    /// Make the post-recovery attempt.
+    Retry,
+    /// Return the original failure.
+    Original,
+    /// Fail the step as the blocker recovery declared [ORB-14268].
+    Blocked(AgentBlocker),
 }
 
 pub(super) fn recover_or_return_original(
@@ -130,8 +161,10 @@ pub(super) fn recover_or_return_original(
     let mut failure = failure;
     let mut round = 1;
     loop {
-        if !attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
-            return failure.into_result();
+        match attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
+            RecoveryAdmission::Retry => {}
+            RecoveryAdmission::Original => return failure.into_result(),
+            RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
         }
         let recovered_conflict = (recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
             && round < MAX_CONFLICT_RECOVERY_ROUNDS)
@@ -234,7 +267,7 @@ pub(super) fn attempt_recovery_activity(
     failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
-) -> bool {
+) -> RecoveryAdmission {
     // The conflict leaf resolves a stopped rebase; a declared-failed outcome
     // or any other error is never a rebase conflict for it to resolve.
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
@@ -243,7 +276,7 @@ pub(super) fn attempt_recovery_activity(
             StepFailure::Error(DispatchError::RecoverableVcsConflict { .. })
         )
     {
-        return false;
+        return RecoveryAdmission::Original;
     }
 
     let recovery_started = std::time::Instant::now();
@@ -270,8 +303,12 @@ pub(super) fn attempt_recovery_activity(
         Err(error) => Err(("authorization", error.to_string())),
     };
 
-    let (recovery_succeeded, failure_phase, error_message, output, decision) = match result {
-        Ok(RecoveryDispatch { dispatch, slot }) => {
+    let (recovery_succeeded, failure_phase, error_message, output, read) = match result {
+        Ok(RecoveryDispatch {
+            dispatch,
+            slot,
+            observation,
+        }) => {
             let error_message = (!dispatch.success).then(|| {
                 redacted_recovery_diagnostic(dispatch.message.as_deref().unwrap_or(
                     "recovery activity returned an unsuccessful outcome without a diagnostic",
@@ -282,7 +319,7 @@ pub(super) fn attempt_recovery_activity(
             let decision = slot
                 .as_ref()
                 .filter(|_| dispatch.success)
-                .map(|slot| read_recovery_decision(ctx, slot));
+                .map(|slot| read_recovery_decision(ctx, slot, observation.as_ref()));
             (
                 dispatch.success,
                 (!dispatch.success).then(|| "activity".to_string()),
@@ -302,12 +339,20 @@ pub(super) fn attempt_recovery_activity(
             None,
         ),
     };
+    let (decision, blocker) = match read {
+        Some((decision, blocker)) => (Some(decision), blocker),
+        None => (None, None),
+    };
     // Without a slot (custom or conflict recovery, or a host without the
     // capability) a completed recovery keeps the legacy single re-attempt.
-    let retry_admitted = recovery_succeeded
-        && decision
-            .as_ref()
-            .is_none_or(|decision| decision.retry_admitted);
+    let admission = match (&decision, blocker) {
+        _ if !recovery_succeeded => RecoveryAdmission::Original,
+        (_, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
+        (None, None) => RecoveryAdmission::Retry,
+        (Some(decision), None) if decision.retry_admitted => RecoveryAdmission::Retry,
+        (Some(_), None) => RecoveryAdmission::Original,
+    };
+    let retry_admitted = matches!(admission, RecoveryAdmission::Retry);
     if let Some(decision) = decision.as_ref().filter(|_| !retry_admitted) {
         tracing::warn!(
             target: "orbit.engine.job_executor",
@@ -332,24 +377,30 @@ pub(super) fn attempt_recovery_activity(
             decision,
         },
     );
-    retry_admitted
+    admission
 }
 
-/// A completed recovery dispatch and the decision slot its input named.
+/// A completed recovery dispatch, the decision slot its input named, and
+/// what the engine observed before it ran.
 struct RecoveryDispatch {
     dispatch: super::super::dispatcher::DispatchOutcome,
     slot: Option<StepRecoveryDecisionSlot>,
+    observation: Option<RecoveryObservation>,
 }
 
 /// Read the invocation's durable decision through the host [ORB-14152].
 ///
-/// Only a verified `retry` or an absent file admits the post-recovery
-/// attempt. Anything present but not bound to this invocation, and any read
-/// failure, refuses it: neither is evidence that recovery repaired the step.
+/// A verified `retry` admits the post-recovery attempt. An absent file admits
+/// it only when the engine observes a change since the failure [ORB-14268]:
+/// otherwise the rerun meets the same cause. A verified `external_blocker`
+/// returns its blocker. Anything present but not bound to this invocation,
+/// and any read failure, refuses the attempt: neither is evidence that
+/// recovery repaired the step.
 fn read_recovery_decision(
     ctx: &ExecCtx<'_>,
     slot: &StepRecoveryDecisionSlot,
-) -> StepRecoveryDecisionRecord {
+    observation: Option<&RecoveryObservation>,
+) -> (StepRecoveryDecisionRecord, Option<AgentBlocker>) {
     let record =
         |status: &str, verdict: Option<StepRecoveryVerdict>, retry, detail: Option<&str>| {
             StepRecoveryDecisionRecord {
@@ -360,17 +411,53 @@ fn read_recovery_decision(
             }
         };
     match ctx.host.read_step_recovery_decision(slot) {
-        Ok(StepRecoveryDecisionRead::Absent) => record("absent", None, true, None),
-        Ok(StepRecoveryDecisionRead::Verified { verdict, reason }) => record(
-            "verified",
-            Some(verdict),
-            verdict == StepRecoveryVerdict::Retry,
-            reason.as_deref(),
-        ),
-        Ok(StepRecoveryDecisionRead::Invalid { diagnostic }) => {
-            record("invalid", None, false, Some(&diagnostic))
+        Ok(StepRecoveryDecisionRead::Absent) => {
+            let changes = observation.map(|observation| observation.changes(ctx));
+            let detail = match changes.as_deref() {
+                Some([]) => "no decision was written and no change to the worktree, base or \
+                             validation environment was observed since the failure"
+                    .to_string(),
+                Some(changes) => format!(
+                    "no decision was written; changed since the failure: {}",
+                    changes.join(", ")
+                ),
+                None => "no decision was written and no change since the failure could be \
+                         observed"
+                    .to_string(),
+            };
+            let retry = changes.is_some_and(|changes| !changes.is_empty());
+            (record("absent", None, retry, Some(&detail)), None)
         }
-        Err(error) => record("unavailable", None, false, Some(&error.to_string())),
+        Ok(StepRecoveryDecisionRead::Verified {
+            verdict,
+            reason,
+            blocker,
+        }) => {
+            let detail = match &blocker {
+                Some(blocker) => Some(format!(
+                    "kind={}: {}",
+                    blocker.kind,
+                    reason.as_deref().unwrap_or(&blocker.evidence)
+                )),
+                None => reason,
+            };
+            (
+                record(
+                    "verified",
+                    Some(verdict),
+                    verdict == StepRecoveryVerdict::Retry,
+                    detail.as_deref(),
+                ),
+                blocker.filter(|_| verdict == StepRecoveryVerdict::ExternalBlocker),
+            )
+        }
+        Ok(StepRecoveryDecisionRead::Invalid { diagnostic }) => {
+            (record("invalid", None, false, Some(&diagnostic)), None)
+        }
+        Err(error) => (
+            record("unavailable", None, false, Some(&error.to_string())),
+            None,
+        ),
     }
 }
 
@@ -482,6 +569,15 @@ fn dispatch_recovery(
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;
+    // Observed before the provider runs, so an absent decision can be judged
+    // against what the failure saw [ORB-14268].
+    let observation = slot.as_ref().map(|slot| {
+        RecoveryObservation::take(
+            ctx,
+            slot.workspace_root.clone(),
+            recovery_base_ref(ctx, &input),
+        )
+    });
     let input =
         inject_system_crew_input(ctx.host, &input).map_err(|error| ("crew", error.to_string()))?;
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
@@ -500,7 +596,11 @@ fn dispatch_recovery(
     match dispatch {
         Ok(dispatch) => {
             persist_dispatch_invocation(ctx, &recovery.name, &input, &dispatch);
-            Ok(RecoveryDispatch { dispatch, slot })
+            Ok(RecoveryDispatch {
+                dispatch,
+                slot,
+                observation,
+            })
         }
         Err(error) => Err(("dispatch", error.to_string())),
     }

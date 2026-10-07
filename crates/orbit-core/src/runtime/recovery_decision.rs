@@ -1,8 +1,9 @@
 //! Durable step-recovery decisions [ORB-14152].
 //!
 //! A `step_failure_recovery` invocation decides whether the executor makes its
-//! single post-recovery attempt by writing a small JSON file, not by what its
-//! final response says. Before dispatch the host allocates the file's path
+//! single post-recovery attempt, or declares an external blocker
+//! [ORB-14268], by writing a small JSON file, not by what its final response
+//! says. Before dispatch the host allocates the file's path
 //! under the assigned worktree's run-local scratch directory
 //! (`.orbit/tmp/step-recovery/`), which the recovery leaf's sandbox already
 //! makes writable, and binds it to the run, failed step, failed attempt and a
@@ -46,6 +47,9 @@ struct DecisionFile {
     decision: Verdict,
     #[serde(default)]
     reason: Option<String>,
+    /// `{kind, evidence}` for an `external_blocker` decision [ORB-14268].
+    #[serde(default)]
+    blocker: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +57,7 @@ struct DecisionFile {
 enum Verdict {
     Retry,
     NotRecovered,
+    ExternalBlocker,
 }
 
 /// Allocate a fresh decision path for one recovery invocation.
@@ -234,12 +239,38 @@ pub(crate) fn read(
             ));
         }
     }
+    // A blocker is the `external_blocker` verdict's payload and nothing
+    // else's; a malformed one is not a decision at all.
+    let blocker = match (&decision.decision, decision.blocker) {
+        (Verdict::ExternalBlocker, Some(blocker)) => {
+            match orbit_types::workflow::agent_blocker_from_output(
+                &serde_json::json!({ "blocker": blocker }),
+            ) {
+                Some(blocker) => Some(blocker),
+                None => {
+                    return invalid(
+                        "the decision's blocker needs a kind token and non-empty evidence"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        (Verdict::ExternalBlocker, None) => {
+            return invalid("an external_blocker decision needs a blocker".to_string());
+        }
+        (_, Some(_)) => {
+            return invalid("only an external_blocker decision carries a blocker".to_string());
+        }
+        (_, None) => None,
+    };
     Ok(StepRecoveryDecisionRead::Verified {
         verdict: match decision.decision {
             Verdict::Retry => StepRecoveryVerdict::Retry,
             Verdict::NotRecovered => StepRecoveryVerdict::NotRecovered,
+            Verdict::ExternalBlocker => StepRecoveryVerdict::ExternalBlocker,
         },
         reason: decision.reason.filter(|reason| !reason.trim().is_empty()),
+        blocker,
     })
 }
 

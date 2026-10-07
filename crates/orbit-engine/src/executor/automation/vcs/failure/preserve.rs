@@ -20,7 +20,8 @@ pub(super) fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
     Ok(host.get_task(task_id)?.spec_digest())
 }
 
-/// Keep a worktree whose implementer declared a blocker [ORB-14269].
+/// Keep a worktree whose implementer [ORB-14269] or step recovery
+/// [ORB-14268] declared a blocker.
 ///
 /// Unlike a validation-environment failure, the tree may still be dirty:
 /// nothing is committed, pushed, or published. The task is blocked under
@@ -47,15 +48,15 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
         MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
     );
     let note = format!(
-        "{} kind={kind} implementer declared a blocker: run={run_id}, \
+        "{} kind={kind} an agent declared a blocker: run={run_id}, \
          failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; no PR was opened",
         orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER
     );
     let body = format!(
-        "## Implementer blocker\n\nThe implementer stopped with kind `{kind}` and asked the run \
-         not to continue. No repair ran, no review budget was spent, nothing was committed or \
-         pushed, and no PR was opened. The worktree still holds the candidate as the implementer \
-         left it, including uncommitted files.\n\n- Run: `{run_id}`\n- Failed step: \
+        "## Agent blocker\n\nThe implementer or step recovery stopped with kind `{kind}` and \
+         asked the run not to continue. No final recovery ran, no review budget was spent, \
+         nothing was committed or pushed, and no PR was opened. The worktree still holds the \
+         candidate as the agent left it, including uncommitted files.\n\n- Run: `{run_id}`\n- Failed step: \
          `{failed_step_id}`\n- Kind: `{kind}`\n- Branch: `{branch}`\n- Head: `{head_sha}`\n\n\
          Move the task back to `in-progress` once the blocker is gone, then resume the run if the \
          candidate should continue.\n\n## Failure\n\n```text\n{}{}\n```",

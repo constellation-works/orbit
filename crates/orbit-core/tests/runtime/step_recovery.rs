@@ -8,6 +8,10 @@
 //! and reads it back; the engine admits or refuses the one post-recovery
 //! attempt of a failing deterministic step. The provider's final response is
 //! scripted independently, so each case shows which of the two decides.
+//! [ORB-14268] Without a decision, only a change the engine observes in the
+//! worktree or validation environment admits the attempt, and an
+//! `external_blocker` decision ends the step as a typed blocker that final
+//! recovery skips.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -47,7 +51,12 @@ const SAYS_UNRECOVERED: &str =
 const DECLARES_FAILED: &str = r#"{"schemaVersion":1,"status":"failed","result":{"recovered":true},"error":{"code":"blocked","message":"recovery declared failure"}}"#;
 
 /// Shell that writes a decision bound to this invocation. `$1` is the verdict.
-const WRITE_BOUND: &str = r#"bound() { printf '{"schema_version":1,"run_id":"%s","failed_step_id":"%s","attempt":%s,"nonce":"%s","decision":"%s","reason":"%s"}' "$run" "$step" "$attempt" "$nonce" "$1" "$2"; }"#;
+/// `$root` is the assigned worktree the decision path lives under.
+const WRITE_BOUND: &str = r#"bound() { printf '{"schema_version":1,"run_id":"%s","failed_step_id":"%s","attempt":%s,"nonce":"%s","decision":"%s","reason":"%s"}' "$run" "$step" "$attempt" "$nonce" "$1" "$2"; }
+root=$(dirname "$(dirname "$(dirname "$(dirname "$path")")")")"#;
+
+/// Appends `blocker` to a decision [`WRITE_BOUND`] printed.
+const WITH_BLOCKER: &str = r#"sed 's/}$/,"blocker":{"kind":"missing_credentials","evidence":"the push token was revoked"}}/'"#;
 
 struct Fixture {
     _root: TempDir,
@@ -100,6 +109,7 @@ struct Case<'a> {
     retry_succeeds: bool,
     read_failure: bool,
     claimed: bool,
+    change_validation_env: bool,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
 }
@@ -113,6 +123,7 @@ impl Default for Case<'_> {
             retry_succeeds: true,
             read_failure: false,
             claimed: false,
+            change_validation_env: false,
             prepare: |_| {},
         }
     }
@@ -120,6 +131,10 @@ impl Default for Case<'_> {
 
 struct Observed {
     deliveries: usize,
+    /// The job's terminal hooks the engine dispatched, with their inputs.
+    hooks: Vec<(String, Value)>,
+    /// Each final-recovery event's outcome and detail.
+    final_recovery: Vec<(String, Option<String>)>,
     result: Result<(bool, Option<String>), String>,
     attempted: StepRecoveryDecisionAttempt,
     post_recovery: Vec<String>,
@@ -167,9 +182,12 @@ struct RecoveryHost<'a> {
     retry_succeeds: bool,
     read_failure: bool,
     claimed: bool,
+    change_validation_env: bool,
     deliveries: AtomicUsize,
+    hooks: Mutex<Vec<(String, Value)>>,
     task_writes: AtomicUsize,
     slots: Mutex<Vec<StepRecoveryDecisionSlot>>,
+    validation_env_marker: PathBuf,
 }
 
 impl RecoveryHost<'_> {
@@ -190,10 +208,16 @@ impl RuntimeHost for RecoveryHost<'_> {
         &self,
         action: &str,
         _config: &Value,
-        _input: &Value,
+        input: &Value,
         _context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "deliver", "only the failing step is deterministic");
+        if action != "deliver" {
+            self.hooks
+                .lock()
+                .unwrap()
+                .push((action.to_string(), input.clone()));
+            return Ok(json!({}));
+        }
         let call = self.deliveries.fetch_add(1, Ordering::SeqCst);
         if call > 0 && self.retry_succeeds {
             return Ok(json!({"delivered": true}));
@@ -214,6 +238,24 @@ impl RuntimeHost for RecoveryHost<'_> {
             command: self.provider.display().to_string(),
             args: Vec::new(),
         })
+    }
+
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let mut environment = self.runtime.validation_environment();
+        if self.change_validation_env && self.validation_env_marker.exists() {
+            if let Some((_, value)) = environment
+                .env
+                .iter_mut()
+                .find(|(name, _)| name == "CARGO_HOME")
+            {
+                *value = "/changed/cargo-home".to_string();
+            } else {
+                environment
+                    .env
+                    .push(("CARGO_HOME".to_string(), "/changed/cargo-home".to_string()));
+            }
+        }
+        environment
     }
 
     fn tool_context_for_activity(
@@ -321,7 +363,8 @@ impl RuntimeHost for RecoveryHost<'_> {
     }
 }
 
-/// The failing step under the shipped recovery activity.
+/// The failing step under the shipped recovery activity, in a job with a
+/// final recovery and a failure activity scripted as deterministic actions.
 fn job(worktree: &Path) -> JobV2 {
     let mut job = load_job_asset(
         &json!({
@@ -331,6 +374,8 @@ fn job(worktree: &Path) -> JobV2 {
             "spec": {
                 "state": "enabled",
                 "kind": "workflow",
+                "failure_activity": "preserve_candidate",
+                "final_recovery_activity": "final_look",
                 "steps": [{
                     "id": "validate",
                     "recovery_activity": "step_failure_recovery",
@@ -356,6 +401,20 @@ fn job(worktree: &Path) -> JobV2 {
         "step_failure_recovery",
         load_activity_asset(&shipped).unwrap().spec,
     );
+    for hook in ["preserve_candidate", "final_look"] {
+        let asset = json!({
+            "schemaVersion": 2,
+            "kind": "Activity",
+            "metadata": {"name": hook},
+            "spec": {
+                "type": "deterministic",
+                "description": hook,
+                "action": hook,
+                "config": {},
+            },
+        });
+        catalog.insert(hook, load_activity_asset(&asset.to_string()).unwrap().spec);
+    }
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     job
 }
@@ -415,9 +474,12 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         retry_succeeds: case.retry_succeeds,
         read_failure: case.read_failure,
         claimed: case.claimed,
+        change_validation_env: case.change_validation_env,
         deliveries: AtomicUsize::new(0),
+        hooks: Mutex::new(Vec::new()),
         task_writes: AtomicUsize::new(0),
         slots: Mutex::new(Vec::new()),
+        validation_env_marker: worktree.join(".orbit/tmp/validation-env-changed"),
     };
     let run_id = format!("run-{}", case.name);
     let audit = V2AuditWriter::with_disk_sinks(
@@ -465,6 +527,15 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
             _ => None,
         })
         .collect();
+    let final_recovery = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            V2AuditEventKind::FinalRecoveryAttempted {
+                outcome, detail, ..
+            } => Some((outcome.clone(), detail.clone())),
+            _ => None,
+        })
+        .collect();
     let mut envelopes = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir.join("envelopes")) {
         for entry in entries {
@@ -490,6 +561,8 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
     }
     Observed {
         deliveries: host.deliveries.load(Ordering::SeqCst),
+        hooks: std::mem::take(&mut *host.hooks.lock().unwrap()),
+        final_recovery,
         result,
         attempted,
         post_recovery,
@@ -624,32 +697,101 @@ fn the_written_decision_controls_the_single_retry_whatever_the_final_response_sa
 }
 
 #[test]
-fn without_a_decision_the_legacy_retry_stands_and_the_response_has_no_authority() {
-    if !isolated(
-        "step_recovery::without_a_decision_the_legacy_retry_stands_and_the_response_has_no_authority",
-    ) {
+fn without_a_decision_only_an_observed_change_admits_the_retry() {
+    if !isolated("step_recovery::without_a_decision_only_an_observed_change_admits_the_retry") {
         return;
     }
     let fixture = fixture();
-    let absent = run(
+
+    // [ORB-14268] Nothing written and nothing changed: the rerun would meet
+    // the same cause, so the original failure stands, whatever the response
+    // claims.
+    let unchanged = run(
         &fixture,
         &Case {
-            name: "absent",
+            name: "absent_unchanged",
+            response: SAYS_RECOVERED,
+            ..Case::default()
+        },
+    );
+    let decision = unchanged.decision();
+    assert_eq!(decision.status, "absent");
+    assert_eq!(decision.verdict, None);
+    assert!(
+        !decision.retry_admitted,
+        "an unchanged worktree, base and validation environment admit no retry"
+    );
+    assert!(
+        decision
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("no change")),
+        "{decision:?}"
+    );
+    assert_eq!(
+        unchanged.envelopes.len(),
+        1,
+        "the recovery provider runs once"
+    );
+    assert_eq!(unchanged.deliveries, 1, "no post-recovery attempt");
+    assert!(unchanged.post_recovery.is_empty());
+    assert!(unchanged.failed_with_original(), "{:?}", unchanged.result);
+    let projected = unchanged.projection.attempts[0].decision.as_ref().unwrap();
+    assert_eq!(projected.status, "absent");
+    assert!(!unchanged.projection.attempts[0].retry_admitted);
+
+    // A repair in the worktree is an observed change: one retry, and
+    // `recovered: false` alone suppresses nothing.
+    let changed = run(
+        &fixture,
+        &Case {
+            name: "absent_changed",
+            producer: r#"printf 'repaired\n' > "$root/repaired.txt""#,
             response: SAYS_UNRECOVERED,
             ..Case::default()
         },
     );
-    let decision = absent.decision();
+    let decision = changed.decision();
     assert_eq!(decision.status, "absent");
-    assert_eq!(decision.verdict, None);
-    assert!(decision.retry_admitted, "legacy retry-on-success");
-    assert_eq!(
-        absent.deliveries, 2,
-        "`recovered: false` alone suppresses nothing"
+    assert!(decision.retry_admitted, "{decision:?}");
+    assert!(
+        decision
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("worktree")),
+        "the record names the change: {decision:?}"
     );
-    assert_eq!(absent.post_recovery, ["success"]);
-    let projected = absent.projection.attempts[0].decision.as_ref().unwrap();
-    assert_eq!(projected.status, "absent");
+    assert_eq!(changed.deliveries, 2, "exactly one post-recovery attempt");
+    assert_eq!(changed.post_recovery, ["success"]);
+    assert_eq!(changed.result, Ok((true, None)));
+
+    // Changing a toolchain locator also changes the environment validation
+    // runs with, even when the Git worktree remains untouched.
+    let env_changed = run(
+        &fixture,
+        &Case {
+            name: "absent_validation_env_changed",
+            producer: r#"touch "$root/.orbit/tmp/validation-env-changed""#,
+            change_validation_env: true,
+            ..Case::default()
+        },
+    );
+    let decision = env_changed.decision();
+    assert_eq!(decision.status, "absent");
+    assert!(decision.retry_admitted, "{decision:?}");
+    assert!(
+        decision
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("validation environment")),
+        "the record names the change: {decision:?}"
+    );
+    assert_eq!(
+        env_changed.deliveries, 2,
+        "exactly one post-recovery attempt"
+    );
+    assert_eq!(env_changed.post_recovery, ["success"]);
+    assert_eq!(env_changed.result, Ok((true, None)));
 
     // An unsuccessful activity is never retried, whatever it wrote.
     let declared_failed = run(
@@ -740,6 +882,21 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
             "exceeds",
         ),
         (
+            "blocker_without_kind",
+            r#"bound external_blocker "x" | sed 's/}$/,"blocker":{"kind":"","evidence":"y"}}/' > "$path""#,
+            "blocker needs a kind",
+        ),
+        (
+            "external_blocker_without_blocker",
+            r#"bound external_blocker "x" > "$path""#,
+            "needs a blocker",
+        ),
+        (
+            "retry_with_blocker",
+            r#"bound retry "x" | sed 's/}$/,"blocker":{"kind":"k","evidence":"y"}}/' > "$path""#,
+            "only an external_blocker",
+        ),
+        (
             "redirected_slot",
             r#"bound retry "x" > "$path.real"; d=$(dirname "$path"); mv "$d" "$d.moved"; ln -s "$d.moved" "$d""#,
             "replaced by a link",
@@ -769,7 +926,10 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
         },
     );
     assert_eq!(observed.decision().status, "absent");
-    assert_eq!(observed.deliveries, 2);
+    assert_eq!(
+        observed.deliveries, 1,
+        "ignored scratch is not a change to the worktree"
+    );
 }
 
 #[test]
@@ -828,7 +988,8 @@ fn read_write_and_allocation_failures_are_never_a_verified_recovery() {
     );
     assert_eq!(unwritable.decision().status, "absent");
     assert_eq!(unwritable.decision().verdict, None);
-    assert!(unwritable.decision().retry_admitted);
+    assert!(!unwritable.decision().retry_admitted);
+    assert_eq!(unwritable.deliveries, 1);
 
     // Inject a host read error after the producer has written a valid file.
     // This exercises fail-closed gate behavior without relying on permissions
@@ -912,4 +1073,82 @@ fn a_claimed_follower_decides_from_its_own_run_local_file_without_owner_task_wri
             "{name}: a claimed leaf may read its claimed task"
         );
     }
+}
+
+/// [ORB-14268] Step recovery declares a blocker outside the run: no
+/// post-recovery attempt, final recovery skips it, and the failure activity
+/// receives the typed blocker with its kind, as for an implementer blocker.
+#[test]
+fn an_external_blocker_decision_skips_the_retry_and_final_recovery() {
+    if !isolated("step_recovery::an_external_blocker_decision_skips_the_retry_and_final_recovery") {
+        return;
+    }
+    let fixture = fixture();
+    let producer =
+        format!(r#"bound external_blocker "operator must act" | {WITH_BLOCKER} > "$path""#);
+    let blocked = run(
+        &fixture,
+        &Case {
+            name: "external_blocker",
+            producer: &producer,
+            response: SAYS_RECOVERED,
+            ..Case::default()
+        },
+    );
+    let decision = blocked.decision();
+    assert_eq!(decision.status, "verified");
+    assert_eq!(decision.verdict.as_deref(), Some("external_blocker"));
+    assert!(!decision.retry_admitted);
+    assert!(
+        decision
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("kind=missing_credentials")),
+        "{decision:?}"
+    );
+    assert_eq!(
+        blocked.envelopes.len(),
+        1,
+        "the recovery provider runs once"
+    );
+    assert_eq!(blocked.deliveries, 1, "no post-recovery attempt");
+    assert!(blocked.post_recovery.is_empty());
+
+    let message = match &blocked.result {
+        Ok((false, Some(message))) => message.clone(),
+        Err(message) => message.clone(),
+        other => panic!("the step fails with the blocker: {other:?}"),
+    };
+    assert_eq!(
+        orbit_types::workflow::task_blocked_by_agent_kind(&message),
+        Some("missing_credentials"),
+        "{message}"
+    );
+    assert!(message.contains(ORIGINAL_FAILURE), "{message}");
+
+    assert!(
+        matches!(
+            blocked.final_recovery.as_slice(),
+            [(outcome, Some(detail))] if outcome == "skipped" && detail.contains("declared a blocker")
+        ),
+        "final recovery skips the blocker: {:?}",
+        blocked.final_recovery
+    );
+    let actions: Vec<&str> = blocked.hooks.iter().map(|(a, _)| a.as_str()).collect();
+    assert_eq!(
+        actions,
+        ["preserve_candidate"],
+        "final recovery is never dispatched; the failure activity runs once"
+    );
+    let preserve = &blocked.hooks[0].1;
+    assert_eq!(
+        preserve["error_code"],
+        orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE
+    );
+    assert_eq!(
+        preserve["error_message"]
+            .as_str()
+            .and_then(orbit_types::workflow::task_blocked_by_agent_kind),
+        Some("missing_credentials")
+    );
 }
