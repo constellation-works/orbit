@@ -162,6 +162,58 @@ fn failure_history_entries(
         .collect()
 }
 
+/// Deterministic interleaving: a task commit held by another participant delays
+/// cleanup after the terminal run write. Run state alone is not completion of
+/// the finalizer, which detached resume fixtures must wait for.
+#[test]
+fn terminal_run_publication_precedes_coupled_task_cleanup() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &terminal_run_publication_precedes_coupled_task_cleanup,
+    )) {
+        return;
+    }
+    let (_root, runtime, repo_root) = test_runtime();
+    let runtime = std::sync::Arc::new(runtime);
+    let task_id = create_backlog_task(&runtime, &repo_root, "cleanup-order");
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    let mut finalizer = None;
+    let mut at_terminal = None;
+    runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(&task_id, &mut || {
+            let worker_runtime = runtime.clone();
+            let run_id = run.run_id.clone();
+            finalizer = Some(std::thread::spawn(move || {
+                finalize_failed(&worker_runtime, &run_id);
+            }));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while runtime.get_job_run(&run.run_id)?.unwrap().state != JobRunState::Failed {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "run must terminalize while coupled-task cleanup waits for the task commit"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            at_terminal = Some(runtime.get_task(&task_id)?.status);
+            Ok(())
+        })
+        .unwrap();
+    // Release the task commit before joining, including on assertion failure.
+    finalizer.unwrap().join().unwrap();
+    assert_eq!(
+        at_terminal,
+        Some(TaskStatus::InProgress),
+        "terminal publication alone does not establish coupled-task cleanup"
+    );
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Blocked,
+        "waiting for finalizer exit observes completed task cleanup"
+    );
+}
+
 #[test]
 fn re_running_terminalization_is_idempotent_and_respects_human_recovery() {
     let (_root, runtime, repo_root) = test_runtime();
