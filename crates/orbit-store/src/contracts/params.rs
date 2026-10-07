@@ -147,6 +147,9 @@ pub struct TaskArtifactUpdateParams {
     pub actor: String,
     /// Trusted executor context supplied by Core, never parsed from tool input.
     pub owner_run_id: Option<String>,
+    /// Trusted writer class Core derives from the write path, never parsed
+    /// from tool input. `None` records an agent or unclassified writer.
+    pub writer: Option<orbit_types::task::ArtifactWriter>,
     /// Artifact files to write under the task bundle `artifacts/` directory.
     /// Existing files at the same relative path are overwritten.
     pub upsert_artifacts: Vec<TaskArtifact>,

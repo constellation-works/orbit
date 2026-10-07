@@ -2642,6 +2642,7 @@ fn racing_report_writers_each_retain_their_revision() {
                 origin: None,
                 actor: "codex".to_string(),
                 owner_run_id: None,
+                writer: None,
                 upsert_artifacts: vec![artifact],
             },
         )

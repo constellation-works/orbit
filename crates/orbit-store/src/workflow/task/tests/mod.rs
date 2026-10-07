@@ -128,6 +128,7 @@ fn seed_artifact_blob(
     fs::write(&blob_path, bytes).expect("write blob");
     ArtifactManifestFileV2 {
         origin: None,
+        writer: None,
         path: path.to_string(),
         blob,
         sha256: format!("{:x}", Sha256::digest(bytes)),

@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::agent_context_declared;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_system_identity_tag,
-    is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags, validate_os_tags,
-    validate_task_dependencies_with,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus,
+    is_system_identity_tag, is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags,
+    validate_os_tags, validate_task_dependencies_with,
 };
 
 use super::TaskRecordUpdateParams;
@@ -53,6 +54,9 @@ struct TaskUpdateContext {
     calling_run_id: Option<String>,
     /// Trusted entrypoint authority; task/tool input cannot populate it.
     operator_decision_authority: bool,
+    /// Orbit's own deterministic writer: artifacts record
+    /// [`ArtifactWriter::System`]. Only `update_task_as_system` sets it.
+    system_writer: bool,
 }
 
 /// A locked write's result plus what the after-lock side effects need: the
@@ -177,6 +181,7 @@ impl OrbitRuntime {
                 actor_override: Some(SYSTEM_ACTOR_LABEL.to_string()),
                 artifact_owner: owner,
                 status_authority: StatusAuthority::Lifecycle,
+                system_writer: true,
                 ..Default::default()
             },
         )
@@ -303,6 +308,7 @@ impl OrbitRuntime {
             status_authority,
             calling_run_id,
             operator_decision_authority,
+            system_writer,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
             Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
@@ -387,11 +393,22 @@ impl OrbitRuntime {
             .map(|value| value.as_deref())
             .filter(|replacement| task.source_task_id() != *replacement);
 
-        let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
-        if operator_decision_authority
+        let operator_write = operator_decision_authority
             && canonical_agent.is_none()
             && canonical_model.is_none()
-            && !super::helpers::is_automation_actor(&effective_label)
+            && !super::helpers::is_automation_actor(&effective_label);
+        // [ORB-14530] Review evidence counts only from a trusted writer class,
+        // so it is stamped from the entry point, never from a label. A process
+        // that declares an agent envelope or a managed run is never an operator.
+        let artifact_writer = if system_writer {
+            Some(ArtifactWriter::System)
+        } else if operator_write && !agent_context_declared() {
+            Some(ArtifactWriter::Operator)
+        } else {
+            None
+        };
+        let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if operator_write
             && let Some(resolution) =
                 self.operator_validation_resolution(&task, &params, &effective_label)?
         {
@@ -466,6 +483,7 @@ impl OrbitRuntime {
                 id,
                 TaskRecordUpdateParams {
                     artifact_owner_run_id: artifact_owner.clone(),
+                    artifact_writer,
                     actor: effective_label.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),

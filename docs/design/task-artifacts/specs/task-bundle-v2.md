@@ -291,6 +291,8 @@ files:
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
 
+An optional `writer` records the trusted class of the latest put: `system` for Orbit's own deterministic machinery, `operator` for a human operator surface with no agent identity outside a managed run. Orbit stamps it from the write path; tool input cannot set it, and it is absent for agent tool calls, claimed-worker evidence and entries written before it existed. Review evidence counts only from accepted classes ([review gate design §4](../../review-gate/2_design.md)).
+
 `path` is the logical artifact name; readers must open the separate `blob` path from the manifest. Existing manifests may use `files/<path>`. Replacement writes use immutable, content-addressed files under `artifacts/files/`, then atomically publish the complete updated manifest. A failure before manifest publication leaves the previous artifact set and hashes intact. Unreferenced blobs from interrupted or superseded writes may remain and are ignored by readers.
 
 The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite. Artifact replacement relies on immutable blobs and atomic manifest publication, so an interrupted replacement needs no repair to remain readable.

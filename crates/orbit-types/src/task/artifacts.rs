@@ -344,12 +344,30 @@ impl ArtifactManifestV2 {
     }
 }
 
+/// The trusted class of an artifact's writer, stamped by Orbit from the write
+/// path that stored it. Unlike `created_by`, which records a caller-chosen
+/// label, no tool input or environment label can select it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactWriter {
+    /// Orbit's own deterministic machinery, such as owner evidence
+    /// fulfilment or the review gate.
+    System,
+    /// A human operator surface (the bare CLI or the dashboard) with no
+    /// agent identity and outside any managed run.
+    Operator,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactManifestFileV2 {
     /// Authenticated or trusted put-time origin, never an actor-label inference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::task::ExecutionLocation>,
+    /// Trusted writer class of the latest put. Absent for agent tool calls,
+    /// claimed-worker evidence, and artifacts stored before writer classes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<ArtifactWriter>,
     pub path: String,
     pub blob: String,
     /// Lowercase hex SHA-256 digest; writers should format bytes with `{:x}`.

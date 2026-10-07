@@ -330,6 +330,7 @@ impl TaskV2Store {
                     path.clone(),
                     ArtifactManifestFileV2 {
                         origin: fields.origin.clone(),
+                        writer: fields.writer,
                         path: path.clone(),
                         blob,
                         sha256,

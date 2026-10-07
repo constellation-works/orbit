@@ -11,6 +11,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) artifact_origin: Option<orbit_types::task::ExecutionLocation>,
     pub(crate) job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub(crate) artifact_owner_run_id: Option<String>,
+    /// Trusted writer class the update entry point derived; never task input.
+    pub(crate) artifact_writer: Option<orbit_types::task::ArtifactWriter>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,

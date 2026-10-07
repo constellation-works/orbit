@@ -58,7 +58,10 @@ An evidence hold applies only when every remaining requirement is a named
 unavailable external check and the report contains no open defect or failed
 required check. `review-evidence-hold.json` pins the attempt, candidate,
 task meaning, and each required artifact. Attach a passing `ReviewExternalEvidence`
-result at each named path and its nonempty log artifact. Each result must match
+result at each named path and its nonempty log artifact with
+`orbit task artifact put` from an operator shell: no agent identity, outside
+any managed run. A result or log an agent attached never counts
+([review gate design §4](../design/review-gate/2_design.md)). Each result must match
 the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
