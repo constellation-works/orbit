@@ -1,0 +1,62 @@
+Search tasks and frictions
+
+Usage: orbit search [OPTIONS] [query] [COMMAND]
+
+Commands:
+  reindex  Rebuild the task search index from the task store
+
+Arguments:
+  [query]
+          Tasks match non-adjacent terms: all terms first, then partial matches by term count and BM25. Frictions match a case-insensitive substring
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --kind <KIND>
+          Restrict results to one corpus kind
+          
+          [default: all]
+          [possible values: task, friction, all]
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --limit <LIMIT>
+          Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation)
+          
+          [default: 10]
+
+      --tag <TAGS>
+          Filter by tag (AND semantics). Applies to task and friction results
+
+      --all
+          Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; --all adds done/rejected/archived/someday. Friction defaults to open; --all adds triaged/resolved
+
+      --status <STATUS>
+          Explicit per-kind status override, e.g. task:open,friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides --all for the named kind
+
+      --workspaces <SELECTOR>
+          Search this registered workspace as well. Repeat or comma-separate to federate across several; every hit is labelled with the workspace it came from. Accepts a registered name, a `ws_*` ID, or an absolute checkout path. Distinct from the top-level `orbit --workspace`, which binds the whole invocation to one checkout
+
+      --all-workspaces
+          Search every active workspace registered on this machine. Overrides `--workspaces`
+
+      --json
+          Output as JSON
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Forms:
+  orbit search <query>
+  orbit search reindex

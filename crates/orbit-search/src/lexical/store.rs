@@ -5,11 +5,13 @@ use orbit_types::task::Task;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone)]
 pub struct LexicalStore {
     conn: Arc<Mutex<Connection>>,
+    fts_queries: Arc<AtomicU64>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchIndexStats {
@@ -30,6 +32,7 @@ impl LexicalStore {
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            fts_queries: Arc::new(AtomicU64::new(0)),
         })
     }
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
@@ -37,6 +40,7 @@ impl LexicalStore {
             .map_err(err)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            fts_queries: Arc::new(AtomicU64::new(0)),
         })
     }
     pub fn open_in_memory() -> Result<Self, OrbitError> {
@@ -44,10 +48,19 @@ impl LexicalStore {
         migration::ensure_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            fts_queries: Arc::new(AtomicU64::new(0)),
         })
     }
     pub(super) fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
+    }
+    /// Number of BM25 page queries executed by this handle and its clones.
+    pub fn fts_query_count(&self) -> u64 {
+        self.fts_queries.load(Ordering::Relaxed)
+    }
+    pub(super) fn record_fts_query(&self) {
+        let fts_queries = self.fts_queries.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(target: "orbit.search.fts", fts_queries, "BM25 page query");
     }
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, OrbitError> {
         self.conn

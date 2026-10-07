@@ -27,7 +27,15 @@ FTS5 AND, preserving non-adjacent matching. BM25 chunk order rolls up to first-h
 task order. Core reads the ranking in bounded pages and applies status, tag, and
 path filters as it goes, so filtered-out chunks cannot starve the result page.
 It then appends bundle substring matches for unindexed tasks, comments, external
-references, and artifact manifest paths.
+references, and artifact manifest paths. If fewer than the requested limit survive,
+a multi-word query runs an FTS5 OR pass. Partial hits follow all full matches,
+ordered by the number of query terms matched in the best chunk, then BM25 and
+chunk id. Term counts use FTS5 itself, preserving its token and phrase semantics.
+The CLI MATCH column and `orbit.search`'s `matched_by` labels identify partial
+hits and their counts (for example `["partial", "terms:3/6"]`). A full page skips
+the OR pass. Frictions retain case-insensitive substring matching, requiring
+adjacent words. Empty multi-word results and partial task results explain these
+per-kind semantics in `notes`.
 Federation interleaves per-workspace rankings and attributes each hit.
 
 The index retains `semantic.db` for persisted-path compatibility. The first

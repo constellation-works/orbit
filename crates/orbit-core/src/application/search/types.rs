@@ -101,24 +101,20 @@ impl GlobalSearchParams {
     }
 }
 
-/// Note attached when a whitespace-containing query matches nothing.
-///
-/// Lexical friction and task search keep a single case-insensitive substring
-/// needle. A zero-hit multi-word query is therefore not evidence the corpus is
-/// empty — the same records may still match each token on its own.
-pub(crate) fn empty_whitespace_query_note(query: &str) -> Option<String> {
+/// Explain multi-word semantics for an empty or partially matched search.
+pub(crate) fn whitespace_query_note(query: &str, kind: GlobalSearchKind) -> Option<String> {
     let trimmed = query.trim();
-    if trimmed.is_empty() {
+    if trimmed.split_whitespace().count() < 2 {
         return None;
     }
-    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-    if tokens.len() < 2 {
-        return None;
+    let mut semantics = Vec::new();
+    if kind.includes_tasks() {
+        semantics.push("task search matches non-adjacent indexed terms: all terms first, then any term to fill the limit. Partial labels count terms in the best matching chunk. Bundle-only fields use a case-insensitive substring; an unavailable index uses only that fallback");
     }
-    Some(format!(
-        "query {trimmed:?} is a single case-insensitive substring (all tokens required together), not independent terms. Zero hits is not proof the corpus is empty; retry each distinctive token on its own: {}.",
-        tokens.join(", ")
-    ))
+    if kind.includes_frictions() {
+        semantics.push("friction search matches a single case-insensitive substring, so words must be adjacent; retry a distinctive term if the phrase has no hits");
+    }
+    Some(format!("query {trimmed:?}: {}.", semantics.join("; ")))
 }
 
 #[derive(Debug, Clone, Serialize)]

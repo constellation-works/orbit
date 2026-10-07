@@ -121,3 +121,84 @@ fn find_payloads(dir: &Path) -> Vec<PathBuf> {
     }
     found
 }
+
+/// Observe actual SQLite page executions at the composed-runtime boundary.
+/// This guards the fallback's scan cost without replacing the store with a mock.
+#[test]
+fn full_search_page_skips_any_term_scan() {
+    if !super::dispatch_admission::isolated(
+        "search_hydration::full_search_page_skips_any_term_scan",
+    ) {
+        return;
+    }
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use tracing_subscriber::{Layer, layer::Context, prelude::*};
+
+    struct Queries(Arc<AtomicU64>);
+    impl<S: tracing::Subscriber> Layer<S> for Queries {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            if event.metadata().target() == "orbit.search.fts" {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    let root = TempDir::new().unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    for title in [
+        "generation participant mcp serve pinned deploy",
+        "generation participant",
+    ] {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Search fixture".into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let queries = Arc::new(AtomicU64::new(0));
+    let subscriber = tracing_subscriber::registry().with(Queries(Arc::clone(&queries)));
+    tracing::subscriber::with_default(subscriber, || {
+        let response = runtime
+            .global_search(GlobalSearchParams {
+                query: Some("generation participant mcp serve pinned deploy".into()),
+                kind: GlobalSearchKind::Task,
+                limit: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(response.results.len(), 1);
+        assert!(response.results[0].matched_by.is_none());
+        assert_eq!(
+            queries.load(Ordering::Relaxed),
+            1,
+            "a full page executes exactly one FTS query"
+        );
+
+        let response = runtime
+            .global_search(GlobalSearchParams {
+                query: Some("generation participant mcp serve pinned deploy".into()),
+                kind: GlobalSearchKind::Task,
+                limit: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(
+            response.results[1].matched_by.as_ref().unwrap(),
+            &["partial", "terms:2/6"]
+        );
+        assert_eq!(
+            queries.load(Ordering::Relaxed),
+            3,
+            "the short page executes both AND and OR queries"
+        );
+    });
+}
