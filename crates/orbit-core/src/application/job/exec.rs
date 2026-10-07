@@ -482,15 +482,25 @@ impl OrbitRuntime {
         );
         let final_state = match outcome {
             Ok(result) if result.evidence_hold.is_some() => {
-                self.persist_v2_run_state(run, input, result, JobRunState::Held, options)?;
-                self.record_pipeline_diagnostic_step(
-                    run,
-                    started_at,
-                    finished_at,
-                    Some("review_awaiting_evidence"),
-                    "Delivery awaits named external evidence; receipt queues a fresh review.",
-                    JobRunState::Held,
-                )?;
+                // Final summaries are best-effort for every outcome: a store
+                // fault must not turn an evidence hold into a worker failure.
+                log_best_effort(
+                    "persist held run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Held, options),
+                );
+                log_best_effort(
+                    "record held step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        Some("review_awaiting_evidence"),
+                        "Delivery awaits named external evidence; receipt queues a fresh review.",
+                        JobRunState::Held,
+                    ),
+                );
                 JobRunState::Held
             }
             Ok(result) if result.success => {
@@ -517,7 +527,11 @@ impl OrbitRuntime {
                 JobRunState::Success
             }
             Ok(result) => {
-                self.persist_v2_run_state(run, input, result, JobRunState::Failed, options)?;
+                log_best_effort(
+                    "persist failed run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Failed, options),
+                );
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
                 log_best_effort(
