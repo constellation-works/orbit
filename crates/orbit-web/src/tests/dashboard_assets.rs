@@ -95,6 +95,24 @@ fn settings_system_view_executes_render_provenance_override_edit_and_refused_wri
 }
 
 #[test]
+fn settings_hosts_view_executes_rows_freshness_load_banner_and_inline_mutations() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_config_hosts.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard settings hosts behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn runs_view_executes_load_more_live_duration_actions_header_and_cancel_style() {
     let result = std::process::Command::new("node")
         .args(["--experimental-vm-modules", "src/tests/dashboard_runs.mjs"])

@@ -15,6 +15,15 @@ pub(crate) fn request_shutdown() {
 pub(crate) fn router() -> Router<crate::state::DashboardState> {
     Router::new()
         .route("/host/resources", get(host::resources))
+        // Settings › Hosts [ORB-14451]: the serving host's host file, through
+        // the same operations as `orbit host`.
+        .route("/hosts", get(host::list_hosts).post(host::add_host))
+        .route(
+            "/hosts/:host",
+            get(host::show_host)
+                .patch(host::rename_host)
+                .delete(host::remove_host),
+        )
         .route("/search", get(search::search))
         .route(
             "/tasks",

@@ -261,6 +261,15 @@ pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
 };
 
+/// Add, rename or remove a host-file entry from the dashboard's Settings ›
+/// Hosts view [ORB-14451].
+pub const DASHBOARD_HOST_EDIT: GovernedOperation = GovernedOperation {
+    id: "host.edit",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "the host file decides where federated MCP, pull drains and routed task calls go for every surface on this machine",
+};
+
 /// Enable a plugin from the dashboard without changing recorded consent.
 pub const DASHBOARD_PLUGIN_ENABLE: GovernedOperation = GovernedOperation {
     id: "plugin.enable",
@@ -581,6 +590,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    DASHBOARD_HOST_EDIT,
     DASHBOARD_PLUGIN_ENABLE,
     DASHBOARD_PLUGIN_DISABLE,
     PLUGIN_TOOL_READ_ONLY,

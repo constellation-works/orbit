@@ -12,6 +12,7 @@
 
 import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
+import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +31,8 @@ const SUBTAB_SOURCES = {
   crews: { path: "/api/config/effective", scope: "workspace" },
   keys: { path: "/api/config/keys", scope: null },
   system: { path: "/api/config/file?scope=global", scope: "global" },
+  // Settings › Hosts is owned by hosts.js; it reads `/api/hosts`.
+  hosts: { path: "/api/hosts", scope: null },
 };
 
 /// The System tab is the resource throttle only: its keys, in display order.
@@ -68,6 +71,7 @@ export function setConfigSubtab(name) {
   if (name !== activeSubtab) {
     editing = null;
     lastPayload = null;
+    if (name === "hosts" || activeSubtab === "hosts") resetHostsView();
   }
   activeSubtab = name;
   updateConfigChrome();
@@ -78,6 +82,11 @@ export function getConfigSubtab() {
 }
 
 export async function fetchAndRenderConfig() {
+  // The host file is machine-global, so Hosts renders in the aggregate view too.
+  if (activeSubtab === "hosts") {
+    updateConfigChrome();
+    return fetchAndRenderHosts();
+  }
   if (isAggregateView()) {
     renderPanelPlaceholder("config-body");
     $("config-count").textContent = "—";

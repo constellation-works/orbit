@@ -55,11 +55,14 @@ use serde_json::json;
 use crate::runtime_memo::RuntimeMemo;
 
 mod dashboard;
+mod hosts;
 mod registry;
 mod request;
 
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;
+use hosts::HostFileState;
+pub(crate) use hosts::PinnedHosts;
 
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};

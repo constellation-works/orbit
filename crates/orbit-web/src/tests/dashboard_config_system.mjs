@@ -109,7 +109,7 @@ p = P(); p.feed(sys.stdin.read()); print(json.dumps(p.subtabs))
 `], { input: fs.readFileSync(new URL('../../assets/dashboard/index.html', import.meta.url), 'utf8'), encoding: 'utf8' });
 assert.equal(parsed.status, 0, parsed.stderr);
 const subtabs = JSON.parse(parsed.stdout);
-assert.deepEqual(subtabs.slice(-3), ['crews', 'keys', 'system'], 'System sits beside Crews and Keys');
+assert.deepEqual(subtabs.slice(subtabs.indexOf('crews'), subtabs.indexOf('crews') + 3), ['crews', 'keys', 'system'], 'System sits beside Crews and Keys');
 
 const body = Object.assign(new Node('div'), { id: 'config-body' });
 const controls = Object.assign(new Node('div'), { id: 'config-controls' });

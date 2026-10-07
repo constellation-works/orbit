@@ -21,7 +21,7 @@
 
 use std::collections::HashSet;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_common::{HostRegistryCode, OrbitError};
@@ -255,6 +255,27 @@ pub struct HostRegistry {
     local: Option<MachineIdentity>,
     hosts: RegisteredHosts,
     snapshot: FileSnapshot,
+}
+
+/// `global_root` unchanged when it is absolute and has no `.` or `..`
+/// component, so the fixed host-file names joined to it stay inside the
+/// selected root. A caller holding a root it did not resolve itself, such as
+/// a served dashboard, passes it through here before deriving any host path.
+pub fn validated_host_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    let plain = global_root.is_absolute()
+        && global_root.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        });
+    if !plain {
+        return Err(OrbitError::InvalidInput(format!(
+            "Orbit root '{}' must be an absolute path without '.' or '..' components",
+            global_root.display()
+        )));
+    }
+    Ok(global_root.to_path_buf())
 }
 
 pub fn hosts_path(global_root: &Path) -> PathBuf {

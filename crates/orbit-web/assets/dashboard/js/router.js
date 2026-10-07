@@ -83,8 +83,9 @@ function railRoute(ctx, tab) {
 }
 const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
-// `--scope` equivalents, and `keys` is the settable-key reference.
-const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system"];
+// `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
+// the serving host's registered remote hosts [ORB-14451].
+const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system", "hosts"];
 const REFRESH_INTERVAL_MS = 30_000;
 const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 
