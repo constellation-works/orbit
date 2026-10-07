@@ -26,7 +26,10 @@ pub enum MemberOutcome {
     Pending,
     /// The run's deterministic apply settled every member of the attempt:
     /// only apply output with host-verified origin is admissible, and a member
-    /// it did not apply is failed at its fingerprint without retry.
+    /// it did not apply is failed at its fingerprint without retry, unless the
+    /// evidence names it superseded by a source move. A run that stopped
+    /// after the source moved under its material also settles, with every
+    /// member superseded, so no retry replays the old source.
     Settled(MemberBatchEvidence),
     /// The run stopped before any apply output existed; the attempt retries
     /// as a whole while its budget lasts. Requires proof the owner and all

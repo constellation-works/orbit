@@ -9,7 +9,7 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
 
 use super::input::{action_failed, bounded_usize, requested_workspace_root, string_array};
-use super::persist::no_target_assessment_marker;
+use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
@@ -34,7 +34,7 @@ pub(in super::super) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input, &[])
+    let claim = crate::application::automation::members::claim(runtime, input)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
@@ -67,6 +67,21 @@ pub(in super::super) fn prepare(
             .map_err(|error| action_failed(action, error.to_string()))?;
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
         .map_err(|error| action_failed(action, error.to_string()))?;
+    // A claimed task the branch already changed under is not piloted against
+    // the frozen source: it settles superseded, and its member is claimed
+    // afresh at the head [ORB-14476]. Apply carries these outcomes.
+    let superseded = match &claim {
+        Some(claim) => crate::application::automation::members::stale_tasks(
+            runtime,
+            claim,
+            &policy,
+            &Value::Null,
+            &claim.task_ids(),
+            &BTreeMap::new(),
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?,
+        None => BTreeMap::new(),
+    };
 
     let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
@@ -97,6 +112,7 @@ pub(in super::super) fn prepare(
             .collect::<Result<Vec<_>, _>>()?;
         let selected = selected
             .into_iter()
+            .filter(|task| !superseded.contains_key(&task.id))
             .filter(|task| {
                 if active_preparations.contains_key(&task.id) {
                     excluded.record(&task.id, "already_preparing", &active_preparations);
@@ -264,8 +280,15 @@ pub(in super::super) fn prepare(
         })
         .collect::<Vec<_>>();
 
+    let superseded_by_source = superseded
+        .iter()
+        .map(|(task_id, detail)| source_superseded(task_id, detail))
+        .collect::<Vec<_>>();
+
     Ok(json!({
         "state_automation": claim,
+        "superseded_by_source": superseded_by_source,
+        "source_age": source.as_ref().map(|source| source.age(&workspace_root)),
         "mode": mode,
         "workspace_path": workspace_root,
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {

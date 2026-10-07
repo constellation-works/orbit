@@ -132,6 +132,34 @@ impl SourceSnapshot {
         }
     }
 
+    /// When the pinned revision was committed and how old it was at
+    /// preparation, or `null` when Git cannot say [ORB-14476]. A state
+    /// routine pins its local branch head, which moves only on an operator
+    /// pull or deploy, so this is how far behind a preparation may be.
+    pub(super) fn age(&self, workspace: &Path) -> Value {
+        // `committer <name> <email> <epoch> <zone>` in the raw commit header.
+        let committed = run_git(workspace, &["cat-file", "commit", &self.source_revision])
+            .ok()
+            .filter(|output| output.success)
+            .and_then(|output| {
+                let committer = output
+                    .stdout
+                    .lines()
+                    .take_while(|line| !line.is_empty())
+                    .find_map(|line| line.strip_prefix("committer "))?
+                    .to_owned();
+                let epoch = committer.rsplit(' ').nth(1)?.parse::<i64>().ok()?;
+                chrono::DateTime::from_timestamp(epoch, 0)
+            });
+        match committed {
+            Some(at) => json!({
+                "committed_at": at,
+                "age_seconds": (chrono::Utc::now() - at).num_seconds().max(0),
+            }),
+            None => Value::Null,
+        }
+    }
+
     pub(super) fn path_kind(
         &self,
         action: &str,

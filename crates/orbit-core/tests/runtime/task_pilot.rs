@@ -27,6 +27,7 @@ mod admission;
 mod ci_sweep_races;
 mod creation;
 mod races;
+mod source_moves;
 
 struct Workspace {
     root: TempDir,
@@ -176,18 +177,30 @@ impl Workspace {
     /// the store's own transitions, pinning its source the way admission
     /// does, with the run's input carrying the claim.
     fn admitted(&self, task: &Task, max_attempts: u32) -> MemberAttempt {
+        self.admitted_batch(&[task], max_attempts)
+    }
+
+    /// [`Self::admitted`] for one attempt over several pending members.
+    fn admitted_batch(&self, tasks: &[&Task], max_attempts: u32) -> MemberAttempt {
         let store = self.runtime.automation_store().unwrap();
         let state = self.routine_state();
-        let member = state.members.as_ref().unwrap().pending[&task.id].clone();
-        let id = digest(format!("attempt:{}", task.id).as_bytes());
+        let members = tasks
+            .iter()
+            .map(|task| state.members.as_ref().unwrap().pending[&task.id].clone())
+            .collect::<Vec<_>>();
+        let keys = tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>();
+        let id = digest(format!("attempt:{}", keys.join(",")).as_bytes());
         let now = Utc::now();
         let mut attempt = MemberAttempt {
             consumer: state.consumer.clone(),
             kind: StateTriggerKind::PreparationEligible,
             action_key: format!("automation:{id}:1"),
             id,
-            member: member.clone(),
-            members: vec![member],
+            member: members[0].clone(),
+            members,
             attempt: 1,
             max_attempts,
             deadline: now + Duration::minutes(90),

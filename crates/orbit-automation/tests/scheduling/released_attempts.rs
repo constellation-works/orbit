@@ -112,6 +112,7 @@ impl MemberHost for PinningHost<'_> {
                     result: serde_json::json!({"task_id": "fixture-task"}),
                 }],
                 failed: BTreeMap::new(),
+                superseded: BTreeMap::new(),
                 action_id,
                 attempt_id: attempt.id.clone(),
             }),

@@ -97,6 +97,7 @@ impl MemberHost for FailingHost {
                 .into_iter()
                 .map(|member| (member.key.clone(), "fixture_failure".into()))
                 .collect(),
+            superseded: Default::default(),
             action_id,
             attempt_id: attempt.id.clone(),
         }))

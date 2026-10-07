@@ -372,8 +372,42 @@ retained for audit. They do not invalidate their own assessment. External edits
 still do. A blocked-by-decision, duplicate, or low-utility verdict is a fresh
 assessment with `ready=false`; do not rerun it every clock tick. Invalid or failed
 assessments retry within budget, then wait for material change or explicit reset.
-If a pinned source became stale, retain its evidence but do not certify current
-readiness. A continuously moving base may require escalation rather than churn.
+
+A claim freezes its members' source, and the branch head can move under it
+while the pilot runs: a drain lands every few minutes, an operator pull or
+deploy jumps many commits. Prepare and apply, and the write boundary again
+under task locks, judge each claimed task on its own [ORB-14476]. A task is
+stale when a changed path lies under one of its selectors (current, prepared,
+or the ones apply is about to write), when a changed `AGENTS.md`/`CLAUDE.md`
+sits in a selector's directory or an ancestor, or when a selector has no
+filesystem anchor to compare. `source_sensitivity: any` makes every move
+stale, `instructions` as a material field makes any instruction change stale,
+and a rewritten branch or unreadable diff makes every task stale. This
+selector-path check is the floor under `ignore` and `context_files` alike: the
+pilot read those files at the frozen source. A stale task settles
+`superseded_by_source` without a write; its disjoint siblings still apply.
+Prepare sets stale tasks aside before any pilot runs, and a run that stopped
+before apply after its source moved settles with every member superseded
+instead of retrying. A superseded member gets no failure record, spends no
+retry budget and is not retired at its fingerprint. Its pending entry moves to
+the head with its timestamps, so the next admission claims it there, as a
+first attempt. A member whose input changed while it ran keeps its newer
+pending entry. One that is back at the frozen source leaves pending and is
+observed again.
+
+A state routine pins its local branch head, which moves only on an operator
+pull or deploy, rather than fetching `origin` at admission. A best-effort fetch
+would shrink jumps but tie every scheduling pass to the network. Preparation
+records instead `source_age` (`committed_at`, `age_seconds`) of the revision it
+pinned, and apply carries it, so a pilot that ran far behind shows how far.
+
+Before supersession, a task stale this way failed, retried against the same
+source and was retired at its fingerprint, shelved until someone edited it.
+Automation store schema v4 releases such members once: an exhausted
+preparation failure record at the fingerprint the member is still pending at,
+while pending at another source, is removed and the consumer's generation
+advances. Persisted state does not record why an attempt failed, so a member
+that failed for another reason costs at most one more pilot attempt.
 
 The routine passes explicit batch task IDs and expected fingerprints to the
 existing pilot job, which today only accepts IDs/source preparation inputs and
@@ -589,6 +623,7 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | D6 arrives / max pending age expires | Freeze B2 for D4–D6 / D4–D5 respectively; never silently include them in B1's receipt. |
 | Crash after T1 creation before scheduler acknowledgement | Action-key lookup recovers T1. A second evaluator cannot mint T2 for B1. |
 | Pilot captures task fingerprint F1, user changes criteria to F2 | F1 apply is stale; F2 stays pending. Successful F2 selector write certifies its post-apply fingerprint and does not loop. |
+| Pilot claims T1 and T2 at H0; a pull moves the head to H1 through T1's selector file | T1 settles `superseded_by_source` with no failure record and is claimed afresh at H1 as a first attempt; T2 applies and is certified. |
 | Child fails, wrapper propagates failure, retry remains | One unsettled incident, no diagnosis. Final retry exhaustion settles it; one triage batch includes affected tasks. |
 | Operator intentionally cancels instead / triage itself fails | Intentional cancellation is filtered; triage failure retries or escalates the original incident without recursive diagnosis. |
 

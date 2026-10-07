@@ -32,6 +32,11 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))
     }),
+    FeatureMigration::new(
+        4,
+        "release_stale_source_failures",
+        super::members::release_stale_source_failures,
+    ),
 ];
 
 pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {

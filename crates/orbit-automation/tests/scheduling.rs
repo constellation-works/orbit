@@ -703,6 +703,7 @@ fn forged_member_outputs_never_advance_coverage() {
             action_id: attempt.action_id.clone().unwrap(),
             attempt_id: attempt.id.clone(),
             failed: BTreeMap::new(),
+            superseded: BTreeMap::new(),
             applied: vec![MemberEvidence {
                 action_id: attempt.action_id.clone().unwrap(),
                 attempt_id: attempt.id.clone(),

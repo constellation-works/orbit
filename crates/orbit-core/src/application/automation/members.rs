@@ -622,11 +622,62 @@ impl MemberHost for Host<'_> {
                 .and_then(|state| state.step_outputs.get(&index))
         };
         let Some(initial) = apply_output(APPLY_STEP) else {
-            return Ok(if stopped {
-                MemberOutcome::Failed("stopped_without_member_evidence".into())
-            } else {
-                MemberOutcome::Pending
+            if !stopped {
+                return Ok(MemberOutcome::Pending);
+            }
+            // A retry would replay the frozen source; once the branch moved
+            // under any member's material, no member was applied and every
+            // one is better claimed afresh at the head [ORB-14476].
+            let prepared = state
+                .as_ref()
+                .filter(|state| state.step_states.get(&PREPARE_STEP) == Some(&JobRunState::Success))
+                .and_then(|state| state.step_outputs.get(&PREPARE_STEP))
+                .unwrap_or(&Value::Null);
+            let stale = stale_tasks(
+                self.runtime,
+                attempt,
+                &self.policy,
+                prepared,
+                &attempt.task_ids(),
+                &BTreeMap::new(),
+            )
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    routine = self.routine,
+                    attempt = attempt.id,
+                    error = %error,
+                    "could not compare the stopped attempt's source with the branch head; \
+                     it retries as an ordinary failure"
+                );
+                BTreeMap::new()
             });
+            if stale.is_empty() {
+                return Ok(MemberOutcome::Failed(
+                    "stopped_without_member_evidence".into(),
+                ));
+            }
+            let superseded = attempt
+                .members()
+                .iter()
+                .map(|member| {
+                    let reason = member
+                        .task_ids
+                        .iter()
+                        .find_map(|id| stale.get(id))
+                        .map_or_else(
+                            || format!("{SUPERSEDED_BY_SOURCE}: a sibling's source moved"),
+                            |detail| format!("{SUPERSEDED_BY_SOURCE}: {detail}"),
+                        );
+                    (member.key.clone(), reason)
+                })
+                .collect();
+            return Ok(MemberOutcome::Settled(MemberBatchEvidence {
+                action_id: id.into(),
+                attempt_id: attempt.id.clone(),
+                applied: Vec::new(),
+                failed: BTreeMap::new(),
+                superseded,
+            }));
         };
 
         // A member whose partition needed repair settles with the repair apply,
@@ -652,11 +703,12 @@ impl MemberHost for Host<'_> {
 
         let latest_outcomes = repair.unwrap_or(initial);
         let mut failed = BTreeMap::new();
+        let mut superseded = BTreeMap::new();
         for member in attempt.members() {
             if applied.iter().any(|entry| entry.member_key == member.key) {
                 continue;
             }
-            let reason = latest_outcomes
+            let outcome = latest_outcomes
                 .get("task_outcomes")
                 .and_then(Value::as_array)
                 .into_iter()
@@ -666,7 +718,21 @@ impl MemberHost for Host<'_> {
                         .get("task_id")
                         .and_then(Value::as_str)
                         .is_some_and(|task_id| member.task_ids.iter().any(|id| id == task_id))
-                })
+                });
+            if let Some(outcome) = outcome.filter(|outcome| {
+                outcome.get("reason").and_then(Value::as_str) == Some(SUPERSEDED_BY_SOURCE)
+            }) {
+                let detail = outcome
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                superseded.insert(
+                    member.key.clone(),
+                    format!("{SUPERSEDED_BY_SOURCE}: {detail}"),
+                );
+                continue;
+            }
+            let reason = outcome
                 .and_then(|outcome| {
                     let classification = outcome
                         .get("reason")
@@ -695,6 +761,7 @@ impl MemberHost for Host<'_> {
             attempt_id: attempt.id.clone(),
             applied,
             failed,
+            superseded,
         }))
     }
 }
@@ -728,8 +795,13 @@ fn incident_crew(
     Ok(Some(agreed.flatten()))
 }
 
-/// Step indices of the two deterministic apply steps in
-/// `task_pilot_pipeline`: the partition apply and the targeted repair apply.
+/// The task outcome reason apply and prepare record for a task the branch
+/// made stale under its claim; the member settles superseded, not failed.
+pub(crate) const SUPERSEDED_BY_SOURCE: &str = "superseded_by_source";
+
+/// Step indices of the deterministic steps in `task_pilot_pipeline`: the
+/// preparation, the partition apply and the targeted repair apply.
+const PREPARE_STEP: u32 = 0;
 const APPLY_STEP: u32 = 2;
 const REPAIR_APPLY_STEP: u32 = 4;
 
@@ -751,13 +823,13 @@ fn member_evidence(output: &Value) -> Result<Vec<MemberEvidence>, AutomationErro
 
 /// Recheck the server-issued claim at the deterministic prepare/apply boundary.
 ///
-/// `material` names selectors the caller is about to write for a claim member
-/// (a pilot's recommended `context_files`) beyond those the members and the
-/// prepared snapshot already carry; they join the head-freshness comparison.
+/// This proves only that the claim is still the consumer's live attempt. Whether
+/// the branch moved under a member's material since the claim froze its source
+/// is [`stale_tasks`]' per-task answer, which supersedes those members instead
+/// of failing the run [ORB-14476].
 pub(crate) fn claim(
     runtime: &OrbitRuntime,
     value: &Value,
-    material: &[String],
 ) -> Result<Option<MemberAttempt>, OrbitError> {
     let Some(claim) = value
         .get("state_automation")
@@ -769,19 +841,10 @@ pub(crate) fn claim(
     let submitted: MemberAttempt = serde_json::from_value(claim.clone())
         .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
 
-    let state = runtime
+    let active = runtime
         .automation_store()?
         .automation_state(&submitted.consumer)?
-        .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
-
-    // Preparation material is derived from the branch head the claim froze;
-    // incident material is not tied to the head.
-    if submitted.kind == StateTriggerKind::PreparationEligible {
-        ensure_preparation_fresh(runtime, &state.branch, &submitted, value, material)?;
-    }
-
-    let active = state
-        .members
+        .and_then(|state| state.members)
         .and_then(|members| members.active)
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
 
@@ -802,124 +865,196 @@ pub(crate) fn claim(
     Ok(Some(active))
 }
 
-/// A drain lands on the integration branch every few minutes, so its head
-/// routinely moves while a pilot runs. The preparation stays valid when the
-/// head only advanced through commits disjoint from the prepared material:
-/// repository instructions and every path a member's context selectors
-/// anchor, before or after the pilot [ORB-12981]. A rewritten branch, a touched
-/// path, or a selector with no repository path to compare is stale.
-fn ensure_preparation_fresh(
+/// Which of `task_ids` the branch made stale since `claim` froze its source,
+/// each with the reason; empty while every one is still fresh.
+///
+/// A drain lands on the integration branch every few minutes, and an operator
+/// pull or deploy moves it many commits at once, so its head routinely moves
+/// while a pilot runs. A task stays fresh when the head only advanced through
+/// commits disjoint from its own prepared material [ORB-12981], judged by the
+/// consumer's freshness policy, the one the scheduler fingerprints under
+/// [ORB-14476]:
+///
+/// - `source_sensitivity = any`: every move makes every task stale.
+/// - otherwise a task is stale when a changed path lies under one of its
+///   context selectors (current, prepared, or `material` the caller is about
+///   to write for it), or when a changed `AGENTS.md` / `CLAUDE.md` governs one
+///   of those selectors: it sits in the selector's directory or an ancestor.
+///   A selector anchored outside the repository is one no commit changes; one
+///   with no filesystem anchor at all (`module:`, `command:`) cannot be
+///   compared, so its task is stale. When `instructions` is a material field,
+///   any instruction change makes every task stale, as it changes every
+///   fingerprint.
+///
+/// A rewritten branch, or a diff that cannot be read, makes every task stale.
+/// Incident claims are not tied to the head.
+pub(crate) fn stale_tasks(
     runtime: &OrbitRuntime,
-    branch: &str,
-    submitted: &MemberAttempt,
-    value: &Value,
-    material: &[String],
-) -> Result<(), OrbitError> {
+    claim: &MemberAttempt,
+    policy: &PreparationPolicy,
+    prepared: &Value,
+    task_ids: &[String],
+    material: &BTreeMap<String, Vec<String>>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    if claim.kind != StateTriggerKind::PreparationEligible || task_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let branch = runtime
+        .automation_store()?
+        .automation_state(&claim.consumer)?
+        .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?
+        .branch;
     let root = &runtime.paths().repo_root;
     let source = Source::new(root);
     let (_, head) = source
-        .local_head(branch)
+        .local_head(&branch)
         .map_err(automation_error_to_orbit)?;
-    let prepared = &submitted.member.source;
-    if head == *prepared {
-        return Ok(());
+    let prepared_source = &claim.member.source;
+    if head == *prepared_source {
+        return Ok(BTreeMap::new());
     }
 
-    let stale = |detail: String| {
-        OrbitError::InvalidInput(format!(
-            "stale preparation: state-trigger source changed from {} to {}: {detail}",
-            prepared.commit, head.commit
-        ))
+    let stale = |detail: &str| {
+        format!(
+            "state-trigger source changed from {} to {}: {detail}",
+            prepared_source.commit, head.commit
+        )
+    };
+    let every = |detail: String| {
+        Ok(task_ids
+            .iter()
+            .map(|id| (id.clone(), stale(&detail)))
+            .collect())
     };
 
-    source
+    if policy.freshness.source_sensitivity == SourceSensitivity::Any {
+        return every("source_sensitivity is any".into());
+    }
+    if source
         .git(&[
             "merge-base",
             "--is-ancestor",
-            &prepared.commit,
+            &prepared_source.commit,
             &head.commit,
         ])
-        .map_err(|_| stale("the branch no longer descends from the prepared source".into()))?;
+        .is_err()
+    {
+        return every("the branch no longer descends from the prepared source".into());
+    }
 
     // `--no-renames` reports both sides of a rename; `--relative` keeps paths
     // in the workspace frame the selectors and instruction scan use.
-    let changed = source
-        .git(&[
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "--relative",
-            "-z",
-            &prepared.commit,
-            &head.commit,
-        ])
-        .map_err(|error| stale(format!("changed paths unavailable: {error}")))?;
+    let changed = match source.git(&[
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--relative",
+        "-z",
+        &prepared_source.commit,
+        &head.commit,
+    ]) {
+        Ok(changed) => changed,
+        Err(error) => return every(format!("changed paths unavailable: {error}")),
+    };
     let changed = changed
         .split('\0')
         .filter(|path| !path.is_empty())
         .collect::<Vec<_>>();
-
-    if let Some(path) = changed
+    let instructions = changed
         .iter()
-        .find(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
+        .copied()
+        .filter(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
+        .collect::<Vec<_>>();
+    if policy.freshness.includes(MaterialField::Instructions)
+        && let Some(path) = instructions.first()
     {
-        return Err(stale(format!("repository instructions `{path}` changed")));
+        return every(format!("repository instructions `{path}` changed"));
     }
 
-    let mut selectors = material.to_vec();
-    for id in submitted.task_ids() {
-        match runtime.get_task(&id) {
+    let prepared_selectors = prepared
+        .get("tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|task| {
+            let id = task.get("task_id")?.as_str()?;
+            let selectors = task.get("context_files_before")?.as_array()?;
+            Some((id, selectors.iter().filter_map(Value::as_str).collect()))
+        })
+        .collect::<BTreeMap<&str, Vec<&str>>>();
+
+    let mut stale_tasks = BTreeMap::new();
+    for id in task_ids {
+        let mut selectors = material.get(id).cloned().unwrap_or_default();
+        match runtime.get_task(id) {
             Ok(task) => selectors.extend(task.context_files),
             // The write boundary reports a deleted task stale on its own.
             Err(OrbitError::NotFound { .. }) => {}
             Err(error) => return Err(error),
         }
-    }
-    selectors.extend(
-        value
-            .get("tasks")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|task| task.get("context_files_before")?.as_array())
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned),
-    );
-    selectors.sort();
-    selectors.dedup();
-
-    for selector in &selectors {
-        let anchor = repository_anchor(root, selector).ok_or_else(|| {
-            stale(format!(
-                "context selector `{selector}` has no repository path to compare"
-            ))
-        })?;
-        let Some(anchor) = anchor else {
-            continue;
-        };
-        if let Some(path) = changed.iter().find(|path| {
-            anchor.is_empty()
-                || **path == anchor
-                || path
-                    .strip_prefix(anchor.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-        }) {
-            return Err(stale(format!(
-                "`{path}` changed under prepared context selector `{selector}`"
-            )));
+        if let Some(prepared) = prepared_selectors.get(id.as_str()) {
+            selectors.extend(prepared.iter().map(|selector| (*selector).to_owned()));
+        }
+        selectors.sort();
+        selectors.dedup();
+        if let Some(detail) = selector_change(root, &selectors, &changed, &instructions) {
+            stale_tasks.insert(id.clone(), stale(&detail));
         }
     }
 
-    tracing::info!(
-        consumer = %submitted.consumer,
-        attempt = %submitted.id,
-        from = %prepared.commit,
-        to = %head.commit,
-        changed = changed.len(),
-        "preparation revalidated across a head move disjoint from its material"
-    );
-    Ok(())
+    if stale_tasks.len() < task_ids.len() {
+        tracing::info!(
+            consumer = %claim.consumer,
+            attempt = %claim.id,
+            from = %prepared_source.commit,
+            to = %head.commit,
+            changed = changed.len(),
+            stale = stale_tasks.len(),
+            "preparation revalidated across a head move disjoint from its material"
+        );
+    }
+    Ok(stale_tasks)
+}
+
+/// Why `changed` reaches one of `selectors`, if it does: a path under a
+/// selector, or an instruction file on a selector's instruction path.
+fn selector_change(
+    root: &std::path::Path,
+    selectors: &[String],
+    changed: &[&str],
+    instructions: &[&str],
+) -> Option<String> {
+    let under = |path: &str, anchor: &str| {
+        anchor.is_empty()
+            || path == anchor
+            || path
+                .strip_prefix(anchor)
+                .is_some_and(|rest| rest.starts_with('/'))
+    };
+    for selector in selectors {
+        let Some(anchor) = repository_anchor(root, selector) else {
+            return Some(format!(
+                "context selector `{selector}` has no repository path to compare"
+            ));
+        };
+        let Some(anchor) = anchor else {
+            continue;
+        };
+        if let Some(path) = changed.iter().find(|path| under(path, &anchor)) {
+            return Some(format!(
+                "`{path}` changed under prepared context selector `{selector}`"
+            ));
+        }
+        if let Some(path) = instructions.iter().find(|path| {
+            let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+            under(&anchor, directory)
+        }) {
+            return Some(format!(
+                "repository instructions `{path}` govern prepared context selector `{selector}`"
+            ));
+        }
+    }
+    None
 }
 
 /// The workspace-relative path a context selector anchors (`""` for the

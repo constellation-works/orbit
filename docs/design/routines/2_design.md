@@ -288,7 +288,11 @@ attempt at the original pinned revision; material edits require fresh preparatio
 Tasks admitted to a workflow, held by a follower execution claim, or made terminal while
 the pilot runs settle as `superseded` without pilot writes. A durable task edit by a human
 or another writer also refuses the stale write and settles as `superseded`, including
-context edits and an implementer's new plan. A false agent snapshot without a durable
+context edits and an implementer's new plan. A task whose selector material the branch
+head changed after its routine claim froze the source settles `superseded_by_source`; its
+member is claimed afresh at the head rather than retried or retired
+([automation triggers §6](../automation-triggers/2_design.md#6-pilot-eligibility-and-freshness)).
+A false agent snapshot without a durable
 edit, dependency meaning drift, and invalid assessment envelopes remain failures.
 Superseded outcomes survive a sibling's targeted repair and count as resolved, so the
 pilot succeeds and the sweep's child success guard accepts it. A following
