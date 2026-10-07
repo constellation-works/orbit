@@ -301,9 +301,11 @@ value. The witness directory is already outside every backend's and agent's writ
 - **A mismatch fails closed.** At `orbit plugin add|upgrade --allow-build`, when the current
   workspace pins that namespace with an `artifact_digest`, an output digest that differs refuses
   the install. Nothing is published, and the refusal shows both digests. At `sync`, an installed
-  build whose recorded commit or artifact digest differs from the pin is unsatisfied. Sync does
-  not enable, toggle on or seed it in that workspace, and `doctor` reports it. A differing pin
-  never causes a rebuild.
+  build whose recorded commit or artifact digest differs from the pin is unsatisfied, and so is a
+  plugin sync has just installed whose recorded build does not satisfy the pin. Sync does not
+  enable, toggle on or seed it in that workspace, and `doctor` reports it. A pin's
+  `enabled: false` still switches the plugin off in that workspace. A differing pin never causes
+  a rebuild.
 - A pin is never consent of any kind. As with grants (scope §3), consent comes only from the
   operator's command line.
 
