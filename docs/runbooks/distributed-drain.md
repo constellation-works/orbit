@@ -753,6 +753,12 @@ record lives in the owner's review store, separate from review-gate
 certificates, and never changes the original run's identity or the merged pull
 request. Agents cannot submit or dispose one.
 
+The default text output includes this information; `--format json` returns the
+full tool document. `status` prints one line per reconciliation with its id,
+outcome, current run (when present), and exact next step. `submit` and
+`accept-baseline` print that same summary for the resulting record, including
+when a request is replayed. Use the printed id with `--reconciliation`.
+
 `status` names the outcome and the exact next step:
 
 - `accepted`: complete the task from review.
