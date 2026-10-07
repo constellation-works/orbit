@@ -17,7 +17,7 @@ use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
 use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
-use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
+use super::incidents::{ROLLUP_SCAN_LIMIT, agent_family_key, failure_category_summaries};
 use super::jobs::FAILED_RUN_STATES;
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
@@ -68,7 +68,10 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         None => None,
     };
 
-    let status = match q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let raw_status = q.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let non_success = raw_status == Some("non_success");
+    let status = match raw_status {
+        Some("non_success") => None,
         Some(raw) => match AuditEventStatus::from_str(raw) {
             Ok(s) => Some(s),
             Err(msg) => return bad_request(msg),
@@ -130,6 +133,13 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     let post_filter = AuditPostFilter {
+        agent_family: q
+            .agent_family
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(agent_family_key),
+        non_success,
         execution_id: q
             .execution_id
             .as_deref()
@@ -198,9 +208,10 @@ fn parse_audit_event_ids(raw: &str) -> Result<Vec<i64>, String> {
     Ok(ids)
 }
 
-/// Predicates the SQLite schema has no column for, applied to each fetched
-/// row in Rust.
+/// Predicates without a direct store filter, applied to each fetched row in Rust.
 struct AuditPostFilter {
+    agent_family: Option<String>,
+    non_success: bool,
     execution_id: Option<String>,
     profile: Option<String>,
     /// Lowercased free-text needle.
@@ -209,10 +220,22 @@ struct AuditPostFilter {
 
 impl AuditPostFilter {
     fn is_empty(&self) -> bool {
-        self.execution_id.is_none() && self.profile.is_none() && self.needle.is_none()
+        self.agent_family.is_none()
+            && !self.non_success
+            && self.execution_id.is_none()
+            && self.profile.is_none()
+            && self.needle.is_none()
     }
 
     fn matches(&self, e: &orbit_core::AuditEvent) -> bool {
+        if let Some(family) = self.agent_family.as_deref()
+            && agent_family_key(&e.role) != family
+        {
+            return false;
+        }
+        if self.non_success && e.status == AuditEventStatus::Success {
+            return false;
+        }
         if let Some(eid) = self.execution_id.as_deref()
             && e.execution_id != eid
         {

@@ -133,6 +133,77 @@ fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInse
 }
 
 #[test]
+fn scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging() {
+    isolated(
+        "audit::scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging",
+        || {
+            let fixture = Fixture::new();
+            use AuditEventStatus::{Denied, Failure, Success};
+            for (id, role, status) in [
+                ("model-failure", "claude-sonnet-4-5", Failure),
+                ("model-denied", "claude-opus-4-1", Denied),
+                ("model-success", "claude-sonnet-4-5", Success),
+                ("family-failure", "claude", Failure),
+            ] {
+                let mut event = row(id, Some("orbit.task.show"), status);
+                event.role = role.into();
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            // A whole newer SQL batch belongs to another family. Family and
+            // status must be evaluated before offset/limit, across batches.
+            for index in 0..225 {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("other-family-{index}"),
+                        Some("orbit.task.show"),
+                        Failure,
+                    ))
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let events = |query: &str| {
+                json_ok(server.get(&format!(
+                    "/api/audit?workspace=ws_http_fixture&since=24h&{query}"
+                )))
+                .as_array()
+                .unwrap()
+                .clone()
+            };
+            let all = events("agent_family=claude");
+            assert_eq!(all.len(), 4, "family view includes model and native roles");
+            let non_success = events("agent_family=claude&status=non_success");
+            assert_eq!(non_success.len(), 3);
+            assert!(non_success.iter().any(|event| event["status"] == "denied"));
+            assert!(non_success.iter().all(|event| event["status"] != "success"));
+            let scoreboard =
+                json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture&window=24h"));
+            assert_eq!(
+                scoreboard["agents"]["claude"]["failure_incident_events"],
+                non_success.len(),
+                "the incident drilldown retains every raw event counted for the family"
+            );
+            let page = events("agent_family=claude&status=non_success&limit=1&offset=1");
+            assert_eq!(page, non_success[1..2]);
+            assert_eq!(events("agent_family=claude&status=failure").len(), 2);
+            assert_eq!(events("role=claude").len(), 1, "exact roles stay exact");
+            assert_eq!(events("role=claude-sonnet-4-5").len(), 2);
+            assert_eq!(
+                events("agent_family=claude&role=claude-sonnet-4-5&status=non_success&q=sonnet")
+                    .len(),
+                1,
+                "free text still composes with family, role and status predicates"
+            );
+            assert_eq!(
+                events("agent_family=claude&role=claude-sonnet-4-5&status=non_success&tool=orbit.task.show")
+                    .len(),
+                1
+            );
+        },
+    );
+}
+
+#[test]
 fn incident_audit_ids_return_all_requested_rows_with_workspace_scope() {
     isolated(
         "audit::incident_audit_ids_return_all_requested_rows_with_workspace_scope",

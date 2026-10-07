@@ -550,10 +550,10 @@ function renderAgentStrip(rows) {
   sorted.forEach(([name, agent, score], index) => {
     const card = applyAgentTheme(el("button", {
       class: `scoreboard-agent-card ${score === 0 ? "quiet" : ""}`,
-      title: `${name} - click to filter audit by role`,
+      title: `${name} - click to filter audit by agent family`,
     }), name);
     card.type = "button";
-    card.addEventListener("click", () => navigateToDrilldown({ role: name }));
+    card.addEventListener("click", () => navigateToDrilldown({ agent_family: name }));
 
     card.appendChild(el("div", { class: "scoreboard-agent-rank", text: `#${String(index + 1).padStart(2, "0")} · activity` }));
     card.appendChild(el("div", { class: "scoreboard-agent-heading" }, [
@@ -601,12 +601,12 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
   for (const [name, agent] of rows) {
     const th = applyAgentTheme(el("th", {
       class: "col-agent clickable",
-      title: `${name} — click to filter audit by role`,
+      title: `${name} — click to filter audit by agent family`,
     }, [
       document.createTextNode(name),
       el("span", { class: "totals", text: `${fmtScoreboardCount(agentActivityTotal(agent))} activity` }),
     ]), name);
-    th.addEventListener("click", () => navigateToDrilldown({ role: name }));
+    th.addEventListener("click", () => navigateToDrilldown({ agent_family: name }));
     headRow.appendChild(th);
   }
   thead.appendChild(headRow);
@@ -657,11 +657,10 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
         td.classList.add("clickable");
         td.title = `${title}: click to filter audit`;
         td.addEventListener("click", () => navigateToDrilldown({
-          role: name,
+          agent_family: name,
           metric: col.key,
-          status: ["tools", "failed_tool_calls", "failure_incidents"].includes(col.key)
-            ? "failure"
-            : null,
+          status: col.key === "failure_incidents" ? "non_success"
+            : ["tools", "failed_tool_calls"].includes(col.key) ? "failure" : null,
         }));
         tr.appendChild(td);
       }
