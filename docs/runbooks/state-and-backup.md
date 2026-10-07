@@ -162,8 +162,13 @@ intentionally does not auto-commit, stash, or discard operator modifications.
 With `--mcp`, it also writes the detected clients' repo-local MCP configuration
 files (for example `.mcp.json` and `.claude/settings.json`). The init report
 lists every checkout file it wrote. Review and commit the listed files before
-the first local ship, which requires a clean base checkout. PR delivery uses a
-separate worktree and does not impose that local landing check.
+the first local ship. Local delivery refuses tracked modifications and unresolved
+merge conflicts in the base checkout at setup and before landing. Untracked
+files may remain when they do not overlap the candidate's changed paths; the
+merge-time check names only conflicting paths, including file/directory
+collisions. Files created during the run are checked again before each merge,
+and Git's overwrite refusal remains a backstop. PR delivery uses a separate
+worktree and does not impose that local landing check.
 
 ### Recover a missing or corrupt checkout identity
 

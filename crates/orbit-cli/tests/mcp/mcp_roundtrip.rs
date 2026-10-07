@@ -1690,8 +1690,8 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     assert_eq!(listed["items"], json!([]));
 }
 
-/// A fresh checkout's first ship must explain the setup files that block local
-/// landing. PR delivery reaches worktree setup with those same files present.
+/// Initialization's tracked edits still block local setup, while its unrelated
+/// untracked MCP files are omitted from the refusal. PR setup accepts both.
 #[test]
 fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
     for mode in ["local", "pr"] {
@@ -1718,7 +1718,8 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             &["config", "user.email", "orbit-test@example.invalid"],
         );
         std::fs::write(work.join("README.md"), "first commit\n").expect("write first commit");
-        git(&work, &["add", "README.md"]);
+        std::fs::write(work.join(".gitignore"), "").expect("track ignore file before init");
+        git(&work, &["add", "README.md", ".gitignore"]);
         git(&work, &["commit", "--quiet", "-m", "first commit"]);
         git(
             temp.path(),
@@ -1767,10 +1768,7 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
                 "init omitted {path}: {human_report}"
             );
         }
-        assert!(
-            human_report.contains("commit") && human_report.contains("clean"),
-            "{human_report}"
-        );
+        assert!(human_report.contains("commit"), "{human_report}");
         let status = Command::new("git")
             .args(["status", "--porcelain", "--untracked-files=all"])
             .current_dir(&work)
@@ -1860,11 +1858,13 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
                 .expect("local refusal");
             assert!(
                 error.contains("worktree_setup")
-                    && error.contains(".claude/settings.json")
-                    && error.contains(".mcp.json")
                     && error.contains(".gitignore")
                     && error.contains("Commit or stash"),
                 "{error}"
+            );
+            assert!(
+                !error.contains(".claude/settings.json") && !error.contains(".mcp.json"),
+                "unrelated untracked init files do not block local delivery: {error}"
             );
         } else {
             assert!(

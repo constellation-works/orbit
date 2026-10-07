@@ -752,7 +752,8 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
             host.add_task("T-LAND", TaskStatus::Backlog);
             let checkouts_before = registered_worktrees(&fixture.repo);
 
-            fs::write(landing.join("dirty.txt"), "uncommitted landing work\n").unwrap();
+            let original = fs::read(landing.join("README.md")).unwrap();
+            fs::write(landing.join("README.md"), "uncommitted landing work\n").unwrap();
             for (field, spelling) in [
                 ("base", "main"),
                 ("base", "origin/main"),
@@ -776,7 +777,7 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
                 "a refused pre-check creates no worktree"
             );
 
-            fs::remove_file(landing.join("dirty.txt")).unwrap();
+            fs::write(landing.join("README.md"), &original).unwrap();
             fs::write(fixture.repo.join("unrelated.txt"), "primary dirt\n").unwrap();
             let mut workspace = None;
             for (spelling, run_id) in [
@@ -805,7 +806,7 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
                 "setup leaves the primary checkout on its own branch"
             );
 
-            fs::write(landing.join("dirty.txt"), "uncommitted landing work\n").unwrap();
+            fs::write(landing.join("README.md"), "uncommitted landing work\n").unwrap();
             for spelling in ["main", "origin/main"] {
                 let error = action(
                     &host,
@@ -816,7 +817,7 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
                 assert_landing_checkout_refusal(&error, &landing, spelling);
             }
 
-            fs::remove_file(landing.join("dirty.txt")).unwrap();
+            fs::write(landing.join("README.md"), &original).unwrap();
             for spelling in ["main", "origin/main"] {
                 let merged = action(
                     &host,
@@ -842,6 +843,233 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
                 fs::read_to_string(fixture.repo.join("unrelated.txt")).unwrap(),
                 "primary dirt\n"
             );
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Local delivery: operator-owned untracked files in the landing checkout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn local_landing_preserves_unrelated_untracked_files() {
+    isolated("local_landing_preserves_unrelated_untracked_files", || {
+        for linked in [false, true] {
+            let fixture = Fixture::new();
+            git(&fixture.repo, &["branch", "main"]);
+            if linked {
+                let landing = fixture.root.path().join("landing");
+                git(
+                    &fixture.repo,
+                    &["worktree", "add", path_str(&landing), "main"],
+                );
+            } else {
+                git(&fixture.repo, &["checkout", "main"]);
+            }
+            let landing = checkout_holding(&fixture.repo, "main");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-LAND", TaskStatus::Backlog);
+            let notes = ["on-call-goal.md", "operations/research/notes\n\".md"];
+            let bytes = b"operator notes\n\0\xff\r\n";
+            for note in notes {
+                let path = landing.join(note);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, bytes).unwrap();
+            }
+            let run_id = "jrun-untracked-notes";
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &landing_input("base", "main", run_id),
+            )
+            .expect("local setup accepts unrelated operator notes");
+            let checkout = Checkout::from_setup(&setup);
+            commit_tracked_record(
+                &checkout.path,
+                "operations/scripts/feature.txt",
+                "candidate\n",
+            );
+            let candidate = git(&checkout.path, &["rev-parse", "HEAD"]);
+
+            action(
+                &host,
+                "git_merge",
+                &merge_input(run_id, "main", &checkout.path),
+            )
+            .expect("local delivery lands beside unrelated operator notes");
+
+            assert_eq!(git(&landing, &["rev-parse", "HEAD"]), candidate);
+            assert_eq!(
+                fs::read(landing.join("operations/scripts/feature.txt")).unwrap(),
+                b"candidate\n"
+            );
+            for note in notes {
+                assert_eq!(
+                    fs::read(landing.join(note)).unwrap(),
+                    bytes,
+                    "operator bytes survive: {note:?}"
+                );
+            }
+            assert_eq!(
+                git(
+                    &landing,
+                    &["ls-files", "--others", "--exclude-standard", "-z"]
+                ),
+                format!("{}\0", notes.join("\0"))
+            );
+        }
+    });
+}
+
+#[test]
+fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
+    isolated(
+        "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
+        || {
+            // Exact paths, newline/quote spelling, file/directory collisions,
+            // and a path created after the merge action's initial pre-check.
+            for (incoming, untracked, at_setup, at_intent) in [
+                ("candidate.txt", "candidate.txt", true, false),
+                ("line\n\".txt", "line\n\".txt", false, false),
+                ("folder/child.txt", "folder", false, false),
+                ("folder", "folder/child.txt", false, false),
+                ("late.txt", "late.txt", false, true),
+            ] {
+                let fixture = Fixture::new();
+                let host = LifecycleHost::new(&fixture.repo);
+                host.add_task("T-LAND", TaskStatus::Backlog);
+                let operator_path = fixture.repo.join(untracked);
+                let operator_bytes = b"operator-owned\0\xff\n";
+                let write_operator = || {
+                    fs::create_dir_all(operator_path.parent().unwrap()).unwrap();
+                    fs::write(&operator_path, operator_bytes).unwrap();
+                };
+                fs::write(fixture.repo.join("unrelated.txt"), "keep me\n").unwrap();
+                if at_setup {
+                    write_operator();
+                }
+                let run_id = "jrun-untracked-conflict";
+                let setup = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", BASE, run_id),
+                )
+                .expect("setup cannot yet know the candidate's paths");
+                let checkout = Checkout::from_setup(&setup);
+                commit_tracked_record(&checkout.path, incoming, "candidate\n");
+                if at_intent {
+                    *host.landing_write.lock().unwrap() =
+                        Some((operator_path.clone(), operator_bytes.to_vec()));
+                } else if !at_setup {
+                    write_operator();
+                }
+                let before = git(&fixture.repo, &["rev-parse", "HEAD"]);
+                let candidate = git(&checkout.path, &["rev-parse", "HEAD"]);
+                let error = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, BASE, &checkout.path),
+                )
+                .expect_err("a conflicting operator path must refuse before merge");
+                let message = error.to_string();
+                assert!(
+                    message.contains("untracked paths conflicting with the incoming changes"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains(&format!("\n{untracked:?}\n")),
+                    "names the exact conflicting path: {message}"
+                );
+                assert!(
+                    !message.contains("unrelated.txt"),
+                    "unrelated notes are absent from the refusal: {message}"
+                );
+                assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), before);
+                assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), candidate);
+                assert_eq!(fs::read(&operator_path).unwrap(), operator_bytes);
+                assert_eq!(
+                    fs::read(fixture.repo.join("unrelated.txt")).unwrap(),
+                    b"keep me\n"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
+    isolated(
+        "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
+        || {
+            for dirty_kind in ["unstaged", "staged", "unmerged"] {
+                let fixture = Fixture::new();
+                let host = LifecycleHost::new(&fixture.repo);
+                host.add_task("T-LAND", TaskStatus::Backlog);
+                let run_id = "jrun-tracked-work";
+                let setup = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", BASE, run_id),
+                )
+                .expect("setup on a clean base");
+                let checkout = Checkout::from_setup(&setup);
+                commit_file(&checkout.path, "candidate.txt", "candidate\n");
+                if dirty_kind == "unmerged" {
+                    git(&fixture.repo, &["checkout", "-b", "other"]);
+                    commit_file(&fixture.repo, "README.md", "other side\n");
+                    git(&fixture.repo, &["checkout", BASE]);
+                    commit_file(&fixture.repo, "README.md", "base side\n");
+                    let merge = Command::new("git")
+                        .args(["merge", "other"])
+                        .current_dir(&fixture.repo)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        !merge.status.success(),
+                        "fixture creates an actual merge conflict"
+                    );
+                    assert!(!git(&fixture.repo, &["ls-files", "-u"]).is_empty());
+                } else {
+                    fs::write(fixture.repo.join("README.md"), "operator changes\n").unwrap();
+                    if dirty_kind == "staged" {
+                        git(&fixture.repo, &["add", "README.md"]);
+                    }
+                }
+                fs::write(fixture.repo.join("unrelated.txt"), "notes\n").unwrap();
+                let before = git(&fixture.repo, &["rev-parse", "HEAD"]);
+                let status = git(&fixture.repo, &["status", "--porcelain"]);
+                let contents = fs::read(fixture.repo.join("README.md")).unwrap();
+                let checkouts = registered_worktrees(&fixture.repo);
+                for (name, input) in [
+                    (
+                        "worktree_setup",
+                        landing_input("base", BASE, "jrun-refused-tracked"),
+                    ),
+                    ("git_merge", merge_input(run_id, BASE, &checkout.path)),
+                ] {
+                    let error = action(&host, name, &input)
+                        .expect_err("tracked/unmerged work refuses local delivery");
+                    let message = error.to_string();
+                    let expected = if dirty_kind == "unmerged" {
+                        "has unresolved merge conflicts:"
+                    } else {
+                        "must be clean before merge_batch_worktree_into_base"
+                    };
+                    assert!(
+                        message.contains(expected) && message.contains("README.md"),
+                        "{dirty_kind}: {message}"
+                    );
+                    assert!(
+                        !message.contains("unrelated.txt"),
+                        "only hazardous paths are named: {message}"
+                    );
+                    assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), before);
+                    assert_eq!(git(&fixture.repo, &["status", "--porcelain"]), status);
+                    assert_eq!(fs::read(fixture.repo.join("README.md")).unwrap(), contents);
+                    assert_eq!(registered_worktrees(&fixture.repo), checkouts);
+                    assert_eq!(host.admitted(), ["T-LAND"]);
+                }
+            }
         },
     );
 }
@@ -3475,6 +3703,8 @@ struct LifecycleHost {
     machine: Mutex<Option<String>>,
     /// The candidate the owner kept from the task's last claim.
     kept_claim: Mutex<Option<KeptClaimCandidate>>,
+    /// Deterministically model an operator write immediately before landing.
+    landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -3643,6 +3873,15 @@ impl LifecycleHost {
 }
 
 impl RuntimeHost for LifecycleHost {
+    fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
+            fs::write(path, bytes).unwrap();
+        }
+        Ok(())
+    }
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()
@@ -3922,7 +4161,8 @@ fn assert_landing_checkout_refusal(error: &OrbitError, landing: &Path, spelling:
         landing.display()
     );
     assert!(
-        message.contains("dirty.txt"),
+        message.contains("README.md")
+            && message.contains("must be clean before merge_batch_worktree_into_base"),
         "base spelling {spelling} reports that checkout's dirty path: {message}"
     );
     assert!(

@@ -17,7 +17,7 @@ use super::dependency_delivery::{
     DependencyDeliveryMode, dependency_delivery_mode_from_input,
     ensure_dependencies_delivered_into_base,
 };
-use super::merge::{checkout_holding_branch, ensure_clean_checkout};
+use super::merge::{checkout_holding_branch, ensure_base_checkout_ready};
 use super::{WorktreeIdentity, is_registered_worktree};
 
 const DEFAULT_BASE: &str = "main";
@@ -90,7 +90,9 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     }
 
     // ORB-11373: when delivering into a local checkout, verify that the landing
-    // base checkout is clean before creating the worktree or admitting tasks.
+    // base checkout has no tracked changes before creating the worktree or
+    // admitting tasks. Untracked files are checked against the candidate at
+    // merge time, once its changed paths are known.
     // An initialized dirty base (e.g. from `workspace init`) will deterministically
     // fail the final merge step, so catch it early before expensive agent runs.
     if let Some((field, mode)) = landing_mode {
@@ -102,7 +104,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
                 let landing_branch = normalize_base_branch(&base)?;
                 let base_checkout = checkout_holding_branch(repo_root, &landing_branch)?
                     .unwrap_or_else(|| repo_root.to_path_buf());
-                ensure_clean_checkout(&base_checkout, "base branch checkout")?;
+                ensure_base_checkout_ready(&base_checkout, None)?;
             }
             "pr" => {}
             other => {
