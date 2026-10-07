@@ -15,13 +15,15 @@ use orbit_types::task::TaskStatus;
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION,
-    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewAdmission, ReviewEvidenceHold,
-    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewFinding, ReviewReport,
-    ReviewReportHistory, ReviewValidation, ReviewVerdict, ReviewerInvocationEvent,
-    ValidationOutcome, ValidationRole,
+    FindingDisposition, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
+    ReviewAdmission, ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement,
+    ReviewFinding, ReviewReport, ReviewReportHistory, ReviewValidation, ReviewVerdict,
+    ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
 };
+// Used only by the Linux-gated CodeQL hold test below.
+#[cfg(target_os = "linux")]
+use orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT;
 
 /// A crew every runtime's default registry resolves.
 const REVIEW_CREW: &str = "sol";
@@ -261,6 +263,7 @@ impl ReviewedLeaf {
 
     /// A reviewer on a host that cannot run `command` reports everything
     /// else checked and names a Linux CodeQL run of it as the evidence owed.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn reviewer_holds_for(&self, attempt_id: &str, command: &str) {
         let report = ReviewReport {
             external_evidence: vec![ReviewEvidenceRequirement {
@@ -300,6 +303,7 @@ impl ReviewedLeaf {
 
     /// The leaf's worker ends held, as the executor ends a run whose gate
     /// settled into an evidence hold.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn leaf_holds(&self, hold: &ReviewEvidenceHold) {
         let jobs = &self.pair.follower_jobs;
         let mut state = self
