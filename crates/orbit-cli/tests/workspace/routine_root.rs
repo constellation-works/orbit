@@ -4,6 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::time::{Duration, SystemTime};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -80,6 +81,53 @@ impl Fixture {
             routine_name,
         }
     }
+}
+
+#[test]
+fn routine_list_preserves_unchanged_registry_modification_time() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+    let registry_path = fixture.root.join("workspaces.json");
+    let contents = fs::read(&registry_path).expect("read initialized registry");
+    // A rewrite must get a different timestamp, even on coarse-resolution filesystems.
+    fs::File::options()
+        .write(true)
+        .open(&registry_path)
+        .expect("open registry to set modification time")
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .expect("set registry modification time");
+    let modified = fs::metadata(&registry_path)
+        .expect("registry metadata before listing")
+        .modified()
+        .expect("registry modification time before listing");
+
+    let list = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &["--root", &root_arg, "routine", "list", "--format", "json"],
+        None,
+    );
+
+    assert!(
+        list["routines"]
+            .as_array()
+            .is_some_and(|routines| !routines.is_empty()),
+        "routine status discovery must visit the registered workspace: {list}"
+    );
+    assert_eq!(
+        fs::metadata(&registry_path)
+            .expect("registry metadata after listing")
+            .modified()
+            .expect("registry modification time after listing"),
+        modified,
+        "read-only routine discovery must preserve the registry runtime cache stamp"
+    );
+    assert_eq!(
+        fs::read(&registry_path).expect("read registry after listing"),
+        contents,
+        "read-only routine discovery must preserve the registry contents"
+    );
+    assert_home_empty(&fixture.home);
 }
 
 #[test]
