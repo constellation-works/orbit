@@ -9,6 +9,109 @@ use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
 
 #[test]
+fn friction_update_preserves_explicit_clears_and_omits_blank_optional_strings() {
+    let fixture = Fixture::new();
+    let body = "Derived friction title";
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        body,
+        "--title",
+        "Explicit title",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+
+    // Both CLI and tool input must restore the same body-derived title.
+    for blank in ["", " \t "] {
+        fixture.json(&[
+            "friction",
+            "update",
+            id,
+            "--title",
+            "Explicit title",
+            "--json",
+        ]);
+        let cleared = fixture.json(&["friction", "update", id, "--title", blank, "--json"]);
+        assert_eq!(cleared["title"], body);
+        assert_eq!(
+            fixture.json(&["friction", "show", id, "--json"])["title"],
+            body
+        );
+
+        fixture.json(&[
+            "friction",
+            "update",
+            id,
+            "--title",
+            "Explicit title",
+            "--json",
+        ]);
+        let input = json!({"id": id, "title": blank, "model": "codex"}).to_string();
+        let tool_cleared =
+            fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+        assert_eq!(tool_cleared["title"], cleared["title"]);
+
+        for combined in [false, true] {
+            let recorded = fixture.json(&[
+                "friction",
+                "update",
+                id,
+                "--status",
+                "open",
+                "--rehome-to",
+                "hm_fixture_remote/ws_owner",
+                "--move",
+                "false",
+                "--json",
+            ]);
+            assert_eq!(recorded["rehome_to"], "hm_fixture_remote/ws_owner");
+            let mut args = vec!["friction", "update", id, "--rehome-to", blank, "--json"];
+            if combined {
+                args.extend(["--status", "triaged"]);
+            }
+            let cleared = fixture.json(&args);
+            assert!(cleared["rehome_to"].is_null());
+            assert!(fixture.json(&["friction", "show", id, "--json"])["rehome_to"].is_null());
+            if combined {
+                assert_eq!(cleared["status"], "triaged");
+            } else {
+                assert_eq!(cleared["status"], "open");
+            }
+        }
+    }
+
+    // Blank body and status have no clearing semantics. Alone they still
+    // supply no update; alongside a title they must leave the stored values.
+    let before = fixture.json(&["friction", "show", id, "--json"]);
+    for flag in ["--body", "--status"] {
+        fixture
+            .command(&["friction", "update", id, flag, " \t ", "--json"])
+            .assert()
+            .failure();
+        assert_eq!(fixture.json(&["friction", "show", id, "--json"]), before);
+    }
+    let updated = fixture.json(&[
+        "friction",
+        "update",
+        id,
+        "--body",
+        " \t ",
+        "--status",
+        " \t ",
+        "--title",
+        "Replacement title",
+        "--json",
+    ]);
+    assert_eq!(updated["body"], before["body"]);
+    assert_eq!(updated["status"], before["status"]);
+    assert_eq!(updated["title"], "Replacement title");
+}
+
+#[test]
 fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     let mut fixture = Fixture::new();
     fixture.root = PathBuf::new();

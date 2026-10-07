@@ -134,9 +134,9 @@ fn static_value_name(param: &'static ParamSpec) -> &'static str {
 
 /// Project parsed args into the verb's tool input.
 ///
-/// Optional string parameters are trimmed and dropped when empty, so an unset
-/// filter is absent rather than present-and-blank. Required parameters are
-/// passed through verbatim and left for the handler to validate, which keeps
+/// Optional string parameters are trimmed and dropped when empty unless the
+/// spec declares that empty is meaningful. An omitted flag stays absent.
+/// Required parameters pass through verbatim for the handler to validate, keeping
 /// "you passed only whitespace" reporting where the domain rules live.
 fn input_from_matches<V: 'static>(spec: &'static OperationSpec<V>, matches: &ArgMatches) -> Value {
     let mut input = Map::new();
@@ -148,7 +148,7 @@ fn input_from_matches<V: 'static>(spec: &'static OperationSpec<V>, matches: &Arg
                 };
                 if param.required {
                     input.insert(param.name.to_string(), Value::String(value.clone()));
-                } else if !value.trim().is_empty() {
+                } else if param.allow_empty || !value.trim().is_empty() {
                     input.insert(
                         param.name.to_string(),
                         Value::String(value.trim().to_string()),

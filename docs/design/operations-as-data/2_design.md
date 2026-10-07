@@ -42,7 +42,8 @@ pub struct OperationSpec<V: 'static> {
 ```
 
 A `ParamSpec` carries the wire field name, its `ParamType`, whether it is
-required, an **optional** MCP description, and an **optional** CLI binding. Both
+required, whether an empty string is meaningful (`allow_empty`), an **optional**
+MCP description, and an **optional** CLI binding. Both
 sides are optional independently, so a parameter can be MCP-only, CLI-only, or
 both. The CLI binding carries its own help text because MCP and CLI wording
 legitimately differ for the same field — `show`'s `id` is `friction ID` over MCP
@@ -121,11 +122,13 @@ because the adapter reproduces what `#[derive(Args)]` generates:
   spec is contract, not style;
 - `Vec`-shaped params use `ArgAction::Append` plus the spec's value delimiter.
 
-Input projection has one rule worth stating: **optional** string parameters are
-trimmed and dropped when blank, so an unset filter is absent rather than
-present-and-empty; **required** parameters pass through verbatim so that
-"you passed only whitespace" is reported by the handler, where the domain rules
-live. That reproduces the pre-migration behavior exactly.
+Input projection trims **optional** string parameters and drops blank values
+unless the parameter declares `allow_empty`. That declaration preserves an
+explicit blank as an empty string, distinct from an omitted flag. Friction
+`update` enables it for `title` (restore derivation from the body) and `rehome_to`
+(clear a recorded disposition). Other optional strings still omit blanks.
+**Required** parameters pass through verbatim so that "you passed only
+whitespace" is reported by the handler, where the domain rules live.
 
 Audit metadata is derived too. `command/operation/registry.rs`'s friction arm reads
 `invocation.spec.name` and `invocation.target_id()` — the latter resolved by

@@ -118,6 +118,10 @@ pub struct ParamSpec {
     pub param_type: ParamType,
     /// Whether the operation rejects input that omits this parameter.
     pub required: bool,
+    /// Whether an explicit empty string is meaningful to the handler.
+    /// Optional CLI strings are trimmed, then omitted when blank unless this
+    /// is set. Only applies to [`ParamType::String`].
+    pub allow_empty: bool,
     /// MCP tool-schema description. `None` keeps the parameter off the MCP
     /// schema entirely.
     pub mcp_description: Option<Description>,

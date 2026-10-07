@@ -94,6 +94,7 @@ const ADD: FrictionOperation = FrictionOperation {
             name: "body",
             param_type: ParamType::String,
             required: true,
+            allow_empty: false,
             mcp_description: Some(BODY_HELP),
             cli: Some(CliBinding {
                 kind: flag("body"),
@@ -104,6 +105,7 @@ const ADD: FrictionOperation = FrictionOperation {
             name: "title",
             param_type: ParamType::String,
             required: false,
+            allow_empty: false,
             mcp_description: Some(ADD_TITLE_HELP),
             cli: Some(CliBinding {
                 kind: flag("title"),
@@ -114,6 +116,7 @@ const ADD: FrictionOperation = FrictionOperation {
             name: "tags",
             param_type: ParamType::StringList,
             required: false,
+            allow_empty: false,
             mcp_description: Some(Description::Computed(add_tags_description)),
             cli: Some(CliBinding {
                 kind: CliArgKind::Flag {
@@ -129,6 +132,7 @@ const ADD: FrictionOperation = FrictionOperation {
             name: "during_task",
             param_type: ParamType::String,
             required: false,
+            allow_empty: false,
             mcp_description: Some(DURING_TASK_HELP),
             cli: Some(CliBinding {
                 kind: flag("during-task"),
@@ -139,6 +143,7 @@ const ADD: FrictionOperation = FrictionOperation {
             name: "model",
             param_type: ParamType::String,
             required: true,
+            allow_empty: false,
             mcp_description: Some(Description::Static(
                 "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
             )),
@@ -185,6 +190,7 @@ const LIST: FrictionOperation = FrictionOperation {
             name: "response_mode",
             param_type: ParamType::String,
             required: false,
+            allow_empty: false,
             mcp_description: Some(Description::Static(
                 "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
             )),
@@ -254,6 +260,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             name: "id",
             param_type: ParamType::String,
             required: true,
+            allow_empty: false,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
                 kind: CliArgKind::Positional,
@@ -265,6 +272,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             name: "tags",
             param_type: ParamType::StringList,
             required: false,
+            allow_empty: false,
             mcp_description: Some(Description::Computed(update_tags_description)),
             cli: Some(CliBinding {
                 kind: CliArgKind::Flag {
@@ -281,6 +289,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             name: "rehome_to",
             param_type: ParamType::String,
             required: false,
+            allow_empty: true,
             mcp_description: Some(REHOME_TO_HELP),
             cli: Some(CliBinding {
                 kind: flag("rehome-to"),
@@ -291,6 +300,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             name: "move",
             param_type: ParamType::Boolean,
             required: false,
+            allow_empty: false,
             mcp_description: Some(MOVE_HELP),
             cli: Some(CliBinding {
                 kind: flag("move"),
@@ -301,6 +311,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             name: "title",
             param_type: ParamType::String,
             required: false,
+            allow_empty: true,
             mcp_description: Some(UPDATE_TITLE_HELP),
             cli: Some(CliBinding {
                 kind: flag("title"),
@@ -339,6 +350,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             name: "id",
             param_type: ParamType::String,
             required: true,
+            allow_empty: false,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
                 kind: CliArgKind::Positional,
@@ -349,6 +361,7 @@ const REHOME: FrictionOperation = FrictionOperation {
             name: "to_workspace",
             param_type: ParamType::String,
             required: true,
+            allow_empty: false,
             mcp_description: Some(TO_WORKSPACE_HELP),
             cli: Some(CliBinding {
                 kind: flag("to-workspace"),
@@ -400,6 +413,7 @@ const BARE_ID_PARAM: ParamSpec = ParamSpec {
     name: "id",
     param_type: ParamType::String,
     required: true,
+    allow_empty: false,
     mcp_description: Some(Description::Static("friction ID")),
     cli: Some(CliBinding {
         kind: CliArgKind::Positional,
@@ -413,6 +427,7 @@ const fn text_param(name: &'static str, description: &'static str) -> ParamSpec 
         name,
         param_type: ParamType::String,
         required: false,
+        allow_empty: false,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
             kind: flag(name),
@@ -427,6 +442,7 @@ const fn count_param(name: &'static str, description: &'static str) -> ParamSpec
         name,
         param_type: ParamType::Integer,
         required: false,
+        allow_empty: false,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
             kind: flag(name),
