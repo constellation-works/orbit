@@ -27,6 +27,9 @@ const LONG_TIMEOUT_MS: u64 = 60_000;
 const GITHUB_LOOKUP_TRANSIENT_ATTEMPTS: u32 = 3;
 const GITHUB_LOOKUP_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+const PUSH_TRANSIENT_ATTEMPTS: u32 = 3;
+const PUSH_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
+
 /// GitHub's reason for refusing a merge because another merge moved the base
 /// between its mergeability check and the mutation (F2026-10-071). The `sha`
 /// condition was not what failed.
@@ -80,11 +83,19 @@ fn push(input: &Value) -> Result<Value, OrbitError> {
         ));
     }
     args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
-    let result = execute(
+    let target_ref = format!("refs/heads/{branch}");
+    let local_head = execute(
         "git",
-        args,
+        vec!["rev-parse".into(), "--verify".into(), target_ref.clone()],
         Some(Path::new(repo_root)),
-        LONG_TIMEOUT_MS,
+        DEFAULT_TIMEOUT_MS,
+        "push local head",
+    )?;
+    let result = execute_push_with_transient_retry(
+        &args,
+        Path::new(repo_root),
+        &target_ref,
+        local_head.stdout.trim(),
         "push",
     )?;
     Ok(json!({
@@ -111,22 +122,146 @@ fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
              '{CANDIDATE_REF_PREFIX}'"
         )));
     }
-    let result = execute(
-        "git",
-        vec![
+    let result = execute_push_with_transient_retry(
+        &[
             "push".to_string(),
             "--".to_string(),
             "origin".to_string(),
             format!("+{head_sha}:{target_ref}"),
         ],
-        Some(Path::new(repo_root)),
-        LONG_TIMEOUT_MS,
+        Path::new(repo_root),
+        target_ref,
+        head_sha,
         "candidate ref push",
     )?;
     Ok(json!({
         "stdout": result.stdout,
         "stderr": result.stderr,
     }))
+}
+
+/// Retry only transient push failures, confirming the exact remote ref before
+/// resending. A lost reply may hide a successful push, including one that
+/// consumed its force-with-lease. A failed remote read stops further mutations.
+fn execute_push_with_transient_retry(
+    args: &[String],
+    repo_root: &Path,
+    target_ref: &str,
+    head_sha: &str,
+    operation: &str,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    if !valid_expected_remote_sha(Some(head_sha)) {
+        return Err(OrbitError::Execution(
+            "private automation VCS push could not resolve the local head SHA".into(),
+        ));
+    }
+    let mut attempt = 1;
+    loop {
+        let result = run_vcs_process("git", args.to_vec(), Some(repo_root), LONG_TIMEOUT_MS)?;
+        if result.success
+            || result.timed_out
+            || !is_transient_push_failure(&format!("{}\n{}", result.stdout, result.stderr))
+        {
+            return succeeded(result, operation);
+        }
+
+        let remote = execute(
+            "git",
+            vec![
+                "ls-remote".into(),
+                "--refs".into(),
+                "--".into(),
+                "origin".into(),
+                target_ref.into(),
+            ],
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+            "push remote confirmation",
+        )?;
+        if remote.stdout.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields
+                .next()
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
+                && fields.next() == Some(target_ref)
+                && fields.next().is_none()
+        }) {
+            tracing::info!(
+                operation,
+                attempt,
+                "confirmed push landed after a transient failure"
+            );
+            return Ok(remote);
+        }
+        if attempt == PUSH_TRANSIENT_ATTEMPTS {
+            return succeeded(result, operation);
+        }
+        tracing::warn!(
+            operation,
+            attempt,
+            "retrying push after a transient remote failure"
+        );
+        std::thread::sleep(PUSH_TRANSIENT_RETRY_DELAY * attempt);
+        attempt += 1;
+    }
+}
+
+/// Permanent diagnostics take precedence over transport errors: a server may
+/// print both a policy refusal and a generic RPC or remote-rejection message.
+fn is_transient_push_failure(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    if [
+        "authentication",
+        "permission",
+        "access denied",
+        "not granted",
+        "not allowed",
+        "not permitted",
+        "access rights",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "bad credentials",
+        "repository not found",
+        "http 401",
+        "http 403",
+        "error: 401",
+        "error: 403",
+        "forbidden",
+        "non-fast-forward",
+        "fetch first",
+        "stale info",
+        "force-with-lease",
+        "hook",
+        "protect",
+        "declined",
+        "gh006",
+        "gh013",
+        "rule violation",
+    ]
+    .iter()
+    .any(|permanent| text.contains(permanent))
+    {
+        return false;
+    }
+    text.lines()
+        .any(|line| line.contains("[remote rejected]") && line.trim_end().ends_with("(failed)"))
+        || ["http ", "returned error: "].iter().any(|prefix| {
+            text.match_indices(prefix).any(|(index, _)| {
+                let status = &text[index + prefix.len()..];
+                let bytes = status.as_bytes();
+                bytes.len() >= 3
+                    && bytes[0] == b'5'
+                    && bytes[1].is_ascii_digit()
+                    && bytes[2].is_ascii_digit()
+                    && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
+            })
+        })
+        || text.contains("rpc failed")
+        || text.contains("early eof")
+        || text.contains("connection reset")
+        || (text.contains("tls handshake")
+            && (text.contains("timeout") || text.contains("timed out")))
 }
 
 /// Whether `value` is a ref under [`CANDIDATE_REF_PREFIX`] made of plain
@@ -587,9 +722,9 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
 /// or `PR_STATUS`) across a bounded number of attempts when GitHub answers with
 /// a transient failure. `pr_open` calls the first two operations to check for
 /// an existing PR before deciding whether to create one; `PR_STATUS` is used
-/// during completion. Mutating operations (`push`, `pr.create`, `pr.merge`)
-/// go through `execute` directly and are never retried here, since resending a
-/// mutation after an ambiguous failure risks a duplicate side effect.
+/// during completion. Pushes have their own remote-confirming retry path;
+/// PR creation and merge are never retried here, since resending those mutations
+/// after an ambiguous failure risks a duplicate side effect.
 fn execute_with_transient_retry(
     program: &str,
     args: &[String],
