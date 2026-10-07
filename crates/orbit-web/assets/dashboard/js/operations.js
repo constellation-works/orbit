@@ -34,7 +34,7 @@ export function initOperations(nextContext) {
   context = nextContext;
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
-    lastOperations = lastAutoTasks = lastAutoDrain = null;
+    lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
     announcedDrainState = null;
     updateDrainIndicators("idle", "idle");
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");

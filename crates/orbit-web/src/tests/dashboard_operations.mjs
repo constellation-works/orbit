@@ -26,6 +26,10 @@ let releasePost = null;
 let delayPost = false;
 let delayGet = false;
 let releaseGet = null;
+let delayJobRunsWorkspace = null;
+let releaseJobRuns = null;
+let failJobRunsWorkspace = null;
+let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
 let drainPhase = 'idle';
@@ -113,15 +117,19 @@ globalThis.fetch = async (path, options = {}) => {
       ? [{ name: 'graph-refresh', source: 'one', target: 'job:graph_refresh_pipeline', plugin_inactive: true, reason: "seeded by plugin:graph@1.0.0, which is switched off in workspace 'one'; run `orbit plugin enable graph --scope workspace` there to fire it again" }]
       : [],
   });
-  if (url.pathname === '/api/job-runs') return response({
-    items: [
-      ...(submittedJob ? [submittedJob] : []),
-      { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
-      { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
-      { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
-    ],
-    total: submittedJob ? 4 : 3, limit: 100, truncated: false,
-  });
+  if (url.pathname === '/api/job-runs') {
+    if (workspace === delayJobRunsWorkspace) await new Promise(resolve => { releaseJobRuns = resolve; });
+    if (workspace === failJobRunsWorkspace) return response({ error: 'Fixture job runs unavailable' }, 500);
+    const items = workspace === 'two' && workspaceTwoRunId
+      ? [{ run_id: workspaceTwoRunId, job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T21:00:00Z', started_at: '2026-09-07T21:00:01Z', finished_at: null, duration_ms: null }]
+      : [
+        ...(submittedJob ? [submittedJob] : []),
+        { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
+        { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
+        { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
+      ];
+    return response({ items, total: items.length, limit: 100, truncated: false });
+  }
   if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: controlsAuthorized,
@@ -451,6 +459,32 @@ releasePost(); await tick(); await tick(); await tick();
 delayPost = false;
 assert(get('job-operation-feedback').textContent.includes('jrun-dashboard-fixture submitted'), 'submission receipt is visible');
 assert(get('jobs-body').textContent.includes('jrun-dashboard-fixture'), 'new run appears after refresh');
+
+// A workspace switch clears the previous jobs view while the new workspace's
+// runs are still pending. A routines refresh must not repaint the old run list,
+// and a failed B read must leave only its error state in the panel.
+workspaceTwoRunId = 'jrun-workspace-two';
+delayJobRunsWorkspace = 'two';
+failJobRunsWorkspace = 'two';
+setWorkspace('two');
+const workspaceTwoJobs = fetchAndRenderOperationsPane('jobs');
+await tick(); await tick();
+assert(releaseJobRuns, 'workspace B job-runs request is pending');
+await fetchAndRenderOperationsPane('routines');
+const pendingJobsText = get('jobs-body').textContent;
+assert(pendingJobsText === 'Loading…' && !pendingJobsText.includes('jrun-fixture-running'), `pending B jobs show only loading state: ${pendingJobsText}`);
+releaseJobRuns();
+const failedWorkspaceTwoJobs = await Promise.allSettled([workspaceTwoJobs]);
+assert(failedWorkspaceTwoJobs[0].status === 'rejected', 'workspace B job-runs failure reaches the panel');
+const failedJobsText = get('jobs-body').textContent;
+assert(failedJobsText.startsWith('Unable to load:') && !failedJobsText.includes('jrun-fixture-running'), `failed B jobs show only the error state: ${failedJobsText}`);
+assert(requests.some(request => request.path === '/api/job-runs' && request.workspace === 'two'), 'workspace B jobs request uses its selected workspace');
+delayJobRunsWorkspace = null;
+failJobRunsWorkspace = null;
+await fetchAndRenderOperationsPane('jobs');
+assert(get('jobs-body').textContent.includes('jrun-workspace-two') && !get('jobs-body').textContent.includes('jrun-fixture-running'), 'workspace B run list appears after its jobs load');
+setWorkspace('one');
+await fetchAndRenderOperations();
 responseError = 'Fixture submission refused';
 jobRunButton('fixture').click(); await tick(); await tick();
 assert(get('job-operation-feedback').textContent.includes('Fixture submission refused'), 'server error is visible');
