@@ -276,10 +276,17 @@
   background: var(--bg-hover);
 }
 
-/* Cancelling a run from the list is legitimate but rare: it reads as a
-   quiet control until it is the one being pointed at. */
-.action.run-cancel { border-color: transparent; color: var(--fg-dim); }
-.action.run-cancel:hover:not(:disabled) { border-color: #5a2a27; background: var(--danger-wash); color: var(--danger-fg); }
+/* ORB-14485: Cancelling a run is styled as a destructive secondary button. */
+.action.run-cancel {
+  border-color: var(--border);
+  background: var(--bg-elev);
+  color: #e7b8b1;
+}
+.action.run-cancel:hover:not(:disabled) {
+  border-color: #5a2a27;
+  background: var(--danger-wash);
+  color: var(--danger-fg);
+}
 
 @keyframes spin { 100% { transform: rotate(360deg); } }
 .spinner {
