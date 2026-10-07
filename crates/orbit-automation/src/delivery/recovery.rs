@@ -24,6 +24,9 @@ use orbit_types::workflow::automation::*;
 /// How many audited recoveries a preview reports.
 pub(super) const HISTORY_LIMIT: usize = 10;
 
+/// Maximum first-parent commits per side admitted to a history replay.
+pub const HISTORY_REPLAY_COMMIT_LIMIT: usize = 1000;
+
 /// One additional attempt is authorized for the same window the frozen batch
 /// budget grants, so a reissue never quietly widens the retry deadline policy.
 const REISSUE_WINDOW_HOURS: i64 = 24;
@@ -509,12 +512,13 @@ fn replay_plan(
     canonical_seed.unresolved.clear();
     canonical_seed.associations.clear();
     canonical_seed.active = None;
-    let canonical = super::observe::apply(
+    let canonical = super::observe::apply_with_commit_limit(
         &canonical_seed,
         input.page.clone(),
         recorded_coverage(state)
             .ok_or_else(|| AutomationError::Refused(refusal::COVERAGE_UNVERIFIABLE.into()))?,
         DateTime::<Utc>::UNIX_EPOCH,
+        HISTORY_REPLAY_COMMIT_LIMIT,
     )?;
     let mapped_unresolved = input
         .record

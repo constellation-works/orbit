@@ -1,6 +1,9 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
-use orbit_automation::{AutomationError, delivery::digest};
+use orbit_automation::{
+    AutomationError,
+    delivery::{digest, recovery::HISTORY_REPLAY_COMMIT_LIMIT},
+};
 use orbit_common::fs::git::{
     GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
     with_git_fetch_lock,
@@ -31,6 +34,11 @@ const LISTING_LIMIT: u64 = 256 * 1_048_576;
 /// A delivery pass could not fetch `origin/<branch>`. Observation is not
 /// advanced and the local branch is not consulted in its place.
 pub(crate) const SOURCE_FETCH_FAILED: &str = "source_fetch_failed";
+
+struct ObservationLimits {
+    commits: usize,
+    lookups: usize,
+}
 
 pub(crate) struct Source<'a> {
     root: &'a Path,
@@ -563,15 +571,25 @@ impl<'a> Source<'a> {
         state: &AutomationState,
         lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
     ) -> Result<SourcePage, AutomationError> {
-        self.observe_with_lookup_limit(branch, state, lookup, 10, None, false)
+        self.observe_with_limits(
+            branch,
+            state,
+            lookup,
+            ObservationLimits {
+                commits: 200,
+                lookups: 10,
+            },
+            None,
+            false,
+        )
     }
 
-    fn observe_with_lookup_limit(
+    fn observe_with_limits(
         &self,
         branch: &str,
         state: &AutomationState,
         lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
-        lookup_limit: usize,
+        limits: ObservationLimits,
         head_override: Option<SourceRevision>,
         preserve_known_associations: bool,
     ) -> Result<SourcePage, AutomationError> {
@@ -599,19 +617,20 @@ impl<'a> Source<'a> {
             .parse::<usize>()
             .map_err(|_| AutomationError::Deferred("source_count_invalid".into()))?;
 
-        let through = if count > 200 {
-            self.revision(&format!("{}~{}", head.commit, count - 200))?
+        let through = if count > limits.commits {
+            self.revision(&format!("{}~{}", head.commit, count - limits.commits))?
         } else {
             head
         };
 
         let page_range = format!("{}..{}", state.observed.commit, through.commit);
+        let max_count = format!("--max-count={}", limits.commits);
         let commits = self
             .git(&[
                 "rev-list",
                 "--first-parent",
                 "--reverse",
-                "--max-count=200",
+                &max_count,
                 &page_range,
             ])?
             .lines()
@@ -627,7 +646,7 @@ impl<'a> Source<'a> {
         let offset = (state.generation as usize) % old.len().max(1);
         let candidates = commits
             .iter()
-            .take(lookup_limit)
+            .take(limits.lookups)
             .chain(
                 old.iter()
                     .cycle()
@@ -709,7 +728,7 @@ impl<'a> Source<'a> {
             associations,
             unresolved,
             exclusions: Default::default(),
-            complete: count <= 200,
+            complete: count <= limits.commits,
         })
     }
 
@@ -928,11 +947,14 @@ impl<'a> Source<'a> {
         // own deadline so it cannot consume the signature proof's budget.
         let page_source = Self::new(self.root);
         let mut page = page_source
-            .observe_with_lookup_limit(
+            .observe_with_limits(
                 branch,
                 &probe,
                 &|repository, sha| lookup(&page_source, repository, sha),
-                200,
+                ObservationLimits {
+                    commits: HISTORY_REPLAY_COMMIT_LIMIT,
+                    lookups: HISTORY_REPLAY_COMMIT_LIMIT,
+                },
                 Some(replay_through.clone()),
                 true,
             )
@@ -1486,7 +1508,10 @@ pub(super) fn validate_replay_range_lengths(
     orphan_count: usize,
     canonical_count: usize,
 ) -> Result<(), AutomationError> {
-    if orphan_count == 0 || orphan_count > 1000 || canonical_count > 1000 {
+    if orphan_count == 0
+        || orphan_count > HISTORY_REPLAY_COMMIT_LIMIT
+        || canonical_count > HISTORY_REPLAY_COMMIT_LIMIT
+    {
         return Err(AutomationError::Refused(
             refusal::HISTORY_TRAVERSAL_LIMIT.into(),
         ));

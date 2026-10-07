@@ -10,8 +10,16 @@ use std::process::Command;
 
 use orbit_automation::AutomationError;
 use orbit_automation::delivery::digest;
-use orbit_types::workflow::automation::AutomationState;
-use orbit_types::workflow::automation::recovery::{HistoryReplayRecord, refusal};
+use orbit_automation::delivery::recovery::{
+    self, HISTORY_REPLAY_COMMIT_LIMIT, HistoryReplayInput, Recovery,
+};
+use orbit_store::{Store, compose};
+use orbit_types::workflow::automation::recovery::{
+    HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
+};
+use orbit_types::workflow::automation::{
+    AutomationState, CoverageClass, DeliveryTrigger, SourcePage,
+};
 
 use super::super::source::{
     Source, arm_canonical_signature_deadline, arm_expire_source_after_next_head,
@@ -290,59 +298,172 @@ fn direct_signature(repo: &Path, commit: &str) -> String {
 fn replay(
     source: &Source<'_>,
     state: &AutomationState,
-) -> Result<HistoryReplayRecord, AutomationError> {
-    source
-        .replay_history_with_lookup(
-            "main",
-            state,
-            &|_, _, _| unreachable!("no provider lookup"),
-            0,
-        )
-        .map(|(_page, record)| record)
+) -> Result<(SourcePage, HistoryReplayRecord), AutomationError> {
+    source.replay_history_with_lookup(
+        "main",
+        state,
+        &|_, _, _| unreachable!("no provider lookup"),
+        0,
+    )
 }
 
 #[test]
 fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
-    clear_canonical_signature_deadline();
-    let history = diverged(1000, 1000);
-    let (source, state) = state_for(history.root.path(), history.old.last().expect("old tip"));
-    let record = replay(&source, &state).expect(
-        "ORB-14356: a 1000-commit replay finishes instead of exhausting the source deadline",
-    );
-    assert_eq!(
-        record.mappings.len(),
-        history.old.len(),
-        "every admitted orphan maps"
-    );
-    for (index, mapping) in record.mappings.iter().enumerate() {
-        assert_eq!(mapping.orphan.commit, history.old[index], "orphan {index}");
-        assert_eq!(
-            mapping.canonical.commit, history.new[index],
-            "canonical {index}"
-        );
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &admitted_replay_limit_completes_and_one_past_it_is_refused,
+    )) {
+        return;
     }
-    let first = &record.mappings[0];
-    let last = &record.mappings[999];
-    assert_eq!(
-        first.proof_digest,
-        direct_signature(history.root.path(), &history.old[0]),
-        "batched signature matches the per-commit git signature"
-    );
-    assert_eq!(
-        last.proof_digest,
-        direct_signature(history.root.path(), &history.old[999]),
-        "batched signature matches the per-commit git signature"
-    );
+    clear_canonical_signature_deadline();
+    for count in [201, HISTORY_REPLAY_COMMIT_LIMIT] {
+        let history = diverged(count, count);
+        let (source, mut state) =
+            state_for(history.root.path(), history.old.last().expect("old tip"));
+        let trigger = DeliveryTrigger {
+            owner_machine: Some("fixture-machine".into()),
+            branch: "main".into(),
+            threshold: 1,
+            max_wait_minutes: 60,
+            coverage: CoverageClass::LandedCodeReviewV1,
+            max_items: 50,
+            retries: 1,
+        };
+        state.trigger = Some(trigger.clone());
+        state.pending_commits = history.old.clone();
+        state.unresolved = history
+            .old
+            .iter()
+            .map(|commit| (commit.clone(), "delivery_owner_evidence_pending".into()))
+            .collect();
+        let (page, record) = replay(&source, &state).expect(
+            "ORB-14356: a 1000-commit replay finishes instead of exhausting the source deadline",
+        );
+        assert_eq!(
+            record.mappings.len(),
+            history.old.len(),
+            "every admitted orphan maps"
+        );
+        for (index, mapping) in record.mappings.iter().enumerate() {
+            assert_eq!(mapping.orphan.commit, history.old[index], "orphan {index}");
+            assert_eq!(
+                mapping.canonical.commit, history.new[index],
+                "canonical {index}"
+            );
+        }
+        let first = &record.mappings[0];
+        let last = record.mappings.last().expect("last mapping");
+        assert_eq!(
+            first.proof_digest,
+            direct_signature(history.root.path(), &history.old[0]),
+            "batched signature matches the per-commit git signature"
+        );
+        assert_eq!(
+            last.proof_digest,
+            direct_signature(history.root.path(), history.old.last().expect("old tip")),
+            "batched signature matches the per-commit git signature"
+        );
 
-    let over = diverged(1001, 1);
-    let (source, state) = state_for(over.root.path(), over.old.last().expect("old tip"));
-    match replay(&source, &state) {
-        Err(AutomationError::Refused(reason)) => assert_eq!(
-            reason,
-            refusal::HISTORY_TRAVERSAL_LIMIT,
-            "ORB-14356: one commit past the admitted limit is the traversal refusal"
-        ),
-        other => panic!("expected history_traversal_limit, got {other:?}"),
+        let store = compose::automation_store(Store::open_in_memory().expect("store"))
+            .expect("automation store");
+        let baseline = AutomationState {
+            observed: state.baseline.clone(),
+            generation: 0,
+            pending_commits: vec![],
+            unresolved: Default::default(),
+            ..state.clone()
+        };
+        assert!(store.automation_initialize(&baseline).expect("initialize"));
+        let ordinary = source
+            .observe_with_lookup("main", &baseline, &|_, _| unreachable!("no provider"))
+            .expect("ordinary observation");
+        assert_eq!(ordinary.commits, history.new[..200]);
+        assert_eq!(ordinary.through.commit, history.new[199]);
+        assert!(!ordinary.complete, "ordinary observation remains paginated");
+        assert!(
+            store
+                .automation_commit(&baseline, &state, None)
+                .expect("observe orphans")
+        );
+        let request = RecoveryRequest {
+            replay_history: true,
+            ..RecoveryRequest::default()
+        };
+        let operation = Recovery {
+            consumer: &state.consumer,
+            epoch: &state.epoch,
+            trigger: &trigger,
+            repository: &state.repository,
+            host_refusal: None,
+            request: &request,
+            by: "operator",
+            now: chrono::DateTime::UNIX_EPOCH,
+            replay: Some(HistoryReplayInput { page, record }),
+            resolved_action_id: None,
+            expected_generation: Some(state.generation),
+            action_terminal: false,
+            action_failed_without_evidence: false,
+        };
+        let preview = recovery::preview(store.as_ref(), &operation)
+            .expect("a replay beyond the ordinary page limit can be previewed");
+        assert!(preview.refusals.is_empty());
+        assert_eq!(preview.debt.pending_commits, count);
+        assert_eq!(preview.debt.unresolved, count);
+        assert_eq!(
+            store.automation_state(&state.consumer).expect("state"),
+            Some(state.clone()),
+            "preview must leave the orphaned checkpoint untouched"
+        );
+        let apply_request = RecoveryRequest {
+            reason: "reconcile the content-preserving rebase".into(),
+            ..request
+        };
+        let applied = recovery::apply(
+            store.as_ref(),
+            &Recovery {
+                request: &apply_request,
+                ..operation
+            },
+        )
+        .expect("the returned replay page can be applied");
+        assert_eq!(applied.applied, [RecoveryPreview::REPLAYED_HISTORY]);
+        assert_eq!(applied.history_replay, preview.history_replay);
+        let checkpoint = store
+            .automation_state(&state.consumer)
+            .expect("state")
+            .expect("checkpoint");
+        assert_eq!(
+            checkpoint.observed.commit,
+            *history.new.last().expect("canonical tip")
+        );
+        assert_eq!(checkpoint.pending_commits, history.new);
+        assert_eq!(
+            checkpoint.unresolved,
+            checkpoint
+                .pending_commits
+                .iter()
+                .map(|commit| { (commit.clone(), "delivery_owner_evidence_pending".into()) })
+                .collect()
+        );
+        assert_eq!(checkpoint.baseline, state.baseline);
+        assert_eq!(checkpoint.covered, state.covered);
+        assert_eq!(checkpoint.generation, state.generation + 1);
+        assert_eq!(applied.history[0].replayed_history, applied.history_replay);
+    }
+
+    for (orphans, canonical) in [
+        (HISTORY_REPLAY_COMMIT_LIMIT + 1, 1),
+        (1, HISTORY_REPLAY_COMMIT_LIMIT + 1),
+    ] {
+        let over = diverged(orphans, canonical);
+        let (source, state) = state_for(over.root.path(), over.old.last().expect("old tip"));
+        match replay(&source, &state) {
+            Err(AutomationError::Refused(reason)) => assert_eq!(
+                reason,
+                refusal::HISTORY_TRAVERSAL_LIMIT,
+                "ORB-14356: one commit past the admitted limit is the traversal refusal"
+            ),
+            other => panic!("expected history_traversal_limit, got {other:?}"),
+        }
     }
 }
 
