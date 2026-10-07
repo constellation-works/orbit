@@ -165,12 +165,12 @@
 }
 .config-crew-head [role="columnheader"] { min-width: 0; }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
-.config-crew-row.disabled .config-crew-cells { color: var(--fg-mute); }
+.config-crew-row.disabled .config-crew-cells { color: var(--fg-disabled); }
 .config-crew-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .config-crew-description { color: var(--fg-mute); font-size: 11px; overflow-wrap: anywhere; }
 .config-crew-usage { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .config-crew-use { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
-.config-crew-row.disabled .config-crew-use { color: var(--fg-mute); }
+.config-crew-row.disabled .config-crew-use { color: var(--fg-disabled); }
 .config-crew-disabled {
   margin-left: 6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 2px;
   color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;

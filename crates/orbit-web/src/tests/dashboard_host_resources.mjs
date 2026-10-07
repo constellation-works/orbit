@@ -5,11 +5,21 @@ import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 
 class Node {
-  constructor(tag) { this.tagName = tag; this.children = []; this.className = ''; this.text = ''; }
+  constructor(tag) {
+    this.tagName = tag;
+    this.children = [];
+    this.className = '';
+    this.text = '';
+    this.attributes = new Map();
+  }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return this.text + this.children.map(child => child.textContent ?? child).join(' '); }
   append(child) { this.children.push(child); }
   replaceChildren(...children) { this.text = ''; this.children = children; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  set tabIndex(value) { this.setAttribute('tabindex', value); }
+  get tabIndex() { return Number(this.getAttribute('tabindex') ?? -1); }
 }
 // Use a real HTML parser rather than assertions over source text. The small DOM
 // implements only the element/text operations used by the shipped renderer.
@@ -98,7 +108,9 @@ assert.doesNotMatch(chips()[0].textContent, /cpu|193/, 'the chip never shows loa
 const held = chips()[0];
 assert.equal(held.children.length, 3);
 assert.equal(held.children[2].textContent, 'throttled', 'the throttle verdict is accessible text');
-assert.equal(held.tabIndex, 0, 'keyboard users can inspect the chip tooltip');
+assert.equal(held.tabIndex, -1, 'static host readings do not add an unhelpful tab stop');
+assert.equal(held.getAttribute('role'), 'group');
+assert.match(held.getAttribute('aria-label'), /memory 82\.0% \(elevated\)/, 'assistive technology can read the full resource breakdown');
 assert.match(held.title, /1-minute load average divided by online cores/, 'the title explains the load measure');
 assert.match(held.title, /193\.7% of cores/);
 assert.match(held.title, /memory 82\.0% \(elevated\)/);

@@ -273,7 +273,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--bg); }
 .operation-button.drain-start { font-family: var(--font-sans); font-size: 13.5px; flex: 1 1 auto; min-width: 0; min-height: 36px; border-radius: var(--radius); overflow: hidden; text-overflow: ellipsis; }
 .operation-button.drain-stop { font-family: var(--font-sans); font-size: 13px; flex: 0 0 auto; min-height: 36px; border-radius: var(--radius); color: #ffb4ab; border-color: #5a2a27; background: transparent; }
-.operation-button.drain-stop:disabled { color: var(--fg-mute); border-color: var(--hair); }
+.operation-button.drain-stop:disabled { color: var(--fg-disabled); border-color: var(--hair); }
 .operation-button.drain-stop:hover:not(:disabled) { color: #ffd0ca; border-color: var(--state-failed); background: var(--danger-wash); }
 
 @media (max-width: 900px) {

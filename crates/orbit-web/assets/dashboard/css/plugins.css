@@ -15,9 +15,8 @@
   padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0;
 }
 
-/* A plugin that is not serving its tools reads as muted, with its
-   diagnostic — the reason — in the warning colour. */
-.plugin-card.plugin-disabled, .plugin-card.plugin-missing { opacity: 0.82; }
+/* Disabled and missing state is conveyed by its status and diagnostic; keep
+   the card text at full contrast so the state remains readable. */
 .plugin-card.plugin-inactive { border-color: var(--status-open); }
 .plugin-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .plugin-name { color: var(--fg); font-size: 13px; font-weight: 600; }
@@ -30,7 +29,7 @@
   border: 1px solid var(--border); color: var(--fg-dim); font: 10px/1.6 var(--font-mono);
 }
 .plugin-chip-warn { color: var(--status-open); border-color: var(--status-open); }
-.plugin-chip-idle { opacity: 0.6; }
+.plugin-chip-idle { color: var(--fg-mute); }
 .plugin-description { margin: 0; color: var(--fg-dim); font-size: 12px; }
 .plugin-diagnostic { margin: 0; color: var(--status-open); font-size: 12px; overflow-wrap: anywhere; }
 .plugin-enablement { display: flex; gap: 8px 20px; flex-wrap: wrap; }

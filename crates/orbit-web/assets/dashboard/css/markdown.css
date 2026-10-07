@@ -16,7 +16,7 @@
 .ac-list a:focus-visible,
 .artifact-preview a:focus-visible {
   text-decoration: underline;
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .markdown-body code {

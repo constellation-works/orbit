@@ -82,7 +82,7 @@
 #task-search:focus-visible,
 #audit-search:focus-visible,
 #friction-search:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -164,7 +164,7 @@
 .step-row:focus-visible,
 .runs-row:focus-visible,
 .field-block.collapsible h4:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 /* Click-to-copy identifiers are real buttons (keyboard-operable) that must
@@ -181,7 +181,7 @@
   cursor: copy;
 }
 .copy-id:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: 2px;
 }

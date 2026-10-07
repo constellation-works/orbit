@@ -10,6 +10,7 @@
     <script src="/static/vendor/purify.min.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css">  </head>
   <body>
+    <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
       <!-- ORB-10972: the top-level nav is a left rail. It keeps the `.tab` /
            `.subtab` classes and the `#diag-subtabs` id the router selects on,
@@ -90,7 +91,7 @@
             <button type="button" class="kpi" id="tile-events" title="Audited events in the selected window. Opens Audit."><span class="v" id="tile-events-value">-</span><span class="k">events</span><svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg></button>
             <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
             <div class="host-resource-chips" id="host-resource-chips" role="group" aria-label="Live serving host resources" aria-live="polite">
-              <span class="kpi host-resource unknown" tabindex="0" title="Host resources unknown · sample unavailable · Throttle verdict: unknown"><span class="k">host</span><span class="v">-</span></span>
+              <span class="kpi host-resource unknown" role="group" aria-label="Host resources unknown · sample unavailable · Throttle verdict: unknown"><span class="k">host</span><span class="v">-</span></span>
             </div>
           </div>
           <span class="topbar-spacer"></span>
@@ -99,7 +100,7 @@
         </header>
 
     <section class="tab-pane" data-tab="tasks">
-      <main class="tasks-layout">
+      <main class="tasks-layout" id="tasks-main">
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <header class="tasks-head">
@@ -119,7 +120,7 @@
               <span id="tasks-page-status" role="status" aria-live="polite"></span>
               <button id="tasks-next" type="button" disabled>Next</button>
             </nav>
-            <div class="body" id="tasks-body">
+            <div class="body" id="tasks-body" tabindex="0" role="region" aria-label="Task list">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -172,7 +173,7 @@
                 <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">wrap</button>
                 <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
               </div>
-              <div class="log-stream">
+              <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                 <div class="inner" id="logInner"></div>
               </div>
             </section>
@@ -180,7 +181,7 @@
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="audit">
+    <section class="tab-pane" data-tab="audit" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main class="tasks-layout" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="audit-pane">
@@ -194,7 +195,7 @@
               <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
               <div id="audit-filter"></div>
             </div>
-            <div class="body scoreboard-table-wrap" id="audit-body">
+            <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -212,13 +213,13 @@
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="audit-summary-panel">
             <header><span id="audit-summary-title">Audit Summary 24h</span></header>
-            <div class="body" id="audit-summary-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
+            <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
             </div>
           </section>
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="run-detail">
+    <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: 1fr;">
         <section class="panel" id="run-detail-panel">
           <header>
@@ -242,7 +243,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="diagnostics">
+    <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-panel">
@@ -250,13 +251,13 @@
               <span id="diag-title">Diagnostics</span>
               <span class="count" id="diag-count">-</span>
             </header>
-            <div class="body scoreboard-table-wrap" id="diag-body" style="display: none;">
+            <div class="body scoreboard-table-wrap" id="diag-body" tabindex="0" role="region" aria-label="Health diagnostics">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 75%"></div>
               </div>
             </div>
-            <div class="body" id="runs-body" style="display: none;">
+            <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -368,7 +369,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="operations">
+    <section class="tab-pane" data-tab="operations" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <p id="operations-session" class="operations-readonly-note" role="status"></p>
       <main class="operations-layout operations-routines-layout" id="operations-routines-main">
         <section class="panel operation-clock-panel" id="clock-panel">
@@ -414,7 +415,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="knowledge">
+    <section class="tab-pane" data-tab="knowledge" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
         <section class="panel" id="knowledge-panel">
           <header><span>Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
@@ -467,7 +468,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="plugins">
+    <section class="tab-pane" data-tab="plugins" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- One generic surface for every installed plugin: its state, the
            panels its manifest declares, and its link tiles. No plugin ships
            markup or script, so a new plugin needs no dashboard edit. -->
@@ -490,7 +491,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="config">
+    <section class="tab-pane" data-tab="config" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- ORB-12724: the Config tab reads the same layered resolution
            `orbit config show` prints, so a row's value, its layer, and the
            lower layer it shadows are the server's answer, not the client's. -->
