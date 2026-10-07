@@ -26,7 +26,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Inspect the Audit Trail](./runbooks/audit-trail.md) | Query and interpret Orbit invocation, run, step, and activity audit history. |
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
 | [Verify and Recover Claimed-Review Artifacts](./runbooks/claimed-review-artifacts.md) | Verify and recover a distributed-drain follower's before-PR reviewer, whose review-artifact reads and report write reach the owner through the run's coordinator instead of SSH inside the sandbox. |
-| [Confirm a Rust Code scanning repair locally](./runbooks/codeql-local.md) | Confirm Rust Code scanning repairs locally with isolated toolchain preparation and reject incomplete semantic extraction. |
+| [Run local Rust CodeQL for every change touching Rust sources](./runbooks/codeql-local.md) | Run local Rust CodeQL for every change touching Rust sources with isolated toolchain preparation, and reject incomplete semantic extraction. |
 | [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off. |
 | [Recover a Corrupted Database](./runbooks/database-recovery.md) | Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration. |
 | [Set Up and Recover a Single-Owner Distributed Drain](./runbooks/distributed-drain.md) | Set up, migrate, run, and recover a single-owner distributed drain — follower pull with owner-only landing, no follower merges. |
