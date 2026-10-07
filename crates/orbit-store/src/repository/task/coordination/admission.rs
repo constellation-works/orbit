@@ -392,13 +392,6 @@ impl TaskCommitBoundary {
                 });
                 continue;
             }
-            if !task.has_prepared_context() {
-                receipt.invalid_candidates.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: "unprepared: run task-pilot or set context_files before admission; this task declares no context scope".into(),
-                });
-                continue;
-            }
             // A task whose `os:` tags the executor's OS does not satisfy stays
             // for a host that does, rather than being claimed and failed. The
             // tags are read at each admission, so a retag applies to the next.

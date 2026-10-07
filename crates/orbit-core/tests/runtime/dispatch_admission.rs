@@ -221,15 +221,23 @@ fn admitted(output: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Empty-context backlog work cannot race prepared work on any local admission
-/// route; an operator's scope repair takes effect on the next pass.
+/// Selector-free backlog work is admitted on the first auto/ship pass, even
+/// while another task holds the workspace, and reserves no context locks.
 #[test]
-fn empty_context_waits_for_preparation_on_auto_ship_and_readiness() {
-    if !isolated("empty_context_waits_for_preparation_on_auto_ship_and_readiness") {
+fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
+    if !isolated("empty_context_is_admitted_on_auto_ship_and_readiness_without_locks") {
         return;
     }
-    let (_root, runtime, repo) = runtime();
-    let unprepared = seed(
+    let (_root, runtime, _repo) = runtime();
+    seed(
+        &runtime,
+        Seed {
+            status: TaskStatus::InProgress,
+            context_files: Some(&["dir:."]),
+            ..Seed::default()
+        },
+    );
+    let selector_free = seed(
         &runtime,
         Seed {
             context_files: Some(&[]),
@@ -245,68 +253,45 @@ fn empty_context_waits_for_preparation_on_auto_ship_and_readiness() {
             ..Seed::default()
         },
     );
-    for input in [json!({}), json!({"task_ids": [unprepared.id, no_diff.id]})] {
+    for input in [
+        json!({}),
+        json!({"task_ids": [selector_free.id, no_diff.id]}),
+    ] {
         let output = list_backlog_tasks(&runtime, input);
-        assert_eq!(admitted(&output), vec![no_diff.id.clone()], "{output}");
-        let excluded = output["excluded"].as_array().unwrap();
-        let waiting = excluded
-            .iter()
-            .find(|entry| entry["id"] == unprepared.id)
-            .unwrap();
-        assert_eq!(waiting["reason"], "unprepared");
-        assert!(waiting["detail"].as_str().unwrap().contains("task-pilot"));
+        assert_eq!(
+            admitted(&output),
+            vec![selector_free.id.clone(), no_diff.id.clone()],
+            "{output}"
+        );
+        assert_eq!(output["excluded"], json!([]), "{output}");
     }
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
     let wave = runtime
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
-            &json!({"max_active_leaf_runs": 2}),
+            &json!({"run_id": drain, "max_active_leaf_runs": 2}),
             ToolContext::default(),
         )
         .unwrap();
-    assert_eq!(wave["loose_task_ids"], json!([no_diff.id]), "{wave}");
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    let waiting = readiness_task(&readiness, &unprepared.id);
-    assert_eq!(waiting["eligible"], false);
-    assert_eq!(waiting["reason"], "unprepared");
-    assert!(waiting["detail"].as_str().unwrap().contains("task-pilot"));
-    assert_eq!(readiness_task(&readiness, &no_diff.id)["eligible"], true);
-
-    std::fs::write(repo.join("prepared.rs"), "fixture\n").unwrap();
-    runtime
-        .update_task_as_human(
-            &unprepared.id,
-            orbit_core::application::task::TaskUpdateParams {
-                context_files: Some(vec!["file:prepared.rs".into()]),
-                ..Default::default()
-            },
-            "fixture operator".into(),
-        )
-        .unwrap();
-    for input in [json!({}), json!({"task_ids": [unprepared.id]})] {
-        assert!(admitted(&list_backlog_tasks(&runtime, input)).contains(&unprepared.id));
-    }
-    let wave = runtime
-        .run_deterministic(
-            "classify_workspace_auto_tasks",
-            &json!({}),
-            &json!({"max_active_leaf_runs": 2}),
-            ToolContext::default(),
-        )
-        .unwrap();
-    assert!(
-        wave["loose_task_ids"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(unprepared.id)),
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([selector_free.id, no_diff.id]),
         "{wave}"
     );
+    let shown = as_operator(&runtime, "orbit.workflow.run.show", json!({"id": drain}));
+    assert_eq!(shown["drain_last_pass"]["excluded_total"], 0, "{shown}");
     let readiness = runtime
         .workspace_auto_readiness(&[], None, 50, &[])
         .unwrap();
-    assert_eq!(readiness_task(&readiness, &unprepared.id)["eligible"], true);
+    for id in [&selector_free.id, &no_diff.id] {
+        let ready = readiness_task(&readiness, id);
+        assert_eq!(ready["eligible"], true, "{ready}");
+        assert_eq!(ready["reason"], "ready", "{ready}");
+        let reservation = reserve_locks(&runtime, id);
+        assert_eq!(reservation["reserved"], true, "{reservation}");
+        assert_eq!(reservation["reserved_files"], json!([]), "{reservation}");
+    }
 }
 
 /// The shipped documentation chore mints with a locking scope, so a drain can

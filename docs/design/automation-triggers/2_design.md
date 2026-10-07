@@ -532,13 +532,13 @@ persisted complexity remains `unassessed`. Task-pilot records the bounded
 repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
 triggers. Its apply step commits concrete selectors, complexity, audit evidence,
-and the idempotency receipt at one task-bundle boundary. Automatic admission
-then rejects tasks with empty `context_files` (unless tagged exactly
-`no-diff-expected`) as `unprepared`, directing
-task-pilot or an operator to set a scope before local auto, ship (including
-explicit selection), or owner pull admission. Readiness repeats that typed
-reason and preparation instruction. Setting selectors clears this hold on the
-next admission pass. Local automatic admission also rejects any
+and the idempotency receipt at one task-bundle boundary. `context_files` are
+optional for admission: local auto, ship (including explicit selection), and
+owner pull admit selector-free backlog tasks on the next pass without holding
+a context lock. Task-pilot can supply selectors, but empty context alone does
+not exclude work or produce a readiness reason. A live pilot's successful
+preparation checkpoint still holds its tasks until that run settles.
+Local automatic admission rejects any
 still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
 because an implementation lane sizes no diff for it [ORB-12118]; missing

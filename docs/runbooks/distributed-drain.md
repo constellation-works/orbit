@@ -247,9 +247,12 @@ orbit task lint --restore-pruned
 ```
 
 `--restore-pruned` never invents scope. Unrestorable entries stay unrestorable;
-supply own `context_files` yourself. Empty lock surfaces stay ineligible for
-distributed pull and for operator task-scope reservation until an operator
-declares context.
+supply own `context_files` yourself. Context is optional for local auto, ship
+and distributed pull admission: selector-free backlog tasks are admitted on
+the next pass without a context lock. Undeclared edit conflicts are handled at
+landing by rebase and conflict repair. Operator task-scope reservation still
+requires a declared surface. A live task-pilot preparation checkpoint still
+holds its tasks until that run settles.
 
 Reservation TTL on a pulled claim is 14,400 seconds (four hours). Expiry does
 **not** revoke the claim, admit another worker, or shrink the frozen

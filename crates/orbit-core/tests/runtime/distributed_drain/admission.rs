@@ -6,13 +6,13 @@ use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::*;
 
-/// Owner admission cannot hand selector-free implementation work to a follower.
-/// Preparing its scope clears the hold; tagged no-diff work stays on the owner.
+/// Owner admission hands selector-free implementation work to a follower on
+/// its first pass with an empty lock footprint; tagged no-diff stays on owner.
 #[test]
-fn owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner() {
+fn owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner() {
     if !isolated(
         module_path!(),
-        "owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner",
+        "owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner",
     ) {
         return;
     }
@@ -24,7 +24,7 @@ fn owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner() {
                 id,
                 orbit_core::application::task::TaskUpdateParams {
                     context_files: Some(vec![]),
-                    tags: (index == 1).then(|| vec!["no-diff-expected".into()]),
+                    tags: (index == 0).then(|| vec!["no-diff-expected".into()]),
                     ..Default::default()
                 },
                 "fixture operator".into(),
@@ -33,54 +33,27 @@ fn owner_pull_waits_for_context_preparation_and_keeps_no_diff_work_on_owner() {
     }
     let drain = pair.start_drain();
     let first = pair.pass(&drain);
-    assert!(first["error"].is_null(), "{first}");
-    assert!(pair.owner_claims().is_empty());
-    assert_eq!(pair.owner_status(&pair.tasks[1]), "backlog");
+    assert!(launch_refused(&first), "{first}");
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let claims = pair.owner_claims();
+    assert_eq!(claims.len(), 1, "{claims:#?}");
+    assert_eq!(claims[0]["claim"]["task_id"], pair.tasks[1]);
+    assert_eq!(claims[0]["claim"]["footprint"], json!([]), "{claims:#?}");
     let receipts = pair.follower_jobs.local_pull_admissions().unwrap();
+    let receipt = receipts
+        .iter()
+        .filter_map(|record| record.receipt.as_ref())
+        .find(|receipt| receipt.claim.is_some())
+        .expect("first pass claimed selector-free work");
+    assert!(receipt.invalid_candidates.is_empty(), "{receipt:#?}");
+    assert!(receipt.task.as_ref().unwrap().context_files.is_empty());
     assert!(
-        receipts
-            .iter()
-            .filter_map(|record| record.receipt.as_ref())
-            .any(|receipt| {
-                receipt.invalid_candidates.iter().any(|entry| {
-                    entry.task_id == pair.tasks[0]
-                        && entry.reason.starts_with("unprepared:")
-                        && entry.reason.contains("task-pilot")
-                })
-            }),
-        "{receipts:#?}"
-    );
-    assert!(
-        receipts
-            .iter()
-            .filter_map(|record| record.receipt.as_ref())
-            .any(|receipt| {
-                receipt.deferred_conflicts.iter().any(|entry| {
-                    entry.task_id == pair.tasks[1]
-                        && entry.reason.contains("no-diff-expected")
-                        && entry.reason.contains("verified handoff")
-                })
-            }),
-        "tag alone cannot establish a verified NoDiff handoff: {receipts:#?}"
-    );
-    pair.wire
-        .owner
-        .update_task_as_human(
-            &pair.tasks[0],
-            orbit_core::application::task::TaskUpdateParams {
-                context_files: Some(vec!["file:src/f0.rs".into()]),
-                ..Default::default()
-            },
-            "fixture operator".into(),
-        )
-        .unwrap();
-    let second = pair.pass(&drain);
-    assert!(launch_refused(&second), "{second}");
-    assert!(
-        pair.owner_claims()
-            .iter()
-            .any(|claim| claim["claim"]["task_id"] == pair.tasks[0])
+        receipt.deferred_conflicts.iter().any(|entry| {
+            entry.task_id == pair.tasks[0]
+                && entry.reason.contains("no-diff-expected")
+                && entry.reason.contains("verified handoff")
+        }),
+        "tag alone cannot establish a verified NoDiff handoff: {receipt:#?}"
     );
 }
 
