@@ -12,12 +12,24 @@ pub(super) fn apply(
     coverage: CoverageClass,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<AutomationState, AutomationError> {
+    apply_with_commit_limit(state, page, coverage, now, 200)
+}
+
+/// Replay applies its full admitted range; ordinary observation keeps its
+/// smaller page bound. All other page and debt checks are shared.
+pub(super) fn apply_with_commit_limit(
+    state: &AutomationState,
+    page: SourcePage,
+    coverage: CoverageClass,
+    now: chrono::DateTime<chrono::Utc>,
+    commit_limit: usize,
+) -> Result<AutomationState, AutomationError> {
     let invalid = || AutomationError::Deferred("source_page_invalid".into());
 
     // A page must resume exactly where the cursor stands, stay within its bounds,
     // and end on the revision it claims to reach.
     if page.from != state.observed
-        || page.commits.len() > 200
+        || page.commits.len() > commit_limit
         || page.deliveries.len() > 50
         || page
             .commits

@@ -155,7 +155,10 @@ leftover time. The provider observation after proof uses its own source pass,
 including its provider lookups, so neither fetch spends the signature proof's
 budget. A deadline or command budget while signing canonical commits is
 returned as that deferral. A canonical commit that simply has no signature is
-still skipped. It then obtains ordinary
+still skipped. Replay observes and applies the entire admitted range in one
+page, up to the same 1,000-commit bound; ordinary observation keeps its
+200-commit pages. A range over the replay bound is refused as
+`history_traversal_limit` before proof or provider observation. It then obtains ordinary
 provider associations for inserted commits and reconciles debt by delivery key.
 Missing objects, ambiguous content, unreachable covered/frozen boundaries,
 provider gaps, contract drift, or a changed head/generation fail closed. Never
