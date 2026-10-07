@@ -130,13 +130,17 @@ writes nothing, when:
 |---|---|
 | target does not answer within the probe budget | `unreachable_destination` |
 | probe reports the local machine id or local prefix | `host_is_local` |
-| `machine_id` already registered | `host_exists` (names the entry) |
+| `machine_id` already registered in `hosts.toml` | `host_exists` (names the entry) |
 | name already used by an entry or the local host | `host_name_conflict` |
 | prefix already used by an entry or the local host | `task_prefix_conflict` |
 | envelope lacks `task_prefix` | `host_too_old` |
 
 Adding a host writes nothing on that host. Registration is one-directional: a follower needs
 an entry for its owner, and the owner needs none for the follower.
+
+When the target's identity is already in the legacy file, `add` commits the migration and
+exits 0 with action `migrated`, the entry and live summary, and the migrated rows. It preserves
+the legacy SSH target and the migration's chosen name; `--name` applies only to new hosts.
 
 ### `orbit host list [--no-probe]`
 
@@ -170,6 +174,11 @@ Refuses with `host_in_use` while a local replica checkout names the host as owne
 running `orbit run auto --pull` drain targets it. The error lists the dependents. `--force`
 removes the entry anyway and prints which dependents will lose their route. Removing the
 local host is `host_is_local`.
+
+A legacy row can be removed by SSH target or machine_id without contacting that host,
+with or without `--force`. Every retained row must still answer to migrate. The removed
+entry reports its cached SSH target as its name and `task_prefix: null`, because the legacy
+file does not store a prefix. Registered entries retain their existing JSON fields.
 
 ## Dashboard
 
@@ -247,11 +256,18 @@ One release of compatibility:
 1. **Only the legacy file exists.** Federated serve, pull drains and worktree GC load its
    rows as today. `host list` shows them marked `legacy`, with live-probed fields. Prefix
    routing treats them as having no prefix, so they contribute nothing to the prefix table.
-2. **First mutation.** The first `host add`, `rename` or `remove` probes every legacy row.
-   If all of them answer, it writes `hosts.toml` with those rows, applies the mutation, and
-   deletes the legacy file. Each migrated row is named after the remote's `machine.name`, or
-   after its SSH target when that name is taken. If any row fails, the command refuses with `legacy_host_unreachable`,
-   naming the row, and touches neither file.
+2. **First mutation.** The first `host add`, `rename` or `remove` probes every retained
+   legacy row. `remove` excludes the selected row from probing, even without `--force`;
+   `--force` only overrides local dependents. If all retained rows answer, the command writes
+   `hosts.toml`, applies the mutation, and deletes the legacy file. Each migrated row is named
+   after the remote's `machine.name`, or after its SSH target when that name is taken. Adding
+   a host whose machine_id is already a legacy row commits the migration and reports it with
+   exit 0, preserving that row's SSH target and migrated name. A duplicate in `hosts.toml`
+   still refuses with `host_exists` without changing the file. If any retained row fails,
+   the command refuses with `legacy_host_unreachable`, naming the row, and touches neither
+   file. Make that host reachable, or remove its legacy row with `orbit host remove <host>`.
+   Doctor's legacy warning names `orbit host add <existing-ssh-target>` with a target from
+   the file; running it migrates the file when all retained hosts answer and clears the warning.
 3. **Both files exist.** Every consumer refuses with `host_file_conflict`, naming both paths.
    Orbit doesn't pick one, because they are two answers to the same question.
 4. The next release drops the legacy reader and keeps the `host_file_conflict` check one

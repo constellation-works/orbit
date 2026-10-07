@@ -43,7 +43,9 @@ machine's, and `orbit doctor` reports it in its `hosts` row.
 
 An older `~/.orbit/mcp-destinations.toml` is still read while it is the only
 file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
-row must answer) and deletes it. If both files exist every consumer refuses with
+retained row must answer; `remove` never contacts the row it drops) and deletes
+it, and `orbit host add <ssh-target of a listed host>` is the direct way to
+migrate. If both files exist every consumer refuses with
 `host_file_conflict`; once `orbit host list` shows every legacy row, delete the
 legacy file.
 

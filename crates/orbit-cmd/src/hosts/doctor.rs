@@ -49,11 +49,20 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     let targets = remote_targets(registry.hosts());
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
-    if let RegisteredHosts::Legacy(_) = registry.hosts() {
+    let mut migration_action = None;
+    if let RegisteredHosts::Legacy(rows) = registry.hosts() {
+        let command = rows
+            .iter()
+            .find(|row| row.machine_id != local.id)
+            .map(|row| format!("orbit host add {}", row.ssh))
+            .unwrap_or_else(|| "orbit host add <ssh-target>".to_string());
+        migration_action = Some(format!(
+            "Run `{command}` to migrate to hosts.toml and retire the legacy file. Every retained \
+             host must answer; remove a decommissioned row with `orbit host remove <host>` first."
+        ));
         warnings.push(format!(
-            "hosts are still read from the legacy '{}'; the next `orbit host add`, `rename` or \
-             `remove` migrates them",
-            legacy_destinations_path(global_root).display()
+            "hosts are still read from the legacy '{}'; run `{command}` to migrate them",
+            legacy_destinations_path(global_root).display(),
         ));
     }
     for owner in &pulls_from {
@@ -95,15 +104,13 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
         .chain(warnings)
         .collect::<Vec<_>>()
         .join("; ");
-    row(
-        status,
-        message,
-        Some(
-            "Run `orbit host list` for each host's live state. Deploy matching Orbit builds where \
+    let remediation = migration_action.unwrap_or_else(|| {
+        "Run `orbit host list` for each host's live state. Deploy matching Orbit builds where \
              versions or protocols differ, and register missing owners with \
-             `orbit host add <ssh-target>`.",
-        ),
-    )
+             `orbit host add <ssh-target>`."
+            .to_string()
+    });
+    row(status, message, Some(&remediation))
 }
 
 fn classify(

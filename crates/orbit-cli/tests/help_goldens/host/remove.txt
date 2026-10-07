@@ -1,0 +1,34 @@
+Remove a registered host
+
+Usage: orbit host remove [OPTIONS] <HOST>
+
+Arguments:
+  <HOST>
+          Host name (case-insensitive) or machine_id
+
+Options:
+      --force
+          Remove the entry even while a replica checkout or pull drain routes to it
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --json
+          Emit machine-readable JSON
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+With only mcp-destinations.toml, removal migrates the retained rows to hosts.toml. The removed legacy host is never contacted, even without --force; every retained host must answer. --force only overrides dependent replica checkouts and pull drains.

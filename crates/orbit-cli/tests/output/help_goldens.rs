@@ -19,6 +19,8 @@ const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 /// under `tests/help_goldens/`.
 const CASES: &[(&[&str], &str)] = &[
     (&["init"], "init.txt"),
+    (&["host", "add"], "host/add.txt"),
+    (&["host", "remove"], "host/remove.txt"),
     (&["gc"], "gc/root.txt"),
     (&["gc", "tmp"], "gc/tmp.txt"),
     (&["gc", "worktrees"], "gc/worktrees.txt"),

@@ -18,10 +18,10 @@ use super::{HostDependents, HostRow, RemoteTarget, host_dependents, remote_row, 
 /// What one `orbit host` mutation wrote.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostChange {
-    /// `added`, `renamed` or `removed`.
+    /// `added`, `migrated`, `renamed` or `removed`.
     pub action: &'static str,
     /// The entry as written, or as it was before removal.
-    pub entry: HostEntry,
+    pub entry: HostChangeEntry,
     /// The previous name of a renamed entry.
     pub previous_name: Option<String>,
     /// Legacy rows this mutation migrated into the host file.
@@ -30,6 +30,30 @@ pub struct HostChange {
     pub host: Option<HostRow>,
     /// Dependents a forced removal left without a route.
     pub orphaned: Option<HostDependents>,
+}
+
+/// The cached identity reported by a host mutation.
+#[derive(Debug, Clone, Serialize)]
+pub struct HostChangeEntry {
+    /// The registered name, or the SSH target of a removed legacy row.
+    pub name: String,
+    /// The registered machine identity.
+    pub machine_id: String,
+    /// The registered SSH target.
+    pub ssh: String,
+    /// Unknown when removing a legacy row without probing it.
+    pub task_prefix: Option<String>,
+}
+
+impl From<HostEntry> for HostChangeEntry {
+    fn from(entry: HostEntry) -> Self {
+        Self {
+            name: entry.name,
+            machine_id: entry.machine_id,
+            ssh: entry.ssh,
+            task_prefix: Some(entry.task_prefix),
+        }
+    }
 }
 
 /// Probe `ssh`, validate the would-be entry, and register it. Writes nothing
@@ -53,8 +77,10 @@ pub fn add_host(
     if facts.machine_id == local.id {
         return Err(is_local(ssh, &format!("machine_id {}", local.id)));
     }
-    let migrated = migrated_entries(&registry, local)?;
-    if let Some(existing) = registered(&registry, &migrated)
+    let migrated = migrated_entries(&registry, local, None)?;
+    if let Some(existing) = registry
+        .hosts()
+        .entries()
         .iter()
         .find(|entry| entry.machine_id == facts.machine_id)
     {
@@ -65,6 +91,22 @@ pub fn add_host(
                 facts.machine_id, existing.name, existing.ssh
             ),
         ));
+    }
+    if let Some(entry) = migrated
+        .iter()
+        .find(|entry| entry.machine_id == facts.machine_id)
+        .cloned()
+    {
+        registry.commit(migrated.clone())?;
+        let host = remote_row_from(&entry, live);
+        return Ok(HostChange {
+            action: "migrated",
+            entry: entry.into(),
+            previous_name: None,
+            migrated,
+            host: Some(host),
+            orphaned: None,
+        });
     }
     let Some(task_prefix) = facts.task_prefix.clone() else {
         return Err(too_old(ssh, &live));
@@ -92,7 +134,7 @@ pub fn add_host(
     let host = remote_row_from(&entry, live);
     Ok(HostChange {
         action: "added",
-        entry,
+        entry: entry.into(),
         previous_name: None,
         migrated: newly_migrated(&registry, migrated),
         host: Some(host),
@@ -120,7 +162,7 @@ pub fn rename_host(
     };
     let new_name = new_name.trim().to_string();
     validate_machine_name(&new_name)?;
-    let migrated = migrated_entries(&registry, local)?;
+    let migrated = migrated_entries(&registry, local, None)?;
     let mut entries = registered(&registry, &migrated).to_vec();
     let Some(entry) = entries
         .iter_mut()
@@ -133,7 +175,7 @@ pub fn rename_host(
     registry.commit(entries)?;
     Ok(HostChange {
         action: "renamed",
-        entry: renamed,
+        entry: renamed.into(),
         previous_name: Some(previous_name),
         migrated: newly_migrated(&registry, migrated),
         host: None,
@@ -150,16 +192,23 @@ pub fn remove_host(
 ) -> Result<HostChange, OrbitError> {
     let registry = load_host_registry(global_root)?;
     let local = require_local(&registry)?;
-    let machine_id = match registry.resolve(selector)? {
+    let removed = match registry.resolve(selector)? {
         ResolvedHost::Local(_) => {
             return Err(OrbitError::host_registry(
                 HostRegistryCode::HostIsLocal,
                 "this machine is the local host, which is never an entry and cannot be removed",
             ));
         }
-        resolved => resolved.machine_id().to_string(),
+        ResolvedHost::Entry(entry) => HostChangeEntry::from(entry.clone()),
+        ResolvedHost::Legacy(row) => HostChangeEntry {
+            name: row.ssh.clone(),
+            machine_id: row.machine_id.clone(),
+            ssh: row.ssh.clone(),
+            task_prefix: None,
+        },
     };
-    let dependents = host_dependents(global_root, &machine_id)?;
+    let machine_id = &removed.machine_id;
+    let dependents = host_dependents(global_root, machine_id)?;
     if !dependents.is_empty() && !force {
         return Err(OrbitError::host_registry(
             HostRegistryCode::HostInUse,
@@ -170,13 +219,12 @@ pub fn remove_host(
             ),
         ));
     }
-    let migrated = migrated_entries(&registry, local)?;
-    let mut entries = registered(&registry, &migrated).to_vec();
-    let index = entries
+    let migrated = migrated_entries(&registry, local, Some(machine_id))?;
+    let entries = registered(&registry, &migrated)
         .iter()
-        .position(|entry| entry.machine_id == machine_id)
-        .ok_or_else(|| vanished(&machine_id))?;
-    let removed = entries.remove(index);
+        .filter(|entry| entry.machine_id != *machine_id)
+        .cloned()
+        .collect();
     registry.commit(entries)?;
     Ok(HostChange {
         action: "removed",
@@ -189,22 +237,24 @@ pub fn remove_host(
 }
 
 /// The entries a mutation starts from: the host file's, or — on the first
-/// mutation after the legacy file — every legacy row probed into an entry.
+/// mutation after the legacy file — every retained legacy row probed into an entry.
 ///
-/// A legacy row that does not answer refuses the whole mutation and touches
+/// A retained legacy row that does not answer refuses the whole mutation and touches
 /// neither file. Each migrated row is named after the remote's
 /// `machine.name`, or after its SSH target when that name is taken. A row for
-/// this machine was never a route and is dropped.
+/// this machine was never a route and is dropped. Removal also excludes its
+/// selected row, whose cached identity suffices to drop it.
 fn migrated_entries(
     registry: &HostRegistry,
     local: &MachineIdentity,
+    removing: Option<&str>,
 ) -> Result<Vec<HostEntry>, OrbitError> {
     let rows = match registry.hosts() {
         RegisteredHosts::None => return Ok(Vec::new()),
         RegisteredHosts::Hosts(entries) => return Ok(entries.clone()),
         RegisteredHosts::Legacy(rows) => rows
             .iter()
-            .filter(|row| row.machine_id != local.id)
+            .filter(|row| row.machine_id != local.id && Some(row.machine_id.as_str()) != removing)
             .collect::<Vec<_>>(),
     };
     let legacy_path = legacy_destinations_path(registry.global_root());
@@ -309,10 +359,12 @@ fn legacy_unreachable(row: &LegacyHost, legacy_path: &Path, error: &OrbitError) 
     OrbitError::host_registry(
         HostRegistryCode::LegacyHostUnreachable,
         format!(
-            "migrating '{}' needs every row to answer, and ssh {} ({}) did not: {error}. Make it \
-             reachable, or delete its row by hand, then rerun; neither file was changed",
+            "migrating '{}' needs every retained row to answer, and ssh {} ({}) did not: {error}. \
+             Make it reachable, or remove it with `orbit host remove {}`, then rerun; neither \
+             file was changed",
             legacy_path.display(),
             row.ssh,
+            row.machine_id,
             row.machine_id
         ),
     )
