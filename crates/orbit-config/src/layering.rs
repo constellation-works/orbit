@@ -284,6 +284,37 @@ pub(crate) fn validate_staged_workspace_document(
         .map(|loaded| loaded.resolved)
 }
 
+/// Resolve workspace file values with only crew definitions inherited from
+/// global. Other global settings must not appear in a scoped file snapshot.
+pub(crate) fn resolve_workspace_file_document(
+    global_path: &Path,
+    global_raw: &str,
+    workspace_path: &Path,
+    raw: &str,
+) -> Result<ResolvedConfig, OrbitError> {
+    let workspace = parse_config_document(workspace_path, raw)?;
+    reject_workspace_machine_table(&workspace.value, workspace_path)?;
+    let global = parse_config_document(global_path, global_raw)?;
+    for document in [&global, &workspace] {
+        reject_unpoolable_crew_names_in_document(&document.value, &document.path)?;
+    }
+
+    let mut table = toml::map::Map::new();
+    if let Some(crews) = global.value.get("crews") {
+        table.insert("crews".to_string(), crews.clone());
+    }
+    let mut scoped = toml::Value::Table(table);
+    // The normal recursive merge preserves global fields when the workspace
+    // overrides only part of a crew definition.
+    merge_tables(&mut scoped, &workspace.value);
+    warn_compatibility_keys(&workspace.value, workspace_path);
+    ResolvedConfig::from_scoped_value(
+        scoped,
+        workspace_path,
+        PersistenceConfig::default_for_data_root(workspace_path.parent().unwrap_or(workspace_path)),
+    )
+}
+
 fn load_layered_resolved_with_workspace(
     roots: &ConfigRoots,
     staged_workspace: Option<(&Path, &str)>,

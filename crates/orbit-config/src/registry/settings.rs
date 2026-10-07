@@ -44,7 +44,18 @@ macro_rules! define_config_settings {
                 crews: &BTreeMap<String, Crew>,
             ) -> Result<Self, OrbitError> {
                 let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
-                Self::admit_with_env(document, config_path, crews, env_default.as_deref())
+                Self::admit_with_env(document, config_path, crews, env_default.as_deref(), true)
+            }
+
+            /// A file view validates explicit references without requiring a
+            /// runtime default-crew selection from this single layer.
+            pub(crate) fn admit_scoped(
+                document: &toml::Value,
+                config_path: &Path,
+                crews: &BTreeMap<String, Crew>,
+            ) -> Result<Self, OrbitError> {
+                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
+                Self::admit_with_env(document, config_path, crews, env_default.as_deref(), false)
             }
 
             fn admit_with_env(
@@ -52,6 +63,7 @@ macro_rules! define_config_settings {
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
                 env_default: Option<&str>,
+                require_default_crew: bool,
             ) -> Result<Self, OrbitError> {
                 $(let $field: $resolved = {
                     let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
@@ -61,7 +73,7 @@ macro_rules! define_config_settings {
                     execution_env_inherit: false,
                     $($field,)+
                 };
-                snapshot.finish_admission(crews, env_default)?;
+                snapshot.finish_admission(crews, env_default, require_default_crew)?;
                 Ok(snapshot)
             }
 
@@ -397,6 +409,7 @@ impl ConfigSnapshot {
         &mut self,
         crews: &BTreeMap<String, Crew>,
         env_default: Option<&str>,
+        require_default_crew: bool,
     ) -> Result<(), OrbitError> {
         LogRotationConfig::from_parts(
             Some(self.runtime_log_retention_days),
@@ -427,8 +440,12 @@ impl ConfigSnapshot {
             self.workflow_final_recovery_crews.take(),
             crews,
         )?);
-        self.workflow_default_crew =
-            resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;
+        self.workflow_default_crew = resolve_default_crew(
+            self.workflow_default_crew.take(),
+            crews,
+            env_default,
+            require_default_crew,
+        )?;
         if self.machine_worker_containment_strict && !self.machine_worker_containment {
             return Err(OrbitError::InvalidInput(
                 "machine.worker_containment_strict=true requires machine.worker_containment=true"
@@ -597,6 +614,7 @@ impl Default for ConfigSnapshot {
             Path::new("<built-in defaults>"),
             &default_admission_crews(),
             None,
+            true,
         )
         .unwrap_or_else(|error| panic!("built-in configuration defaults must admit: {error}"))
     }
@@ -857,10 +875,11 @@ fn resolve_optional_non_empty(
     .transpose()
 }
 
-pub(crate) fn resolve_default_crew(
+fn resolve_default_crew(
     configured: Option<String>,
     crews: &BTreeMap<String, Crew>,
     env_default: Option<&str>,
+    require_selection: bool,
 ) -> Result<Option<String>, OrbitError> {
     let selected = if let Some(configured) = configured.filter(|value| !value.trim().is_empty()) {
         Some(configured)
@@ -893,7 +912,7 @@ pub(crate) fn resolve_default_crew(
     if crews.contains_key(LEGACY_DEFAULT_WORKFLOW_CREW) {
         return Ok(Some(LEGACY_DEFAULT_WORKFLOW_CREW.to_string()));
     }
-    if crews.is_empty() {
+    if crews.is_empty() || !require_selection {
         return Ok(None);
     }
     Err(OrbitError::InvalidInput(format!(

@@ -19,7 +19,10 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::layering::{reject_workspace_machine_table, validate_staged_workspace_document};
+use crate::layering::{
+    reject_workspace_machine_table, resolve_workspace_file_document,
+    validate_staged_workspace_document,
+};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
@@ -182,11 +185,37 @@ impl ConfigStore {
     }
 
     /// The fully resolved (defaulted) view of this document, as if it were
-    /// loaded as the effective `config.toml`. Scoped `orbit config show` uses
-    /// this to enumerate settings, and [`Self::validate`] uses it to verify an
-    /// edited document before saving.
+    /// loaded as the effective `config.toml`. [`Self::validate`] uses it to
+    /// verify a standalone document before saving. File views use
+    /// [`Self::snapshot_with_global`] to admit cross-layer crew references.
     pub fn snapshot(&self) -> Result<ConfigSnapshot, OrbitError> {
         Ok(self.resolved()?.snapshot)
+    }
+
+    /// Resolve this file's settings and built-in defaults. For workspace
+    /// files, crew definitions layer over the global file so crew references
+    /// and partial crew overrides are admitted in their normal context.
+    /// Other global settings are excluded; a global snapshot stays isolated.
+    pub fn snapshot_with_global(&self, global_root: &Path) -> Result<ConfigSnapshot, OrbitError> {
+        // Without a distinct workspace, both runtime roots name the global
+        // file. Preserve its standalone semantics, including [machine].
+        if self.path.parent() == Some(global_root) {
+            return self.snapshot();
+        }
+        match self.scope {
+            ConfigScope::Global => self.snapshot(),
+            ConfigScope::Workspace => {
+                let global_path = global_root.join("config.toml");
+                let global_raw = read_optional(&global_path)?;
+                resolve_workspace_file_document(
+                    &global_path,
+                    &global_raw,
+                    &self.path,
+                    &self.doc.to_string(),
+                )
+                .map(|resolved| resolved.snapshot)
+            }
+        }
     }
 
     fn resolved(&self) -> Result<ResolvedConfig, OrbitError> {

@@ -163,6 +163,97 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
 }
 
 #[test]
+fn workspace_file_views_and_writes_admit_global_crews() {
+    isolated(
+        "guards::workspace_file_views_and_writes_admit_global_crews",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let mut global = std::fs::read_to_string(&global_path).unwrap();
+            global.push_str(concat!(
+                "\n[workflow]\ndefault_crew = \"x\"\nbase_branch = \"global-branch\"\n",
+                "\n[crews.x]\nprovider = \"codex\"\nmodel = \"global-model\"\n",
+            ));
+            std::fs::write(&global_path, global).unwrap();
+            let path = fixture.work.join("config.toml");
+            let workspace = "[workflow]\nlow_complexity_crews = [\"x\"]\n";
+            std::fs::write(&path, workspace).unwrap();
+            let server = fixture.server(true);
+            let url = "/api/config/file?scope=workspace&workspace=ws_http_fixture";
+            let shown = super::support::json_ok(server.get(url));
+            let displayed_path = shown["file"]["path"].as_str().unwrap();
+            assert!(displayed_path.ends_with("/repo/.orbit/config.toml"));
+            let rows = shown["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|section| section["keys"].as_array().unwrap())
+                .collect::<Vec<_>>();
+            let pool = rows
+                .iter()
+                .find(|row| row["key"] == "workflow.low_complexity_crews")
+                .unwrap();
+            assert_eq!(pool["value"], json!(["x"]));
+            assert_eq!(pool["source"]["layer"], "workspace");
+            let branch = rows
+                .iter()
+                .find(|row| row["key"] == "workflow.base_branch")
+                .unwrap();
+            assert_eq!(branch["state"], "default");
+            assert_ne!(
+                branch["value"], "global-branch",
+                "file values remain scoped"
+            );
+            let default_crew = rows
+                .iter()
+                .find(|row| row["key"] == "workflow.default_crew")
+                .unwrap();
+            assert_ne!(
+                default_crew["value"], "x",
+                "global default selection is not a scoped setting"
+            );
+
+            std::fs::write(
+                &path,
+                format!("{workspace}\n[crews.x]\nmodel = \"workspace-model\"\n"),
+            )
+            .unwrap();
+            super::support::json_ok(server.get(url));
+            let written = super::support::json_ok(server.send(
+                "PUT",
+                "/api/config/keys/workflow.base_branch?workspace=ws_http_fixture",
+                json!({"value":"workspace-branch", "scope":"workspace"}),
+            ));
+            assert_eq!(written["new_value"], "workspace-branch");
+            // Read through the file endpoint again, proving the accepted write
+            // leaves a usable scoped view rather than merely returning success.
+            let after = super::support::json_ok(server.get(url));
+            assert!(
+                after["sections"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|section| section["keys"].as_array().unwrap())
+                    .any(|row| row["key"] == "workflow.base_branch"
+                        && row["value"] == "workspace-branch")
+            );
+
+            std::fs::write(&path, "[workflow]\nlow_complexity_crews = [\"missing\"]\n").unwrap();
+            let failed = server.get(url);
+            assert_eq!(failed.status().as_u16(), 400);
+            let error = failed.json::<Value>().unwrap();
+            let reason = error["error"].as_str().unwrap();
+            assert!(reason.contains("workflow.low_complexity_crews"), "{error}");
+            assert!(reason.contains("missing"), "{error}");
+            assert!(
+                reason.contains(displayed_path),
+                "file errors retain the path: {error}"
+            );
+        },
+    );
+}
+
+#[test]
 fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
     isolated(
         "guards::config_key_admission_refuses_invalid_writes_and_preserves_types",

@@ -87,7 +87,16 @@ export async function fetchAndRenderConfig() {
   await requestPanel(
     "config-body",
     `${activeSubtab}:${getWorkspace() || ""}`,
-    () => (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path)),
+    async () => {
+      try {
+        return await (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path));
+      } catch (error) {
+        if (error.status === 400 && source.path.startsWith("/api/config/file")) {
+          error.remedy = "Correct the configuration in the named file, then reload this view.";
+        }
+        throw error;
+      }
+    },
     (payload) => {
       lastPayload = payload;
       render(payload);

@@ -175,7 +175,7 @@ impl ResolvedConfig {
             ))
         })?;
         translate_legacy_review_keys(&mut document, config_path)?;
-        Self::from_document_with_warnings(document, config_path, persistence, true)
+        Self::from_document_with_warnings(document, config_path, persistence, true, false)
     }
 
     /// Resolve an already-merged layered document while leaving compatibility
@@ -188,7 +188,17 @@ impl ResolvedConfig {
         config_path: &Path,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        Self::from_document_with_warnings(document, config_path, persistence, false)
+        Self::from_document_with_warnings(document, config_path, persistence, false, false)
+    }
+
+    /// Admit a file snapshot with contextual crews, without requiring the
+    /// scoped file to choose a runtime default crew when it omits that key.
+    pub(crate) fn from_scoped_value(
+        document: toml::Value,
+        config_path: &Path,
+        persistence: PersistenceConfig,
+    ) -> Result<Self, OrbitError> {
+        Self::from_document_with_warnings(document, config_path, persistence, false, true)
     }
 
     fn from_document_with_warnings(
@@ -196,6 +206,7 @@ impl ResolvedConfig {
         config_path: &Path,
         persistence: PersistenceConfig,
         emit_compatibility_warnings: bool,
+        scoped: bool,
     ) -> Result<Self, OrbitError> {
         let parsed = document
             .clone()
@@ -222,7 +233,11 @@ impl ResolvedConfig {
         )?;
         let (mut crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path)?;
-        let snapshot = ConfigSnapshot::admit(&document, config_path, &crews)?;
+        let snapshot = if scoped {
+            ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
+        } else {
+            ConfigSnapshot::admit(&document, config_path, &crews)?
+        };
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a single file (or the
         // store's pre-write validation) resolves it as the workspace layer.

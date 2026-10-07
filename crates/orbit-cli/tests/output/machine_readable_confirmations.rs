@@ -270,6 +270,43 @@ fn workspace_config_set_validates_crews_against_the_effective_config() {
 
     fixture
         .orbit()
+        .args([
+            "config",
+            "set",
+            "--global",
+            "workflow.base_branch",
+            "global-branch",
+        ])
+        .assert()
+        .success();
+    let shown = fixture.json(&["config", "show", "--scope", "workspace", "--json"]);
+    assert_eq!(shown["source"]["scope"], "workspace");
+    let pool = shown["settings"]["workflow.low_complexity_crews"]
+        .as_array()
+        .unwrap();
+    assert_eq!(pool.len(), 2);
+    assert!(
+        pool.contains(&serde_json::json!("global-only")),
+        "a workspace file view admits a global pool crew"
+    );
+    assert!(pool.contains(&serde_json::json!("sol")));
+    assert_ne!(
+        shown["settings"]["workflow.base_branch"], "global-branch",
+        "the scoped view must not import other global settings"
+    );
+    fixture
+        .orbit()
+        .args(["config", "show", "--scope", "workspace"])
+        .assert()
+        .success();
+
+    let partial_override =
+        format!("{workspace}\n[crews.global-only]\nmodel = \"workspace-model\"\n");
+    fs::write(&workspace_config, partial_override).expect("add partial crew override");
+    fixture.json(&["config", "show", "--scope", "workspace", "--json"]);
+
+    fixture
+        .orbit()
         .args(["config", "set", "workflow.base_branch", "qa"])
         .assert()
         .success();
@@ -285,6 +322,16 @@ fn workspace_config_set_validates_crews_against_the_effective_config() {
 
     let invalid_workspace = "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\", \"global-only\", \"missing\"]\nbase_branch = \"qa\"\n\n[crews.sol]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\n";
     fs::write(&workspace_config, invalid_workspace).expect("add undefined pool crew");
+    let dangling = fixture
+        .orbit()
+        .args(["config", "show", "--scope", "workspace"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let reason = String::from_utf8_lossy(&dangling.stderr);
+    assert!(reason.contains("workflow.low_complexity_crews"), "{reason}");
+    assert!(reason.contains("missing"), "{reason}");
     let rejected = fixture
         .orbit()
         .args(["config", "set", "workflow.base_branch", "rejected"])

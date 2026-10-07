@@ -39,7 +39,7 @@ impl Execute for ConfigShowArgs {
         }
 
         let store = open_store_for_scope(runtime, self.scope)?;
-        let snapshot = store.snapshot()?;
+        let snapshot = store.snapshot_with_global(&runtime.global_root())?;
         let settings = snapshot.all_values();
 
         Ok(Payload::detail(
