@@ -73,7 +73,9 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
     // not populate the memo after a switch (or a forced re-read) the way
     // requestPanel rejects A→B→A and overlapping refreshes.
     const revision = getWorkspaceRevision();
-    const request = fetchJson(`${CONSOLE_PATH}?task=${encodeURIComponent(key)}`)
+    // One task's whole history, settled claims in full: the panel renders
+    // them, and the endpoint's default (active, compact) would hide them.
+    const request = fetchJson(`${CONSOLE_PATH}?task=${encodeURIComponent(key)}&state=all&detail=true`)
       .then((payload) => {
         const body = payload || {};
         if (inflightConsoles.get(key) !== request || revision !== getWorkspaceRevision()) {
