@@ -121,7 +121,10 @@ cause, give that task
 friction IDs are workspace-local: auto-resolve looks up that ID only in the
 task's workspace and records `resolved_by_task` when the task reaches `done`.
 IDs are not global. Filing the task does not itself resolve anything — the
-record stays open until the fix lands.
+record stays open until the fix lands. Auto-resolve runs on the transition into
+`done`, not on later writes to the done task: a friction reopened afterwards
+stays open. A resolution that failed at that transition is recorded in the
+task's history and retried by the task's next write.
 
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A

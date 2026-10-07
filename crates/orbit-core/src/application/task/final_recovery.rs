@@ -211,6 +211,7 @@ impl OrbitRuntime {
             )
         })?;
         if !replayed
+            && let Some((previous_status, _)) = &transition
             && matches!(
                 outcome,
                 FinalRecoveryOutcome::Completed {
@@ -219,7 +220,7 @@ impl OrbitRuntime {
                 }
             )
         {
-            self.record_resolves_side_effects(&self.get_task(&request.task_id)?)?;
+            self.record_resolves_side_effects(*previous_status, &self.get_task(&request.task_id)?);
         }
         if let Some((previous_status, note)) = transition {
             self.close_task_prs_after_transition(

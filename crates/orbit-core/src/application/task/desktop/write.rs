@@ -104,7 +104,7 @@ impl OrbitRuntime {
                 .tasks()
                 .lookup_desktop_creation(&key, &digest)?
             {
-                return self.desktop_write_result(&task.id, true, session);
+                return self.desktop_write_result(&task.id, true, None, session);
             }
             let task = self.add_task_admitted_guarded(
                 TaskAddParams {
@@ -121,7 +121,7 @@ impl OrbitRuntime {
                 Some(&key),
                 Some(&digest),
             )?;
-            return self.desktop_write_result(&task.id, false, session);
+            return self.desktop_write_result(&task.id, false, None, session);
         }
         let (id, expected_revision) = match &request.operation {
             DesktopTaskOperation::Edit {
@@ -153,7 +153,7 @@ impl OrbitRuntime {
             if history.note.as_deref() != Some(expected_receipt.as_str()) {
                 return Err(invalid("request identity reused with a different payload"));
             }
-            return self.desktop_write_result(&id, true, session);
+            return self.desktop_write_result(&id, true, None, session);
         }
         let pull_request = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation
         {
@@ -328,6 +328,7 @@ impl OrbitRuntime {
         self.desktop_write_result(
             &id,
             outcome == Some(AtomicTaskMutationOutcome::AlreadyApplied),
+            previous_status,
             session,
         )
     }
@@ -335,14 +336,15 @@ impl OrbitRuntime {
         &self,
         id: &str,
         replayed: bool,
+        previous_status: Option<TaskStatus>,
         session: &ToolSessionContext,
     ) -> Result<DesktopTaskWriteResult, OrbitError> {
         let refresh = || {
             let task = self.get_task(id)?;
             self.stores().task_records().index_task(&task);
-            if task.status == TaskStatus::Done {
-                self.record_resolves_side_effects(&task)?;
-            }
+            // A write that changed no status, and every replay, left the
+            // task where it already was.
+            self.record_resolves_side_effects(previous_status.unwrap_or(task.status), &task);
             Ok(DesktopTaskWriteResult {
                 snapshot: self.desktop_task_snapshot(id, session)?,
                 replayed,

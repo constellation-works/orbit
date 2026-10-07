@@ -1,4 +1,3 @@
-use chrono::Utc;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
@@ -17,7 +16,6 @@ use super::helpers::{
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
 
-const RELATION_RESOLVES: &str = "resolves";
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
 /// now resolves.
@@ -199,19 +197,12 @@ impl OrbitRuntime {
         })?;
 
         if result.status == TaskStatus::Done {
-            self.record_resolves_side_effects(&result)?;
+            self.record_resolves_side_effects(TaskStatus::Review, &result);
             // Approval to done only ever leaves `review`.
             self.close_task_prs_after_transition(TaskStatus::Review, &result, note.as_deref());
         }
 
         Ok(result)
-    }
-
-    pub(crate) fn record_resolves_side_effects(&self, task: &Task) -> Result<(), OrbitError> {
-        for event in self.apply_resolves_side_effects(task) {
-            self.record_event(event)?;
-        }
-        Ok(())
     }
 
     /// Refuse a done transition whose unqualified `resolves` target lives in
@@ -228,56 +219,6 @@ impl OrbitRuntime {
         };
         let workspace_id = self.workspace_id()?;
         ensure_resolves_targets_are_workspace_local(frictions.as_ref(), &workspace_id, task)
-    }
-
-    pub(crate) fn apply_resolves_side_effects(&self, task: &Task) -> Vec<OrbitEvent> {
-        let mut events = Vec::new();
-        let frictions = match crate::runtime::friction::store_for(self) {
-            Ok(store) => store,
-            Err(error) => {
-                // Without a store there is no per-relation verdict to give, so
-                // report the failure once against each `resolves` target.
-                return task
-                    .relations
-                    .iter()
-                    .filter(|relation| relation.relation_type == TaskRelationType::Resolves)
-                    .filter(|relation| is_valid_friction_id(&relation.target))
-                    .map(|relation| OrbitEvent::TaskRelationSideEffectFailed {
-                        task_id: task.id.clone(),
-                        target: relation.target.clone(),
-                        relation: RELATION_RESOLVES.to_string(),
-                        reason: error.to_string(),
-                    })
-                    .collect();
-            }
-        };
-        for relation in &task.relations {
-            if relation.relation_type != TaskRelationType::Resolves {
-                continue;
-            }
-            let target = relation.target.as_str();
-            if !is_valid_friction_id(target) {
-                continue;
-            }
-            match frictions.auto_resolve_by_task(target, &task.id, Utc::now()) {
-                Ok(Some(_)) => events.push(OrbitEvent::FrictionAutoResolved {
-                    task_id: task.id.clone(),
-                    friction_id: target.to_string(),
-                }),
-                Ok(None) => events.push(OrbitEvent::TaskRelationDangling {
-                    task_id: task.id.clone(),
-                    target: target.to_string(),
-                    relation: RELATION_RESOLVES.to_string(),
-                }),
-                Err(error) => events.push(OrbitEvent::TaskRelationSideEffectFailed {
-                    task_id: task.id.clone(),
-                    target: target.to_string(),
-                    relation: RELATION_RESOLVES.to_string(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
-        events
     }
 
     pub fn start_task(

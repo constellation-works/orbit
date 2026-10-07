@@ -287,9 +287,7 @@ impl OrbitRuntime {
 
         // Cascading friction/task resolution touches *other* records, so it
         // stays outside this task's lock.
-        if updated.status == TaskStatus::Done {
-            self.record_resolves_side_effects(&updated)?;
-        }
+        self.record_resolves_side_effects(previous_status, &updated);
         // So does the forge round trip that closes the task's PRs.
         self.close_task_prs_after_transition(previous_status, &updated, status_note.as_deref());
         Ok(updated)
