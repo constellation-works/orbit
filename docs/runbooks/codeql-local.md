@@ -101,17 +101,23 @@ Other untracked files outside these exclusions are still extracted. To confirm
 selection, rerun the `codeql resolve files` command recorded in
 `database/log/database-index-files-*.log`. It lists the primary inputs, which
 must be production sources only. In `src.zip`, every checkout path outside the
-run directory must be one of those inputs. Retain both listings with the run
-evidence.
+run directory must be one of those inputs. Keep the full listings locally
+under the run directory for inspection. Task evidence should contain their
+SHA-256 digests, entry counts, and bounded excerpts that identify the checked
+production paths; never attach archives or full listings.
 
 ## Verification and failures
 
 Exit zero means preparation, extraction-log checks, and query execution
 completed. **It does not mean the rule is clean.** Inspect `results.sarif` for
 the findings relevant to the selected query and change; for an identified
-repair, inspect that rule and each affected location. Retain the logs, query
-selector, CodeQL version, validated source tree, and `src.zip` listing with the
-task evidence. When practical, run the same query on the baseline to confirm it
+repair, inspect that rule and each affected location. Retain the full logs,
+database and `src.zip` locally under `.orbit/tmp/`. Attach a compact JSON record
+with the query selector, CodeQL version, validated source tree, extraction
+checks, SARIF findings, and SHA-256 digests of the retained logs and source
+archive. Attach only bounded log/listing excerpts (gzip when useful), each
+within the artifact tool's 1 MiB limit; never attach `src.zip`, another archive,
+or a full source listing. When practical, run the same query on the baseline to confirm it
 detects the finding.
 Source-side confirmation does not close hosted alerts; closure requires a
 hosted rescan.

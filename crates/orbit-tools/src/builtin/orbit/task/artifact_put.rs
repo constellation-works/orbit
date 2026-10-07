@@ -98,6 +98,16 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
         ],
     )?;
     let id = super::super::required_string(&input, &["id"], "id")?;
+    if !["source_path", "sourcePath", "source-path"]
+        .iter()
+        .any(|key| input.get(*key).is_some())
+    {
+        return Err(OrbitError::InvalidInput(
+            "missing `source_path`; `path` is the artifact name, and `source_path` is the \
+             local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)"
+                .to_string(),
+        ));
+    }
     let source_path = super::super::required_string(
         &input,
         &["source_path", "sourcePath", "source-path"],
@@ -191,7 +201,8 @@ fn read_bounded_artifact(
         })?;
     if content.len() as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
         return Err(OrbitError::InvalidInput(format!(
-            "artifact source '{}' exceeds the {} byte content limit",
+            "artifact source '{}' exceeds the {} byte content limit; attach a digest or a \
+             bounded, gzipped excerpt instead",
             source_path.display(),
             MAX_TASK_ARTIFACT_CONTENT_BYTES
         )));
