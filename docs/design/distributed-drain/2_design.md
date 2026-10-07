@@ -234,7 +234,9 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   sending the additive field to older endpoints.
   The owner independently reads the published candidate, refuses only paths no owner can track
   (Git or `.orbit` metadata, environment files, symlinks and malformed or redirected paths), and
-  requires the request to equal its observed additions. A competing live claim, in-progress or
+  requires the request to equal its observed additions. Protected metadata names and environment
+  patterns (including `.envrc`) ignore ASCII case on every host, so a Linux owner also refuses
+  `.Orbit/`, `.GIT/`, `.ENV` and `.Env.local`. A competing live claim, in-progress or
   review selector, or reservation on an added path does not refuse it; a concurrent task meets
   the overlap as a rebase conflict instead. Acceptance journals the task selector additions, one
   `context_files_widened` history entry (step `implement`, activity `claim_handoff`), the enlarged

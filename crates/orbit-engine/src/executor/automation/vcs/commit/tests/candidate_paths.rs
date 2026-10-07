@@ -131,6 +131,10 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
         ("dir:.", "a/b/y.rs", Some(false)),
         ("file:crates/one/src/lib.rs", "crates/one/.env", None),
         ("dir:.", ".orbit/private.json", None),
+        ("dir:.", ".Orbit/private.json", None),
+        ("dir:.", ".ENV", None),
+        ("dir:.", ".Env.local", None),
+        ("dir:.", ".ENVRC", None),
     ] {
         let temp = claimed_worktree();
         let workspace = temp.path();
