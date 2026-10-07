@@ -168,17 +168,18 @@ reset before it stays applied, recorded as its own audited reset.
 A user-authored definition records no opt-out: delete simply removes it.
 `delete` and `restore` are CLI-only; over MCP, disable a definition instead.
 
-Required tools in a template extend the selected agent activity's baseline;
-they do not replace it or bypass runtime capability, policy, filesystem,
+Required tools in a template extend an allowlist activity's baseline; in a
+deny-list activity they cannot override `tool_disallow_list`.
+They do not replace it or bypass runtime capability, policy, filesystem,
 subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
 A template that declares exactly `github.auth.status`, `github.run.list`,
 `github.run.view`, `github.run.logs`, and `github.pr.list` is the worked
 example. A minted instance therefore runs under
-`effective_tools = agent_implement baseline ∪ those five names`. Ordinary
-implementation tasks that request nothing keep the original baseline and
-cannot call GitHub tools. Inclusion is only allowlist membership — a
+`effective_tools = activity baseline ∪ those five names` for allowlist mode.
+The shipped deny-list `agent_implement` already includes those GitHub reads;
+tasks requesting nothing keep that baseline. Inclusion is only tool membership — a
 structured `github.auth.status` answer may still report `available: false` or
 `authenticated: false` when the lane has no GitHub CLI or no credentials.
 That is unavailable evidence, not a clean CI result.
@@ -211,7 +212,7 @@ plugin being removed.
   suite, and files a task for each non-duplicate issue found. In agent-executor
   sandboxes and linked job-run worktrees, the managed `.git` mount is read-only
   by design (must not be worked around by chmod or host-side gitdir writes).
-  Use `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to build a
+  Use `mkdir -p .orbit/tmp/base && git archive <sha> | tar -x -C .orbit/tmp/base` to build a
   baseline revision without writing `.git`, and `git show HEAD:<path> > <path>`
   to revert a tracked file when `git checkout --` cannot take `index.lock`.
 - **`friction-curation`** (`medium`) — daily. Deduplicates the open friction corpus against

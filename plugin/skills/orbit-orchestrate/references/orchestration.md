@@ -27,7 +27,7 @@ orbit run auto --for 2h --allow-crew opus,sonnet  # ... using only these crews
 orbit run auto --stop                      # stop new admissions; children keep running
 orbit run concurrency <run-id> --set 7     # retune a live drain, without replacing it
 orbit run readiness                        # explain current auto-drain eligibility, read-only
-orbit run readiness TASK-123 --json        # explain selected task IDs as JSON
+orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
 orbit run ship-sweep --dry-run      # what every registered workspace would ship
 ```
@@ -243,15 +243,21 @@ children's context declares none of its own, so it reserves nothing and
 
 ## Failed runs
 
-A failed run parks its task in `blocked` with the failure attached. Nothing
-classifies or re-backlogs it for you: read the run, decide whether the cause was
-environmental or real, and make the transition yourself.
+A failed run can park its task in `blocked` with the failure attached. The
+owner's clock can dispatch final recovery for an eligible block; inspect its
+decision before intervening. See [automation.md](../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+If it remains blocked, read the run and decide whether a rerun can succeed
+before deliberately returning it to backlog.
 
 ```bash
 orbit task list --status blocked
 orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
+
+For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
+reports whether the launcher now resolves. Its `--confirm` option requeues only
+the cleared launcher blocks; it leaves implementation failures blocked.
 
 ## Multi-operator workspaces
 

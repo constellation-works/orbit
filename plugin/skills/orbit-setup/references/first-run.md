@@ -34,7 +34,7 @@ brew install constellation-works/tap/orbit
 ```
 
 Choose one installation method; do not run both. A machine that still has the
-retired `danieljhkim/tap/orbit` formula installed conflicts with the canonical
+retired Homebrew formula installed conflicts with the canonical
 one — `orbit update` on that machine detects it and reports the exact
 migration sequence (uninstall the legacy formula, then install the canonical
 one) instead of an ambiguous `brew upgrade orbit`; do not improvise a

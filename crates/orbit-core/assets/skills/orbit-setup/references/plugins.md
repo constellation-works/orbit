@@ -300,13 +300,15 @@ profile fails; so does a TCP connection without the `network` grant. A
 `sandbox: none` plugin needs `unsandboxed` and is reported by
 `orbit plugin doctor` for as long as it stays enabled.
 
-Callbacks are the only way back into Orbit. The host issues a per-call session
-(token plus the child's pid and start time) when it spawns the backend;
+Callbacks are the only way back into Orbit. The host hands the backend its
+per-call session record on file descriptor 3, inherited by descendants;
 `ORBIT_PLUGIN` and `ORBIT_ALLOWED_TOOLS` are information for the child, not the
-gate. `orbit tool run` and MCP `tools/call` look up that session — by the token
-or by process ancestry if the child unsets its environment — and refuse anything
-outside the recorded grants. Unsetting or rewriting the variables cannot expand
-the set, and the plugin's own good behaviour is not the boundary.
+gate. `orbit tool run` and MCP `tools/call` verify that descriptor against the
+host-owned session record and refuse anything outside its effective tool ceiling.
+Closing the descriptor is a refusal; changing environment variables or using
+`setsid` cannot expand access. The retired token/ancestry path is available only
+with the deprecated `plugin.legacy_callback_identity` setting, off by default;
+`orbit plugin doctor` reports it when enabled.
 
 Who may *call* a plugin tool is decided by its `execution_kind`, not by the
 manifest: a `read_only` tool is callable by any caller Orbit can identify, and
