@@ -10,7 +10,7 @@ use orbit_types::workflow::automation::*;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -21,6 +21,12 @@ const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
 /// Budget for one local git or provider command. A fetch uses the time left
 /// on [`SOURCE_DEADLINE`] instead: two seconds is not a network fetch.
 const COMMAND_BUDGET: Duration = Duration::from_secs(2);
+
+/// Largest stdout one command's evidence may carry.
+const OUTPUT_LIMIT: u64 = 1_048_576;
+/// Largest listing [`Source::git_matching_paths`] streams through a filter.
+/// Only the kept paths are held in memory, so this bounds disk, not evidence.
+const LISTING_LIMIT: u64 = 256 * 1_048_576;
 
 /// A delivery pass could not fetch `origin/<branch>`. Observation is not
 /// advanced and the local branch is not consulted in its place.
@@ -71,6 +77,39 @@ impl<'a> Source<'a> {
         budget: Duration,
         trim_output: bool,
     ) -> Result<String, AutomationError> {
+        let mut file = self.capture(program, args, env, input, budget, OUTPUT_LIMIT)?;
+
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+
+        let mut result = String::new();
+        file.take(OUTPUT_LIMIT + 1)
+            .read_to_string(&mut result)
+            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+
+        if result.len() as u64 > OUTPUT_LIMIT {
+            return Err(AutomationError::Deferred("source_budget".into()));
+        }
+
+        Ok(if trim_output {
+            result.trim().into()
+        } else {
+            result
+        })
+    }
+
+    /// Run one child process to completion with stdout in an unlinked temp
+    /// file, killing it once the file passes `limit` bytes or `budget` /
+    /// [`SOURCE_DEADLINE`] elapses.
+    fn capture(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        input: Option<&[u8]>,
+        budget: Duration,
+        limit: u64,
+    ) -> Result<std::fs::File, AutomationError> {
         // Test seam for ORB-14356: the next `diff-tree` fails as a deadline
         // once, so a swallowed canonical signature is distinguishable from a
         // propagated one. Production builds do not include the seam.
@@ -101,8 +140,7 @@ impl<'a> Source<'a> {
             }
         };
 
-        let mut file =
-            tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+        let file = tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
         let output = file
             .try_clone()
             .map_err(|e| AutomationError::Deferred(e.to_string()))?;
@@ -156,7 +194,7 @@ impl<'a> Source<'a> {
                 || self.started.elapsed() > SOURCE_DEADLINE
                 || file
                     .metadata()
-                    .map(|meta| meta.len() > 1_048_576)
+                    .map(|meta| meta.len() > limit)
                     .unwrap_or(true);
 
             if over_budget {
@@ -168,23 +206,59 @@ impl<'a> Source<'a> {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        file.seek(SeekFrom::Start(0))
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
-
-        let mut result = String::new();
-        file.take(1_048_577)
-            .read_to_string(&mut result)
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
-
-        if result.len() > 1_048_576 {
+        // A child that exits between the last poll and here may have written
+        // past the limit.
+        if file
+            .metadata()
+            .map(|meta| meta.len() > limit)
+            .unwrap_or(true)
+        {
             return Err(AutomationError::Deferred("source_budget".into()));
         }
 
-        Ok(if trim_output {
-            result.trim().into()
-        } else {
-            result
-        })
+        Ok(file)
+    }
+
+    /// The NUL-delimited paths of a git listing for which `keep` is true, in
+    /// listing order. The listing is streamed from disk and filtered, so only
+    /// the matches are held in memory and the evidence cap on one command's
+    /// output does not apply to the whole listing — a large tree lists far
+    /// more paths than any caller keeps. The listing runs on the time left on
+    /// this source's deadline, like a replay.
+    pub(crate) fn git_matching_paths(
+        &self,
+        args: &[&str],
+        keep: impl Fn(&str) -> bool,
+    ) -> Result<Vec<String>, AutomationError> {
+        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
+            Some(budget) if !budget.is_zero() => budget,
+            _ => return Err(AutomationError::Deferred("source_deadline".into())),
+        };
+        let mut file = self.capture("git", args, &[], None, budget, LISTING_LIMIT)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+
+        let mut paths = Vec::new();
+        let mut record = Vec::new();
+        let mut reader = std::io::BufReader::new(file);
+        loop {
+            record.clear();
+            let read = reader
+                .read_until(0, &mut record)
+                .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            if read == 0 {
+                break;
+            }
+            if record.last() == Some(&0) {
+                record.pop();
+            }
+            let path = std::str::from_utf8(&record)
+                .map_err(|e| AutomationError::Evidence(e.to_string()))?;
+            if !path.is_empty() && keep(path) {
+                paths.push(path.to_string());
+            }
+        }
+        Ok(paths)
     }
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
