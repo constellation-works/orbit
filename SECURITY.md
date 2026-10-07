@@ -43,13 +43,13 @@ Agent filesystem access is scoped by an `fsProfile` (`read` and `modify` globs) 
 | What runs | macOS | Linux |
 |---|---|---|
 | **Agent CLIs** (Claude Code, Codex, …) | `sandbox-exec`. Writes are confined. Reads are allowed everywhere except a credential denylist. Network is open. | Bubblewrap (`/usr/bin/bwrap`, or Orbit's signed bundled build at the root-owned `/usr/local/libexec/orbit/bwrap` when the host's is missing or lacks `--bind-fd`). Writes are confined by the `modify` policy. Host reads and network stay open. Fails closed if bwrap is missing, unless the executor sets `allow_fallback: true`. |
-| **`proc.spawn` in activities** | Refused, with a capability error | Landlock ruleset applied between `fork` and `exec`, covering the child and all its descendants. Refused on kernels without Landlock ABI 2. |
+| **`proc.spawn` in activities** | The child inherits the enclosing worker's `sandbox-exec` boundary; there is no separate macOS refusal. | The child inherits the enclosing worker's Bubblewrap boundary; no separate Landlock ruleset is applied. |
 
 **Credential denylist (macOS reads).** The denylist covers `~/.ssh`, `~/.aws`, `~/.config/gh`, the user and system Keychains, browser profile stores, and Cargo's publish token. It is known to be incomplete (for example, `~/.netrc`, `~/.git-credentials`, `~/.gnupg`, `~/.docker/config.json`, `~/.kube/config`, `~/.npmrc`, and cloud-CLI caches aren't on it). With network open, treat macOS read scoping as advisory, not a security boundary.
 
 **Provider-specific carve-outs (macOS):**
 - Every supported provider's state directory (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`) is writable in every run, whichever provider is active. A file planted in another provider's directory could persist across sessions.
-- Claude runs may *read* `~/Library/Keychains` so they can refresh their OAuth session. Nothing gets keychain writes. The system keychains stay denied, and an `fsProfile` that denies `~/Library` or `~/Library/Keychains` still wins.
+- Claude, Copilot, Cursor, and Antigravity runs may *read* `~/Library/Keychains` for credentials stored there. Nothing gets keychain writes. The system keychains stay denied, and an `fsProfile` that denies `~/Library` or `~/Library/Keychains` still wins.
 - Sandboxed Codex gets `CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem`, unless you set that or `SSL_CERT_FILE` yourself. The bundle holds public trust anchors only and doesn't weaken TLS verification.
 
 **Environment.** Agent subprocess environments are built from an allowlist: a documented baseline, your `[execution.env]` pass list, and the variables each provider declares it needs. Nothing is inherited just because it has a harmless-looking name.
