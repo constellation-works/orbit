@@ -1,16 +1,18 @@
 ---
 type: runbook
-summary: Confirm Rust Code scanning repairs locally with isolated toolchain preparation and reject incomplete semantic extraction.
+summary: Run local Rust CodeQL for every change touching Rust sources with isolated toolchain preparation, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
 last_validated: 2026-10-06
 ---
 
-# Confirm a Rust Code scanning repair locally
+# Run local Rust CodeQL for every change touching Rust sources
 
-Use this procedure to check the identified Rust rule at every affected location
-before handing off a remediation. An extractor can exit zero after losing
-semantic analysis; a clean query against that database is invalid evidence.
+Use this procedure to validate every change that touches Rust sources before
+handoff. For a code-scanning repair, check the identified rule at every affected
+location; for other Rust changes, run a relevant Rust query or suite. An
+extractor can exit zero after losing semantic analysis; a clean query against
+that database is invalid evidence.
 
 ## Prerequisites
 
@@ -29,8 +31,9 @@ produce a complete run; see [Non-Linux hosts](#non-linux-hosts).
 
 ## Procedure
 
-Run a named query or suite. This example runs the bundled Rust security suite;
-a targeted query may replace the selector with a `.ql` path or pack selector.
+Run a named query or suite appropriate to the Rust change. This example runs
+the bundled Rust security suite; a targeted query may replace the selector
+with a `.ql` path or pack selector.
 
 ```bash
 codeql version
@@ -102,9 +105,10 @@ evidence.
 
 Exit zero means preparation, extraction-log checks, and query execution
 completed. **It does not mean the rule is clean.** Inspect `results.sarif` for
-the identified rule and each affected location, and retain the logs, query
-selector, CodeQL version, validated HEAD, and `src.zip` listing with the task
-evidence. When practical, run the same query on the baseline to confirm it
+the findings relevant to the selected query and change; for an identified
+repair, inspect that rule and each affected location. Retain the logs, query
+selector, CodeQL version, validated source tree, and `src.zip` listing with the
+task evidence. When practical, run the same query on the baseline to confirm it
 detects the finding.
 Source-side confirmation does not close hosted alerts; closure requires a
 hosted rescan.
@@ -122,6 +126,24 @@ outside the intended sources is a source-selection defect. A source file
 pulled into another module with `include!` is not a module of its own, so the
 extractor skips its semantic analysis and the run refuses; declare it with
 `mod` instead of excluding it. A failed query's partial SARIF is also unusable.
+
+## Reusing a verified implementer database
+
+Before a reviewer starts a fresh extraction, inspect the implementer's local
+CodeQL evidence. The reviewer may reuse the retained database and its results
+when the extraction checks passed and the source verification matches the
+candidate being reviewed. Verify the query selector and CodeQL version, review
+the extraction logs for skipped analysis or warnings, and compare the
+`codeql resolve files` listing and the paths and contents in `database/src.zip`
+with the candidate's production Rust sources and effective configuration.
+Inspect the retained `results.sarif` and record the evidence used.
+
+If the evidence is missing, extraction is incomplete, the verified source
+tree or configuration differs from the candidate, or the reviewer changes
+Rust sources, CodeQL configuration, or model extensions, the database does not
+cover the candidate. Run the procedure again against the final candidate tree;
+on a non-Linux host, follow [Non-Linux hosts](#non-linux-hosts) for Linux
+external evidence.
 
 ## Non-Linux hosts
 
