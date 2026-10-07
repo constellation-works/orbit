@@ -77,15 +77,15 @@ pub(super) fn serve_mcp_stdio(
 ///
 /// Local workspaces are an implicit destination and are listed and routed
 /// through [`ServerMcpHost`] in-process. Remote membership comes from the
-/// machine-global destinations file, whose duplicate-`machine_id` check runs
-/// here, before any tool is advertised. A missing or empty file is a valid
+/// machine-global host file (`orbit host`), whose validation runs here,
+/// before any tool is advertised. A missing or empty file is a valid
 /// local-only configuration.
 pub(super) fn serve_mcp_federated_stdio(
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
-    let remotes = federated::load_destinations(&federated::destinations_path(&global_root))?;
+    let remotes = federated::load_destinations(&global_root)?;
     // The mux is a client to each remote, and identifies itself with the same
     // audit label the v1 proxy forwards. `authority` is one statement serving
     // two roles: the local host stamps it on the sessions it answers directly,
@@ -423,16 +423,20 @@ struct ServerMcpHost {
     global_root: PathBuf,
     process_machine_id: String,
     process_machine_name: String,
+    /// What every discovery envelope says about this host [ORB-14448].
+    host_facts: orbit_mcp::HostFacts,
     /// Runtimes this long-lived host has already opened.
     workspace_runtimes: WorkspaceRuntimeCache,
 }
 
 impl ServerMcpHost {
     fn new(global_root: PathBuf, process_machine_id: String, process_machine_name: String) -> Self {
+        let host_facts = orbit_cmd::hosts::local_host_facts(&global_root, &process_machine_id);
         Self {
             global_root,
             process_machine_id,
             process_machine_name,
+            host_facts,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
         }
     }
@@ -544,11 +548,8 @@ impl ServerMcpHost {
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
-        let mut listing = orbit_mcp::execute_discovery_tool(
-            "orbit.workspace.list",
-            &registry,
-            &self.process_machine_id,
-        )?;
+        let mut listing =
+            orbit_mcp::execute_discovery_tool("orbit.workspace.list", &registry, &self.host_facts)?;
         if include_crews {
             self.attach_crews(&mut listing);
         }
@@ -561,7 +562,7 @@ impl ServerMcpHost {
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
         let mut listing =
-            orbit_mcp::execute_federated_workspace_discovery(&registry, &self.process_machine_id);
+            orbit_mcp::execute_federated_workspace_discovery(&registry, &self.host_facts);
         if include_crews {
             self.attach_crews(&mut listing);
         }
@@ -746,8 +747,7 @@ impl ServerMcpHost {
                     Value::String(binding.owner_destination.clone()),
                 );
             }
-            let remotes =
-                federated::load_destinations(&federated::destinations_path(&self.global_root))?;
+            let remotes = federated::load_destinations(&self.global_root)?;
             let destinations = federated::federated_membership(
                 self.process_machine_id.clone(),
                 self.process_machine_name.clone(),

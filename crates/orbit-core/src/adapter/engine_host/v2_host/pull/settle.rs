@@ -408,8 +408,8 @@ impl OrbitRuntime {
                         record,
                         "no_owner_route",
                         Some(
-                            "this runtime has no federated owner route; add the owner to \
-                             ~/.orbit/mcp-destinations.toml"
+                            "this runtime has no federated owner route; register the owner \
+                             with `orbit host add <ssh-target>`"
                                 .into(),
                         ),
                     )

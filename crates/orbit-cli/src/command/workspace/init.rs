@@ -707,6 +707,9 @@ struct WorkspaceInitReport {
     orbit_dir: PathBuf,
     role: Option<WorkspaceCheckoutRole>,
     owner_machine_id: Option<String>,
+    /// A replica's owner as this machine registered it with `orbit host add`,
+    /// or `None` while the owner has no host entry. Never added here.
+    owner_host: Option<String>,
     onboarding: &'static str,
     checkout_files: Vec<String>,
     allocator: AllocatorOutcome,
@@ -797,6 +800,10 @@ fn collect_init_report(
         RulesOutcome::Skipped
     };
 
+    let owner_host = match (init_result.role, init_result.owner_machine_id.as_deref()) {
+        (Some(WorkspaceCheckoutRole::Replica), Some(owner)) => registered_owner(global_root, owner),
+        _ => None,
+    };
     Ok(WorkspaceInitReport {
         id: init_result.id,
         name: init_result.name,
@@ -804,12 +811,23 @@ fn collect_init_report(
         orbit_dir: init_result.orbit_dir,
         role: init_result.role,
         owner_machine_id: init_result.owner_machine_id,
+        owner_host,
         onboarding,
         checkout_files: checkout_files.into_iter().collect(),
         allocator,
         mcp: mcp_outcome,
         rules: rules_outcome,
     })
+}
+
+/// The host name a replica's owner is registered under, if it is.
+fn registered_owner(global_root: &Path, owner_machine_id: &str) -> Option<String> {
+    let registry = orbit_registry::hosts::load_host_registry(global_root).ok()?;
+    match registry.resolve(owner_machine_id).ok()? {
+        orbit_registry::hosts::ResolvedHost::Entry(entry) => Some(entry.name.clone()),
+        orbit_registry::hosts::ResolvedHost::Legacy(row) => Some(row.ssh.clone()),
+        orbit_registry::hosts::ResolvedHost::Local(_) => None,
+    }
 }
 
 fn checkout_file_label(root: &Path, path: &Path) -> String {
@@ -838,6 +856,7 @@ fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "orbit_dir": report.orbit_dir.to_string_lossy(),
         "role": report.role.map(|role| role.to_string()),
         "owner_machine_id": report.owner_machine_id,
+        "owner_host": report.owner_host,
         "onboarding": report.onboarding,
         "checkout_files": report.checkout_files,
         "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; the base checkout must be clean for local delivery.") },
@@ -921,11 +940,18 @@ fn format_workspace_init(report: &WorkspaceInitReport) -> String {
     }
     lines.push(format!("  onboarding: {}", report.onboarding));
     if report.role == Some(WorkspaceCheckoutRole::Replica) {
-        lines.push(
-            "  next:      a replica executes through pull: add the owner to \
-             ~/.orbit/mcp-destinations.toml, then run `orbit run auto --pull <selector>`"
-                .to_string(),
-        );
+        lines.push(match (&report.owner_host, report.owner_machine_id.as_deref()) {
+            (Some(host), _) => format!(
+                "  next:      a replica executes through pull from its owner, registered here as \
+                 '{host}': run `orbit run auto --pull <selector>`"
+            ),
+            (None, owner) => format!(
+                "  next:      a replica executes through pull, and owner {} has no host entry \
+                 here: register it with `orbit host add <ssh-target>`, then run \
+                 `orbit run auto --pull <selector>`",
+                owner.unwrap_or("(unknown)")
+            ),
+        });
     }
     if !report.checkout_files.is_empty() {
         lines.push("  checkout files written:".to_string());

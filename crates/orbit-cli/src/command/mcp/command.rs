@@ -82,10 +82,9 @@ pub enum ServeMode {
     /// one non-PTY SSH process.
     Remote,
     /// Present one stdio MCP surface over this machine's workspaces plus every
-    /// SSH destination configured in `~/.orbit/mcp-destinations.toml`.
+    /// host registered with `orbit host add`.
     ///
-    /// Local workspaces are included automatically and need no destination
-    /// row. This mode binds to no single workspace. It lists each destination's
+    /// Local workspaces are included automatically and need no host entry. This mode binds to no single workspace. It lists each destination's
     /// workspaces as live descriptors, probing remotes on every call, and
     /// includes remotes that are unreachable right now rather than hiding
     /// them. Workspace-scoped tools take the host-qualified `selector` copied
@@ -101,8 +100,7 @@ pub struct ServeArgs {
     ///
     /// `remote` proxies one chosen SSH destination and requires it as an
     /// argument. `federated` includes this machine automatically and muxes
-    /// additional destinations configured in `~/.orbit/mcp-destinations.toml`;
-    /// it takes no argument.
+    /// every host registered with `orbit host add`; it takes no argument.
     #[arg(long, value_name = "MODE")]
     pub mode: Option<ServeMode>,
     /// SSH destination for `--mode remote`, such as a host, `user@host`, or a
@@ -215,8 +213,7 @@ impl ServeArgs {
                 if let Some(ssh_host) = self.ssh_host {
                     return Err(OrbitError::InvalidInput(format!(
                         "`orbit mcp serve --mode federated` takes no SSH destination, but got \
-                         '{ssh_host}'; destinations are configured in \
-                         `~/.orbit/mcp-destinations.toml`"
+                         '{ssh_host}'; register remote hosts with `orbit host add <ssh-target>`"
                     )));
                 }
                 super::server::serve_mcp_federated_stdio(

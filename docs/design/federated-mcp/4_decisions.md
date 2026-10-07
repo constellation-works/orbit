@@ -16,7 +16,7 @@ related_artifacts: [ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-1
 
 # Federated MCP — Decisions
 
-Record non-obvious decisions here by title. These are Door 2 standing rules. Code anchors: `crates/orbit-mcp/src/federated/` (`FederatedMcpHost`, destinations file, host-qualified selector, live probe, fail-closed routing). See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions).
+Record non-obvious decisions here by title. These are Door 2 standing rules. Code anchors: `crates/orbit-mcp/src/federated/` (`FederatedMcpHost`, host-file membership, host-qualified selector, live probe, fail-closed routing). See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions).
 
 ## Federated MCP is a mux of operator-configured destinations
 
@@ -47,7 +47,7 @@ Every `mcp-destinations.toml` row required `ssh` and `machine_id`, so workspaces
 
 ### Decision
 
-Always include the accepting machine as a local destination, keyed by its existing stable `machine_id` and listed from its workspace registry. Local selectors keep the host-qualified `hm_…/ws_*` shape and are delivered through the local MCP host in-process — never over SSH. `mcp-destinations.toml` remains the declaration surface for additional SSH remotes. A missing file or empty remote list is a valid local-only federated server. Local workspaces require no destination row; a machine-id-only row is still invalid and fails closed. If a valid configured row already names this machine, expose exactly one route for that identity (the local in-process destination) rather than duplicate selectors or open loopback SSH.
+Always include the accepting machine as a local destination, keyed by its existing stable `machine_id` and listed from its workspace registry. Local selectors keep the host-qualified `hm_…/ws_*` shape and are delivered through the local MCP host in-process — never over SSH. `mcp-destinations.toml` remains the declaration surface for additional SSH remotes (superseded: since [ORB-14448] remotes are registered with `orbit host add` in `~/.orbit/hosts.toml`; see host-registry [The host registry is operator configuration, not a fleet control plane](../host-registry/4_decisions.md#the-host-registry-is-operator-configuration-not-a-fleet-control-plane)). A missing file or empty remote list is a valid local-only federated server. Local workspaces require no destination row; a machine-id-only row is still invalid and fails closed. If a valid configured row already names this machine, expose exactly one route for that identity (the local in-process destination) rather than duplicate selectors or open loopback SSH.
 
 Rejected alternatives: treating a machine-id-only TOML row as local membership (the operator file would then describe both remotes and this host, and a typo would silently change routing); keeping loopback SSH as the local path (that is the problem being removed).
 
@@ -208,7 +208,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 
 ### Consequences
 
-- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require operator configuration in `~/.orbit/mcp-destinations.toml`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.agent.invoke`, `orbit.workflow.ship`, and `orbit.command.exec`.
+- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.agent.invoke`, `orbit.workflow.ship`, and `orbit.command.exec`.
 - `crates/orbit-mcp/src/remote/callers.rs` and `ssh_auth.rs` are gone, with `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, `~/.orbit/mcp-ssh-acceptance/`, the setgid login-shell launcher, `CallerIdentityProof`, `RemoteAgentInvokeMode`, `RemoteCallerGrant`, and `CallerProvenance::RemoteGrant`. Roughly 2,500 lines of authorization machinery leave with them.
 - Trusted-host admission is `operator`, full stop. The durable admission keeps `caller_machine_id` for attribution and no longer records an identity proof or a trust mode, because there is only one.
 - Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.

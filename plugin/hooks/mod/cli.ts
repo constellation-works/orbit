@@ -22,17 +22,22 @@ export function ownerHost(value: unknown): string | null {
 }
 
 /**
- * The SSH destinations Orbit's federated MCP muxes (`~/.orbit/mcp-destinations.toml`,
- * one `ssh = "<host>"` per `[[destinations]]`), in file order; hosts SSH could read
- * as an option are dropped.
+ * The SSH hosts Orbit's federated MCP muxes: the `orbit host add` file
+ * (`~/.orbit/hosts.toml`, one `ssh = "<host>"` per `[[hosts]]`) or, before its
+ * first migration, the legacy `~/.orbit/mcp-destinations.toml`. In file order;
+ * hosts SSH could read as an option are dropped.
  */
 export function federatedHosts(toml: string): string[] {
   const hosts = [...toml.matchAll(/^\s*ssh\s*=\s*"([^"]*)"\s*(?:#.*)?$/gm)].map(match => match[1] ?? '')
   return [...new Set(hosts.filter(host => HOST.test(host)))]
 }
 
-/** Reads `~/.orbit/mcp-destinations.toml`; empty when it does not exist. */
-export const destinationsArgv: readonly string[] = ['/bin/sh', '-c', 'cat "$HOME/.orbit/mcp-destinations.toml" 2>/dev/null || true']
+/** Reads `~/.orbit/hosts.toml`, else the legacy `~/.orbit/mcp-destinations.toml`; empty when neither exists. */
+export const destinationsArgv: readonly string[] = [
+  '/bin/sh',
+  '-c',
+  'cat "$HOME/.orbit/hosts.toml" 2>/dev/null || cat "$HOME/.orbit/mcp-destinations.toml" 2>/dev/null || true',
+]
 
 /** `orbit` from PATH, or from ~/.orbit/bin where the installer puts it. */
 export const localArgv = (args: readonly string[]): string[] => ['/bin/sh', '-c', 'PATH="$HOME/.orbit/bin:$PATH" exec orbit "$@"', 'orbit', ...args]
@@ -70,10 +75,10 @@ export function readShown(stdout: string): { name: string; role: string } | null
 export function targetFrom(shown: { name: string; role: string } | null, cwd: string, host: string | null, root: string): Target {
   if (shown !== null && shown.role !== 'replica') return { workspace: shown.name, cwd, host: null }
   if (shown !== null) {
-    if (host === null) throw new OrbitError(`${shown.name} is a replica here; add its owner to ~/.orbit/mcp-destinations.toml or set the plugin's ownerHost option`)
+    if (host === null) throw new OrbitError(`${shown.name} is a replica here; register its owner with \`orbit host add <ssh-target>\` or set the plugin's ownerHost option`)
     return { workspace: shown.name, cwd, host }
   }
-  if (host === null) throw new OrbitError(`no Orbit workspace at ${root}; register it, add its owner to ~/.orbit/mcp-destinations.toml, or set the plugin's ownerHost option`)
+  if (host === null) throw new OrbitError(`no Orbit workspace at ${root}; register it, register its owner with \`orbit host add <ssh-target>\`, or set the plugin's ownerHost option`)
   const name = root.split('/').filter(Boolean).pop() ?? ''
   if (!NAME.test(name)) throw new OrbitError(`no Orbit workspace for ${root}`)
   return { workspace: name, cwd, host }

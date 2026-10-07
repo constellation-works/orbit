@@ -98,8 +98,10 @@ under their own terms.
 
 - `orbit plugin add` with an `https://` or `git+` source downloads that source
   with `curl` or `git`.
-- `orbit web connect`, remote MCP destinations, and
-  `~/.orbit/mcp-destinations.toml` entries connect over SSH to hosts you name.
+- `orbit web connect`, remote MCP destinations, and the hosts you register
+  with `orbit host add` connect over SSH to hosts you name. `orbit host add`,
+  `orbit host list`, `orbit host show` and `orbit doctor` open an SSH session
+  to each registered host to read its identity, version and workspaces.
 
 ## Local servers
 
@@ -126,7 +128,7 @@ session-start hook and a mod that shows your Orbit tasks in the session.
 - The mod reads and changes tasks by running `orbit` on your machine. When the
   checkout is a replica or is not registered on this machine, it runs `orbit`
   over SSH instead: on the host you set in the plugin's `ownerHost` option, or
-  on a host listed in `~/.orbit/mcp-destinations.toml`.
+  on a host registered with `orbit host add`.
 
 The MCP server gives your agent access to your local Orbit tasks and tools. What
 the agent then does with that content is governed by its provider; see

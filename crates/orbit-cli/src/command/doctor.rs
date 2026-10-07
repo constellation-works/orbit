@@ -208,6 +208,7 @@ impl Execute for DoctorCommand {
         // the one crate that already assembles both [ORB-11053].
         results.extend(caller_authorization_rows());
         results.push(clock_unit_row());
+        results.push(orbit_cmd::hosts::doctor_hosts_row(&runtime.global_root()));
         let failures = results
             .iter()
             .filter(|row| row.status == WorkspaceDoctorStatus::Error)

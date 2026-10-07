@@ -71,9 +71,7 @@ impl OwnerCoordinator for WorkerOwner {
                  tools cross the coordinator",
             ));
         }
-        let remotes = federated::load_destinations(&federated::destinations_path(
-            &self.runtime.global_root(),
-        ))?;
+        let remotes = federated::load_destinations(&self.runtime.global_root())?;
         let destinations = federated::federated_membership(local, local, remotes);
         let probe = SshDestinationProbe::new(
             local.into(),
@@ -87,8 +85,8 @@ impl OwnerCoordinator for WorkerOwner {
     }
 }
 
-/// Give every registered host a route to the owners in its federated
-/// destinations file [ORB-13625]. Nothing is contacted here: the file is read
+/// Give every registered host a route to the owners in its host file
+/// [ORB-13625] [ORB-14448]. Nothing is contacted here: the file is read
 /// when a pull drain actually calls, so a host that never pulls pays nothing
 /// and one whose destinations change picks them up on the next call.
 fn attach_drain_owner(runtime: OrbitRuntime) -> OrbitRuntime {
@@ -103,7 +101,7 @@ fn attach_drain_owner(runtime: OrbitRuntime) -> OrbitRuntime {
 }
 
 /// A follower drain's owner route: the federated mux over this host's
-/// configured destinations, opened as `agent` — the authority the owner's
+/// registered hosts, opened as `agent` — the authority the owner's
 /// pull, bind and settle rows require, and no more.
 struct FederatedDrainOwner {
     global_root: PathBuf,
@@ -112,8 +110,7 @@ struct FederatedDrainOwner {
 
 impl FederatedDrainOwner {
     fn host(&self) -> Result<FederatedMcpHost, OrbitError> {
-        let remotes =
-            federated::load_destinations(&federated::destinations_path(&self.global_root))?;
+        let remotes = federated::load_destinations(&self.global_root)?;
         let destinations =
             federated::federated_membership(&self.machine_id, &self.machine_id, remotes);
         let probe = SshDestinationProbe::new(

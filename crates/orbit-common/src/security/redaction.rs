@@ -272,6 +272,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         },
         OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact(&m)),
         OrbitError::ProtocolSkew(m) => OrbitError::ProtocolSkew(redact(&m)),
+        OrbitError::HostRegistry { code, message } => OrbitError::HostRegistry {
+            code,
+            message: redact(&message),
+        },
         OrbitError::PluginBuildConsentRequired(m) => {
             OrbitError::PluginBuildConsentRequired(redact(&m))
         }

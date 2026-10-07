@@ -3719,6 +3719,55 @@ fn federated_mcp_serve_lists_local_workspaces_beside_unreachable_remotes() {
     );
 }
 
+/// ORB-14448: federated serve reads its remotes from the host file `orbit
+/// host` writes, and refuses to choose while the legacy file also exists.
+#[test]
+fn federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files() {
+    let workspace = McpWorkspace::init();
+    let orbit_root = workspace.home.join(".orbit");
+    std::fs::write(
+        orbit_root.join("hosts.toml"),
+        "schema_version = 1\n\n[[hosts]]\nname = \"remote\"\nmachine_id = \"hm_remote\"\n\
+         ssh = \"orbit-missing-host\"\ntask_prefix = \"RM\"\n",
+    )
+    .expect("write host file");
+    let ssh_log = workspace.home.join("ssh-invocations.log");
+    plant_ssh_stub(&McpWorkspace::stub_bin_dir(&workspace.home), &ssh_log);
+
+    let mut client = federated_client(&workspace);
+    let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let remote = listed["workspaces"]
+        .as_array()
+        .expect("workspace rows")
+        .iter()
+        .find(|row| row["machine_id"] == "hm_remote")
+        .unwrap_or_else(|| panic!("registered host is listed: {listed}"));
+    assert_eq!(remote["reachability"], "unreachable");
+    assert!(
+        std::fs::read_to_string(&ssh_log).is_ok_and(|log| log.contains("orbit-missing-host")),
+        "the registered host's SSH target is the one dialed"
+    );
+    drop(client);
+
+    std::fs::write(
+        orbit_root.join("mcp-destinations.toml"),
+        "[[destinations]]\nssh = \"orbit-missing-host\"\nmachine_id = \"hm_remote\"\n",
+    )
+    .expect("write legacy destinations");
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve", "--mode", "federated"])
+        .output()
+        .expect("run federated serve");
+    assert!(!output.status.success(), "both host files must fail closed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("host_file_conflict")
+            && stderr.contains("hosts.toml")
+            && stderr.contains("mcp-destinations.toml"),
+        "the refusal names both files: {stderr}"
+    );
+}
+
 /// ORB-11044: a machine-id-only destination row still fails closed.
 #[test]
 fn federated_mcp_serve_rejects_a_machine_id_only_destination_row() {

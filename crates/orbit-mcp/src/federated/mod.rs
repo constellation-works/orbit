@@ -11,7 +11,7 @@
 //! caller that has already chosen one host.
 //!
 //! The mux is deliberately not a fleet registry: remote membership comes only
-//! from the operator's [`DESTINATIONS_FILE`]. The accepting machine is an
+//! from the operator's host file ([`load_destinations`]). The accepting machine is an
 //! implicit local destination and is not declared as an SSH row. No
 //! destination's answer is cached between calls.
 
@@ -28,8 +28,7 @@ pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };
 pub use self::config::{
-    DESTINATIONS_FILE, Destination, DestinationTransport, DestinationsFile,
-    MachineQualifiedSelector, RemoteDestination, destinations_path, federated_membership,
+    Destination, DestinationTransport, MachineQualifiedSelector, federated_membership,
     load_destinations,
 };
 pub use self::descriptor::{Capability, CheckoutHealth, Reachability, WorkspaceDescriptor};

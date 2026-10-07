@@ -142,8 +142,9 @@ a PR. A changed base or evidence requires fresh validation.
 
 ## Start a follower's drain
 
-On the follower, from the replica checkout, with the owner in
-`~/.orbit/mcp-destinations.toml` and the same
+On the follower, from the replica checkout, with the owner registered by
+`orbit host add <owner-ssh-target>` (check `orbit host list` shows it reachable
+with this machine's `binary_version` and `protocol_fingerprint`) and the same
 `workflow.required_validation_commands` the owner declares (an empty list on
 both sides runs no required check; the drain starts and notes it):
 

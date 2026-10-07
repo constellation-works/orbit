@@ -1,23 +1,24 @@
 schema_version: 2
 contract: orbit-mcp-federated
 feature_status: Draft
-last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 
 source_of_truth:
   design: docs/design/federated-mcp/2_design.md
   prescriptive_contract: docs/design/federated-mcp/specs/federated-workspace-mcp.md
-  destinations: crates/orbit-mcp/src/federated/config.rs
+  destinations: crates/orbit-registry/src/hosts.rs (loaded by crates/orbit-mcp/src/federated/config.rs)
   mux_host: crates/orbit-mcp/src/federated/host.rs::FederatedMcpHost
   destination_capabilities: crates/orbit-mcp/src/federated/capability.rs
   serve_entry: crates/orbit-cli/src/command/mcp/command.rs
   client_registration: crates/orbit-cli/src/command/mcp/setup
 
 launch:
-  destinations_file: ~/.orbit/mcp-destinations.toml
-  local_membership: implicit; the accepting machine is always included and needs no destination row
+  destinations_file: ~/.orbit/hosts.toml (written by `orbit host add`)
+  legacy_destinations_file: ~/.orbit/mcp-destinations.toml, read only while it is the sole file; both present is host_file_conflict
+  local_membership: implicit; the accepting machine is always included and needs no host entry
   missing_or_empty_destinations_file: valid local-only federated server
-  explicit_local_row: collapse to one in-process route for that machine_id; do not duplicate selectors
+  explicit_local_row: legacy rows collapse to one in-process route for that machine_id; the host file refuses an entry for the local machine
   argv: orbit mcp serve --mode federated
   registration:
     command: orbit mcp init --federated

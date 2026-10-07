@@ -108,7 +108,7 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
             "the launch was never acknowledged, so the leaf may still be running; recover the \
              claim on the owner's dashboard and do not start another attempt",
         ),
-        "no_owner_route" => Some("add the owner to ~/.orbit/mcp-destinations.toml"),
+        "no_owner_route" => Some("register the owner with `orbit host add <ssh-target>`"),
         _ => None,
     }
 }

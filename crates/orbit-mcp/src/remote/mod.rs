@@ -10,7 +10,7 @@ mod surface;
 mod tests;
 
 pub use self::discovery::{
-    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, WORKSPACE_LIST_INCLUDE_CREWS,
+    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, HostFacts, WORKSPACE_LIST_INCLUDE_CREWS,
     execute_discovery_tool, execute_federated_workspace_discovery, workspace_list_include_param,
     workspace_list_includes_crews,
 };

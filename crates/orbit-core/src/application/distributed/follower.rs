@@ -230,26 +230,23 @@ impl crate::OrbitRuntime {
             .to_string();
         let transport = self.drain_owner_transport().ok_or_else(|| {
             OrbitError::InvalidInput(
-                "this runtime has no federated owner route; add the owner to \
-                 ~/.orbit/mcp-destinations.toml"
+                "this runtime has no federated owner route; register the owner with \
+                 `orbit host add <ssh-target>`"
                     .into(),
             )
         })?;
-        let report = probe_pull_contract(
-            transport.as_ref(),
-            selector,
-            self.local_review_before_pr(),
-        )
-        .map_err(|error| match error {
-            // The selector parsed and names this replica's own owner, so
-            // the only thing missing is a route to that machine.
-            OrbitError::UnknownSelector(token) => OrbitError::UnknownSelector(format!(
-                "{token}: this host has no destination for owner machine '{owner_machine}'; \
-                     add it to ~/.orbit/mcp-destinations.toml and check the selector against \
-                     federated orbit.workspace.list"
-            )),
-            other => other,
-        })?;
+        let report =
+            probe_pull_contract(transport.as_ref(), selector, self.local_review_before_pr())
+                .map_err(|error| match error {
+                    // The selector parsed and names this replica's own owner, so
+                    // the only thing missing is a route to that machine.
+                    OrbitError::UnknownSelector(token) => OrbitError::UnknownSelector(format!(
+                        "{token}: this host has no route to owner machine '{owner_machine}'; \
+                     register it with `orbit host add <ssh-target>` and check the \
+                     selector against federated orbit.workspace.list"
+                    )),
+                    other => other,
+                })?;
         let answered_as = report.get("owner_machine_id").and_then(Value::as_str);
         if answered_as != Some(owner_machine) {
             return Err(OrbitError::InvalidInput(format!(

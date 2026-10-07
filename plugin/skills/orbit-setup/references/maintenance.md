@@ -71,11 +71,11 @@ identify the owner even when other foreign task mirrors exist; without claims,
 multiple foreign prefixes are ambiguous. An unknown or ambiguous prefix retains the worktree with
 `skipped:task_prefix_unroutable` and makes no owner call. Missing local or owner
 tasks stay `skipped:task_unresolved`. Owner lookups use the owner's tool
-surface, through the claim's own route (the owner must be in
-`~/.orbit/mcp-destinations.toml`). A transport failure keeps the worktree as
+surface, through the claim's own route (the owner must be registered with
+`orbit host add`). A transport failure keeps the worktree as
 `skipped:owner_unreachable` with the error in `detail`; run GC again once the
 owner answers. `skipped:no_owner_route` means the replica has no route to ask
-at all — the owner is missing from `mcp-destinations.toml` or the checkout is
+at all — the owner has no host entry (`orbit host add`) or the checkout is
 not a registered workspace — and `detail` says which. A status lookup that
 fails without a transport error is reported as `skipped:owner_lookup_failed`
 with the reason in `detail`; it does not establish that the owner is down.

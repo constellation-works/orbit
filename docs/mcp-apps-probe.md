@@ -322,9 +322,10 @@ Record exact argv separately: `mcp serve`, `mcp serve --mode remote <fixture-hos
 and `mcp serve --mode federated`. The staged launcher is local only. Prepare other
 modes exclusively in separately authorized disposable state. Direct SSH invokes
 `orbit` on the destination PATH; do not replace a production binary for a probe.
-For federation, use only the fixture's `.orbit/mcp-destinations.toml`, pin the
-machine identity and copy the opaque returned selector. Never edit the normal
-HOME's destination catalog for validation.
+For federation, register hosts only in the fixture's own host file
+(`orbit host add` under the fixture `HOME`), pin the machine identity and copy
+the opaque returned selector. Never change the normal HOME's host file for
+validation.
 
 Current limits are explicit: pages max 50; task list titles max 512 bytes and
 crew labels max 128 bytes after shared redaction, with explicit truncation flags;

@@ -82,6 +82,29 @@ impl Commands {
                     runtime_dispatch!(Config),
                 )
             }
+            Commands::Host(command) => {
+                use super::super::host::HostSubcommand;
+                let (subcommand, target_id) = match &command.command {
+                    HostSubcommand::Add(args) => ("add", Some(args.ssh_target.as_str())),
+                    HostSubcommand::List(_) => ("list", None),
+                    HostSubcommand::Show(args) => ("show", Some(args.host.as_str())),
+                    HostSubcommand::Rename(args) => ("rename", Some(args.host.as_str())),
+                    HostSubcommand::Remove(args) => ("remove", Some(args.host.as_str())),
+                };
+                CommandOperation::new(
+                    // The host file is machine-global; no workspace is opened.
+                    RuntimeNeed::Forbidden,
+                    Some(admin_meta(
+                        "host",
+                        Some(subcommand),
+                        Some("host"),
+                        target_id,
+                    )),
+                    None,
+                    false,
+                    dispatch_host,
+                )
+            }
             Commands::Migrate(command) => CommandOperation::new(
                 if command.confirm {
                     RuntimeNeed::Required

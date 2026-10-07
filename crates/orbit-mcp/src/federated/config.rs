@@ -1,20 +1,17 @@
 //! Operator-configured federated destinations and the machine-qualified selector.
 //!
-//! Remote membership is the operator file [`DESTINATIONS_FILE`]. Local
+//! Remote membership is the operator's host file, read through
+//! [`load_destinations`]. Local
 //! membership is implicit: the accepting machine is always a destination,
 //! keyed by its stable `machine_id`, and is never declared as an SSH row.
 
-use std::collections::HashSet;
 use std::fmt;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
 use orbit_common::OrbitError;
+use orbit_registry::hosts::{HostRoute, load_host_routes};
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
-use serde::Deserialize;
-
-pub const DESTINATIONS_FILE: &str = "mcp-destinations.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineQualifiedSelector {
@@ -76,14 +73,14 @@ fn unknown_selector(token: &str) -> OrbitError {
 pub enum DestinationTransport {
     /// The accepting machine. Listed and routed in-process; never over SSH.
     Local { machine_name: String },
-    /// An operator-configured SSH remote.
+    /// A registered SSH remote.
     Ssh { target: String },
 }
 
 /// One federated destination the mux may list and route to.
 ///
-/// Local membership is composed at serve time. SSH rows come only from
-/// [`DestinationsFile`].
+/// Local membership is composed at serve time. SSH rows come only from the
+/// host file ([`load_destinations`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
     pub machine_id: String,
@@ -133,56 +130,14 @@ impl Destination {
     }
 }
 
-/// One operator-configured SSH remote from [`DESTINATIONS_FILE`].
+/// Load the registered SSH remotes from the operator's host file.
 ///
-/// Local workspaces need no row. A machine-id-only row is still invalid: `ssh`
-/// is required on every configured destination.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteDestination {
-    pub ssh: String,
-    pub machine_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DestinationsFile {
-    #[serde(default)]
-    pub destinations: Vec<RemoteDestination>,
-}
-
-pub fn destinations_path(global_orbit_root: &Path) -> PathBuf {
-    global_orbit_root.join(DESTINATIONS_FILE)
-}
-
-/// Load configured SSH remotes.
-///
-/// A missing file or an empty `destinations` list is a valid local-only
-/// configuration. Invalid rows still fail closed before the mux advertises
-/// tools.
-pub fn load_destinations(path: &Path) -> Result<DestinationsFile, OrbitError> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(DestinationsFile {
-                destinations: Vec::new(),
-            });
-        }
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "failed to read federated MCP destinations '{}': {error}",
-                path.display()
-            )));
-        }
-    };
-    let destinations: DestinationsFile = toml::from_str(&contents).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid federated MCP destinations '{}': {error}",
-            path.display()
-        ))
-    })?;
-    validate_destinations(&destinations, path)?;
-    Ok(destinations)
+/// The host file, its one-release legacy fallback and its fail-closed
+/// validation live in [`orbit_registry::hosts`]; the mux, pull drains and
+/// worktree GC all read membership through this one loader. A missing file is
+/// a valid local-only configuration.
+pub fn load_destinations(global_orbit_root: &Path) -> Result<Vec<HostRoute>, OrbitError> {
+    load_host_routes(global_orbit_root)
 }
 
 /// Compose the mux membership: implicit local destination first, then every
@@ -194,44 +149,13 @@ pub fn load_destinations(path: &Path) -> Result<DestinationsFile, OrbitError> {
 pub fn federated_membership(
     local_machine_id: impl Into<String>,
     local_machine_name: impl Into<String>,
-    remotes: DestinationsFile,
+    remotes: Vec<HostRoute>,
 ) -> Vec<Destination> {
     let local_machine_id = local_machine_id.into();
     let local = Destination::local(local_machine_id.clone(), local_machine_name);
     let remotes = remotes
-        .destinations
         .into_iter()
         .filter(|remote| remote.machine_id != local_machine_id)
         .map(|remote| Destination::ssh(remote.ssh, remote.machine_id));
     std::iter::once(local).chain(remotes).collect()
-}
-
-fn validate_destinations(destinations: &DestinationsFile, path: &Path) -> Result<(), OrbitError> {
-    let mut machine_ids = HashSet::with_capacity(destinations.destinations.len());
-    for destination in &destinations.destinations {
-        if !machine_ids.insert(destination.machine_id.as_str()) {
-            return Err(OrbitError::AmbiguousDestination(format!(
-                "machine_id '{}' appears more than once in '{}'",
-                destination.machine_id,
-                path.display()
-            )));
-        }
-    }
-    for destination in &destinations.destinations {
-        validate_machine_id(&destination.machine_id).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "federated MCP destinations '{}' has invalid machine_id '{}': {error}",
-                path.display(),
-                destination.machine_id
-            ))
-        })?;
-        if destination.ssh.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(format!(
-                "federated MCP destinations '{}' has a blank ssh target for '{}'",
-                path.display(),
-                destination.machine_id
-            )));
-        }
-    }
-    Ok(())
 }

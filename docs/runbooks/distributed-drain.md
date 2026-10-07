@@ -288,10 +288,11 @@ SSH login to the owner **is** owner access. There is no
 replacement destination identity registry. `--remote-caller-machine-id` is an
 attribution label, not a credential.
 
-On the follower, put the owner in `~/.orbit/mcp-destinations.toml` and serve
-federation from the caller:
+On the follower, register the owner and serve federation from the caller:
 
 ```bash
+orbit host add <owner-ssh-target>
+orbit host list            # owner reachable, same binary_version and protocol_fingerprint
 orbit mcp init --federated --client <client>
 orbit mcp serve --mode federated --operator
 ```
@@ -381,9 +382,8 @@ orbit run auto --pull <selector> --for 8h --concurrency 3
 ```
 
 `<selector>` is the owner's host-qualified selector from federated discovery
-(`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no entry in
-`~/.orbit/mcp-destinations.toml` is refused as an unknown selector, and the
-message says so. Before anything is
+(`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no host entry
+(`orbit host add`) is refused as an unknown selector, and the message says so. Before anything is
 submitted, the command refuses unless:
 
 - this checkout is a **replica**, and the selector names **its** owner machine
@@ -578,7 +578,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   task to backlog, so its checkout is retained. A worktree kept
   as `skipped:owner_unreachable` carries the transport error in `detail`;
   `skipped:no_owner_route` means the follower has no route to ask (owner
-  missing from `~/.orbit/mcp-destinations.toml`, or an unregistered
+  not registered with `orbit host add`, or an unregistered
   checkout), not that the owner is down. A status lookup failure without a
   transport error is `skipped:owner_lookup_failed`, with the reason in
   `detail`; it does not establish that the owner is down.

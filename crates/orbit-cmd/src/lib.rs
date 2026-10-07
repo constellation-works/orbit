@@ -23,6 +23,7 @@
 pub mod agent_rules;
 mod diagnostics;
 mod doctor;
+pub mod hosts;
 mod migrate;
 mod registry;
 mod task;

@@ -20,8 +20,10 @@ test('remote arguments reach the owner as one quoted word each', () => {
   expect(argv.at(-1)?.endsWith(`'it'\\''s; rm -rf ~'`)).toBe(true)
 })
 
-test('federated destinations come from each ssh line, refusing option-shaped hosts', () => {
+test('federated hosts come from each ssh line of either host file, refusing option-shaped hosts', () => {
   const toml = '[[destinations]]\nssh = "dk-server-2"\nmachine_id = "hm_1"\n\n[[destinations]]\nssh = "-oProxyCommand=x"\n\n[[destinations]]\n  ssh = "daniel@box.ts.net" # tailnet\n'
   expect(federatedHosts(toml)).toEqual(['dk-server-2', 'daniel@box.ts.net'])
   expect(federatedHosts('')).toEqual([])
+  const hosts = 'schema_version = 1\n\n[[hosts]]\nname = "box"\nmachine_id = "hm_1"\nssh = "dk-server-2"\ntask_prefix = "ORB"\n'
+  expect(federatedHosts(hosts)).toEqual(['dk-server-2'])
 })
