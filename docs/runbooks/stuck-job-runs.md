@@ -412,9 +412,15 @@ Each `orbit clock tick` resumes the held run from its checkpoints. The resumed r
 skips implementation and review, pushes the same head, and continues to the pull
 request. If the forge still refuses, the resumed run holds again, and the next tick
 resumes that one. The clock retries for 2 hours from the first hold. After that, it
-blocks the task with a `forge_unavailable_expired` history event that names the held
-run. Once pushes work again, `orbit job resume <held_run_id>` re-admits the task and
-pushes it. A cancel (`orbit run cancel`) stops a push that is waiting between attempts.
+expires that hold once and blocks only in-progress tasks still coupled to that run,
+including a resumed attempt that retains its checkpoint's earlier batch binding.
+The `forge_unavailable_expired` history event names the held run. The run stays
+`held`, with its expiry recorded, so later ticks leave it alone. A task re-queued
+and admitted under an unrelated run is also left alone, even if its old hold has
+not yet expired. Once pushes work again, `orbit job resume <held_run_id>` re-admits
+tasks still owned by that lineage and pushes the kept candidate; the resumed run
+gets its own expiry acknowledgement if it holds again. A cancel (`orbit run cancel`)
+stops a push that is waiting between attempts.
 
 A claimed leaf on a follower that holds this way releases its claim to the owner as a
 `transient` failure; it is not resumed in place.

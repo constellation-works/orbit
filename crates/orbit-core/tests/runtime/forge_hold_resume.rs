@@ -5,10 +5,12 @@
 //! push: each tick inside the retry window resumes it once, a run held for
 //! another reason is left alone, and past the window the clock stops and
 //! blocks the run's in-progress task for a human, whose resume re-admits it.
+//! Expiry acts once and leaves tasks admitted under an unrelated run alone.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
@@ -26,6 +28,40 @@ use orbit_types::workflow::{
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
+use tracing_subscriber::prelude::*;
+
+struct RunEvents {
+    run_id: String,
+    count: Arc<AtomicUsize>,
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RunEvents {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Visitor<'a> {
+            run_id: &'a str,
+            matches: bool,
+        }
+        impl tracing::field::Visit for Visitor<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if matches!(field.name(), "run_id" | "source_run_id")
+                    && format!("{value:?}") == self.run_id
+                {
+                    self.matches = true;
+                }
+            }
+        }
+        if event.metadata().target() == "orbit.core.sweep" {
+            let mut visitor = Visitor {
+                run_id: &self.run_id,
+                matches: false,
+            };
+            event.record(&mut visitor);
+            if visitor.matches {
+                self.count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+}
 
 struct SingleWorkspace(OrbitRuntime);
 
@@ -155,6 +191,12 @@ impl Fixture {
             )
             .unwrap();
 
+        self.hold_run(&run.run_id, held_since);
+        (task, run.run_id)
+    }
+
+    fn hold_run(&self, run_id: &str, held_since: Option<DateTime<Utc>>) {
+        let run = self.jobs.get_job_run(run_id).unwrap().unwrap();
         // Its worker has exited, as a finished run's has.
         let mut worker = Command::new("true").spawn().unwrap();
         worker.wait().unwrap();
@@ -162,7 +204,13 @@ impl Fixture {
             .mark_job_run_running(&run.run_id, Utc::now(), worker.id())
             .unwrap();
 
-        let mut state = PipelineState::new(run.run_id.clone(), run.job_id, input);
+        let mut state = self
+            .jobs
+            .read_run_state(run_id)
+            .unwrap()
+            .unwrap_or_else(|| {
+                PipelineState::new(run.run_id.clone(), run.job_id, run.input.unwrap())
+            });
         state.forge_hold = held_since.map(|held_since| ForgeUnavailableHold {
             target_ref: "refs/heads/orbit/candidate".to_string(),
             head_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
@@ -202,7 +250,33 @@ impl Fixture {
         self.jobs
             .finalize_job_run(&run.run_id, JobRunState::Held, now, None)
             .unwrap();
-        (task, run.run_id)
+    }
+
+    fn admit_unrelated_run(&self, task: &str) -> String {
+        let run = self
+            .jobs
+            .insert_job_run(
+                "test_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [task]})),
+                None,
+            )
+            .unwrap();
+        self.jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        self.runtime
+            .apply_task_automation_update(
+                task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    job_run_id: Some(run.run_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        run.run_id
     }
 
     fn tick(&self) {
@@ -268,6 +342,19 @@ fn past_the_window_the_clock_blocks_the_task_and_a_manual_resume_readmits_it() {
     }
     let fx = Fixture::new();
     let (task, run) = fx.held_delivery(Some(Utc::now() - Duration::hours(3)));
+    // A real resumed delivery keeps the original batch binding through its
+    // successful worktree checkpoint, even though the retry owns cleanup.
+    fx.jobs
+        .update_run_state(&run, &mut |_, state| {
+            state.record_step(
+                0,
+                JobRunState::Success,
+                Some(json!({"job_run_id": run})),
+                None,
+            );
+            Ok(())
+        })
+        .unwrap();
 
     fx.tick();
 
@@ -303,4 +390,181 @@ fn past_the_window_the_clock_blocks_the_task_and_a_manual_resume_readmits_it() {
         entry.note.as_deref().unwrap().contains(&invoke.run_id),
         "{entry:?}"
     );
+    assert_eq!(
+        fx.runtime.get_task(&task).unwrap().job_run_id.as_deref(),
+        Some(run.as_str())
+    );
+    let resumed_state = fx.jobs.read_run_state(&invoke.run_id).unwrap().unwrap();
+    assert!(
+        resumed_state.forge_hold_expired_at.is_none(),
+        "expiry belongs to the source hold"
+    );
+
+    // If a manually resumed push holds again, that attempt expires once too,
+    // using its durable coupling rather than the older checkpoint binding.
+    fx.hold_run(&invoke.run_id, Some(Utc::now() - Duration::hours(3)));
+    fx.tick();
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+    let retry_history = fx.runtime.get_task_history(&task).unwrap();
+    let entry = retry_history.last().unwrap();
+    assert_eq!(entry.event, FORGE_UNAVAILABLE_EXPIRED_EVENT);
+    assert!(
+        entry
+            .note
+            .as_deref()
+            .unwrap()
+            .contains(&format!("run={};", invoke.run_id))
+    );
+    fx.tick();
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        retry_history.len()
+    );
+}
+
+#[test]
+fn expired_hold_does_not_block_or_log_again_after_readmission() {
+    if run_isolated_test(
+        "forge_hold_resume::expired_hold_does_not_block_or_log_again_after_readmission",
+    ) {
+        return;
+    }
+    for unrelated_run in [true, false] {
+        let fx = Fixture::new();
+        let (task, run) = fx.held_delivery(Some(Utc::now() - Duration::hours(3)));
+        let events = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(RunEvents {
+            run_id: run.clone(),
+            count: events.clone(),
+        });
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        fx.tick();
+        assert_eq!(fx.status(&task), TaskStatus::Blocked);
+        assert_eq!(events.load(Ordering::SeqCst), 1, "one expiry diagnostic");
+        let expired_state =
+            serde_json::to_value(fx.jobs.read_run_state(&run).unwrap().unwrap()).unwrap();
+        assert!(!expired_state["forge_hold_expired_at"].is_null());
+
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let current_run = if unrelated_run {
+            fx.admit_unrelated_run(&task)
+        } else {
+            fx.runtime
+                .apply_task_automation_update(
+                    &task,
+                    TaskAutomationUpdate {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            run.clone()
+        };
+        let admitted_task = serde_json::to_value(fx.runtime.get_task(&task).unwrap()).unwrap();
+        let admitted_run =
+            serde_json::to_value(fx.jobs.get_job_run(&current_run).unwrap().unwrap()).unwrap();
+        let history = serde_json::to_value(fx.runtime.get_task_history(&task).unwrap()).unwrap();
+        for _ in 0..2 {
+            fx.tick();
+            assert_eq!(
+                serde_json::to_value(fx.runtime.get_task(&task).unwrap()).unwrap(),
+                admitted_task
+            );
+            assert_eq!(
+                serde_json::to_value(fx.jobs.get_job_run(&current_run).unwrap().unwrap()).unwrap(),
+                admitted_run
+            );
+            assert_eq!(
+                serde_json::to_value(fx.runtime.get_task_history(&task).unwrap()).unwrap(),
+                history
+            );
+            assert_eq!(
+                serde_json::to_value(fx.jobs.read_run_state(&run).unwrap().unwrap()).unwrap(),
+                expired_state
+            );
+            assert_eq!(
+                events.load(Ordering::SeqCst),
+                1,
+                "expired hold is not logged again"
+            );
+            assert_eq!(fx.retries(&run), 0);
+        }
+        if !unrelated_run {
+            // Simulate interruption after the task event committed but before
+            // the run acknowledgement: history must still prevent a second block.
+            fx.jobs
+                .update_run_state(&run, &mut |_, state| {
+                    state.forge_hold_expired_at = None;
+                    Ok(())
+                })
+                .unwrap();
+            fx.tick();
+            assert_eq!(
+                serde_json::to_value(fx.runtime.get_task(&task).unwrap()).unwrap(),
+                admitted_task
+            );
+            assert_eq!(
+                serde_json::to_value(fx.runtime.get_task_history(&task).unwrap()).unwrap(),
+                history
+            );
+            assert_eq!(events.load(Ordering::SeqCst), 1);
+            assert!(
+                fx.jobs
+                    .read_run_state(&run)
+                    .unwrap()
+                    .unwrap()
+                    .forge_hold_expired_at
+                    .is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn expiry_leaves_a_task_admitted_under_an_unrelated_run_alone() {
+    if run_isolated_test(
+        "forge_hold_resume::expiry_leaves_a_task_admitted_under_an_unrelated_run_alone",
+    ) {
+        return;
+    }
+    let fx = Fixture::new();
+    let (task, held_run) = fx.held_delivery(Some(Utc::now() - Duration::hours(3)));
+    let current_run = fx.admit_unrelated_run(&task);
+    let task_before = serde_json::to_value(fx.runtime.get_task(&task).unwrap()).unwrap();
+    let run_before =
+        serde_json::to_value(fx.jobs.get_job_run(&current_run).unwrap().unwrap()).unwrap();
+    let history_before = serde_json::to_value(fx.runtime.get_task_history(&task).unwrap()).unwrap();
+
+    fx.tick();
+    fx.tick();
+
+    assert_eq!(
+        serde_json::to_value(fx.runtime.get_task(&task).unwrap()).unwrap(),
+        task_before
+    );
+    assert_eq!(
+        serde_json::to_value(fx.jobs.get_job_run(&current_run).unwrap().unwrap()).unwrap(),
+        run_before
+    );
+    assert_eq!(
+        serde_json::to_value(fx.runtime.get_task_history(&task).unwrap()).unwrap(),
+        history_before
+    );
+    assert!(
+        fx.jobs
+            .read_run_state(&held_run)
+            .unwrap()
+            .unwrap()
+            .forge_hold_expired_at
+            .is_some()
+    );
+    assert_eq!(fx.retries(&held_run), 0);
 }
