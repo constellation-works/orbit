@@ -3,6 +3,7 @@
 //! head, never retried against the frozen source nor retired, and their
 //! disjoint siblings still apply.
 
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_tools::ReservationOwnerContext;
 
 use super::races::apply_input;
@@ -258,6 +259,144 @@ fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry
     .unwrap();
     assert_eq!(due.reason, "would_fire", "{due:?}");
     assert_eq!(due.batch.len(), 2, "{due:?}");
+}
+
+#[test]
+fn context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::source_moves::context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures",
+    ) {
+        return;
+    }
+    for instructions in [false, true] {
+        let workspace = Workspace::new();
+        workspace.install_pilot_job();
+        let (edited, sibling) = disjoint_tasks(&workspace);
+        let routine = if instructions {
+            instructions_routine()
+        } else {
+            pilot_routine()
+        };
+        // Prepare/apply resolve a claimed consumer's policy from its durable
+        // routine, rather than the definition passed directly to evaluation.
+        let routines = workspace.runtime.shared_root().join("routines");
+        std::fs::create_dir_all(&routines).unwrap();
+        std::fs::write(
+            routines.join("fixture-pilot.yaml"),
+            serde_yaml::to_string(&routine).unwrap(),
+        )
+        .unwrap();
+        let now = Utc::now();
+        evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+        let attempt = workspace.admitted_batch(&[&edited, &sibling], 2);
+        let prepared = claimed(
+            &workspace,
+            &attempt,
+            "prepare_task_pilot",
+            json!({
+                "task_ids": attempt.task_ids(), "workspace_path": workspace.repo,
+                "base_branch": "main", "state_automation": attempt,
+                "source_revision": attempt.member.source.commit, "max_partition_size": 1,
+            }),
+        );
+        assert_eq!(prepared["partition_count"], 2, "{prepared}");
+        let expected_reason = if instructions {
+            // An instruction edit outside both selector paths still invalidates
+            // every member when instructions are material (on-call deploy race).
+            workspace.commit_file(
+                "crates/other/CLAUDE.md",
+                "# Updated repository instructions\n",
+                "deploy instructions",
+            );
+            "superseded_by_source"
+        } else {
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &edited.id,
+                    TaskUpdateParams {
+                        context_files: Some(vec!["file:README.md".into()]),
+                        ..Default::default()
+                    },
+                    "fixture".into(),
+                )
+                .unwrap();
+            "material_changed"
+        };
+        let before = workspace.runtime.get_task(&edited.id).unwrap();
+        let output = apply_claim(&workspace, &attempt, &prepared);
+        let skip_count = if instructions { 2 } else { 1 };
+        assert_eq!(output["status"], "succeeded", "{output}");
+        assert_eq!(output["outcome"], "superseded", "{output}");
+        assert_eq!(output["superseded_count"], skip_count, "{output}");
+        assert_eq!(output["applied_count"], 2 - skip_count, "{output}");
+        assert_eq!(output["unresolved_count"], 0, "{output}");
+        assert_eq!(output["repair_count"], 0, "{output}");
+        assert!(output["error"].is_null(), "{output}");
+        assert_eq!(outcome_for(&output, &edited)["outcome"], "superseded");
+        assert_eq!(outcome_for(&output, &edited)["reason"], expected_reason);
+        assert_eq!(output["partition_decisions"][0]["outcome"], "superseded");
+        assert_eq!(workspace.runtime.get_task(&edited.id).unwrap(), before);
+        assert!(!pilot_applied(&workspace, &edited));
+        assert_eq!(pilot_applied(&workspace, &sibling), !instructions);
+        assert_eq!(
+            workspace.action("pipeline_success_guard", json!({"result": output}))["succeeded"],
+            true
+        );
+
+        finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+        evaluate_routine(
+            &workspace.runtime,
+            &routine,
+            false,
+            now + Duration::minutes(1),
+        )
+        .unwrap();
+        let run = workspace
+            .runtime
+            .show_job_run(attempt.action_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(run.state, JobRunState::Success);
+        let members = workspace.routine_state().members.unwrap();
+        assert!(members.active.is_none(), "no retry of stale preparation");
+        assert!(members.failed.is_empty(), "{:?}", members.failed);
+        assert!(members.withheld.is_empty(), "{:?}", members.withheld);
+        assert!(!members.assessed.contains_key(&edited.id));
+        assert_eq!(members.assessed.contains_key(&sibling.id), !instructions);
+        assert_eq!(members.pending[&edited.id].source.commit, head(&workspace));
+        if !instructions {
+            assert_ne!(
+                members.pending[&edited.id].fingerprint, attempt.member.fingerprint,
+                "the edited context must be prepared afresh"
+            );
+        }
+        let due = evaluate_routine(
+            &workspace.runtime,
+            &routine,
+            true,
+            now + Duration::minutes(3),
+        )
+        .unwrap();
+        assert_eq!(due.reason, "would_fire", "{due:?}");
+        assert_eq!(due.batch.len(), skip_count);
+        assert!(
+            due.batch
+                .iter()
+                .any(|member| member.task_ids == [edited.id.clone()])
+        );
+        let reclaimed = workspace.admitted(&edited, 2);
+        assert_eq!(reclaimed.attempt, 1);
+        assert_eq!(reclaimed.member.source.commit, head(&workspace));
+        let fresh = prepare_claim(&workspace, &reclaimed);
+        assert_eq!(
+            fresh["tasks"][0]["context_files_before"],
+            json!(before.context_files)
+        );
+        let applied = apply_claim(&workspace, &reclaimed, &fresh);
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        assert!(pilot_applied(&workspace, &edited));
+    }
 }
 
 #[test]
