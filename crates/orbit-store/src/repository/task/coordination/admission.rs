@@ -9,13 +9,15 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{TaskStatus, automatic_dispatch_cmp};
+use orbit_types::task::{
+    TaskStatus, automatic_dispatch_cmp, satisfy_completed_archived_dependencies,
+};
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::CandidateOffer;
 use crate::contracts::*;
-use crate::repository::task::v2::TaskV2Store;
+use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
@@ -261,11 +263,20 @@ impl TaskCommitBoundary {
             return self.lookup_admission(identity, &request.request_id);
         }
         let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
+        let mut archived_histories = BTreeMap::new();
         let mut tasks = self
             .bundle_store
             .list_bundles()?
             .into_iter()
-            .map(|bundle| translator.task_from_bundle(bundle))
+            .map(|mut bundle| {
+                if bundle.envelope.status == TaskStatus::Archived {
+                    archived_histories.insert(
+                        bundle.envelope.id.clone(),
+                        task_history_from_events(std::mem::take(&mut bundle.events)),
+                    );
+                }
+                translator.task_from_bundle(bundle)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let mut admission_holds = admission_holds.clone();
         for task in tasks
@@ -278,15 +289,15 @@ impl TaskCommitBoundary {
         }
         tasks.sort_by(automatic_dispatch_cmp);
         let mut statuses: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
-        for dependency in tasks
+        let dependencies = tasks
             .iter()
             .flat_map(|t| t.dependencies())
-            .collect::<BTreeSet<_>>()
-        {
-            if statuses.contains_key(&dependency) {
+            .collect::<BTreeSet<_>>();
+        for dependency in &dependencies {
+            if statuses.contains_key(dependency) {
                 continue;
             }
-            let Some(binding) = self.registry.find_task_binding(&dependency)? else {
+            let Some(binding) = self.registry.find_task_binding(dependency)? else {
                 continue;
             };
             // The host admission lock excludes every partition's ordinary
@@ -305,14 +316,26 @@ impl TaskCommitBoundary {
             };
             owner.verify_journal_binding()?;
             owner.recover_if_pending()?;
-            match owner.bundle_store.read_bundle_lightweight(&dependency) {
+            match owner.bundle_store.read_bundle_lightweight(dependency) {
                 Ok(bundle) => {
-                    statuses.insert(dependency, bundle.envelope.status);
+                    statuses.insert(dependency.clone(), bundle.envelope.status);
+                    if bundle.envelope.status == TaskStatus::Archived {
+                        archived_histories
+                            .insert(dependency.clone(), task_history_from_events(bundle.events));
+                    }
                 }
                 Err(OrbitError::NotFound { .. }) => {}
                 Err(error) => return Err(error),
             }
         }
+        // Project dependency satisfaction from the same canonical snapshots
+        // read under the host admission lock, without changing stored statuses.
+        // An absent or incomplete completion history keeps the archived dead end.
+        let Ok(()) = satisfy_completed_archived_dependencies::<std::convert::Infallible>(
+            &mut statuses,
+            dependencies,
+            |id| Ok(archived_histories.remove(id)),
+        );
         let claims = self.execution_claims()?;
         let drain_released =
             self.drain_releases(&identity.location().machine_id, &request.run_context.run_id)?;
