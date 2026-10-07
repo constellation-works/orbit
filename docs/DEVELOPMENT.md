@@ -232,6 +232,14 @@ environment, not a missing AppArmor profile or a product defect. Replay live
 spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux
 host. Do not disable `linux-bwrap` or try to make bwrap nest from a fixture.
 
+The Bubblewrap environment-forwarding and credential-mask fixtures re-execute
+their exact test in a separate process with a cleared environment and a private
+temporary `HOME` outside `/tmp`. The launcher compiles credential masks from its
+own `HOME` and `CARGO_HOME`, so changing those variables in the parallel harness
+would let other tests observe a fixture home while it is created or deleted.
+Inject fixture variables through the child command instead of process-wide env
+guards; the parent keeps the home alive until the isolated test exits.
+
 The `plugin_secrets` module of the CLI `tool` integration binary also runs
 `secret_sinks::seeded_secrets_stay_out_of_persistence_logs_and_children`:
 
