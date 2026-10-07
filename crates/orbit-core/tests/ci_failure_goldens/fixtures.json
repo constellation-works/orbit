@@ -114,5 +114,30 @@
     "logs": [
       "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo clippy --workspace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z Checking example v0.1.0\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: could not compile `example` due to 1 previous error\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error[E0063]: missing field `owner_machine_id`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z   --> crates/orbit-core/src/runtime.rs:92:7\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.\n"
     ]
+  },
+  {
+    "name": "rustfmt_diff_ending_in_a_brace_does_not_abort_unrelated_filings",
+    "logs": [
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z Diff in crates/example/src/lib.rs:12:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  fn main() {\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z -    let value=1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z +    let value = 1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n",
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: unrelated regression still files\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n",
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z Diff in crates/example/src/lib.rs:12:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  fn main() {\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z -    let value=1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z +    let value = 1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "first_batch": 2
+  },
+  {
+    "name": "symbols_only_content_uses_the_step_fallback",
+    "logs": [
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ----------\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n",
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ----------\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n"
+    ]
+  },
+  {
+    "name": "symbols_only_failure_identity_uses_exact_key_coverage",
+    "logs": [
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n",
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: unrelated regression still files\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n",
+      "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "first_batch": 2
   }
 ]

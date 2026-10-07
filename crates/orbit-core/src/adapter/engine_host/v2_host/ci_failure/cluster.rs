@@ -128,6 +128,18 @@ impl FailureCluster {
             return DuplicateCandidate::new(exact_tag, fingerprints)
                 .with_completed_fingerprints(self.completed_provenance_fingerprints());
         }
+        if !self.signature.chars().any(char::is_alphanumeric) {
+            // Symbols cannot form a coverage anchor. Keep exact-key continuity
+            // without adding provenance fingerprints that repeat the invalid
+            // signature and would abort the entire filing pass.
+            return DuplicateCandidate::new(
+                exact_tag.clone(),
+                vec![CoverageFingerprint::new(
+                    "ci_failure_unmatchable_fallback",
+                    vec![CoverageAnchor::new("exact_failure_key", exact_tag)],
+                )],
+            );
+        }
         let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
             // for exact-key idempotency but too weak for broader free-text
