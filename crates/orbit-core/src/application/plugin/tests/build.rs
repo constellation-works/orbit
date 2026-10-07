@@ -2,7 +2,8 @@
 //! (`docs/design/plugins/3_install_time_build.md`): consent is refused
 //! without the flag and in unattended processes, macOS refuses a `fetch`
 //! phase, a pin never builds, a non-commit source must ship its outputs, and
-//! an installed build's record is checked at load and by doctor.
+//! an installed build's record is checked at load and by doctor, and sync
+//! holds a drifted or freshly installed build to its pin.
 
 use std::path::Path;
 
@@ -15,7 +16,7 @@ use orbit_types::plugin::{
 
 use super::super::{
     PluginAddOptions, PluginUpgradeOptions, install_plugin, plugin_build_doctor, plugin_doctor,
-    show_plugin, sync_plugins, upgrade_plugin,
+    show_plugin, sync_plugins, upgrade_plugin, workspace_plugin_toggles,
 };
 use super::fixture::PluginFixture;
 use crate::runtime::plugin::build_witness::{forget_build_witness, record_build_witness};
@@ -44,6 +45,23 @@ spec:
     outputs:
       - from: out/backend
         to: bin/backend
+  tools:
+    - name: hello
+      description: Hello.
+      execution_kind: read_only
+"#;
+
+/// A plugin that ships its backend and declares no `spec.build`.
+const PREBUILT_MANIFEST: &str = r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: demo
+  version: 1.2.3
+  description: Prebuilt fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend
   tools:
     - name: hello
       description: Hello.
@@ -82,7 +100,14 @@ while [ "$1" = "-c" ]; do shift 2; done
 case "$1" in
   init) for arg in "$@"; do dir=$arg; done; mkdir -p "$dir/.git" ;;
   fetch) ;;
-  checkout) mkdir -p .orbit-plugin && cp '{}' .orbit-plugin/plugin.yaml ;;
+  checkout)
+    mkdir -p .orbit-plugin && cp '{0}' .orbit-plugin/plugin.yaml
+    # A manifest with no `spec.build` has to ship its backend.
+    if ! grep -q 'build:' '{0}'; then
+      mkdir -p .orbit-plugin/bin
+      printf '#!/bin/sh\\n' > .orbit-plugin/bin/backend
+      chmod 755 .orbit-plugin/bin/backend
+    fi ;;
   rev-parse) echo {COMMIT} ;;
   show) echo 1700000000 ;;
   *) echo "unexpected git $*" >&2; exit 1 ;;
@@ -559,6 +584,157 @@ fn an_installed_build_record_is_checked_at_load_and_by_doctor() {
             .any(|row| row.plugin == "demo" && !row.intentional),
         "a missing witness must reach orbit doctor as well as plugin doctor"
     );
+}
+
+/// §3.7: a drifted build is unsatisfied and never switched on, but a pin's
+/// `enabled: false` still switches the plugin off in this workspace.
+#[test]
+fn a_drifted_pin_still_applies_enabled_false() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_drifted_pin_still_applies_enabled_false",
+    ) {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let source = write_build_source(&fixture, true);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install the prebuilt plugin");
+    attach_build(&fixture, &build_record(Vec::new()));
+    let other_commit = "f".repeat(40);
+    let pin = |enabled: bool| {
+        format!(
+            "  - name: demo\n    source: \"git+https://example.test/demo.git#{other_commit}\"\n    \
+             enabled: {enabled}\n"
+        )
+    };
+
+    // `enabled: true` on a drifted build stays unsatisfied, and the final
+    // status says so rather than reporting the host-enabled row as active.
+    write_pins(&fixture, &pin(true));
+    let outcomes = sync_plugins(&fixture.reopen(), false, &[]).expect("sync");
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PluginStatus::Inactive, "{outcomes:?}");
+    assert!(
+        outcomes[0]
+            .message
+            .contains("does not match the pinned commit"),
+        "{outcomes:?}"
+    );
+    assert!(
+        workspace_plugin_toggles(&fixture.reopen())
+            .expect("toggles")
+            .is_empty(),
+        "an unsatisfied pin writes no toggle"
+    );
+
+    write_pins(&fixture, &pin(false));
+    let dry = sync_plugins(&fixture.reopen(), true, &[]).expect("dry-run sync");
+    assert!(
+        dry[0]
+            .message
+            .contains("would switch off in this workspace"),
+        "{dry:?}"
+    );
+    assert!(
+        workspace_plugin_toggles(&fixture.reopen())
+            .expect("toggles")
+            .is_empty(),
+        "a dry run writes nothing"
+    );
+
+    let outcomes = sync_plugins(&fixture.reopen(), false, &[]).expect("sync");
+    assert_eq!(outcomes[0].status, PluginStatus::Disabled, "{outcomes:?}");
+    assert!(
+        outcomes[0]
+            .message
+            .contains("does not match the pinned commit")
+            && outcomes[0]
+                .message
+                .contains("switched off in this workspace"),
+        "{outcomes:?}"
+    );
+    assert_eq!(
+        workspace_plugin_toggles(&fixture.reopen())
+            .expect("toggles")
+            .get("demo"),
+        Some(&false)
+    );
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read the row")
+        .expect("still installed");
+    assert!(installed.enabled, "the host row is never touched by a pin");
+
+    let again = sync_plugins(&fixture.reopen(), false, &[]).expect("repeat sync");
+    assert_eq!(again[0].status, PluginStatus::Disabled, "{again:?}");
+}
+
+/// §3.7: a fresh install whose recorded build cannot satisfy the pin is
+/// reported unsatisfied and is neither enabled, toggled on nor seeded.
+#[cfg(unix)]
+#[test]
+fn a_fresh_install_that_does_not_satisfy_its_pin_is_not_enabled() {
+    let test = "a_fresh_install_that_does_not_satisfy_its_pin_is_not_enabled";
+    if !super::fixture::enter_isolated_child(module_path!(), test)
+        || !enter_fake_git_commit_child(test, PREBUILT_MANIFEST, &[])
+    {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    // The manifest has no `spec.build`, so the install records no build that
+    // could ever carry the pinned digest.
+    write_pins(
+        &fixture,
+        &format!(
+            "  - name: demo\n    source: \"{}\"\n    artifact_digest: \"sha256:{}\"\n",
+            commit_source(),
+            "f".repeat(64)
+        ),
+    );
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
+
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PluginStatus::Inactive, "{outcomes:?}");
+    assert!(
+        outcomes[0].message.contains("records no build"),
+        "{outcomes:?}"
+    );
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read the row")
+        .expect("the source installed");
+    assert!(!installed.enabled, "an unsatisfied pin never enables");
+    assert!(
+        workspace_plugin_toggles(&fixture.reopen())
+            .expect("toggles")
+            .is_empty(),
+        "an unsatisfied pin writes no toggle"
+    );
+    assert!(
+        !fixture.workspace_root.join("config.toml").exists()
+            || !std::fs::read_to_string(fixture.workspace_root.join("config.toml"))
+                .expect("read config")
+                .contains("demo"),
+        "an unsatisfied pin leaves no workspace entry"
+    );
+
+    let again = sync_plugins(&fixture.reopen(), false, &[]).expect("repeat sync");
+    assert_eq!(again[0].status, PluginStatus::Inactive, "{again:?}");
 }
 
 fn build_findings(runtime: &crate::OrbitRuntime) -> usize {
