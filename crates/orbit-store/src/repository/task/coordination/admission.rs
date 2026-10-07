@@ -505,6 +505,7 @@ impl TaskCommitBoundary {
                     workspace_id: Some(self.workspace_id.clone()),
                     task_ids: vec![task.id.clone()],
                     requested_files: footprint.clone(),
+                    stored_files: footprint.clone(),
                     actor: receipt.machine_id.clone(),
                     ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
                     owner_run_id: None,

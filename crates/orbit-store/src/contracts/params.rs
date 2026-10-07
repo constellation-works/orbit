@@ -215,7 +215,10 @@ pub struct TaskReservationReserveParams {
     pub workspace_orbit_dir: String,
     pub workspace_id: Option<String>,
     pub task_ids: Vec<String>,
+    /// Original footprint checked against existing holders at the grant boundary.
     pub requested_files: Vec<String>,
+    /// Files held by the grant. Empty for work exempt from holding context locks.
+    pub stored_files: Vec<String>,
     pub actor: String,
     pub ttl_seconds: u32,
     pub owner_run_id: Option<String>,

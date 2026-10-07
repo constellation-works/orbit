@@ -72,7 +72,7 @@ pub(crate) fn reserve_files_in_tx(
     let created_at = now;
     let expires_at = (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
     let task_ids_json = serialize_string_list(&params.task_ids)?;
-    let files_json = serialize_string_list(&params.requested_files)?;
+    let files_json = serialize_string_list(&params.stored_files)?;
 
     tx.tx
         .execute(
@@ -111,7 +111,7 @@ pub(crate) fn reserve_files_in_tx(
         reserved: true,
         reservation_id: Some(reservation_id),
         expires_at: Some(expires_at),
-        reserved_files: params.requested_files.clone(),
+        reserved_files: params.stored_files.clone(),
         conflicts: Vec::new(),
         expired_reservations,
     })
