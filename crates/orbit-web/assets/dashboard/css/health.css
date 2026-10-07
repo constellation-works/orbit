@@ -201,3 +201,20 @@ td .rel-rate { font-size: 12px; }
   .incident-surface { flex: 1 1 100%; }
   .incident-actions > * { flex: 1 1 100%; }
 }
+
+/* Errors: one card per failed event on phones (see `.card-table`). */
+@media (max-width: 600px) {
+  table.diag-table tbody tr {
+    grid-template-areas:
+      "source ts"
+      "run run"
+      "provider step"
+      "message message";
+  }
+  table.diag-table td.c-source { grid-area: source; color: var(--state-failed); font-weight: 600; }
+  table.diag-table td.c-ts { grid-area: ts; text-align: right; color: var(--fg-dim); }
+  table.diag-table td.c-job_run { grid-area: run; font-family: var(--font-mono); color: var(--fg); }
+  table.diag-table td.c-provider { grid-area: provider; color: var(--fg-dim); }
+  table.diag-table td.c-step { grid-area: step; text-align: right; color: var(--fg-dim); }
+  table.diag-table td.c-message { grid-area: message; font-size: 12px; }
+}

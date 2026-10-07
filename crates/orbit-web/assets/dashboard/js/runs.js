@@ -834,9 +834,9 @@ function runHeaderCell(label, key, opts = {}) {
   return cell;
 }
 
-function runCountCell(value) {
+function runCountCell(value, kind) {
   return el("span", {
-    class: `num${value > 0 ? " hot" : ""}`,
+    class: `num ${kind}${value > 0 ? " hot" : ""}`,
     text: String(value || 0),
   });
 }
@@ -950,8 +950,8 @@ export function renderRuns(runs) {
       el("span", { class: "id", text: r.job_id, title: r.job_id }),
       runIdCell,
       el("span", { class: "when", text: fmtTimestampValue(ts) }),
-      runCountCell(friction.denials),
-      runCountCell(friction.toolFails),
+      runCountCell(friction.denials, "denials"),
+      runCountCell(friction.toolFails, "tool-fails"),
       runDurationCell(r),
       el("span", { class: "run-actions" }, [
         runIsCancellable(r) ? buildCancelRunButton(r, body) : null,

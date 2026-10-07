@@ -963,7 +963,7 @@ function renderAudit(events, ctx) {
   let table = body.querySelector("table.scoreboard-table");
   let tbody;
   if (!table) {
-    table = el("table", { class: "scoreboard-table" });
+    table = el("table", { class: "scoreboard-table card-table audit-table" });
     const thead = el("thead");
     const headRow = el("tr");
     for (const col of AUDIT_COLUMNS) {
@@ -991,16 +991,16 @@ function renderAudit(events, ctx) {
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
     tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
-    tr.appendChild(el("td", { text: fmtTimestampValue(ctx, ev.timestamp) }));
-    tr.appendChild(el("td", { text: ev.role || "-" }));
-    tr.appendChild(el("td", { text: tool }));
-    tr.appendChild(el("td", { text: cmd }));
-    tr.appendChild(el("td", { text: target, title: target }));
-    const statusTd = el("td");
+    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp) }));
+    tr.appendChild(el("td", { class: "c-role", text: ev.role || "-" }));
+    tr.appendChild(el("td", { class: "c-tool", text: tool }));
+    tr.appendChild(el("td", { class: "c-command", text: cmd }));
+    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
+    const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: exitClass, text: exit == null ? "-" : String(exit) }));
-    tr.appendChild(el("td", { class: "num", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
+    tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
     makeToggleRow(tr, {
       expanded: expandedAuditIds.has(ev.id),

@@ -114,7 +114,7 @@ function getDiagErrorsColumns(ctx) {
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
+function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false } = {}) {
   const body = $("diag-body");
   
   if (!rows || rows.length === 0) {
@@ -127,9 +127,10 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
   
   let table = body.querySelector("table.scoreboard-table");
   let tbody;
-  const tableSig = columns.map(c => c.key).join("-");
+  const tableSig = `${cards ? "cards:" : ""}${columns.map(c => c.key).join("-")}`;
   if (!table || table.dataset.sig !== tableSig) {
-    table = el("table", { class: "scoreboard-table" });
+    // `cards` tables restack each row as a card on narrow screens (health.css).
+    table = el("table", { class: `scoreboard-table${cards ? " card-table diag-table" : ""}` });
     table.dataset.sig = tableSig;
     const thead = el("thead");
     const headRow = el("tr");
@@ -151,7 +152,7 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
     const tr = el("tr");
     for (const col of columns) {
       const baseClass =
-        (col.num ? "num" : "") + (col.cellClass ? ` ${col.cellClass}` : "");
+        (col.num ? "num" : "") + (col.cellClass ? ` ${col.cellClass}` : "") + ` c-${col.key}`;
       const td = el("td", { class: baseClass });
       const v = row[col.key];
       const text = col.render ? col.render(v, row, td) : v == null ? "" : String(v);
@@ -468,6 +469,7 @@ function renderDiagnostics(ctx = {}) {
     sub === "errors"
       ? "No error events this month (step/event failures, not job-run states)."
       : "No metric entries this month.",
+    { cards: sub === "errors" },
   );
 }
 

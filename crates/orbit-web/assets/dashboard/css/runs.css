@@ -166,15 +166,62 @@
 }
 .runs-sort.active { color: var(--fg); }
 
+/* 600–760 px: the rows still scroll sideways, but the filter and notes are
+   pinned at the scroller's own width (`#runs-body` is a size container) so
+   they never scroll away or run past the viewport. */
 @media (max-width: 760px) {
+  #runs-body { container-type: inline-size; }
   .runs-row { min-width: 820px; }
   .runs-row.workspace-attributed { min-width: 940px; }
   .runs-filter,
   .runs-source-warning,
   .runs-scope-note,
   .runs-limit-note {
-    min-width: max-content;
     position: sticky;
     left: 0;
+    box-sizing: border-box;
   }
+  .runs-source-warning,
+  .runs-scope-note,
+  .runs-limit-note { width: 100cqw; }
+}
+
+/* Phones: each run is a card; the header becomes a row of sort buttons. */
+@media (max-width: 600px) {
+  .runs-row,
+  .runs-row.workspace-attributed {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "state state when"
+      "job job job"
+      "workspace workspace workspace"
+      "runid runid runid"
+      "denials toolfails duration"
+      "actions actions actions";
+    column-gap: 12px;
+    row-gap: 0;
+    padding: 8px 16px;
+  }
+  .runs-row .state { grid-area: state; }
+  .runs-row .when { grid-area: when; }
+  .runs-row .id { grid-area: job; }
+  .runs-row .run-workspace { grid-area: workspace; }
+  .runs-row .run-id-cell { grid-area: runid; }
+  .runs-row .num.denials { grid-area: denials; text-align: left; }
+  .runs-row .num.tool-fails { grid-area: toolfails; text-align: left; }
+  .runs-row .duration { grid-area: duration; }
+  .runs-row .run-actions { grid-area: actions; min-height: 0; margin-top: 4px; }
+  .runs-row .num.denials::before { content: "denials "; font-family: var(--font-sans); }
+  .runs-row .num.tool-fails::before { content: "tool fails "; font-family: var(--font-sans); }
+  .runs-row.runs-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    min-height: 0;
+    padding: 8px 16px;
+  }
+  .runs-row.runs-header::before { content: "Sort by"; color: var(--fg-mute); }
+  .runs-row.runs-header > span { text-align: left; }
+  .runs-row.runs-header > span:not(:has(.runs-sort)) { display: none; }
 }
