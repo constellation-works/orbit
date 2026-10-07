@@ -126,6 +126,9 @@ pub struct SourcePage {
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    /// Retry progress from provider attempts in this observation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lookup_retries: BTreeMap<String, super::AssociationLookupRetry>,
     /// Accepted before-PR review coverage keyed by delivery key, supplied by
     /// Core from verified certificates [ORB-11333]. Only a
     /// `landed_code_review_v1` consumer excludes on it. A decoded

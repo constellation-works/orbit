@@ -20,6 +20,9 @@ use serde_json::{Value, json};
 use crate::auto_task_lifecycle_cli::{git, publish_origin_if_configured};
 use crate::isolated_cli_fixture::Fixture;
 
+#[cfg(unix)]
+mod tick;
+
 const BRANCH: &str = "fixture-delivery";
 const REPOSITORY: &str = "owner/repository";
 const CONSUMER: &str = "remote-deliveries";

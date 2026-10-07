@@ -142,6 +142,7 @@ fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState)
         excluded: Vec::new(),
         unresolved: Default::default(),
         associations: Default::default(),
+        lookup_retries: Default::default(),
         active: None,
         stall: None,
     };
@@ -335,6 +336,19 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             .iter()
             .map(|commit| (commit.clone(), "delivery_owner_evidence_pending".into()))
             .collect();
+        state.lookup_retries = history
+            .old
+            .iter()
+            .map(|commit| {
+                (
+                    commit.clone(),
+                    orbit_types::workflow::automation::AssociationLookupRetry {
+                        last_checked_at: chrono::DateTime::UNIX_EPOCH,
+                        attempts: 3,
+                    },
+                )
+            })
+            .collect();
         let (page, record) = replay(&source, &state).expect(
             "ORB-14356: a 1000-commit replay finishes instead of exhausting the source deadline",
         );
@@ -370,6 +384,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             generation: 0,
             pending_commits: vec![],
             unresolved: Default::default(),
+            lookup_retries: Default::default(),
             ..state.clone()
         };
         assert!(store.automation_initialize(&baseline).expect("initialize"));
@@ -436,6 +451,10 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             *history.new.last().expect("canonical tip")
         );
         assert_eq!(checkpoint.pending_commits, history.new);
+        assert!(
+            checkpoint.lookup_retries.is_empty(),
+            "replay retires orphan lookup retry keys"
+        );
         assert_eq!(
             checkpoint.unresolved,
             checkpoint
@@ -537,4 +556,146 @@ fn replay_provider_lookups_use_a_fresh_source_after_the_initial_head() {
             .all(|reason| reason != "evidence_unavailable"),
         "a stale pre-fetch source must not silently turn provider lookups into missing evidence"
     );
+}
+
+/// Deterministic clock and provider faults exercise the retry schedule through
+/// the real evaluator and checkpoint store, including observations that do
+/// not advance the source cursor.
+#[test]
+fn recorded_associations_survive_observation_and_missing_identities_back_off() {
+    use orbit_automation::delivery::{self, ActionOutcome, DeliveryHost, Evaluation};
+    use orbit_types::workflow::automation::{BatchAttempt, DeliveryAssociation, SourceRevision};
+
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &recorded_associations_survive_observation_and_missing_identities_back_off,
+    )) {
+        return;
+    }
+    struct LookupHost<'a> {
+        source: Source<'a>,
+        calls: &'a Cell<usize>,
+        missing: &'a str,
+    }
+    impl DeliveryHost for LookupHost<'_> {
+        fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+            self.source.head(branch)
+        }
+        fn observe(
+            &self,
+            branch: &str,
+            state: &AutomationState,
+        ) -> Result<SourcePage, AutomationError> {
+            self.source.observe_with_lookup(branch, state, &|_, sha| {
+                assert_eq!(
+                    sha, self.missing,
+                    "a recorded association is never queried again"
+                );
+                self.calls.set(self.calls.get() + 1);
+                if self.calls.get() < 4 {
+                    Err(AutomationError::Deferred("provider offline".into()))
+                } else {
+                    Ok("[]".into())
+                }
+            })
+        }
+        fn admit(&self, _: &BatchAttempt) -> Result<String, AutomationError> {
+            unreachable!("this fixture never meets its delivery threshold")
+        }
+        fn outcome(&self, _: &BatchAttempt) -> Result<ActionOutcome, AutomationError> {
+            unreachable!("no admitted action")
+        }
+    }
+
+    let history = diverged_with_inserted_canonical_commit();
+    let (source, mut state) = state_for(history.root.path(), history.old.last().unwrap());
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let trigger = DeliveryTrigger {
+        owner_machine: None,
+        branch: "main".into(),
+        threshold: 50,
+        max_wait_minutes: 60,
+        coverage: CoverageClass::LandedCodeReviewV1,
+        max_items: 50,
+        retries: 0,
+    };
+    state.trigger = Some(trigger.clone());
+    let baseline = AutomationState {
+        observed: state.baseline.clone(),
+        generation: 0,
+        ..state.clone()
+    };
+    assert!(store.automation_initialize(&baseline).unwrap());
+    state.observed = source.revision(history.new.last().unwrap()).unwrap();
+    state.pending_commits = history.new.clone();
+    state.unresolved = history
+        .new
+        .iter()
+        .map(|sha| (sha.clone(), "landing_span_pending".into()))
+        .collect();
+    state.associations.insert(
+        history.new[0].clone(),
+        Some(DeliveryAssociation {
+            key: "recorded-pr".into(),
+            anchor: "anchor-not-yet-observed".into(),
+            reference: "https://github.com/example/repo/pull/1".into(),
+            landed_at: chrono::DateTime::UNIX_EPOCH,
+        }),
+    );
+    state.associations.insert(history.new[1].clone(), None);
+    assert!(store.automation_commit(&baseline, &state, None).unwrap());
+    let known = state.associations.clone();
+    let calls = Cell::new(0);
+    // The first three observations make two attempts, and later observations
+    // exercise the five- and thirty-minute boundaries without sleeping.
+    for (seconds, expected) in [
+        (0, 1),
+        (30, 1),
+        (60, 2),
+        (359, 2),
+        (360, 3),
+        (2159, 3),
+        (2160, 4),
+        (4000, 4),
+    ] {
+        let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(seconds);
+        let host = LookupHost {
+            source: Source::at(history.root.path(), now),
+            calls: &calls,
+            missing: &history.new[2],
+        };
+        let diagnostic = delivery::evaluate(
+            store.as_ref(),
+            &host,
+            Evaluation {
+                consumer: &state.consumer,
+                epoch: &state.epoch,
+                trigger: &trigger,
+                enabled: true,
+                dry_run: false,
+                now,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            calls.get(),
+            expected,
+            "provider attempts at {seconds}s respect persisted backoff"
+        );
+        let persisted = store.automation_state(&state.consumer).unwrap().unwrap();
+        assert_eq!(diagnostic.state.as_ref(), Some(&persisted));
+        for (sha, association) in &known {
+            assert_eq!(persisted.associations.get(sha), Some(association));
+        }
+        if expected < 4 {
+            assert_eq!(
+                persisted.lookup_retries[&history.new[2]].attempts,
+                expected as u32
+            );
+        } else {
+            assert!(
+                persisted.lookup_retries.is_empty(),
+                "a successful identity lookup retires its retry state"
+            );
+        }
+    }
 }

@@ -511,6 +511,7 @@ fn replay_plan(
     canonical_seed.excluded.clear();
     canonical_seed.unresolved.clear();
     canonical_seed.associations.clear();
+    canonical_seed.lookup_retries.clear();
     canonical_seed.active = None;
     let canonical = super::observe::apply_with_commit_limit(
         &canonical_seed,
@@ -619,6 +620,12 @@ fn replay_plan(
     next.associations
         .retain(|commit, _| !mapped.contains(commit.as_str()));
     next.associations.extend(canonical.associations);
+    next.lookup_retries
+        .retain(|commit, _| !mapped.contains(commit.as_str()));
+    next.lookup_retries.extend(canonical.lookup_retries);
+    next.lookup_retries.retain(|commit, _| {
+        next.unresolved.contains_key(commit) && !next.associations.contains_key(commit)
+    });
     next.observed = input.record.new_observed.clone();
 
     let mut record = input.record.clone();

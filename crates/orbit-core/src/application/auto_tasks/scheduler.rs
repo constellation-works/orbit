@@ -12,7 +12,62 @@ use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
 use std::path::PathBuf;
 
+use crate::application::automation::SourceCache;
 use crate::application::plugin::InactivePlugin;
+
+struct CachedDispatch<'a> {
+    runtime: &'a OrbitRuntime,
+    cache: &'a SourceCache,
+}
+
+impl AutoTaskDispatch for CachedDispatch<'_> {
+    fn evaluate_delivery(
+        &self,
+        definition: &AutoTaskDefinition,
+        dry_run: bool,
+        now: DateTime<Utc>,
+    ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
+        crate::application::automation::evaluate_auto_task_with_cache(
+            self.runtime,
+            definition,
+            dry_run,
+            now,
+            Some(self.cache),
+        )
+    }
+
+    fn definition_root(&self) -> PathBuf {
+        self.runtime.definition_root()
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.runtime.state_dir()
+    }
+
+    fn has_open_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        self.runtime.has_open_instance(definition)
+    }
+
+    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
+        self.runtime.mint_task(definition)
+    }
+
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
+        self.runtime.skip_reason(definition)
+    }
+
+    fn probe_change_since_last_sweep(
+        &self,
+        definition: &AutoTaskDefinition,
+        precondition: &SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        self.runtime
+            .probe_change_since_last_sweep(definition, precondition)
+    }
+}
 
 /// One definition as a list surface shows it.
 #[derive(Debug, Clone)]
@@ -192,7 +247,20 @@ pub fn run_auto_task_scheduler_at(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
-    orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(runtime, now, options)
+    run_auto_task_scheduler_with_cache(runtime, now, options, &SourceCache::default())
+}
+
+pub(crate) fn run_auto_task_scheduler_with_cache(
+    runtime: &OrbitRuntime,
+    now: DateTime<Utc>,
+    options: SchedulerOptions,
+    cache: &SourceCache,
+) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
+    orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(
+        &CachedDispatch { runtime, cache },
+        now,
+        options,
+    )
 }
 
 /// Mint one task from a definition's template — the single template→task

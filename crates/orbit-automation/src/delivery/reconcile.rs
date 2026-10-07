@@ -102,6 +102,8 @@ pub(super) fn reconcile(
                 .retain(|sha, _| !active.batch.commits.contains(sha));
             next.associations
                 .retain(|sha, _| !active.batch.commits.contains(sha));
+            next.lookup_retries
+                .retain(|sha, _| !active.batch.commits.contains(sha));
             next.active = None;
 
             commit(store, &state, next, Some(&receipt))

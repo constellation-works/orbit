@@ -74,6 +74,7 @@ fn foreign_baseline(
         excluded: vec![],
         unresolved: Default::default(),
         associations: Default::default(),
+        lookup_retries: Default::default(),
         active: None,
         stall: None,
     };

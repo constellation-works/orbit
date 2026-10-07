@@ -82,6 +82,7 @@ fn baseline() -> AutomationState {
         excluded: vec![],
         unresolved: Default::default(),
         associations: Default::default(),
+        lookup_retries: Default::default(),
         active: None,
         stall: None,
     }
@@ -227,6 +228,7 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
         "excluded",
         "waived",
         "associations",
+        "lookup_retries",
         "trigger.retries",
         "formatting",
         "field_order",

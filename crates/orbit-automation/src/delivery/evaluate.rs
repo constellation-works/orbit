@@ -73,6 +73,7 @@ fn evaluate_pass(
                 excluded: vec![],
                 unresolved: Default::default(),
                 associations: Default::default(),
+                lookup_retries: Default::default(),
                 active: None,
                 stall: None,
             };
@@ -145,6 +146,17 @@ fn evaluate_pass(
         return diagnostic(store, consumer, "disabled", Some(state));
     }
 
+    // Parked batches retain their debt until recovery. Reconciliation and
+    // definition adoption above still run, but source observation cannot help
+    // a batch whose executor budget has already ended.
+    if state
+        .active
+        .as_ref()
+        .is_some_and(|active| matches!(active.state, BatchState::Exhausted | BatchState::Failed))
+    {
+        return diagnostic(store, consumer, "needs_attention", Some(state));
+    }
+
     // A consumer an operator has to repair observes nothing: retrying the same
     // unprovable source fact every minute is what hid this debt before. Work
     // already admitted was reconciled above, so evidence can still arrive.
@@ -195,8 +207,7 @@ fn evaluate_pass(
 
     if let Some(active) = &state.active {
         let reason = match active.state {
-            BatchState::Failed => "batch_failed",
-            BatchState::Exhausted => "needs_attention",
+            BatchState::Failed | BatchState::Exhausted => "needs_attention",
             _ => "batch_pending",
         };
         return diagnostic(store, consumer, reason, Some(state));

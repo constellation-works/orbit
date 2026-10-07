@@ -260,6 +260,7 @@ fn validate(
         || previous.pending_commits != next.pending_commits
         || previous.unresolved != next.unresolved
         || previous.associations != next.associations
+        || previous.lookup_retries != next.lookup_retries
     {
         return Err(invalid());
     }
@@ -404,6 +405,11 @@ fn validate_history_replay(
             .associations
             .keys()
             .any(|commit| !next.pending_commits.contains(commit))
+        || next.lookup_retries.keys().any(|commit| {
+            !next.pending_commits.contains(commit)
+                || !next.unresolved.contains_key(commit)
+                || next.associations.contains_key(commit)
+        })
     {
         return Err(invalid());
     }

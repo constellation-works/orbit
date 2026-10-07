@@ -59,6 +59,12 @@ pub(super) fn apply_with_commit_limit(
         }
     }
 
+    for (sha, retry) in page.lookup_retries {
+        if next.pending_commits.contains(&sha) {
+            next.lookup_retries.insert(sha, retry);
+        }
+    }
+
     for delivery in page.deliveries {
         if delivery.key.is_empty()
             || delivery.repository != state.repository
@@ -162,6 +168,8 @@ pub(super) fn apply_with_commit_limit(
             .position(|sha| sha == &d.after.commit)
     });
     next.observed = page.through;
+    next.lookup_retries
+        .retain(|sha, _| next.unresolved.contains_key(sha) && !next.associations.contains_key(sha));
 
     if next.pending.len() > 1000 {
         return Err(AutomationError::Deferred("source_backpressure".into()));
@@ -210,6 +218,8 @@ pub(super) fn retire_excluded_prefix(state: &AutomationState) -> Option<Automati
     next.unresolved
         .retain(|sha, _| !prefix.iter().any(|commit| commit == sha));
     next.associations
+        .retain(|sha, _| !prefix.iter().any(|commit| commit == sha));
+    next.lookup_retries
         .retain(|sha, _| !prefix.iter().any(|commit| commit == sha));
     Some(next)
 }

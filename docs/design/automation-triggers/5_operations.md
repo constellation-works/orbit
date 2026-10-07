@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-10-04
+last_validated: 2026-10-07
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -10,6 +10,23 @@ last_validated: 2026-10-04
 Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
 definitions in-process. Routines submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
 approval/admission lifecycle. There is no new daemon or coverage submission tool.
+
+Delivery observation reuses recorded provider results, including a confirmed
+absence of a PR. A lookup that fails or returns ambiguous identities retries
+after one minute, then five minutes, then every thirty minutes. The checkpoint
+stores each unresolved lookup's last attempt time and count; older checkpoints
+without this information remain readable and get an immediate first attempt.
+Grouping and owner evidence still run for recorded associations, so missing
+landing evidence can arrive without another provider lookup.
+
+Within one clock tick, routine and auto-task consumers share the fetched head
+for the same repository, branch and Git object store, and share each commit's
+provider response (or failure). Independent clones fetch their own objects.
+The cache ends with the tick, and each observation retains its own command
+deadline. Exhausted or failed delivery batches report `needs_attention` before
+observation, in both preview and live evaluation, while keeping their retained
+debt unchanged until recovery. Reconciliation and definition adoption still
+precede that hold.
 
 ## Configuration and migration
 

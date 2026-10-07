@@ -20,6 +20,7 @@ mod provider;
 mod recovery;
 mod reset;
 pub(crate) mod source;
+mod source_cache;
 pub(crate) mod stall;
 mod task;
 
@@ -36,6 +37,7 @@ pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attem
 pub use recovery::recover_auto_task;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
+pub(crate) use source_cache::SourceCache;
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
 
 #[cfg(test)]
@@ -62,6 +64,16 @@ pub fn evaluate_auto_task(
     dry_run: bool,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_auto_task_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_auto_task_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&SourceCache>,
+) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
     } = &definition.schedule
@@ -77,6 +89,7 @@ pub fn evaluate_auto_task(
         runtime,
         Action::Task(definition),
         ownership,
+        cache,
         delivery::Evaluation {
             consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
             epoch: &epoch,
@@ -93,6 +106,16 @@ pub fn evaluate_routine(
     definition: &RoutineDefinition,
     dry_run: bool,
     now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_routine_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_routine_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&SourceCache>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
     if definition.trigger.state.is_some() {
         return members::evaluate(runtime, definition, dry_run, now);
@@ -115,6 +138,7 @@ pub fn evaluate_routine(
         runtime,
         Action::Job(definition),
         ownership,
+        cache,
         delivery::Evaluation {
             consumer: &consumer_key(runtime, "routine", &definition.name)?,
             epoch: &epoch,
@@ -130,6 +154,7 @@ fn evaluate(
     runtime: &OrbitRuntime,
     action: Action<'_>,
     ownership: DeliveryOwnership,
+    cache: Option<&SourceCache>,
     mut request: delivery::Evaluation<'_>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let configured_enabled = request.enabled;
@@ -142,7 +167,12 @@ fn evaluate(
     let host = Host {
         runtime,
         action,
-        source: source::Source::new(&runtime.paths().repo_root),
+        source: match cache {
+            Some(cache) => {
+                source::Source::with_cache(&runtime.paths().repo_root, cache, request.now)
+            }
+            None => source::Source::at(&runtime.paths().repo_root, request.now),
+        },
     };
 
     let mut diagnostic =
@@ -269,6 +299,10 @@ impl DeliveryHost for Host<'_> {
 
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.source.head(branch)
+    }
+
+    fn repository(&self, _branch: &str) -> Result<String, AutomationError> {
+        self.source.repository()
     }
 
     fn observe(
