@@ -10,6 +10,7 @@ class Node {
     this.classList = { add: name => { this.className += ` ${name}`; } };
   }
   set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { assert.equal(value, ''); this.children = []; this.text = ''; }
   get textContent() { return this.text + this.children.map(child => child.textContent ?? child).join(' '); }
   get childNodes() { return this.children; }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
@@ -28,17 +29,24 @@ const container = new Node('div'); container.id = 'audit-summary-body';
 const title = new Node('h3');
 const scoreboardBody = new Node('div'); scoreboardBody.id = 'scoreboard-body';
 const scoreboardCount = new Node('span');
+const scoreboardAgentStrip = new Node('div');
 const diagnosticsBody = new Node('div'); diagnosticsBody.id = 'diag-body';
 const diagnosticsCount = new Node('span');
+const auditScopeChips = new Node('div');
+const auditFilterChips = new Node('div');
 const document = {
   activeElement: null,
   createElement: tag => new Node(tag),
   createTextNode: text => { const node = new Node('#text'); node.textContent = text; return node; },
-  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount })[id] || null,
+  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount, 'scoreboard-agent-strip': scoreboardAgentStrip, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount, 'audit-scope-chips': auditScopeChips, 'audit-filter': auditFilterChips })[id] || null,
   querySelectorAll: () => [],
 };
 const window = { location: { search: '?workspace=ws_fixture&window=24h', hash: '' } };
-const context = vm.createContext({ URLSearchParams, window, document, console });
+const requestedPaths = [];
+const context = vm.createContext({
+  URLSearchParams, window, document, console, AbortController, setTimeout, clearTimeout,
+  fetch: async path => { requestedPaths.push(path); return { ok: true, json: async () => [] }; },
+});
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });
 const audit = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/audit.js', import.meta.url), 'utf8'), { context });
 await common.link(() => { throw new Error('unexpected common dependency'); });
@@ -112,7 +120,7 @@ const descendants = node => [node, ...node.children.flatMap(descendants)];
 const incidentRow = () => descendants(scoreboardBody).find(node => node.dataset.key === 'scoreboard-Operations-failure_incidents');
 const scoreboardPayload = {
   window: '24h', failure_incidents_scan_limit: 10000,
-  agents: { codex: { failure_incidents: 2, failure_incident_events: 3 } },
+  agents: { codex: { tasks_created: 1, tool_calls: 5, failed_tool_calls: 1, failure_incidents: 2, failure_incident_events: 3 } },
 };
 scoreboard.namespace.renderScoreboard({
   ...scoreboardPayload, failure_incidents_truncated: true,
@@ -134,6 +142,53 @@ scoreboard.namespace.renderScoreboard({
 });
 assert.doesNotMatch(incidentRow().textContent, /capped/i, 'complete scoreboard refresh clears the qualifier');
 assert.doesNotMatch(scoreboardBody.textContent, /Only the newest|Capped sample/);
+
+// Drive the actual card/header/cell listeners, then reload the route and fetch
+// Audit. This catches losing family or non-success filters at any UI boundary.
+const familyTargets = [...descendants(scoreboardAgentStrip), ...descendants(scoreboardBody)].filter(node =>
+  node.className.split(' ').includes('scoreboard-agent-card')
+  || node.className.split(' ').includes('col-agent')
+  || node.dataset.agent === 'codex');
+assert.ok(familyTargets.some(node => node.tagName === 'button'), 'agent card is exercised');
+assert.ok(familyTargets.some(node => node.tagName === 'th'), 'column header is exercised');
+assert.ok(familyTargets.some(node => node.dataset.metric === 'failure_incidents'), 'incident cell is exercised');
+for (const target of familyTargets) {
+  const family = target.dataset.agent || (target.tagName === 'th'
+    ? target.children[0].textContent
+    : descendants(target).find(node => node.className === 'scoreboard-agent-name').textContent);
+  target.listeners.get('click')();
+  const familyRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+  assert.equal(familyRoute.get('agent_family'), family);
+  assert.equal(familyRoute.has('role'), false, 'scoreboard uses the family predicate');
+  if (target.dataset.metric === 'failure_incidents') {
+    assert.equal(familyRoute.get('status'), 'non_success', 'incidents include failed and denied rows');
+  } else if (['tools', 'failed_tool_calls'].includes(target.dataset.metric)) {
+    assert.equal(familyRoute.get('status'), 'failure', 'raw failed calls retain their exact status');
+  } else {
+    assert.equal(familyRoute.has('status'), false, 'other metrics and agent views include all statuses');
+  }
+  audit.namespace.applyAuditHashQuery(familyRoute);
+  assert.equal(audit.namespace.buildAuditHash(), window.location.hash, 'route survives reload');
+  await audit.namespace.fetchAndRenderAudit();
+  const request = new URLSearchParams(requestedPaths.at(-1).split('?')[1]);
+  assert.equal(request.get('agent_family'), family, 'family reaches the Events API');
+  assert.equal(request.get('workspace'), 'ws_fixture');
+  assert.equal(request.get('since'), '24h');
+  assert.equal(request.get('status'), familyRoute.get('status'));
+}
+const familyChip = auditScopeChips.children.find(node => node.dataset.chip === 'agent family');
+assert.ok(familyChip, 'family filter can be removed');
+familyChip.listeners.get('click')({ preventDefault() {} });
+assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).has('agent_family'), false);
+audit.namespace.buildAuditChips();
+const nonSuccessChip = auditFilterChips.children.find(node => node.dataset.status === 'non_success');
+assert.ok(nonSuccessChip, 'combined status filter is available in Events');
+nonSuccessChip.listeners.get('click')();
+assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).has('status'), false, 'combined status can be cleared');
+audit.namespace.navigateToRole('gpt-6.1-sol');
+const exactRoleRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(exactRoleRoute.get('role'), 'gpt-6.1-sol');
+assert.equal(exactRoleRoute.has('agent_family'), false, 'exact-role navigation resets the family');
 scoreboard.namespace.renderScoreboard({
   ...scoreboardPayload, failure_incidents_truncated: null,
   agents: { codex: { failure_incidents: null, failure_incident_events: null } },

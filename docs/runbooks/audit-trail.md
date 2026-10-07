@@ -83,6 +83,20 @@ handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
 Tool-call aggregates use the command/subcommand/timestamp index added by the
 store migration, while retaining their existing host-global scope.
 
+Scoreboard agent cards, column headers and metric cells open Audit Events with
+`agent_family=<name>`. This applies the same family normalization as the
+scoreboard, including rows whose recorded role is a model label. The existing
+`role=<label>` Events filter still matches the exact stored role. The
+failure-incidents cell adds `status=non_success`, which includes both `failure`
+and `denied`; Events shows these filters as removable scope chips. The rows are
+raw evidence, so several rows can belong to one counted incident.
+
+Family and combined-status filters compose with the other Events filters and
+apply before `offset`/`limit`. Like execution, profile and free-text filtering,
+they scan at most 10,000 source rows per request; a sparse match can return a
+short page at that bound. Exact incident-ID drilldowns retain their separate
+evidence lookup and do not apply these broader filters.
+
 Run the capped-population timing benchmark explicitly in release mode:
 
 ```sh

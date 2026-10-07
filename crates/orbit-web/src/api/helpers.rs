@@ -34,10 +34,14 @@ pub(super) struct AuditQuery {
     pub(super) since: Option<String>,
     #[serde(default)]
     pub(super) tool: Option<String>,
+    /// A stored status, or `non_success` for failure and denied rows together.
     #[serde(default)]
     pub(super) status: Option<String>,
     #[serde(default)]
     pub(super) role: Option<String>,
+    /// Matches recorded roles using the scoreboard's agent-family fold.
+    #[serde(default)]
+    pub(super) agent_family: Option<String>,
     #[serde(default)]
     pub(super) workspace_id: Option<String>,
     #[serde(default)]

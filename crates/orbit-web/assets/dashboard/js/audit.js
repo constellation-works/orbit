@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 
 const AUDIT_LIMIT = positiveIntParam("audit", 50);
 const INCIDENT_ID_BATCH_SIZE = 500;
-const AUDIT_STATUSES = ["success", "failure", "denied"];
+const AUDIT_STATUSES = ["success", "failure", "denied", "non_success"];
 const AUDIT_SUBTABS = ["events", "policy"];
 
 // Audit tab state (moved from app.js)
@@ -17,6 +17,7 @@ let auditFilter = {
   q: "",
   tool: null,
   role: null,
+  agent_family: null,
   // Filters audit Events by `execution_id` (the orbit invocation id). The CLI
   // SQLite audit table has no real `run_id` field, so this never identifies a
   // JobRun — see T20260427-26.
@@ -151,6 +152,7 @@ function buildAuditHash() {
     if (auditFilter.status) sp.set("status", auditFilter.status);
     if (auditFilter.tool) sp.set("tool", auditFilter.tool);
     if (auditFilter.role) sp.set("role", auditFilter.role);
+    if (auditFilter.agent_family) sp.set("agent_family", auditFilter.agent_family);
     if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.q) sp.set("q", auditFilter.q);
@@ -239,8 +241,14 @@ function renderScopeChips() {
       window.location.hash = buildAuditHash();
     }));
   }
+  if (auditFilter.agent_family) {
+    host.appendChild(removableChip("agent family", auditFilter.agent_family, () => {
+      auditFilter.agent_family = null;
+      window.location.hash = buildAuditHash();
+    }));
+  }
   if (auditFilter.status) {
-    host.appendChild(removableChip("status", auditFilter.status, () => {
+    host.appendChild(removableChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {
       auditFilter.status = null;
       window.location.hash = buildAuditHash();
     }));
@@ -265,6 +273,7 @@ function applyAuditHashQuery(query) {
   auditFilter.status = query.get("status") || null;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
+  auditFilter.agent_family = query.get("agent_family") || null;
   auditFilter.execution_id =
     query.get("execution_id") || query.get("run_id") || null;
   auditFilter.profile = query.get("profile") || null;
@@ -317,6 +326,7 @@ function fetchAndRenderAudit(ctx) {
     if (auditFilter.status) sp.set("status", auditFilter.status);
     if (auditFilter.tool) sp.set("tool", auditFilter.tool);
     if (auditFilter.role) sp.set("role", auditFilter.role);
+    if (auditFilter.agent_family) sp.set("agent_family", auditFilter.agent_family);
     if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.q) sp.set("q", auditFilter.q);
@@ -935,6 +945,7 @@ function emptyAuditFilter() {
     q: "",
     tool: null,
     role: null,
+    agent_family: null,
     execution_id: null,
     profile: null,
     eventIds: [],
@@ -952,8 +963,8 @@ function navigateToAuditExecution(executionId, ctx) {
   window.location.hash = buildAuditHash();
 }
 
-/// Navigates to the Audit tab pre-filtered by `role` (audit `role` ≈ scoreboard
-/// agent name). Clears unrelated filters so the landing page is the role view.
+/// Navigates to the Audit tab pre-filtered by the exact recorded `role`.
+/// Clears unrelated filters so the landing page is the role view.
 function navigateToRole(role, ctx) {
   navigateToDrilldown({ role }, ctx);
 }
@@ -966,6 +977,7 @@ function navigateToDrilldown(opts = {}, ctx) {
     ? [...new Set(opts.eventIds.filter(id => Number.isSafeInteger(id) && id > 0))]
     : [];
   auditFilter.role = auditFilter.eventIds.length > 0 ? null : (opts.role || null);
+  auditFilter.agent_family = auditFilter.eventIds.length > 0 ? null : (opts.agent_family || null);
   auditFilter.metric = auditFilter.eventIds.length > 0 ? null : (opts.metric || null);
   auditFilter.status = auditFilter.eventIds.length > 0 ? null : (opts.status || null);
   // Surface and status filters remain useful for ordinary metric drilldowns.
@@ -989,7 +1001,7 @@ function buildAuditChips(ctx) {
   });
   container.appendChild(allChip);
   for (const status of AUDIT_STATUSES) {
-    const chip = el("button", { class: "chip", text: status });
+    const chip = el("button", { class: "chip", text: status === "non_success" ? "failure + denied" : status });
     chip.dataset.status = status;
     chip.addEventListener("click", () => {
       auditFilter.status = auditFilter.status === status ? null : status;
