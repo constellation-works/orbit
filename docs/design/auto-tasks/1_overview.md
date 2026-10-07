@@ -109,12 +109,18 @@ definition of the same name.
   cursor task.
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
-  commit, partitions the tree into areas of roughly 90k lines along crate and
-  module boundaries, and files one area-review chore per area tagged
+  commit, measures tracked text at that SHA, and splits directories or file
+  sets into areas of at most 25,000 lines. Its `review-areas.json` artifact
+  records the inventories, counts and exclusions. It files one area-review
+  chore per bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
-  complexity or below with no pinned crew. Area reviewers read the whole area
-  at that commit and file findings as `bug`s tagged `code-review` +
-  `full-code-review`.
+  complexity or below with no pinned crew. Area reviewers read every partition
+  of at most 10,000 lines in full, recording file/range coverage and findings
+  in `read-progress.json`; resumed and re-crewed runs continue from that
+  artifact. Parallel reading is used when the crew and execution rules permit
+  it. Incomplete coverage reports `review_incomplete` with uncovered partitions
+  in the artifact and task comment. Findings are `bug`s tagged `code-review` +
+  `full-code-review`, with source-file and matching test context selectors.
 - `doc-duties` — disabled-by-default daily validation of the oldest tracked
   documentation. Existing `last_validated` dates take precedence; documents
   without the key use git last-touched dates and completed task summaries for

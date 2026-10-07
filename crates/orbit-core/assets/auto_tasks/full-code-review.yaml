@@ -18,7 +18,7 @@ template:
     - Use the registered Orbit tool surface. List area reviews already in flight with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["full-code-review","no-diff-expected"],"model":"<agent-family>"}'`.
       File an area review with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"required_tools":["orbit.search","orbit.task.add"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `full-code-review` and `no-diff-expected`.
       Never tag one `code-review`: completed `code-review` chores are the
@@ -37,28 +37,88 @@ template:
 
     ## Partition the tree
 
-    Measure tracked lines per directory at the pinned SHA, for example with
-    `git archive <sha> -- <directory> | tar -xO | wc -l`. Group directories
-    into review areas of roughly 90,000 lines or fewer, following package, crate
-    and module boundaries: never split one module across areas, and split an
-    oversized package along its top-level modules. Group small, closely related
-    directories into one area. Every tracked source directory belongs to
-    exactly one area. Vendored, generated and lockfile-only content may be
-    excluded; name each exclusion.
+    The area bound is **25,000 tracked text lines**, a maximum, not a target
+    that may be exceeded. Inventory tracked files with `git ls-tree -r -z
+    <sha>` and count each text blob at that SHA (`git show <sha>:<path>`),
+    including an unterminated final line. Do not measure the moving checkout
+    or count a concatenated archive containing binary files. Include source,
+    tests, documentation and authored assets, including files at the root.
+    Vendored, generated, binary and lockfile-only content may be excluded;
+    record every excluded path and its reason.
+
+    Start with package/crate directories. Recursively split every candidate
+    above 25,000 lines into disjoint child directories, keeping files directly
+    in the parent as separate candidates. If a leaf directory is still too
+    large, split it into disjoint file sets. Prefer module boundaries where
+    they fit the bound; the bound takes precedence. Group small, closely
+    related candidates only when their combined count stays within the bound.
+    Every included file must belong to exactly one area. Use `dir:` selectors
+    for whole directories and `file:` selectors for direct files or file sets;
+    never select an entire parent alongside its children in different areas.
+    If a single included file exceeds 25,000 lines and this rule cannot produce
+    bounded areas, report `review_incomplete` with that uncovered path and
+    count; do not file an oversized chore or silently exclude the file.
+
+    Before filing, verify all area counts against the bound and reconcile the
+    inventories for gaps and duplicates. Write `.orbit/tmp/review-areas.json`
+    with `schema_version: 1`, `pinned_sha`, `area_line_bound: 25000`, the areas
+    (name, selectors, file paths and per-file counts, total line count), and
+    exclusions (path and reason). Attach it to this coordinator task with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/review-areas.json","path":"review-areas.json","model":"<agent-family>"}'`.
 
     ## File one area review per area
 
     Title each task `Full review: <area name> @ <short SHA>`. Its description
-    carries the brief below, with the pinned SHA and the area's directories
-    filled in. Set `context_files` to the area's `dir:` selectors. Use `hard`
+    carries the brief below, with the pinned SHA, area's selectors, measured
+    line count and complete file inventory filled in. Set `context_files` to
+    those `dir:` / `file:` selectors. Use `hard`
     for areas holding concurrency, persistence, security boundaries or process
     control, and `medium` otherwise.
 
     Area brief:
 
-    > Review `<directories>` in full as it stands at commit `<full SHA>` on
-    > `<integration branch>`. Read the whole area, not a diff; read from that
+    > Review `<area selectors>` in full as it stands at commit `<full SHA>` on
+    > `<integration branch>`. This area has `<measured line count>` tracked
+    > text lines (maximum 25,000); its complete file inventory and per-file
+    > counts are `<inventory>`. Read the whole area, not a diff; read from that
     > commit (`git show <sha>:<path>`) if the checkout has moved.
+    >
+    > Before reading, list this area's task artifacts with
+    > `orbit tool run orbit.task.show --input '{"id":"<this area task ID>","field":"artifacts","model":"<agent-family>"}'`.
+    > If `read-progress.json` exists, retrieve it with
+    > `orbit tool run orbit.task.artifact.get --input '{"id":"<this area task ID>","path":"read-progress.json","model":"<agent-family>"}'`.
+    > A resumed or re-crewed run must continue from that artifact, preserving
+    > completed partitions and findings already filed, instead of starting
+    > over. Verify its pinned SHA, area selectors and complete file/range
+    > inventory match this task. A present but unreadable or mismatched artifact
+    > is `review_incomplete`; do not overwrite it or pretend this is a new run.
+    >
+    > On the first run, divide the inventory into stable named read partitions
+    > of **at most 10,000 lines** each. Prefer directory/module boundaries;
+    > split files larger than a partition into explicit inclusive line ranges.
+    > Cover every included line exactly once, with no gaps or overlaps, and
+    > include empty files in the inventory. Read every partition in full.
+    > Use parallel read passes or subagents when the crew and execution rules
+    > support them; otherwise read partitions sequentially. The reviewer remains
+    > responsible for reconciling every partition and checking calls and
+    > invariants across their boundaries. A search, summary, sampled read or
+    > truncated tool response does not count as a full read; continue in chunks
+    > until all lines in the partition have been examined.
+    >
+    > Write `.orbit/tmp/read-progress.json` with `schema_version: 1`,
+    > `pinned_sha`, `area_selectors`, `area_line_count`,
+    > `partition_line_bound: 10000`, and `partitions`. Each partition records
+    > its stable ID, files / inclusive line ranges, line count, status
+    > (`pending`, `in_progress`, or `complete`), the ranges actually read,
+    > confirmed findings with filed task IDs, and remaining checks across
+    > partition boundaries. Attach the initial inventory before reading and
+    > update it after each read chunk, completed partition and filed finding
+    > with
+    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/read-progress.json","path":"read-progress.json","model":"<agent-family>"}'`.
+    > Parallel readers return progress to one owner who merges and attaches it;
+    > they must not overwrite the shared artifact independently. On resume,
+    > keep completed partitions, finish only unread ranges and unresolved
+    > checks, and reconcile the artifact before claiming full coverage.
     >
     > Look for:
     > - correctness: logic errors, wrong edge cases, broken invariants between
@@ -83,15 +143,34 @@ template:
     > `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
     > and skip anything an open `code-review` task already tracks. File each
     > confirmed finding as its own task with
-    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`,
-    > citing `file:line` evidence at the pinned SHA. Skip nitpicks. An area with
-    > no confirmed findings is a successful no-op; do not invent work. Record
-    > the SHA, what was read, and each filed task ID in the execution summary.
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`,
+    > citing `file:line` evidence at the pinned SHA. Derive canonical `file:`
+    > selectors from every evidenced source path, removing the line suffix,
+    > and add the matching regression-test location. Use existing paths where
+    > possible; for a test file that must be created, set
+    > `allow_missing_context: true` and identify that intended path. Never file
+    > a finding without context selectors. Skip nitpicks.
+    >
+    > If full reading or a partition bound cannot be met, attach the latest
+    > progress and return `result.blocker` with `kind: review_incomplete` and
+    > evidence naming each uncovered partition, file / unread line range and
+    > unresolved check. Put the same inventory in the task comment (return
+    > `comment` in claimed mode) so it remains visible on the blocked task;
+    > leave lifecycle transitions to the pipeline. Incomplete reading is never
+    > a clean no-op. Only an area with every partition fully read, checks across
+    > partitions resolved and no confirmed findings is a successful no-op;
+    > follow the workspace's no-diff artifact and validation requirements.
+    > Record the SHA, area line count, per-partition coverage, progress artifact
+    > and each filed task ID in the execution summary.
 
     Give each area task these acceptance criteria: the whole area was read at
-    the pinned SHA; every filed finding is verified, non-duplicate, a `bug`
+    the pinned SHA using partitions of at most 10,000 lines, with complete
+    per-partition coverage in `read-progress.json` and resumed runs continuing
+    from it; every filed finding is verified, non-duplicate, a `bug`
     tagged `code-review` and `full-code-review` with `file:line` evidence at
-    that SHA; a clean area succeeds as a no-op.
+    that SHA and source/test context selectors; a fully read clean area succeeds
+    as a no-op, while incomplete reading reports uncovered partitions in the
+    progress artifact and task comment with `review_incomplete`.
 
     ## Finish
 
@@ -101,8 +180,8 @@ template:
     ID.
   acceptance_criteria:
   - One integration-branch commit was pinned by full SHA and every area task names it.
-  - The tracked tree is partitioned into areas of roughly 90,000 lines or fewer along package and module boundaries, with every exclusion named.
-  - Each area has exactly one filed `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, `context_files` set to the area's directories, and a `spawned_from` relation to this task.
+  - The tracked tree is partitioned into areas of at most 25,000 text lines along directory or file boundaries, with measured inventories in `review-areas.json` and every exclusion named; an unpartitionable oversized file is reported as `review_incomplete`, never filed as an oversized area.
+  - Each bounded area has exactly one filed `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, source `dir:` / `file:` context selectors, artifact read/write tools, a measured line count, the partitioned reading and resume brief, and a `spawned_from` relation to this task.
   - The execution summary records the pinned SHA, the area table and every area task ID.
   task_type: chore
   tags:
@@ -111,6 +190,7 @@ template:
   required_tools:
   - orbit.task.add
   - orbit.task.list
+  - orbit.task.artifact.put
   priority: medium
   complexity: medium
   # The portable system lane is seeded per machine and compatibility-aliased
