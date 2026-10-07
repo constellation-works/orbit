@@ -180,6 +180,15 @@ is not erasure.
 Publication uses an Orbit-owned cache. It does not check out, switch, stage, or change the
 source-worktree branch.
 
+If a push lands but saving the local success record fails or is interrupted, retry the same
+publish command. Orbit uses private recovery evidence keyed by commit to report `reconciled`
+without another push, even after a concurrent attempt loses its compare-and-swap. Repeated
+retries keep this evidence until a later publish observes the durably recorded success.
+That publish prunes records through the acknowledged generation; newer attempts remain.
+Preserve the owner's `state/task-publication/` cache while recovering a lost success save.
+Legacy single-file recovery records are still recognized. An unrelated remote tip continues
+to require authority resolution.
+
 ## Verify the snapshot
 
 After every publish, compare the owner-local success record with the validated remote tip:

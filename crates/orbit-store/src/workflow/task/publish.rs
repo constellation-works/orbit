@@ -17,7 +17,7 @@
 //! coordination registry and the remote envelope before anything is built.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
-use crate::fs::yaml::write_yaml_atomic_with;
+use crate::fs::yaml::write_yaml_durable_with;
 
 use super::git::{
     GitRunner, field_mismatch, path_str, remote_has_password, remotes_match, short_branch,
@@ -44,8 +44,10 @@ use super::publication::{
 
 /// Error prefix and command label for every transport failure.
 const PUBLISH_LABEL: &str = "task publication";
-/// Private record of a push that was issued but not yet confirmed as recorded.
+/// Legacy single-record cache, still read for interrupted-push recovery.
 const PENDING_FILE_NAME: &str = "pending-publication.yaml";
+/// Commit-keyed evidence: a losing attempt must not overwrite a landed push.
+const PENDING_DIR_NAME: &str = "pending-publications";
 const PENDING_FORMAT_VERSION: u32 = 1;
 
 /// Local checkout role of the caller. Only the declared owner may publish.
@@ -124,6 +126,34 @@ pub fn publish_task_snapshot(
     policy: &AttachmentPolicy,
     scanner: Option<&dyn AttachmentSensitivityScanner>,
 ) -> Result<PublicationPublishOutcome, OrbitError> {
+    publish_task_snapshot_inner(
+        registry,
+        request,
+        policy,
+        scanner,
+        #[cfg(test)]
+        None,
+    )
+}
+
+/// Deterministic interleaving seam around durable evidence and remote CAS.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingWriteStage {
+    Before,
+    After,
+}
+
+#[cfg(test)]
+type PendingHook<'a> = dyn Fn(PendingWriteStage, &str) + 'a;
+
+pub(super) fn publish_task_snapshot_inner(
+    registry: &TaskRegistryStore,
+    request: PublicationPublishRequest,
+    policy: &AttachmentPolicy,
+    scanner: Option<&dyn AttachmentSensitivityScanner>,
+    #[cfg(test)] pending_hook: Option<&PendingHook<'_>>,
+) -> Result<PublicationPublishOutcome, OrbitError> {
     let request = validate_request(request)?;
     assert_registered_workspace(registry, &request)?;
     let cache = PublicationCache::open(registry, &request)?;
@@ -164,6 +194,10 @@ pub fn publish_task_snapshot(
     }
 
     let commit = cache.commit_snapshot(&request, &staged, generation, previous.as_deref())?;
+    #[cfg(test)]
+    if let Some(hook) = pending_hook {
+        hook(PendingWriteStage::Before, &commit);
+    }
     cache.write_pending(&PendingPublication {
         format_version: PENDING_FORMAT_VERSION,
         publication_id: request.publication_id.clone(),
@@ -173,6 +207,10 @@ pub fn publish_task_snapshot(
         commit: commit.clone(),
         previous_publication: previous.clone(),
     })?;
+    #[cfg(test)]
+    if let Some(hook) = pending_hook {
+        hook(PendingWriteStage::After, &commit);
+    }
     cache.push_fast_forward(&request, &commit, observed_tip.as_deref())?;
 
     Ok(PublicationPublishOutcome {
@@ -303,6 +341,7 @@ struct PublicationCache {
     root: PathBuf,
     git_dir: PathBuf,
     pending_path: PathBuf,
+    pending_dir: PathBuf,
 }
 
 impl PublicationCache {
@@ -316,6 +355,7 @@ impl PublicationCache {
         let cache = Self {
             git_dir: root.join("origin.git"),
             pending_path: root.join(PENDING_FILE_NAME),
+            pending_dir: root.join(PENDING_DIR_NAME),
             root,
         };
         if cache.git_dir.join("HEAD").is_file() {
@@ -616,46 +656,99 @@ impl PublicationCache {
             .map(|(oid, _)| oid.trim().to_ascii_lowercase()))
     }
 
-    fn read_pending(
+    fn read_pending(&self, request: &ValidatedRequest) -> Result<Vec<PendingRecord>, OrbitError> {
+        let mut records = Vec::new();
+        if let Some(record) = self.read_pending_record(&self.pending_path, request)? {
+            records.push(record);
+        }
+        let entries = match fs::read_dir(&self.pending_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
+            Err(error) => return Err(OrbitError::from_write_io(&self.pending_dir, error)),
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|error| OrbitError::from_write_io(&self.pending_dir, error))?
+                .path();
+            if path.extension().is_some_and(|ext| ext == "yaml")
+                && let Some(record) = self.read_pending_record(&path, request)?
+                && path == self.pending_commit_path(&record.publication.commit)
+            {
+                records.push(record);
+            }
+        }
+        Ok(records)
+    }
+
+    fn read_pending_record(
         &self,
+        path: &Path,
         request: &ValidatedRequest,
-    ) -> Result<Option<PendingPublication>, OrbitError> {
-        let raw = match fs::read_to_string(&self.pending_path) {
+    ) -> Result<Option<PendingRecord>, OrbitError> {
+        let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(OrbitError::from_write_io(&self.pending_path, error)),
+            Err(error) => return Err(OrbitError::from_write_io(path, error)),
         };
         // A private cache artifact: anything unreadable or belonging to another
-        // binding is discarded, never trusted and never fatal.
+        // binding is ignored, never trusted. Reading must not delete evidence
+        // another attempt may have replaced since this read.
         let pending: Option<PendingPublication> = serde_yaml::from_str(&raw).ok();
         let pending = pending.filter(|pending| {
             pending.format_version == PENDING_FORMAT_VERSION
                 && pending.publication_id == request.publication_id
                 && pending.workspace_id == request.workspace_id
                 && pending.publication_branch == request.publication_branch
+                && pending.generation > 0
                 && validate_git_commit_id(&pending.commit).is_ok()
         });
-        if pending.is_none() {
-            self.remove_pending()?;
-        }
-        Ok(pending)
+        Ok(pending.map(|publication| PendingRecord {
+            path: path.to_path_buf(),
+            publication,
+        }))
+    }
+
+    fn pending_commit_path(&self, commit: &str) -> PathBuf {
+        self.pending_dir.join(format!("{commit}.yaml"))
     }
 
     fn write_pending(&self, pending: &PendingPublication) -> Result<(), OrbitError> {
-        write_yaml_atomic_with(&self.pending_path, pending, |error| {
-            OrbitError::Store(format!(
-                "failed to encode pending publication record: {error}"
-            ))
-        })
+        create_private_dir_all(&self.pending_dir)
+            .map_err(|error| OrbitError::from_write_io(&self.pending_dir, error))?;
+        write_yaml_durable_with(
+            &self.pending_commit_path(&pending.commit),
+            pending,
+            |error| {
+                OrbitError::Store(format!(
+                    "failed to encode pending publication record: {error}"
+                ))
+            },
+        )
     }
 
-    fn remove_pending(&self) -> Result<(), OrbitError> {
-        match fs::remove_file(&self.pending_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(OrbitError::from_write_io(&self.pending_path, error)),
+    /// Only durable last-success can retire evidence. Observing a record's
+    /// parent does not prove failure: its push may still be in flight.
+    fn prune_recorded_pending(
+        &self,
+        records: &[PendingRecord],
+        generation: u64,
+    ) -> Result<(), OrbitError> {
+        for record in records {
+            if record.publication.generation <= generation {
+                match fs::remove_file(&record.path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(OrbitError::from_write_io(&record.path, error)),
+                }
+            }
         }
+        Ok(())
     }
+}
+
+struct PendingRecord {
+    path: PathBuf,
+    publication: PendingPublication,
 }
 
 struct RemoteState {
@@ -699,24 +792,27 @@ fn decide_action(
                 last.generation, last.commit
             )));
         }
-        // A pending push that never landed: private state, cleaned up here.
-        cache.remove_pending()?;
+        // Retain pending evidence: an initializing push may still be in flight.
         return Ok(PublishAction::Initialize);
     };
 
-    let pending_landed = pending
-        .as_ref()
-        .is_some_and(|pending| pending.commit == tip.commit);
+    let pending_landed = pending.iter().any(|record| {
+        let pending = &record.publication;
+        pending.commit == tip.commit
+            && pending.generation == tip.envelope.generation
+            && pending.previous_publication == tip.envelope.previous_publication
+    });
     let recorded = request
         .last_success
         .as_ref()
         .is_some_and(|last| last.commit == tip.commit);
-    // The branch is still the parent this push was based on, so the push never
-    // landed. A rebind clears last_success; this record is then the only local
-    // evidence, and it proves the opposite of an authority conflict.
+    // All attempts were based on this tip. It is safe to try another CAS from
+    // here, but not to delete their evidence: any push may still be in flight.
+    // A rebind clears last_success, so pending evidence also guards adoption.
     let pending_never_landed = !pending_landed
-        && pending.as_ref().is_some_and(|pending| {
-            pending.previous_publication.as_deref() == Some(tip.commit.as_str())
+        && !pending.is_empty()
+        && pending.iter().all(|record| {
+            record.publication.previous_publication.as_deref() == Some(tip.commit.as_str())
         });
     if pending_landed && !recorded {
         // Keep the pending record: the caller records this outcome only after
@@ -744,7 +840,7 @@ fn decide_action(
                     tip.commit, tip.envelope.generation, last.generation
                 )));
             }
-            cache.remove_pending()?;
+            cache.prune_recorded_pending(&pending, last.generation)?;
         }
         Some(last) => {
             return Err(publish_error(format!(
@@ -753,19 +849,15 @@ fn decide_action(
             )));
         }
         // No local record. A pending push that landed reconciles above. One
-        // whose parent is still the tip never landed: drop it and publish from
-        // that tip. Any other tip is neither this owner's commit nor that parent.
-        None if pending.is_some() && !pending_never_landed => {
+        // whose parent is still the tip permits another CAS from that tip.
+        // Any other tip is neither this owner's commit nor that parent.
+        None if !pending.is_empty() && !pending_never_landed => {
             return Err(publish_error(format!(
                 "publication branch '{}' is at {}, which is not the commit this owner pushed; resolve the publication authority before publishing again",
                 request.publication_branch, tip.commit
             )));
         }
-        None => {
-            if pending_never_landed {
-                cache.remove_pending()?;
-            }
-        }
+        None => {}
     }
 
     let generation = tip.envelope.generation.checked_add(1).ok_or_else(|| {
@@ -847,9 +939,9 @@ fn assert_outside_source_checkout(
 /// Private record of a push that was issued but not yet confirmed as recorded
 /// by the owner. It lets the next run reconcile by commit id instead of
 /// publishing a duplicate or divergent generation, and it survives
-/// reconciliation until a request's last success names the landed commit.
-/// A record whose `previous_publication` is still the branch tip never landed
-/// and is discarded so a later publish can continue from that tip.
+/// reconciliation until durable last-success acknowledges its generation.
+/// Records are keyed by commit so concurrent attempts cannot overwrite them;
+/// even a record based on the current tip may belong to a push still in flight.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingPublication {
