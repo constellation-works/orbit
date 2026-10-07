@@ -305,8 +305,9 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 ///
 /// Claude Code, Copilot CLI, and Cursor Agent CLI do: each keeps its login
 /// session in a login-keychain item (`Claude Code-credentials`,
-/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`) and
-/// does not persist a readable token under its state directory by default.
+/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`). The
+/// Antigravity CLI (`agy`) also stores its OAuth token in the login keychain
+/// and does not persist a readable token under its state directory by default.
 /// Codex, Gemini, and Grok keep credentials in plain files under their own
 /// state directories, which are already granted, so they keep the deny. Names
 /// that do not resolve to a canonical [`Provider`] keep the deny too — the
@@ -317,7 +318,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     matches!(
         Provider::parse(provider).ok(),
-        Some(Provider::Claude | Provider::Copilot | Provider::Cursor)
+        Some(Provider::Claude | Provider::Copilot | Provider::Cursor | Provider::Antigravity)
     )
 }
 
@@ -381,9 +382,10 @@ pub fn macos_login_keychain_access(
 /// Re-allow the confined provider's own credential store after
 /// [`emit_default_credential_read_denies`], so last-match-wins grants it.
 ///
-/// Without this, a sandboxed Claude, Copilot, or Cursor CLI cannot see its
-/// Keychain item and reports a fake login failure (Claude: OAuth expiry;
-/// Copilot: no authentication information; Cursor: authentication required) —
+/// Without this, a sandboxed Claude, Copilot, Cursor, or Antigravity CLI cannot
+/// see its Keychain item and reports a fake login failure (Claude: OAuth
+/// expiry; Copilot: no authentication information; Cursor and Antigravity:
+/// authentication required) —
 /// an authentication failure no re-login can clear, because the credential is
 /// present and simply unreadable. The carve-out is deliberately narrow:
 /// - it applies only to those providers, so a Codex or Grok agent still cannot

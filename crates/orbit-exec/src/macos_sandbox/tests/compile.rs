@@ -1,12 +1,31 @@
-#[cfg(target_os = "macos")]
 use super::super::compile::{MacosLoginKeychainAccess, macos_login_keychain_access};
 #[cfg(target_os = "macos")]
 use super::super::compile_macos_sandbox_profile;
 #[cfg(target_os = "macos")]
 use super::super::test_support::*;
 
-#[cfg(target_os = "macos")]
 use orbit_types::policy::ResolvedFsProfile;
+
+#[test]
+fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_denied() {
+    let resolved = ResolvedFsProfile {
+        name: "default".to_string(),
+        read: vec!["/Users/test".to_string()],
+        modify: vec![],
+    };
+    let home = std::ffi::OsStr::new("/Users/test");
+
+    assert_eq!(
+        macos_login_keychain_access("antigravity", Some(home), &resolved),
+        MacosLoginKeychainAccess::Allowed,
+        "Antigravity's login-keychain diagnostic must report its provider carve-out"
+    );
+    assert_eq!(
+        macos_login_keychain_access("future-provider", Some(home), &resolved),
+        MacosLoginKeychainAccess::DeniedByDefaultPolicy,
+        "unknown providers must retain the fail-closed keychain policy"
+    );
+}
 
 /// [ORB-10931] The kernel-level half of the ordering contract: an activity that
 /// denies the keychain directory — or an ancestor of it — must actually lose
@@ -28,7 +47,16 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
         read: vec![home_text.clone()],
         modify: vec![],
     };
-    for provider in ["claude", "copilot", "cursor"] {
+    for provider in ["claude", "copilot", "cursor", "antigravity"] {
+        assert_eq!(
+            macos_login_keychain_access(
+                provider,
+                Some(std::ffi::OsStr::new(&home_text)),
+                &default_allow
+            ),
+            MacosLoginKeychainAccess::Allowed,
+            "the access diagnostic must report the compiled grant for {provider}"
+        );
         assert!(
             fixture.credential_readable(&default_allow, provider),
             "without an overlapping deny, {provider} keeps its keychain read"
@@ -58,6 +86,35 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
             );
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    let fixture = SyntheticKeychainHome::create("unknown-keychain-provider");
+    let resolved = ResolvedFsProfile {
+        name: "default".to_string(),
+        read: vec![fixture.home_text()],
+        modify: vec![],
+    };
+
+    assert!(
+        !fixture.credential_readable(&resolved, "future-provider"),
+        "an unknown provider must retain the default user keychain deny"
+    );
+    assert_eq!(
+        macos_login_keychain_access(
+            "future-provider",
+            Some(std::ffi::OsStr::new(&fixture.home_text())),
+            &resolved
+        ),
+        MacosLoginKeychainAccess::DeniedByDefaultPolicy,
+        "unknown providers must fail closed in the access diagnostic"
+    );
 }
 
 #[cfg(target_os = "macos")]
