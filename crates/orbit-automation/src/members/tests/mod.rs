@@ -4,6 +4,7 @@ use chrono::Duration;
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use std::{cell::RefCell, collections::BTreeSet};
 
+mod disabled;
 mod reconcile;
 
 struct Host {
@@ -13,6 +14,7 @@ struct Host {
     failed: RefCell<bool>,
     deferral: RefCell<Option<String>>,
     lose_ack: RefCell<bool>,
+    head_probes: RefCell<Option<usize>>,
 }
 
 impl Host {
@@ -24,12 +26,17 @@ impl Host {
             failed: RefCell::new(false),
             deferral: RefCell::new(None),
             lose_ack: RefCell::new(false),
+            head_probes: RefCell::new(None),
         }
     }
 }
 
 impl MemberHost for Host {
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
+        if let Some(probes) = self.head_probes.borrow_mut().as_mut() {
+            *probes += 1;
+            return Err(AutomationError::Deferred("head_probed".into()));
+        }
         Ok((
             "repo".into(),
             SourceRevision {
