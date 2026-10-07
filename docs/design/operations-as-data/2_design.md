@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-09-09
-last_validated: 2026-09-30
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: operations-as-data
 doc_role: design
@@ -42,7 +42,8 @@ pub struct OperationSpec<V: 'static> {
 ```
 
 A `ParamSpec` carries the wire field name, its `ParamType`, whether it is
-required, an **optional** MCP description, and an **optional** CLI binding. Both
+required, whether empty string values are meaningful (`preserve_empty`), an
+**optional** MCP description, and an **optional** CLI binding. Both
 sides are optional independently, so a parameter can be MCP-only, CLI-only, or
 both. The CLI binding carries its own help text because MCP and CLI wording
 legitimately differ for the same field — `show`'s `id` is `friction ID` over MCP
@@ -121,11 +122,15 @@ because the adapter reproduces what `#[derive(Args)]` generates:
   spec is contract, not style;
 - `Vec`-shaped params use `ArgAction::Append` plus the spec's value delimiter.
 
-Input projection has one rule worth stating: **optional** string parameters are
-trimmed and dropped when blank, so an unset filter is absent rather than
-present-and-empty; **required** parameters pass through verbatim so that
-"you passed only whitespace" is reported by the handler, where the domain rules
-live. That reproduces the pre-migration behavior exactly.
+Input projection trims **optional** string parameters and drops blank values
+unless the parameter declares `preserve_empty`. For friction update's `title`
+and `rehome_to`, an explicitly supplied empty or whitespace-only value is
+forwarded as an empty string: it restores the derived title or clears the
+recorded disposition, matching the tool input. Omitting either flag still
+leaves its field absent. Other optional strings, such as filters and the
+replacement body, retain blank omission. **Required** parameters pass through
+verbatim so that "you passed only whitespace" is reported by the handler,
+where the domain rules live.
 
 Audit metadata is derived too. `command/operation/registry.rs`'s friction arm reads
 `invocation.spec.name` and `invocation.target_id()` — the latter resolved by
