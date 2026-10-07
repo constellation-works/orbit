@@ -195,7 +195,8 @@ fn evaluate(
 /// Liveness and evidence facts for a claimed or admitted delivery auto-task action, as
 /// used by reset, recovery and `orbit doctor`. A consumer without state has
 /// no action. An unreadable outcome stays unknown, so `--force` remains the
-/// only way past an action whose liveness cannot be proved.
+/// only way past an action whose liveness cannot be proved. Inspection verifies
+/// evidence against existing refs and never fetches from origin.
 fn auto_task_action_liveness(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
@@ -208,7 +209,7 @@ fn auto_task_action_liveness(
     let host = Host {
         runtime,
         action: Action::Task(definition),
-        source: source::Source::new(&runtime.paths().repo_root),
+        source: source::Source::read_only(&runtime.paths().repo_root),
     };
 
     delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {
