@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { satteri } from '@astrojs/markdown-satteri';
 import { defineHastPlugin } from 'satteri';
+import { changelogLinks, changelogReleases } from './plugins/changelog.mjs';
 
 function findFirstTh(node) {
   for (const child of node.children || []) {
@@ -134,7 +135,7 @@ export default defineConfig({
   site: 'https://orbit-cli.com',
   markdown: {
     processor: satteri({
-      hastPlugins: [inlineCodePlugin],
+      hastPlugins: [inlineCodePlugin, changelogLinks, changelogReleases],
     }),
   },
   vite: {

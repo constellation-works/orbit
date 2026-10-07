@@ -82,10 +82,20 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 
 The CHANGELOG is a short consumer-facing release note, not a commit log. Non-release task PRs do not edit it. An explicitly authorized release-preparation task compiles the section at release time from the survey.
 
-Add `## <X.Y.Z>` at the top of `CHANGELOG.md` with:
+Add `## <X.Y.Z> — <YYYY-MM-DD>` at the top of `CHANGELOG.md`, with the release's
+UTC calendar date in the heading (for example, `## 0.28.0 — 2026-10-07`), and:
 
 1. `### Breaking Changes`: minor bumps only. List every breaking change, one bullet each.
 2. `### Highlights`: 3 to 6 user-facing features or behavior changes. If you're unsure whether something is a highlight, it isn't.
+
+The website renders the date beside the version and keeps version-only anchors
+stable. Historical headings remain frozen: `website/src/data/release-dates.json`
+records the UTC dates of their matching `v<X.Y.Z>` Git tags (tagger timestamps
+for annotated tags, tagged commit timestamps for lightweight tags). These
+are release-tag dates, rather than a reconstructed GitHub publication time.
+New releases use the date in `CHANGELOG.md`; do not add them to that historical
+fallback file. The newest three releases are expanded on the website; older
+notes remain available through their disclosure controls and existing anchors.
 
 Leave out refactors, crate splits, lint fixes, dependency bumps, docs and ADR churn, release metadata, and bug fixes with no user-visible impact.
 

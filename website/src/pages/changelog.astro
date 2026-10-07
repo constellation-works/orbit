@@ -9,7 +9,10 @@ import { Content as ChangelogContent, getHeadings } from '../../../CHANGELOG.md'
 
 // The changelog's own H1 ("Changelog") duplicates the page title; the release
 // sections underneath it are the useful table of contents.
-const headings = getHeadings().filter((heading) => heading.depth >= 2);
+const headings = getHeadings().filter((heading) => heading.depth === 2).map((heading) => ({
+  ...heading,
+  text: heading.text.match(/^\d+\.\d+\.\d+/)?.[0] ?? heading.text,
+}));
 ---
 
 <StarlightPage
@@ -21,10 +24,9 @@ const headings = getHeadings().filter((heading) => heading.depth >= 2);
   headings={headings}
 >
   <p>
-    What changed in each Orbit release, newest first. Breaking changes come before highlights. A
-    task ID in brackets names the task a change shipped under; search for it on <a
-      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged">GitHub</a
-    > to find its pull request.
+    What changed in each Orbit release, newest first. Breaking changes come before highlights.
+    Follow a pull request link to find the delivery on GitHub. The newest three releases are
+    expanded; select an older version to read its notes.
   </p>
   <div class="orbit-changelog-upgrade">
     <span>Check for a newer release:</span>
@@ -35,3 +37,23 @@ const headings = getHeadings().filter((heading) => heading.depth >= 2);
     <ChangelogContent />
   </div>
 </StarlightPage>
+
+<script>
+  // Version and subsection links retain their original IDs. Reveal a folded
+  // body before scrolling, both on a direct URL and later hash navigation.
+  function revealRelease() {
+    let id: string;
+    try {
+      id = decodeURIComponent(window.location.hash.slice(1));
+    } catch {
+      return;
+    }
+    const target = document.getElementById(id);
+    const release = target?.closest<HTMLDetailsElement>('.orbit-release');
+    if (!target || !release) return;
+    release.open = true;
+    requestAnimationFrame(() => target.scrollIntoView());
+  }
+  revealRelease();
+  window.addEventListener('hashchange', revealRelease);
+</script>

@@ -89,6 +89,27 @@ require a passing affected-test record. Distributed review contracts freeze
 the owner's list at admission; existing claims need a fresh admission after
 a policy change.
 
+## Website changelog validation
+
+After changing the changelog renderer, run `npm ci`, `npm run build`, and
+`npm run check` in `website/`. Serve `website/dist` locally, then use an
+installed Playwright module and Chromium to check the rendered page:
+
+```bash
+node website/scripts/check-changelog.mjs \
+  /absolute/path/to/playwright/index.mjs http://localhost:4187 .orbit/tmp/changelog-browser
+```
+
+The check covers release dates, merged-PR links, preserved version and
+subsection anchors, keyboard and JavaScript-free disclosure controls, the
+version badge, and future dated headings. It records page heights and
+screenshots at 1440px and 375px in both themes. Browser dependencies may live
+under `.orbit/tmp/`; use `PLAYWRIGHT_BROWSERS_PATH` for a local browser cache
+and `TMPDIR` for scratch profiles when required by the executor. Minimal Linux
+runners may also need `FONTCONFIG_FILE` pointing to a configuration with local
+fonts and a cache under `.orbit/tmp/`. The check selects the site's saved theme
+explicitly and requires its web fonts to load before measuring page height.
+
 ## MCP Apps compatibility prototype
 
 See [the isolated reproduction and native desktop probe](mcp-apps-probe.md)
