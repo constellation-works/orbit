@@ -79,7 +79,10 @@
 //! [`GenerationUpdate::acquire_for_candidate`] is the same admission for an
 //! installer that renames a candidate over the executable: a participant
 //! whose registered capability the candidate reports will hand over after
-//! the rename, so it is admitted beside and named instead.
+//! the rename, so it is admitted beside and named instead. Its
+//! [`CandidateAdmission::pin`] waits, still holding admission, for those
+//! participants to release the generation by exec'ing into the candidate,
+//! then records the candidate; they queue behind it and join what it pinned.
 //!
 //! # Coexistence with `executable-generation-v1`
 //!

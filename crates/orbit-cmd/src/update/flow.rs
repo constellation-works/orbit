@@ -1,10 +1,13 @@
-//! The linear update pipeline: decide, admit, lock, stage, swap, verify, pin.
+//! The linear update pipeline: decide, lock, stage, verify, admit, swap,
+//! verify, pin.
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-use super::admission::{acquire_admissions, pin_candidate};
+use super::admission::{
+    acquire_admissions, acquire_candidate_admissions, handover_of, pin_candidate,
+};
 use super::channel;
 use super::converge;
 use super::environment::UpdateEnvironment;
@@ -60,6 +63,7 @@ pub fn run_update(
             .map(|workspace| workspace.root.clone()),
         admission_roots: environment.admission_roots.clone(),
         local_candidate: None,
+        handover: Vec::new(),
         recovery: None,
     };
 
@@ -83,7 +87,6 @@ pub fn run_update(
         return Err(OrbitError::InvalidInput(remediation));
     }
 
-    let admissions = acquire_admissions(&environment.admission_roots)?;
     let install_dir = environment.executable.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "'{}' has no parent directory",
@@ -119,14 +122,16 @@ pub fn run_update(
 
     if target == current {
         // Not a no-op: re-running `orbit update` at the installed version is
-        // the documented way to finish a run whose convergence failed.
-        let identity = converge::require_admission_contract(&executable)?;
+        // the documented way to finish a run whose convergence failed. It
+        // renames nothing, so nothing live can hand over to it.
+        let contract = converge::require_admission_contract(&executable)?;
         let digest = orbit_common::fs::generation::executable_generation(&executable)?;
+        let admissions = acquire_admissions(&environment.admission_roots)?;
         let _generations = pin_candidate(
             &environment.admission_roots,
             admissions,
             &digest,
-            identity.as_ref(),
+            contract.identity.as_ref(),
         )?;
         return Ok(finish(
             environment,
@@ -163,12 +168,18 @@ pub fn run_update(
         )));
     }
 
-    let identity = converge::require_admission_contract(staged.path())?;
+    let contract = converge::require_admission_contract(staged.path())?;
     if target < current {
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
     }
 
     let digest = orbit_common::fs::generation::executable_generation(staged.path())?;
+    // Admission comes only now, once the candidate is staged and verified:
+    // knowing what the candidate resumes is what lets a live process that
+    // will hand over to it after the rename be admitted beside.
+    let admissions =
+        acquire_candidate_admissions(&environment.admission_roots, &contract.handover)?;
+    report.handover = handover_of(&admissions).iter().map(Into::into).collect();
     let backup = backup_path(&executable);
     staged.commit(&executable, &backup)?;
     report.replaced = true;
@@ -199,7 +210,7 @@ pub fn run_update(
         &environment.admission_roots,
         admissions,
         &digest,
-        identity.as_ref(),
+        contract.identity.as_ref(),
     ) {
         Ok(guards) => guards,
         Err(error) => {

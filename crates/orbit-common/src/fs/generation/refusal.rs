@@ -139,6 +139,20 @@ fn describe_holders(
     listed
 }
 
+/// Processes admitted to hand over to an installed candidate still held the
+/// generation after `bound`. The executable is already replaced, so this is
+/// not an admission refusal: what is left is pinning and convergence.
+pub(super) fn handover_outlasted(bound: Duration, holders: &[ParticipantRecord]) -> OrbitError {
+    OrbitError::Execution(format!(
+        "the candidate is installed, but these Orbit processes did not hand over to it within \
+         {}s ({QUIESCE_TIMEOUT_ENV}): {}; nothing was pinned or converged. A session hands over \
+         once its in-flight requests are answered. A re-run renames nothing, so no session hands \
+         over to it: close the live MCP clients, then re-run the update to converge",
+        bound.as_secs(),
+        describe_blockers(holders)
+    ))
+}
+
 /// What ends `holder`'s hold on the generation.
 fn remedy(holder: &ParticipantRecord, candidate: Option<&HandoverCandidate>) -> String {
     let capability = holder.handover.as_deref();
@@ -154,9 +168,10 @@ fn remedy(holder: &ParticipantRecord, candidate: Option<&HandoverCandidate>) -> 
                  needs; close its MCP client"
             ),
             None => format!(
-                "it hands over ({capability}) only when a candidate is renamed over the \
-                 executable: admit that with `orbit update --preflight --candidate <path>`, \
-                 or close its MCP client"
+                "it hands over ({capability}) only to a candidate renamed over the executable, \
+                 which `orbit update` (a newer release) and `orbit update --local-candidate` \
+                 admit and then install; nothing is renamed here, so close its MCP client to \
+                 proceed without one"
             ),
         },
         (_, ParticipantRole::McpServe, None) => {

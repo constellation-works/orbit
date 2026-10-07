@@ -65,7 +65,8 @@ pub struct UpdateCommand {
     #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "local_candidate"])]
     pub preflight: bool,
     /// With --preflight: the executable an installer will rename over this one.
-    /// Live processes that hand over to it after the rename are admitted and named
+    /// Live processes that hand over to it after the rename are admitted and named,
+    /// as `orbit update` and --local-candidate admit them when they install
     #[arg(long, value_name = "PATH", requires = "preflight")]
     pub candidate: Option<PathBuf>,
     /// Install this locally built executable instead of a published release
@@ -315,6 +316,18 @@ fn format_report(report: &UpdateReport, check: bool) -> String {
     }
     if let Some(backup) = &report.backup_path {
         let _ = writeln!(text, "  previous: {}", backup.display());
+    }
+    if !report.handover.is_empty() {
+        let _ = writeln!(
+            text,
+            "  handover: {} (admitted beside the update; each re-execs into the candidate)",
+            report
+                .handover
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     for step in &report.steps {
         let _ = writeln!(

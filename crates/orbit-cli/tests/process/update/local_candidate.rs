@@ -629,12 +629,13 @@ fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
     );
 }
 
-/// Admission and the install lock are held from before the candidate is read
-/// until it is pinned: the manifest FIFO holds the updater mid-validation.
-/// Meanwhile no client and no second update gets in, and replacing the
-/// candidate's pathname changes nothing about what is installed.
+/// The install lock is held from before the candidate is read until it is
+/// pinned, and admission is taken only once it has been validated: the
+/// manifest FIFO holds the updater mid-validation. Meanwhile clients still
+/// run, a second update is refused, and replacing the candidate's pathname
+/// changes nothing about what is installed.
 #[test]
-fn no_client_or_update_enters_mid_validation_and_the_accepted_bytes_are_installed() {
+fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
     let candidate = install.candidate("orbit-b");
@@ -673,24 +674,21 @@ fn no_client_or_update_enters_mid_validation_and_the_accepted_bytes_are_installe
         .expect("change replacement");
     fs::rename(&replacement, &candidate).expect("replace the candidate path");
 
-    // A client of the installed build is refused admission, not queued.
+    // Validation holds no authority, so a client of the installed build runs.
     let client = install.run(
         &install.installed,
         &args(&["task".as_ref(), "list".as_ref(), "--json".as_ref()]),
     );
-    assert_eq!(client.status.code(), Some(1), "{client:?}");
-    assert!(
-        String::from_utf8_lossy(&client.stderr).contains("upgrade admission refused"),
-        "{client:?}"
-    );
-    // So is a second update, and the installation is untouched so far.
+    assert_success(&client, "a client while the candidate is validated");
+    // A second update is refused by the install lock, and the installation is
+    // untouched so far.
     let second = install.run(
         &install.installed,
         &install.install_args(&candidate, &manifest, COMMIT_B),
     );
     assert_eq!(second.status.code(), Some(1), "{second:?}");
     assert!(
-        String::from_utf8_lossy(&second.stderr).contains("upgrade admission refused"),
+        String::from_utf8_lossy(&second.stderr).contains("another orbit update is already running"),
         "{second:?}"
     );
     assert_eq!(fs::read(&install.installed).expect("installed"), before);
@@ -723,7 +721,7 @@ fn no_client_or_update_enters_mid_validation_and_the_accepted_bytes_are_installe
         sha256(&install.installed)
     );
 
-    // Once the update has released admission, clients run again.
+    // Once the update has released admission, clients still run.
     let after = install.run(
         &install.installed,
         &args(&["task".as_ref(), "list".as_ref(), "--json".as_ref()]),

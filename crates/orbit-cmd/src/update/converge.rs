@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    CompatibilityIdentity, GENERATION_CONTRACT, LEGACY_GENERATION_CONTRACT,
+    CompatibilityIdentity, GENERATION_CONTRACT, HandoverCandidate, LEGACY_GENERATION_CONTRACT,
 };
 use serde::Serialize;
 
@@ -368,13 +368,22 @@ pub(super) fn probe_writable_state(
 /// installation. Older or unrecognized candidates fail before any installation,
 /// as does one that does not describe its contract within [`probe_timeout`].
 ///
-/// Returns the compatibility the candidate reports under
-/// `compatibility-generation-v2`, which its pin records so compatible builds
-/// can join it; `None` for a candidate that only speaks
-/// `executable-generation-v1`.
+/// What a candidate's `update --contract` report commits it to.
+pub(super) struct AdmissionContract {
+    /// The compatibility the candidate reports under
+    /// `compatibility-generation-v2`, which its pin records so compatible
+    /// builds can join it; `None` for a candidate that only speaks
+    /// `executable-generation-v1`.
+    pub(super) identity: Option<CompatibilityIdentity>,
+    /// The resume capabilities a live process can hand over to it with; none
+    /// for an `executable-generation-v1` candidate.
+    pub(super) handover: HandoverCandidate,
+}
+
+/// See [`AdmissionContract`] for what the report yields.
 pub(super) fn require_admission_contract(
     executable: &Path,
-) -> Result<Option<CompatibilityIdentity>, OrbitError> {
+) -> Result<AdmissionContract, OrbitError> {
     let output = run_probe(Command::new(executable).args(["update", "--contract", "--json"]))
         .map_err(|error| {
             OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
@@ -386,9 +395,23 @@ pub(super) fn require_admission_contract(
                 && report["schema_version"] == 1
                 && report["contract"] == LEGACY_GENERATION_CONTRACT =>
         {
-            Ok((report["admission_contract"] == GENERATION_CONTRACT)
-                .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
-                .flatten())
+            let v2 = report["admission_contract"] == GENERATION_CONTRACT;
+            let resume = report["resume"]
+                .as_array()
+                .filter(|_| v2)
+                .map(|resume| {
+                    resume
+                        .iter()
+                        .filter_map(|entry| entry.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(AdmissionContract {
+                identity: v2
+                    .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
+                    .flatten(),
+                handover: HandoverCandidate::reporting(resume),
+            })
         }
         _ => Err(OrbitError::Execution(
             "replacement does not support executable generation admission; nothing was replaced"

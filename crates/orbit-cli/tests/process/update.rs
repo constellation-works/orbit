@@ -338,11 +338,13 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     .expect("preflight against overridden root");
     assert_admission_refused(&preflight, "preflight --root");
 
+    // Request the installed version: the update downloads nothing and goes
+    // straight to the admission it takes before converging.
     let update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
-            "99.0.0",
+            env!("CARGO_PKG_VERSION"),
             "--json",
             "--root",
             scratch_arg.as_ref(),
@@ -367,7 +369,7 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let env_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
-            .args(["update", "--version", "99.0.0", "--json"]),
+            .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT");
@@ -456,11 +458,13 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
     let before = fs::read(&executable).expect("installed bytes");
 
+    // Request the installed version: the update downloads nothing and goes
+    // straight to the admission it takes before converging.
     let root_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
-            "99.0.0",
+            env!("CARGO_PKG_VERSION"),
             "--json",
             "--root",
             scratch_arg.as_ref(),
@@ -477,7 +481,7 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let env_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
-            .args(["update", "--version", "99.0.0", "--json"]),
+            .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT under a host-global pin");
