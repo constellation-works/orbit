@@ -49,6 +49,14 @@ jq -r 'select(.level=="ERROR")
 `RUST_LOG` controls the tracing filter for any Orbit process. For example,
 `RUST_LOG=debug orbit task list` uses standard `EnvFilter` syntax.
 
+In follow mode, `orbit log tail -f` drains the open file after a rename, waits
+if the active path is temporarily absent, and follows the replacement from
+its beginning. If the open file shrinks below the read offset, it restarts
+from the beginning. Filters and output mode continue to apply. Incomplete
+records wait for a newline; unfinished bytes from an archive or truncated
+contents are discarded when switching to the new contents. Writes to an
+archive after the follower has switched to the replacement are not followed.
+
 The dashboard log snapshot (`/api/log`) and Errors tab
 (`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
 to show valid records on either side. File access and read errors still fail the
