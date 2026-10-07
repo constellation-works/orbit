@@ -41,13 +41,19 @@ const CONTRACT_READS: [&str; 4] = [
     REVIEW_EVIDENCE_HOLD_ARTIFACT,
 ];
 
-/// Whether `path` is in the before-PR gate's artifact namespace, which only
-/// the running reviewer's attempt scope reaches through the broker. The gate
-/// names every artifact it writes or reads `review-*`; refusing the whole
-/// prefix keeps a worker from forging one the gate adds later.
+/// Whether the canonical artifact `path` is in the before-PR gate's artifact
+/// namespace, which only the running reviewer's attempt scope reaches through
+/// the broker. The gate names every artifact it writes or reads `review-*`;
+/// refusing the whole prefix keeps a worker from forging one the gate adds
+/// later. The prefix is matched without ASCII case, so an owner on a
+/// case-insensitive filesystem cannot be handed a `Review-gate.json` whose
+/// blob is the certificate's.
 pub(super) fn is_review_artifact(path: &str) -> bool {
-    path.starts_with("review-")
+    path.get(..REVIEW_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(REVIEW_PREFIX))
 }
+
+const REVIEW_PREFIX: &str = "review-";
 
 /// The review attempt a broker serves, derived from host records.
 struct ClaimedReviewScope<'a> {
@@ -124,15 +130,18 @@ fn denied(reason: &str) -> OrbitError {
 }
 
 /// Execute one bridged call on a [review artifact](is_review_artifact) in
-/// the broker, for the claim [`super::claimed_owner`] derived. A hold-named
-/// evidence artifact outside the `review-*` namespace is any claimed
-/// worker's ordinary artifact read, so it never reaches this scope.
+/// the broker, for the claim [`super::claimed_owner`] derived. `path` is the
+/// request's canonical artifact path; every check and the owner's call use
+/// it, never the raw string. A hold-named evidence artifact outside the
+/// `review-*` namespace is any claimed worker's ordinary artifact read, so it
+/// never reaches this scope.
 pub(super) fn execute_brokered(
     runtime: &OrbitRuntime,
     run: &orbit_engine::PluginBrokerRun,
     binding: &WorkerInvocation,
     tool: &str,
     object: &Map<String, Value>,
+    path: &str,
     session: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
     let scope = ClaimedReviewScope::derive(runtime, run, binding)?;
@@ -142,10 +151,6 @@ pub(super) fn execute_brokered(
         accept_fields(object, &["id", "path", "model"])?;
     }
     require_claimed_task(object, binding)?;
-    let path = object
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     if tool == PUT && path != REVIEW_REPORT_ARTIFACT {
         return Err(denied(&format!(
             "'{PUT}' carries only `{REVIEW_REPORT_ARTIFACT}` for the claimed reviewer"

@@ -46,6 +46,12 @@ Only the manifest read and the report write are required. The other reads
 are optional prior evidence: the reviewer continues from the manifest when
 one is absent or refused.
 
+The coordinator decides on an artifact path's canonical form, the key the
+owner stores it under, and sends the owner that form: ` review-gate.json`,
+`./review-gate.json` and `Review-gate.json` are all in the `review-*`
+namespace, so a worker cannot reach a gate artifact by spelling its name
+differently.
+
 The coordinator takes the task, claim, owner and attempt from its own records,
 never from the request. It carries a call on a `review-*` artifact only when
 all of these hold:

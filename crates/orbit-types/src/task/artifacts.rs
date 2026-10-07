@@ -469,6 +469,35 @@ pub fn serialize_task_artifacts<T: TaskArtifactMetadata>(artifacts: &[T]) -> ser
     )
 }
 
+/// The canonical form of an artifact path: the key the artifact store records.
+///
+/// [`validate_relative_artifact_path`] accepts surrounding whitespace, a
+/// leading `./`, duplicate or trailing slashes and interior `.` components,
+/// because `Path` components drop them; the store keys the artifact under
+/// this canonical form. A guard that decides on an artifact's name must
+/// decide on this form, and forward it, never the raw request string. The
+/// form is a fixpoint: trimming or normalizing it again changes nothing, so
+/// `./ review-gate.json` cannot surface a leading space a later trim drops.
+pub fn canonical_artifact_path(raw: &str) -> Result<String, TaskError> {
+    let mut trimmed = raw.trim();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest.trim_start();
+    }
+    validate_relative_artifact_path(trimmed)?;
+    let mut parts = Vec::new();
+    for component in Path::new(trimmed).components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy()),
+            _ => {
+                return Err(TaskError::Invalid(format!(
+                    "artifact path '{trimmed}' must be canonical"
+                )));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 pub fn validate_relative_artifact_path(path: &str) -> Result<(), TaskError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
