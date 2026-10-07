@@ -2003,8 +2003,9 @@ function fetchAndRenderAutoDrain() {
     return requestPanel("auto-drain-body", "unselected", () => Promise.resolve({}), renderAutoDrain, "auto-drain-live");
   }
   const query = autoDrainConcurrency && autoDrainConcurrencyValid() ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
-  const path = `/api/workflows/auto/readiness${query}`;
-  return requestPanel("auto-drain-body", path, () => fetchJson(path), renderAutoDrain, "auto-drain-live");
+  const scope = "/api/workflows/auto/readiness";
+  const path = `${scope}${query}`;
+  return requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-live");
 }
 
 function throwFirstPanelError(results) {
