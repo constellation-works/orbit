@@ -3,6 +3,8 @@
 
 #[path = "http_api/audit.rs"]
 mod audit;
+#[path = "http_api/automation.rs"]
+mod automation;
 #[path = "http_api/guards.rs"]
 mod guards;
 #[path = "http_api/host.rs"]

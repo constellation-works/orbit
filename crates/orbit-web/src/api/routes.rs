@@ -48,6 +48,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             put(config::put_config_crew).delete(config::delete_config_crew),
         )
         .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
+        .route("/automation/:kind/:name/state", get(automation::full_state))
         .route(
             "/automation/:kind/:name/coverage/:batch/evidence",
             get(automation::accepted_evidence),

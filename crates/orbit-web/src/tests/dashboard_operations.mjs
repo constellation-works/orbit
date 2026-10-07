@@ -5,7 +5,7 @@ const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, 
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
 const fetchAndRenderOperations = async () => {
-  const results = await Promise.allSettled([fetchAndRenderOperationsPane(), fetchAndRenderAutoDrainPane()]);
+  const results = await Promise.allSettled([...(["routines", "auto-tasks", "jobs"].map(subtab => fetchAndRenderOperationsPane(subtab))), fetchAndRenderAutoDrainPane()]);
   const failed = results.find(result => result.status === 'rejected');
   if (failed) throw failed.reason;
 };
@@ -16,6 +16,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const allowed = { authorized: true, reason: null };
 const denied = { authorized: false, reason: 'Test session cannot perform this action. Ask the server operator.' };
+let operationsSubtab = 'routines';
 const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
 let clock = { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' };
@@ -39,6 +40,15 @@ let nullCapacity = false;
 let resourceThrottle = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
+const memberDiagnostic = {
+  reason: 'withheld',
+  state: { consumer: 'routine/one', counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, unresolved: {}, members: {
+    counts: { pending: 999, fresh: 251, ready: 125, withheld: 1000, failed: 200 },
+    withheld: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`member-${i}`, `Waiting for dependency ${i}`])),
+    active: { member: { key: 'member-active' }, attempt: 1, max_attempts: 2, deadline: '2026-10-07T09:00:00Z', action_id: 'jrun-member' },
+  } },
+};
+let fullStateError = false;
 const requests = [];
 const confirmations = [];
 const readinessTasks = [
@@ -58,7 +68,7 @@ globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   const workspace = url.searchParams.get('workspace');
   const body = options.body ? JSON.parse(options.body) : null;
-  requests.push({ path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
+  requests.push({ method: options.method || 'GET', path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
   if (options.method === 'POST') {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
@@ -75,7 +85,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
+    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
     // A plugin-off definition is hidden unless asked for; listed, it is
     // enabled with an earlier slot, so leaking into a summary would show.
     payload.inactive_plugin_count = 1;
@@ -85,10 +95,14 @@ globalThis.fetch = async (path, options = {}) => {
     if (delayGet) await new Promise(resolve => { releaseGet = resolve; });
     return response(payload);
   }
+  if (url.pathname.startsWith('/api/automation/') && url.pathname.endsWith('/state')) {
+    return fullStateError ? response({ error: 'full state unavailable' }, 500)
+      : response({ state: { consumer: 'routine/one', members: { pending: { 'member-full': { fingerprint: 'full-input' } } } } });
+  }
   if (url.pathname === '/api/routines') return response({
     machine_name: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: [
-      ...['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+      ...['one', 'two'].map(source => ({ automation: memberDiagnostic, name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
       { name: 'Parked one', source: 'one', target: 'job:parked_pipeline', enabled: false, cron: '*/20 * * * *', description: 'Kept in the repo, never fires.', next_evaluation: { state: 'disabled', at: '2026-09-07T21:40:00Z', hypothetical: true } },
     ],
     clock: { ...clock },
@@ -129,7 +143,7 @@ globalThis.fetch = async (path, options = {}) => {
   return response({});
 };
 setWorkspace('one');
-initOperations({ getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
+initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
 await fetchAndRenderOperations();
 // The Drain card keeps only what an operator acts on: the capacity line and
 // what a window would admit, two counts, the blocked-by list, then duration,
@@ -644,8 +658,12 @@ assert(!get('routines-body').textContent.includes('graph-refresh'), 'a plugin-of
 const showHidden = button('auto-tasks-body', 'Show 1 hidden · plugin off');
 assert(showHidden && showHidden.getAttribute('aria-pressed') === 'false', 'the auto-task pane offers the hidden definition');
 assert(button('routines-body', 'Show 1 hidden · plugin off'), 'the routine pane offers the hidden routine');
+operationsSubtab = 'auto-tasks';
+const beforeToggle = requests.length;
 await showHidden.click(); await tick(); await tick();
-assert(requests.some(request => request.path === '/api/auto-tasks') && requests.some(request => request.path === '/api/routines'), 'toggle refetches both panes');
+assert(requests.slice(beforeToggle).every(request => request.path === '/api/auto-tasks'), 'plugin toggle refreshes the displayed pane');
+operationsSubtab = 'routines';
+await fetchAndRenderOperationsPane();
 for (const [pane, name] of [['auto-tasks-body', 'graph-reindex'], ['routines-body', 'graph-refresh']]) {
   const group = descendants(get(pane)).find(node => String(node.className || '').includes('inactive-plugin-group'));
   assert(group && group.textContent.includes(name) && group.textContent.includes('Plugin off'), `${pane} lists ${name} in the plugin-off group`);
@@ -658,6 +676,7 @@ const autoSummary = descendants(get('auto-tasks-body')).find(node => String(node
 assert(autoSummary && !autoSummary.textContent.includes('20:05'), 'the inactive definition never becomes the next mint');
 assert(!descendants(get('auto-tasks-body')).some(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('graph-reindex')), 'no toggle or mint row for the inactive definition');
 await button('routines-body', 'Hide plugin-off definitions').click(); await tick(); await tick();
+operationsSubtab = 'auto-tasks'; await fetchAndRenderOperationsPane();
 assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('routines-body').textContent.includes('graph-refresh'), 'hiding again restores the default view');
 
 globalThis.setDrainFixturePhase = async (phase) => {
@@ -691,4 +710,46 @@ responseError='old visit refused';releasePost();await tick();await tick();await 
 assert(!get('auto-drain-operation-feedback').textContent.includes('old visit refused'),'A to B to A suppresses errors from the old A visit');
 delayPost=false;responseError=null;
 
+// A refresh tick requests only what the active Automation subtab displays.
+for (const [subtab, expected] of [
+  ['auto-tasks', ['/api/auto-tasks']],
+  ['routines', ['/api/routines']],
+  ['jobs', ['/api/job-runs', '/api/routines']],
+]) {
+  operationsSubtab = subtab;
+  const before = requests.length;
+  await fetchAndRenderOperationsPane();
+  const paths = requests.slice(before).filter(request => request.method === 'GET').map(request => request.path).sort();
+  assert(JSON.stringify(paths) === JSON.stringify(expected), `${subtab} tick: ${JSON.stringify(paths)}`);
+}
+operationsSubtab = 'routines';
+await fetchAndRenderOperationsPane();
+const diagnostic = get('routines-body').querySelector('.automation-diagnostic');
+assert(diagnostic.textContent.includes('Pending members999'), 'projected pending count is rendered');
+assert(diagnostic.textContent.includes('Fresh / ready251 / 125'), 'projected fresh and ready counts are rendered');
+assert(diagnostic.textContent.includes('Withheld members1000') && diagnostic.textContent.includes('Exhausted inputs200'), 'withheld and exhausted totals are preserved');
+assert(diagnostic.querySelector('pre').textContent.split('\n').length === 20, 'the disclosure shows twenty withheld reasons');
+assert(diagnostic.textContent.includes('Waiting for dependency 19'), 'withheld reasons are visible');
+assert(diagnostic.textContent.includes('Batch member-active'), 'the active member batch remains visible');
+assert(!diagnostic.textContent.includes('Usage'), 'member diagnostics have no dead Usage field');
+assert(!get('auto-tasks-body').querySelector('.automation-diagnostic').textContent.includes('Usage'), 'delivery diagnostics have no dead Usage field');
+const fullRequests = () => requests.filter(request => request.path.startsWith('/api/automation/'));
+assert(fullRequests().length === 0, 'polling and rendering never load full membership');
+const disclosure = diagnostic.querySelector('details');
+disclosure.open = true;
+await tick(); await tick();
+assert(fullRequests().length === 1 && fullRequests()[0].workspace === 'one', 'full state loads on disclosure in the selected workspace');
+assert(disclosure.textContent.includes('full-input'), 'full membership is displayed');
+await fetchAndRenderOperationsPane(); await tick(); await tick();
+assert(fullRequests().length === 1, 'polling reuses explicitly loaded full state');
+const rebuilt = get('routines-body').querySelector('.automation-diagnostic details');
+assert(rebuilt.open && rebuilt.textContent.includes('full-input'), 'full disclosure survives a poll');
+fullStateError = true;
+rebuilt.querySelector('button').click(); await tick(); await tick();
+assert(rebuilt.textContent.includes('full state unavailable'), 'on-demand fetch failures are visible');
+fullStateError = false;
+rebuilt.querySelector('button').click(); await tick(); await tick();
+assert(rebuilt.textContent.includes('full-input'), 'full state can be retried after an error');
+// Leave the harness on the normal routines view for the layout scenarios.
+rebuilt.open = false; await tick();
 globalThis.operationsTestsPassed = true;

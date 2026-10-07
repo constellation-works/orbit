@@ -615,7 +615,7 @@ function routineRow(payload, routine, workspaceId) {
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
-      renderAutomation(routine.automation, `${detailsKey}:automation`),
+      renderAutomation(routine.automation, `${detailsKey}:automation`, { kind: "routine", name: routine.name, workspace: workspaceId }),
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
   );
@@ -964,7 +964,7 @@ function autoTaskRow(payload, definition, workspaceId) {
         field("Open duplicate", duplicate),
         field("Template", [template.crew && `crew ${template.crew}`, template.priority && `priority ${template.priority}`, template.complexity && `complexity ${template.complexity}`, `→ ${template.status || "backlog"}`].filter(Boolean).join(" · ")),
       ]),
-      renderAutomation(definition.automation, `${detailsKey}:automation`),
+      renderAutomation(definition.automation, `${detailsKey}:automation`, { kind: "auto-task", name: definition.name, workspace: getWorkspace() }),
       definition.description ? el("p", { class: "operation-description", text: definition.description }) : null,
       el("p", {
         class: "operation-control-note operation-mint-warning",
@@ -1996,13 +1996,19 @@ function throwFirstPanelError(results) {
   if (errors.length) throw errors.find(error => error.networkFailure) || errors[0];
 }
 
-export async function fetchAndRenderOperations() {
+export async function fetchAndRenderOperations(subtab = context.getOperationsSubtab()) {
+  if (subtab === "auto-tasks") {
+    await fetchAndRenderAutoTasks();
+    return;
+  }
   const routines = fetchJson(withInactivePlugins("/api/routines"));
+  if (subtab === "jobs") {
+    await fetchAndRenderJobs(routines);
+    return;
+  }
   throwFirstPanelError(await Promise.allSettled([
     requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
     requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
-    fetchAndRenderAutoTasks(),
-    fetchAndRenderJobs(routines),
   ]));
 }
 

@@ -1721,7 +1721,7 @@ setScopeChangeListener(() => {
   }
   refreshDashboard();
 });
-initOperations({ getWorkspaces: () => dashboardWorkspaces, formatAbsoluteTime: fmtAbsTime });
+initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab, formatAbsoluteTime: fmtAbsTime });
 initConfig();
 
 initRuns(runsContext());

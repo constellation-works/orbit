@@ -56,6 +56,21 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+Automation polling fetches only the selected subtab: routines and clock share
+`GET /api/routines`, auto-tasks uses `GET /api/auto-tasks`, and jobs uses routines
+plus recent job runs for its catalogue. Both definition lists project compact
+automation diagnostics: member pending/fresh/ready/withheld/exhausted counts,
+the active batch, and up to 20 withheld or failed samples. Fresh assessments
+are those without a pending member or with a matching resulting fingerprint.
+Delivery inventories likewise carry totals and bounded unresolved/excluded samples.
+The diagnostic disclosure's **Full persisted state** loads
+`GET /api/automation/:kind/:name/state?workspace=<id>` on demand (`kind` is
+`routine` or `auto-task`). It reads the selected workspace's stored state,
+requires a concrete active workspace, and returns 404 for missing state. The
+browser caches that full state across ticks; **Reload full state** refreshes it,
+and switching workspace clears it. Counts reflect inspection; the full view
+is explicitly the persisted snapshot. Neither surface authorizes execution.
+
 `GET /api/routines` still returns those definition rows when native clock
 inspection fails (for example a systemd user bus that cannot be reached): the
 clock object is `health: unknown` with the bounded diagnostic in `error` /

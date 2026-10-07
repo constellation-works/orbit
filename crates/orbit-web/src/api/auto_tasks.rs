@@ -468,7 +468,7 @@ fn definition_json(
     let automation = match &definition.schedule {
         AutoTaskSchedule::Deliveries { .. } => Some(
             match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
-                Ok(diagnostic) => json!(diagnostic),
+                Ok(diagnostic) => super::automation::summary(&json!(diagnostic)),
                 Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
             },
         ),
