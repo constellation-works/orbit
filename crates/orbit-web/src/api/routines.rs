@@ -518,7 +518,7 @@ fn status_json(status: &RoutineStatus) -> Value {
         "effective": status.effective(),
         "cron": definition.trigger.cron,
             "trigger": definition.trigger,
-            "automation": status.automation,
+            "automation": status.automation.as_ref().map(super::automation::summary),
         "first_observed_at": status.first_observed_at,
         "last_evaluated_slot": status.last_evaluated_slot,
         "next_due": status.next_due,
