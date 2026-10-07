@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-10-04
+last_validated: 2026-10-07
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -15,6 +15,12 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
 ## Redaction Invariants
 
 - BlobStore redacts bytes before computing the stored hash.
+- CLI output captures above the capture limit (1 MiB by default) redact the
+  diagnostic prefix with the surrounding captured bytes before cutting it to
+  half the limit. Only complete redacted prefix lines are retained, so a
+  long token cannot leave a fragment at that cut. The newest complete-line
+  tail remains raw for provider protocol parsing and is redacted by BlobStore
+  before storage. Captures at or below the limit retain their original bytes.
 - Command audit error messages are scrubbed for sensitive live environment values before insertion.
 - Completed provider result strings, including nested objects and arrays, are
   scrubbed for sensitive live environment values and known secret patterns before
