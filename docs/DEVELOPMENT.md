@@ -33,6 +33,13 @@ dependencies. For example, changing `crates/orbit-core/` selects `orbit-core`,
 binary and integration test targets with nextest (or Cargo when nextest is
 unavailable), followed by Cargo doctests. Compilation and execution retain
 the shared [build-budget admission](runbooks/build-budget.md).
+
+Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and
+`cargo test` / `nextest`) one at a time when they share a target directory. To
+overlap gates, assign each a separate `CARGO_TARGET_DIR`. Concurrent gates in
+one target can rebuild `target/debug/orbit` while generation-bound fixtures
+are running, causing spurious CLI fixture failures; F2026-10-118 records this
+failure mode.
 When the temporary directory is inside the checkout, the runner adds that
 directory to `GIT_CEILING_DIRECTORIES` for test execution. This prevents
 non-Git fixtures from discovering the managed checkout above them; existing
