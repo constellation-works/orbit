@@ -443,6 +443,46 @@ fn inactive_tool_calls_are_denied_by_registry_and_audit_classifier() {
 }
 
 #[test]
+fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
+    isolated(
+        "audit::duration_ranking_excludes_unnamed_events_before_selecting_top_tools",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..8 {
+                let tool = format!("fixture.tool.{index}");
+                let mut event = row(&tool, Some(&tool), AuditEventStatus::Success);
+                event.duration_ms = (index + 1) * 100;
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            for (index, tool) in [None, Some(""), Some(" "), Some("unknown")]
+                .into_iter()
+                .enumerate()
+            {
+                let mut event = row(&format!("unnamed-{index}"), tool, AuditEventStatus::Success);
+                event.command = "job-run".into();
+                event.duration_ms = 90_000;
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let durations = summary["duration_by_tool"].as_array().unwrap();
+            assert_eq!(
+                durations.len(),
+                8,
+                "unnamed buckets must not consume top-N slots"
+            );
+            for (rank, duration) in durations.iter().enumerate() {
+                assert_eq!(duration["tool"], format!("fixture.tool.{}", 7 - rank));
+                assert_eq!(duration["count"], 1);
+                assert_eq!(duration["avg"].as_f64().unwrap(), ((8 - rank) * 100) as f64);
+                assert_eq!(duration["p95"], (8 - rank) * 100);
+            }
+        },
+    );
+}
+
+#[test]
 fn dashboard_renders_callable_failure_counts_and_denial_only_tools() {
     let result = std::process::Command::new("node")
         .args([

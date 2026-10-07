@@ -11,6 +11,12 @@
 tr.audit-row { cursor: pointer; }
 tr.audit-row:hover td { background: rgba(255, 255, 255, 0.03); }
 tr.audit-row.expanded td { background: rgba(110, 159, 255, 0.05); }
+table.audit-table td.c-command,
+table.audit-table td.c-target {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 tr.audit-detail-row td {
   padding: 12px 16px;
   background: #050505;
@@ -21,13 +27,12 @@ tr.audit-detail-row td {
     grid-template-columns: minmax(0, 1fr) auto auto;
     grid-template-areas:
       "command command status"
-      "tool time time"
+      "time time time"
       "target target target"
       "role exit duration";
   }
   table.audit-table td.c-command { grid-area: command; font-family: var(--font-mono); color: var(--fg); }
   table.audit-table td.c-status { grid-area: status; text-align: right; }
-  table.audit-table td.c-tool { grid-area: tool; font-family: var(--font-mono); color: var(--fg-dim); }
   table.audit-table td.c-time { grid-area: time; text-align: right; color: var(--fg-dim); }
   table.audit-table td.c-target { grid-area: target; color: var(--fg-dim); }
   table.audit-table td.c-role { grid-area: role; color: var(--fg-dim); }
@@ -85,6 +90,14 @@ tr.audit-detail-row td {
   background: var(--border);
   margin-top: 1px;
 }
+.policy-count-note {
+  padding: 10px 16px;
+  font: 12px/1.5 var(--font-sans);
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+}
+.policy-count-note p { margin: 0 0 6px; }
+.policy-count-note p:last-child { margin-bottom: 0; color: var(--fg-dim); }
 @media (max-width: 1100px) {
   .policy-grid { grid-template-columns: 1fr; }
 }
@@ -196,6 +209,8 @@ table.policy-table.policy-cause-table td {
   border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
+  container-type: inline-size;
+  flex-shrink: 0;
 }
 .audit-summary-card .card-title {
   font-family: var(--font-sans);
@@ -211,11 +226,9 @@ table.policy-table.policy-cause-table td {
 .audit-summary-card .card-body {
   padding: 0;
 }
-.audit-summary-card[data-key="tool-call-failures-by-tool"] .card-body {
-  overflow-x: auto;
-}
 .summary-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -224,11 +237,13 @@ table.policy-table.policy-cause-table td {
   text-align: left;
   color: var(--fg-dim);
   font-weight: normal;
-  padding: 6px 12px;
+  padding: 6px;
+  font-family: var(--font-sans);
+  overflow-wrap: anywhere;
   border-bottom: 1px solid var(--border);
 }
 .summary-table td {
-  padding: 6px 12px;
+  padding: 6px;
   color: var(--fg);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   white-space: nowrap;
@@ -237,6 +252,12 @@ table.policy-table.policy-cause-table td {
 }
 .summary-table tr:last-child td { border-bottom: none; }
 .summary-table th.num, .summary-table td.num { text-align: right; }
+.summary-table th:first-child { width: 36%; }
+.summary-table td.num { white-space: normal; overflow-wrap: anywhere; }
+/* Secondary counts remain in the row's title and reappear in wider cards. */
+@container (max-width: 420px) {
+  .summary-table .summary-secondary { display: none; }
+}
 .summary-table tr.clickable { cursor: pointer; }
 .summary-table tr.clickable:hover td { background: rgba(110, 159, 255, 0.08); color: var(--accent-hover); }
 
@@ -313,7 +334,7 @@ table.policy-table.policy-cause-table td {
 }
 .tool-call-failure-rate-note {
   padding: 0 12px 12px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--fg-dim);
 }

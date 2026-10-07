@@ -154,6 +154,15 @@ node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/dashboard-browser
 ```
 
+The Audit browser fixture exercises the shipped event and summary tables at
+1440, 1024, 1920 and mobile widths, keyboard expansion, duplicate targets and
+the Policy count explanation with filtered and independent-window views:
+
+```bash
+node crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/audit-browser
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

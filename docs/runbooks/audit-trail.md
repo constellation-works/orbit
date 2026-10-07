@@ -79,6 +79,29 @@ unexpected execution errors. Tools with only denials still appear, with zero
 comparable calls and a zero rate. Inactive agent-surface calls are policy
 denials, including attempts to enable or disable an already-set inactive tool.
 
+Audit Events places status immediately after time. Actor is the recorded role;
+the column tooltip explains `unverified`, `unknown`, agent names,
+`admin`, and `hook`. Tool calls use one tool/command column, with the invocation
+command on hover, and leave the target blank when it repeats the tool.
+
+Audit Summary tables fit their card width. Compact cards omit secondary total
+and unexpected counts in the tool-failures table, and other/internal counts
+in Role split; hover the row label to read all values. Wider cards show those
+columns. Top duration ranks named tools only, excluding the synthetic
+`unknown` bucket and empty names before choosing the top eight.
+
+Audit > Policy shows the canonical policy-decision count used by the top bar,
+split into invocation and envelope decisions, alongside its retained evidence
+row count. Repeated invocation evidence and session, coordination, or protocol
+refusals can make the evidence count larger than the KPI. On an unfiltered,
+uncapped view the page also gives the number of additional evidence rows.
+Evidence filters do not change the canonical count. An independent Audit window
+is identified when it differs from the dashboard window. Recent Denials shows
+at most twelve rows; evidence scans are capped at 1,000 rows per source, while
+the canonical count covers the full window. The API exposes these as
+`policy_decisions` (`total`, `sql`, `v2`) and `evidence_scan_limit` alongside
+the existing evidence `total` and `recent_denials`.
+
 To reconcile with **Audit Events**, use the same workspace routing and cutoff
 (`since` in the summary response), select the tool, and count only its `tool`
 `run`/`run-mcp` rows. Count successes plus failures for total, failures for

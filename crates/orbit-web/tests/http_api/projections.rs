@@ -624,11 +624,19 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
             let policy =
                 json_ok(server.get("/api/diagnostics/denials?since=24h&workspace=ws_http_fixture"));
             assert_eq!(policy["total"], RAW_DENIED_COUNT + V2_POLICY_COUNT);
+            assert_eq!(policy["policy_decisions"]["total"], summary["denials"]);
+            assert_eq!(policy["policy_decisions"]["sql"], SQL_POLICY_COUNT);
+            assert_eq!(policy["policy_decisions"]["v2"], V2_POLICY_COUNT);
             let tool_policy = json_ok(
                 server
                     .get("/api/diagnostics/denials?kind=tool&since=24h&workspace=ws_http_fixture"),
             );
             let recent = tool_policy["recent_denials"].as_array().unwrap();
+            assert_eq!(
+                tool_policy["policy_decisions"], policy["policy_decisions"],
+                "evidence filters must not change the top-bar population"
+            );
+            assert!(tool_policy["total"].as_i64().unwrap() < policy["total"].as_i64().unwrap());
             assert!(
                 recent
                     .iter()
