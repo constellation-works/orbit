@@ -31,7 +31,8 @@ let browser;
 let page;
 try {
   browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // A fixed zone away from UTC, so local times cannot pass as UTC.
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const sharedDrainDeadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
   await page.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   // Serve the actual markup/styles with only the Operations module initialized.
@@ -293,7 +294,7 @@ try {
     return target.locator('#auto-drain-live').textContent();
   };
   const firstBrowser = await timeLeft(page);
-  const otherPage = await browser.newPage();
+  const otherPage = await browser.newPage({ timezoneId: 'America/Los_Angeles' });
   await otherPage.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   await otherPage.goto(`http://127.0.0.1:${server.address().port}/`);
   await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });

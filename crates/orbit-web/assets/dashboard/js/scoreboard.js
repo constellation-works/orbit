@@ -1,7 +1,7 @@
 // Orbit dashboard scoreboard-domain rendering.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 // ORB-00337/ORB-10872: selector writes the shared dashboard window; app.js
@@ -468,8 +468,8 @@ function emptyOrchestrationNode() {
 
 function renderOrchestrationSummary(orchestration) {
   if (!orchestration || !Array.isArray(orchestration.buckets)) return emptyOrchestrationNode();
-  const since = orchestration.since || "all managed execution retained";
-  const until = orchestration.until || orchestration.as_of || "unknown cutoff";
+  const since = orchestration.since ? formatDateTime(orchestration.since) : "all managed execution retained";
+  const until = orchestration.until || orchestration.as_of ? formatDateTime(orchestration.until || orchestration.as_of) : "unknown cutoff";
   const children = [
     el("div", { class: "scoreboard-orchestration-context" }, [
       el("div", { class: "scoreboard-orchestration-scope" }, [
@@ -477,7 +477,7 @@ function renderOrchestrationSummary(orchestration) {
         el("span", { class: "scope-badge", text: `window ${getWindow()}` }),
         el("span", { text: "Direct interactive Codex or Claude orchestration-session overhead is excluded." }),
       ]),
-      el("div", { class: "scoreboard-orchestration-window", text: `Window ${getWindow()}: ${since} ≤ invocation < ${until} (exclusive cutoff; as of ${orchestration.as_of || "unknown"}).` }),
+      el("div", { class: "scoreboard-orchestration-window", text: `Window ${getWindow()}: ${since} ≤ invocation < ${until} (exclusive cutoff; as of ${orchestration.as_of ? formatDateTime(orchestration.as_of) : "unknown"}).` }),
       el("p", { class: "scoreboard-orchestration-policy", text: "Provider-first estimate policy: provider-reported values are primary; derived values remain explicitly labeled estimates with their own coverage. Only the explicitly comparable same-invocation population is safe to compare." }),
     ]),
     renderNormalizedTokenUsage(orchestration.normalized_tokens, orchestration.previous_normalized_tokens),

@@ -82,6 +82,7 @@ fn settings_system_view_executes_render_provenance_override_edit_and_refused_wri
             "--experimental-vm-modules",
             "src/tests/dashboard_config_system.mjs",
         ])
+        .env("TZ", "America/Los_Angeles")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("node is required to execute the dashboard asset behavior fixture");
@@ -103,6 +104,25 @@ fn runs_view_executes_load_more_live_duration_actions_header_and_cancel_style() 
     assert!(
         result.status.success(),
         "dashboard runs behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn dashboard_clock_renders_local_times_with_zone_and_reliability_range_in_utc() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_timestamps.mjs",
+        ])
+        .env("TZ", "America/Los_Angeles")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard timestamp behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );

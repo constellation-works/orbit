@@ -311,7 +311,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("inspect this run on machine hm_follower"), text);
 
   // An elapsed reservation is a diagnostic. Nothing here may read as revoked.
-  assert.ok(text.includes("expired 2026-09-19T00:00:00+00:00"), text);
+  assert.ok(text.includes("expired 2026-09-18 17:00 PDT"), text);
   assert.ok(text.includes("expiry is not revocation"), text);
   assert.ok(!/revoked/i.test(text), `an expired reservation must not read as revoked: ${text}`);
 
@@ -347,7 +347,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   // Several claims for one task (a retry after recovery) are told apart by id
   // and creation time.
   assert.ok(text.includes("claim claim-1"), text);
-  assert.ok(text.includes("created 2026-09-18T00:00:00+00:00"), text);
+  assert.ok(text.includes("created 2026-09-17 17:00 PDT"), text);
 }
 
 {

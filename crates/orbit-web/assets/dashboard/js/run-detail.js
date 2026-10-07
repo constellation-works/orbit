@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -682,23 +682,18 @@ export function renderRunGantt() {
   axisLine.setAttribute("x2", String(W_TOTAL - PAD_RIGHT));
   axisLine.setAttribute("y2", String(axisY));
   svg.appendChild(axisLine);
-  const fmtAxis = (ms) => {
-    const d = new Date(ms);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  };
   const axisStart = document.createElementNS(svgNS, "text");
   axisStart.setAttribute("class", "gantt-axis-label");
   axisStart.setAttribute("x", String(PAD_LEFT));
   axisStart.setAttribute("y", String(axisY + 12));
-  axisStart.textContent = fmtAxis(derivedStart);
+  axisStart.textContent = formatClock(derivedStart, { zone: false });
   svg.appendChild(axisStart);
   const axisEnd = document.createElementNS(svgNS, "text");
   axisEnd.setAttribute("class", "gantt-axis-label");
   axisEnd.setAttribute("x", String(W_TOTAL - PAD_RIGHT));
   axisEnd.setAttribute("y", String(axisY + 12));
   axisEnd.setAttribute("text-anchor", "end");
-  axisEnd.textContent = fmtAxis(derivedEnd);
+  axisEnd.textContent = formatClock(derivedEnd);
   svg.appendChild(axisEnd);
 
   // Bars per step.
@@ -952,7 +947,7 @@ export function renderRunEvents() {
     const ev = events[i];
     const summary = summarizeEvent(ev);
     const tr = el("tr");
-    tr.appendChild(el("td", { text: fmtTimestamp(ev.ts) }));
+    tr.appendChild(el("td", { text: fmtTimestamp(ev.ts), title: ev.ts ? fmtAbsTime(ev.ts) : "" }));
     tr.appendChild(el("td", { text: ev.body_kind || "-" }));
     tr.appendChild(el("td", { text: ev.event_type || "-" }));
     tr.appendChild(el("td", { text: ev.agent_identity || "-" }));

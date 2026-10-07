@@ -1462,7 +1462,7 @@ function buildCommentCard(task, comment, index, context) {
     }),
     isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
     el("span", { class: "comment-at", text: fmtAbsTimeValue(context, comment && comment.at) }),
-    el("span", { class: "comment-age", text: commentAge(comment && comment.at) }),
+    el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
     size,
     actions,
   ]);

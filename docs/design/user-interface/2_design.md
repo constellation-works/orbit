@@ -29,6 +29,8 @@ The UI uses layered dark surfaces instead of flat black: base canvas, elevated p
 
 `Geist` carries labels, headings, and prose. `Geist Mono` is reserved for IDs, metrics, timestamps, code, and log streams so numeric and diagnostic data stays aligned. Both are self-hosted variable fonts served from `/static/fonts/`, so the dashboard makes no third-party request.
 
+Timestamps share one clock, the formatters in `js/common.js`. An absolute instant renders as 24-hour browser-local time with its zone abbreviation (`2026-10-06 23:31 PDT`); the rail footer, log dock and status bar use the same 24-hour `HH:MM:SS`, with the log's date and zone in each line's title. A relative age ("5m", "in 2 h") carries its absolute instant in the title. UTC appears only where the value is defined in UTC and is always labelled: cron triggers ("daily 14:30 UTC", whose next fire beside it reads in local time with its zone) and Reliability, whose window, bucket titles and axis are UTC because the server cuts them in UTC.
+
 Status reads as a coloured dot and a plain word, never colour alone: status pills, filter chips, task-row status cells, group headings and run states all draw their dot from the element's `data-status` / `data-state` attribute. Section titles are sentence-weight headings; the small uppercase overline is kept for field labels inside a section.
 
 ## 4. Live Status

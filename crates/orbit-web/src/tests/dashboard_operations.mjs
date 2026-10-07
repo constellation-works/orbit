@@ -146,7 +146,7 @@ globalThis.fetch = async (path, options = {}) => {
   return response({});
 };
 setWorkspace('one');
-initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
+initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
 // The Drain card keeps only what an operator acts on: the capacity line and
 // what a window would admit, two counts, the blocked-by list, then duration,
@@ -265,9 +265,9 @@ resourceThrottle = {
 };
 await fetchAndRenderOperations();
 assert(
-  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04T08:41:00Z') &&
+  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04 01:41 PDT') &&
   drainText().includes('; resumes below 80%)') &&
-  drainText().includes('cpu 89% (throttled at ≥ 90% since 2026-10-04T08:40:00Z') &&
+  drainText().includes('cpu 89% (throttled at ≥ 90% since 2026-10-04 01:40 PDT') &&
   drainText().includes('; resumes below 75%)') &&
   drainText().includes('Running tasks are not touched.'),
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
@@ -662,6 +662,9 @@ const autoGroups = descendants(get('auto-tasks-body')).filter(node => String(nod
 assert(autoGroups.some(text => text.startsWith('On a schedule2')), `auto-tasks grouped by trigger: ${autoGroups}`);
 const autoStats = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-stat ')).map(node => node.textContent);
 assert(autoStats.some(text => text.startsWith('Definitions2')) && autoStats.some(text => text.startsWith('Enabled2')) && autoStats.some(text => text.startsWith('Open duplicates1')), `auto-task stats: ${autoStats}`);
+// The browser runs in America/Los_Angeles: the 22:00Z mint is a local 15:00
+// and says so, beside cron triggers that are stated in UTC.
+assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('15:00 PDT')), `next mint names its local zone: ${autoStats}`);
 const autoSwitch = descendants(autoCard).find(node => String(node.className || '').includes('operation-switch'));
 assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true', 'auto-task toggle is a switch');
 assert(autoHead.textContent.includes('still open · scheduler will skip'), 'open duplicate is called out on the row');

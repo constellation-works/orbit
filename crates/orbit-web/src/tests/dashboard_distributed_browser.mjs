@@ -47,7 +47,8 @@ const assertNoOverflow = async (label) => {
 
 try {
   browser = await chromium.launch({ headless: true });
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // A fixed zone away from UTC, so claim times are checked as local times.
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
