@@ -261,7 +261,9 @@ It inspects. It does not reclaim.
 
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then
-`GET /api/distributed/claims`). There is no distributed tab; the panel appears
+`GET /api/distributed/claims?task=<task-id>`). The endpoint accepts
+`state=active|settled|all` (default `active`); settled claims are compact
+summaries unless `detail=true`. There is no distributed tab; the panel appears
 only for a task this workspace holds a claim for, and a replica reports that
 the owner machine holds that state.
 

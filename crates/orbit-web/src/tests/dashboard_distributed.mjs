@@ -154,7 +154,8 @@ globalThis.fetch = async (path, options = {}) => {
   const method = (options && options.method) || "GET";
   if (method === "GET") {
     const workspace = url.searchParams.get("workspace");
-    consoleReads.push({ path: url.pathname, workspace });
+    const task = url.searchParams.get("task");
+    consoleReads.push({ path: url.pathname, workspace, task });
     if (failConsoleReads > 0) {
       failConsoleReads -= 1;
       return respond({ error: "claims unavailable" }, 500);
@@ -345,8 +346,11 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
 {
   // A task this workspace holds no claim for gets no block at all.
+  const readsBefore = consoleReads.length;
   const block = await mount("ORB-999");
   assert.equal(block.style.display, "none", "a task with no claim shows nothing");
+  assert.equal(consoleReads.length, readsBefore + 1, "the task panel makes one claim request");
+  assert.equal(consoleReads.at(-1).task, "ORB-999", "the request is scoped to the task being opened");
 }
 
 // --- workspace switching invalidates the distributed-console cache ---------

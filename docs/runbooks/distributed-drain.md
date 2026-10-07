@@ -627,7 +627,10 @@ appears only for a task this workspace holds a claim for:
 orbit web serve --operator
 ```
 
-`GET /api/distributed/claims` is the read; a replica answers that the owner
+`GET /api/distributed/claims` is the read. It accepts `task=<task-id>` and
+`state=active|settled|all`; state defaults to `active`, and settled claims are
+compact summaries unless `detail=true`. The task detail panel sends its task
+filter so it does not fetch unrelated claims. A replica answers that the owner
 machine holds claim state rather than showing an empty list. Read-only
 inspection needs no operator authority; the three actions below do, and the
 server re-resolves that for every call regardless of what the page rendered.

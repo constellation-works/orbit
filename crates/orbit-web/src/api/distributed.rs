@@ -46,7 +46,9 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_REVOKE,
 };
-use orbit_core::application::review::{ExpectedCandidate, HandoffConsoleRefusal};
+use orbit_core::application::review::{
+    DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
+};
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,6 +71,24 @@ const MAX_REQUEST_ID: usize = 128;
 /// Longest accepted operator reason, matching what the store records as a
 /// status note.
 const MAX_REASON: usize = 2000;
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ClaimsStateQuery {
+    #[default]
+    Active,
+    Settled,
+    All,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct ClaimsQuery {
+    task: Option<String>,
+    #[serde(default)]
+    state: ClaimsStateQuery,
+    #[serde(default)]
+    detail: bool,
+}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ApproveHandoffRequest {
@@ -105,10 +125,24 @@ pub(super) struct RecoverClaimRequest {
 /// Creates nothing: no receipt, no reservation, no claim, no task transition.
 /// A replica checkout is answered rather than refused, so switching the
 /// workspace selector renders an honest empty view instead of a fault.
-pub(super) async fn list_claims(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
+pub(super) async fn list_claims(
+    State(state): State<DashboardState>,
+    Query(query): Query<ClaimsQuery>,
+    Ws(runtime): Ws,
+) -> Response {
+    if let Some(task_id) = query.task.as_deref()
+        && let Err(message) = validate_id(task_id)
+    {
+        return bad_request(message);
+    }
+    let claim_state = match query.state {
+        ClaimsStateQuery::Active => DistributedClaimState::Active,
+        ClaimsStateQuery::Settled => DistributedClaimState::Settled,
+        ClaimsStateQuery::All => DistributedClaimState::All,
+    };
     let operator_session = state.operator_session();
     match blocking("distributed claim console", move || {
-        runtime.distributed_claim_console()
+        runtime.distributed_claim_console_filtered(query.task.as_deref(), claim_state, query.detail)
     })
     .await
     {
