@@ -575,17 +575,18 @@ fn run_deterministic(
                 }
                 // Only the delivery push writes this hold; a refusal text
                 // that merely quotes the marker carries no parseable hold.
-                error
-                    if let Some(hold) = orbit_types::workflow::ForgeUnavailableHold::from_text(
-                        &error.to_string(),
-                    ) =>
-                {
-                    DispatchError::ForgeUnavailableHold(Box::new(hold))
+                // A nested match, not an `if let` guard: guards need a newer
+                // toolchain than the workspace MSRV.
+                error => {
+                    let message = error.to_string();
+                    match orbit_types::workflow::ForgeUnavailableHold::from_text(&message) {
+                        Some(hold) => DispatchError::ForgeUnavailableHold(Box::new(hold)),
+                        None => DispatchError::DeterministicActionFailed {
+                            action: spec.action.clone(),
+                            message,
+                        },
+                    }
                 }
-                error => DispatchError::DeterministicActionFailed {
-                    action: spec.action.clone(),
-                    message: error.to_string(),
-                },
             })?
         }
         Some(DeterministicAction::Core(_)) | None => host.run_deterministic(
