@@ -248,7 +248,7 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
         .unwrap();
     transaction
         .execute(
-            "UPDATE job_runs SET pipeline_state_json = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
+            "UPDATE job_run_states SET pipeline_state_json = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
             rusqlite::params![
                 serde_json::to_string(&expected).unwrap(),
                 runtime.workspace_id().unwrap(),
@@ -367,11 +367,19 @@ fn repeated_automation_admission_preserves_pending_running_and_terminal_state() 
             }
             _ => {}
         }
-        runtime.sqlite_store().unwrap().connection().lock().unwrap().execute_batch(
-            "CREATE TRIGGER refuse_pipeline_rewrite BEFORE UPDATE OF pipeline_state_json ON job_runs \
-             WHEN json_extract(OLD.input_json, '$.guard') = 1 \
-             BEGIN SELECT RAISE(ABORT, 'repeated admission rewrote pipeline state'); END;"
-        ).unwrap();
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_pipeline_rewrite BEFORE UPDATE ON job_run_states \
+             WHEN (SELECT json_extract(input_json, '$.guard') FROM job_runs \
+                   WHERE workspace_id = OLD.workspace_id AND run_id = OLD.run_id) = 1 \
+             BEGIN SELECT RAISE(ABORT, 'repeated admission rewrote pipeline state'); END;",
+            )
+            .unwrap();
         let repeated = runtime
             .submit_automation_pipeline_run(
                 "snapshot_fixture",
@@ -421,17 +429,25 @@ fn failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic() {
     let job_path = jobs_dir.join("snapshot_fixture.yaml");
     std::fs::write(&job_path, SNAPSHOT_YAML).unwrap();
     crate::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    // Fail every state write after the run insert. The state an automation
+    // admission commits with its run carries no trigger yet; every later
+    // write (the detached and foreground seeds, trigger recording) does.
+    let fault = |event: &str| {
+        format!(
+            "CREATE TRIGGER fail_post_insert_{event} BEFORE {event} ON job_run_states \
+             WHEN json_extract(NEW.pipeline_state_json, '$.trigger') IS NOT NULL \
+             AND (SELECT json_extract(input_json, '$.fail_after_insert') = 1 AND state = 'pending' \
+                  FROM job_runs WHERE workspace_id = NEW.workspace_id AND run_id = NEW.run_id) \
+             BEGIN SELECT RAISE(ABORT, 'injected post-insert failure'); END;"
+        )
+    };
     runtime
         .sqlite_store()
         .unwrap()
         .connection()
         .lock()
         .unwrap()
-        .execute_batch(
-            "CREATE TRIGGER fail_post_insert_state BEFORE UPDATE OF pipeline_state_json ON job_runs \
-             WHEN json_extract(OLD.input_json, '$.fail_after_insert') = 1 AND NEW.state = 'pending' \
-             BEGIN SELECT RAISE(ABORT, 'injected post-insert failure'); END;",
-        )
+        .execute_batch(&format!("{}{}", fault("INSERT"), fault("UPDATE")))
         .unwrap();
     let input = json!({"fail_after_insert": true});
     let jobs = runtime.stores().jobs();

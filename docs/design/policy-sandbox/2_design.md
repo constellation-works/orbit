@@ -413,7 +413,7 @@ edits the provider made outside them (never `.orbit/` state), and continues
 the rebase.
 
 This protects the live invocation's in-memory checkpoint and Git destinations.
-Durable recovery certificates also live in `job_runs.pipeline_state_json` in
+Durable recovery certificates also live in `job_run_states.pipeline_state_json` in
 `<global-root>/orbit.db`. The existing child-runtime grants allow that database
 and its sidecars for nested Orbit tools. They do not provide a host-only raw
 filesystem boundary for durable recovery certificates; protecting that store

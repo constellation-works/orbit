@@ -13,6 +13,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use super::queries::{
     get_job_run_for_workspace_conn, next_run_id_conn, upsert_job_run_for_workspace_conn,
 };
+use super::state::read_state_json_conn;
 use crate::Store;
 use crate::contracts::{
     AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
@@ -332,16 +333,7 @@ fn dispatch_lineage(
             let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
             for child in state.child_dispatches {
                 if seen.insert(child.child_run_id.clone()) {
-                    let raw: Option<String> = conn
-                        .query_row(
-                            "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                            params![workspace, child.child_run_id],
-                            |r| r.get(0),
-                        )
-                        .optional()
-                        .map_err(db_error)?
-                        .flatten();
-                    next.push(raw);
+                    next.push(read_state_json_conn(conn, workspace, &child.child_run_id)?);
                 }
             }
         }
@@ -366,7 +358,13 @@ fn occupancy(
     workspace: &str,
     coordinator: Option<&str>,
 ) -> Result<DrainLeafOccupancy, OrbitError> {
-    let mut stmt = conn.prepare("SELECT run_id,job_id,pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND state IN ('pending','running','retrying')").map_err(db_error)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.run_id, r.job_id, s.pipeline_state_json FROM job_runs r \
+             LEFT JOIN job_run_states s ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+             WHERE r.workspace_id=?1 AND r.state IN ('pending','running','retrying')",
+        )
+        .map_err(db_error)?;
     let active = stmt
         .query_map([workspace], |r| {
             Ok((
@@ -413,15 +411,7 @@ fn occupancy(
     // coordinator finishes. Walking it avoids counting a wrapper and its
     // delivery twice, or attributing our detached delivery to another drain.
     let mut owned = if let Some(run_id) = coordinator {
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                params![workspace, run_id],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(db_error)?
-            .flatten();
+        let raw = read_state_json_conn(conn, workspace, run_id)?;
         dispatch_lineage(conn, workspace, raw.as_ref())?
     } else {
         BTreeSet::new()
@@ -590,13 +580,7 @@ pub(super) fn allocate(
         if parent.state.is_terminal() {
             return Ok(None);
         }
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                params![workspace, parent.run_id],
-                |r| r.get(0),
-            )
-            .map_err(db_error)?;
+        let raw = read_state_json_conn(conn, workspace, &parent.run_id)?;
         let state: PipelineState =
             serde_json::from_str(&raw.ok_or_else(|| invalid("pull drain state missing"))?)
                 .map_err(db_error)?;

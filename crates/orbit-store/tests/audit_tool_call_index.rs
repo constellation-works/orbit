@@ -31,11 +31,14 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
     let path = root.path().join("store.sqlite");
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    // Recreate the immediately preceding schema to exercise an upgrade, not
-    // only creation of a fresh store. Compatibility is rewritten by the opener.
+    // Recreate schema v36 so the next open applies the index migration at v37
+    // and the job-state migration at v38. Compatibility is rewritten by the
+    // opener.
     conn.execute_batch(
         "DROP INDEX idx_audit_events_command_subcommand_timestamp;
-        DELETE FROM schema_meta WHERE key = 'migration.v0037';
+        DROP TABLE job_run_states;
+        ALTER TABLE job_runs ADD COLUMN pipeline_state_json TEXT;
+        DELETE FROM schema_meta WHERE key IN ('migration.v0037', 'migration.v0038');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",
@@ -59,13 +62,21 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
             })
             .unwrap();
         assert_eq!(row, ("preserved".into(), "failure".into()));
-        let name: String = conn
+        let index_migration: String = conn
             .query_row(
                 "SELECT value FROM schema_meta WHERE key = 'migration.v0037'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(name, "audit_tool_call_index");
+        assert_eq!(index_migration, "audit_tool_call_index");
+        let state_migration: String = conn
+            .query_row(
+                "SELECT value FROM schema_meta WHERE key = 'migration.v0038'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state_migration, "job_run_states");
     }
 }

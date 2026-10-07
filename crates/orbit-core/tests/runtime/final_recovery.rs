@@ -176,7 +176,11 @@ impl Fixture {
         connection
             .execute_batch(
                 "CREATE TRIGGER fail_final_recovery_outcome \
-                 BEFORE UPDATE OF pipeline_state_json ON job_runs \
+                 BEFORE UPDATE ON job_run_states \
+                 WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
+                 BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END; \
+                 CREATE TRIGGER fail_final_recovery_outcome_insert \
+                 BEFORE INSERT ON job_run_states \
                  WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
                  BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END;",
             )
@@ -238,7 +242,10 @@ struct OutcomeWriteFault(rusqlite::Connection);
 impl Drop for OutcomeWriteFault {
     fn drop(&mut self) {
         self.0
-            .execute_batch("DROP TRIGGER IF EXISTS fail_final_recovery_outcome;")
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS fail_final_recovery_outcome; \
+                 DROP TRIGGER IF EXISTS fail_final_recovery_outcome_insert;",
+            )
             .unwrap();
     }
 }

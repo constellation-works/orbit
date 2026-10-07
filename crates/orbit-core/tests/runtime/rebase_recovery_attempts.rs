@@ -295,7 +295,11 @@ fn fail_writes_naming(fixture: &Fixture, marker: &str) -> WriteFault {
     connection
         .execute_batch(&format!(
             "CREATE TRIGGER fail_recovery_copy \
-             BEFORE UPDATE OF pipeline_state_json ON job_runs \
+             BEFORE UPDATE ON job_run_states \
+             WHEN NEW.pipeline_state_json LIKE '%{marker}%' \
+             BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END; \
+             CREATE TRIGGER fail_recovery_copy_insert \
+             BEFORE INSERT ON job_run_states \
              WHEN NEW.pipeline_state_json LIKE '%{marker}%' \
              BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END;"
         ))
@@ -308,7 +312,10 @@ struct WriteFault(rusqlite::Connection);
 impl Drop for WriteFault {
     fn drop(&mut self) {
         self.0
-            .execute_batch("DROP TRIGGER IF EXISTS fail_recovery_copy;")
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS fail_recovery_copy; \
+                 DROP TRIGGER IF EXISTS fail_recovery_copy_insert;",
+            )
             .unwrap();
     }
 }

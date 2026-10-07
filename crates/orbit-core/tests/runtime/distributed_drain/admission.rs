@@ -276,7 +276,7 @@ fn unreadable_cancel_state_fails_visibly_without_admission() {
     store
         .with_transaction(|tx| {
             let changed = tx.connection().execute(
-                "UPDATE job_runs SET pipeline_state_json = '{' WHERE workspace_id = ?1 AND run_id = ?2",
+                "UPDATE job_run_states SET pipeline_state_json = '{' WHERE workspace_id = ?1 AND run_id = ?2",
                 [workspace.as_str(), drain.as_str()],
             ).unwrap();
             assert_eq!(changed, 1);

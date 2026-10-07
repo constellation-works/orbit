@@ -17,6 +17,7 @@ use super::queries::{
     JOB_RUN_COLUMNS, get_job_run_for_workspace_conn, next_run_id_conn, read_steps_for_runs,
     row_to_job_run, upsert_job_run_for_workspace_conn,
 };
+use super::state::write_state_json_conn;
 use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
@@ -515,8 +516,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let parent_row = tx
                     .tx
                     .query_row(
-                        "SELECT state, pipeline_state_json FROM job_runs \
-                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        "SELECT r.state, s.pipeline_state_json FROM job_runs r \
+                         LEFT JOIN job_run_states s \
+                           ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                         WHERE r.workspace_id = ?1 AND r.run_id = ?2",
                         rusqlite::params![self.workspace_id, params.parent_run_id],
                         |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                     )
@@ -601,17 +604,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 )?;
                 let parent_state_json = serde_json::to_string(&parent_state)
                     .map_err(|error| OrbitError::Store(format!("serialize pipeline state: {error}")))?;
-                tx.tx
-                    .execute(
-                        "UPDATE job_runs SET pipeline_state_json = ?3 \
-                         WHERE workspace_id = ?1 AND run_id = ?2",
-                        rusqlite::params![
-                            self.workspace_id,
-                            params.parent_run_id,
-                            parent_state_json
-                        ],
-                    )
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                write_state_json_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &params.parent_run_id,
+                    &parent_state_json,
+                )?;
                 Ok(ChildJobRunAdmissionOutcome::Admitted(Box::new(run)))
             })
     }

@@ -155,9 +155,10 @@ fn successful_runs_stay_successful_when_final_summary_writes_fail() {
         connection
             .execute_batch(match fault {
                 SummaryFault::Pipeline => {
-                    "CREATE TRIGGER fail_final_summary BEFORE UPDATE OF pipeline_state_json \
-                     ON job_runs WHEN OLD.state = 'running' AND NEW.state = 'running' \
-                     AND NEW.pipeline_state_json IS NOT OLD.pipeline_state_json \
+                    "CREATE TRIGGER fail_final_summary BEFORE UPDATE ON job_run_states \
+                     WHEN NEW.pipeline_state_json IS NOT OLD.pipeline_state_json \
+                     AND (SELECT state FROM job_runs WHERE workspace_id = NEW.workspace_id \
+                          AND run_id = NEW.run_id) = 'running' \
                      BEGIN SELECT RAISE(ABORT, 'injected pipeline summary failure'); END;"
                 }
                 SummaryFault::Step => {
