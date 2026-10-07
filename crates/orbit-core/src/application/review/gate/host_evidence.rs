@@ -97,7 +97,7 @@ impl Judgement {
             return Ok(satisfied);
         }
         let arrived = satisfied_external_evidence(runtime, task_id, candidate)?;
-        let host_os = EvidenceHostOs::current();
+        let host_os = EvidenceHostOs::of_host(runtime.host_os());
         let owner_required = self
             .required_validation_commands
             .clone()
@@ -135,7 +135,9 @@ impl Judgement {
                     detail: format!(
                         "the requirement needs {}; this host is {}",
                         os.as_str(),
-                        std::env::consts::OS
+                        runtime
+                            .host_os()
+                            .map_or("an unknown OS", orbit_types::task::HostOs::as_str)
                     ),
                 })
             };

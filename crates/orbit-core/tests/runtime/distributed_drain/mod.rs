@@ -61,6 +61,7 @@ mod cancel;
 mod candidate_carry;
 #[cfg(unix)]
 mod claimed_host_evidence;
+mod claimed_owed_evidence;
 mod claimed_owner;
 mod claimed_review;
 mod desktop_completion;

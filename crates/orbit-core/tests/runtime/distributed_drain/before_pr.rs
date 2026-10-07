@@ -129,6 +129,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             crew: Some("reviewer".into()),
             budget: ReviewBudget::default(),
             required_validation_commands: Some(vec![]),
+            host_evidence: Vec::new(),
         }),
     };
     let boundary = TaskCommitBoundary::new(
@@ -253,6 +254,8 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         baseline_red: Vec::new(),
         host_evidence: Vec::new(),
         issued_at: Utc::now(),
+        owed_evidence: Vec::new(),
+        resumed_hold_attempt: None,
     };
     let content = serde_json::to_vec(&certificate).unwrap();
     let reference = HandoffArtifactRef {

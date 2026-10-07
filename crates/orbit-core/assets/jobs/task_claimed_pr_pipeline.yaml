@@ -46,7 +46,10 @@
 # leaf pushes the held candidate to `orbit-evidence/<branch>` on `origin` and
 # ends `held`, and its settlement releases the claim with the hold, so the
 # owner keeps the task in progress until the named evidence arrives (a Linux
-# owner runs `codeql`-only holds itself). Required validation (`validate`) runs on the final,
+# owner runs `codeql`-only holds itself). The owner's `[[review.host_evidence]]`
+# rules make a hold deterministic: a matching change owes the rule's check on
+# this host whatever the reviewer reports, and the reviewer's manifest names it
+# as `owed_external_evidence` to record `not_run`. Required validation (`validate`) runs on the final,
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
@@ -213,7 +216,7 @@ spec:
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
 
     - id: review
-      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      when: "{{ steps.review_gate_admit.output.applies }} == true && {{ steps.review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000

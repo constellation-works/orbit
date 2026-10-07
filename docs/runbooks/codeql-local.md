@@ -175,6 +175,28 @@ for evidence instead of ending it incomplete ([review gate design §4](../design
 job runs only for pull requests and pushes to `main` and `agent-main`, so it
 cannot supply evidence for a candidate before its PR opens.
 
+A claimed leaf does not depend on its reviewer to name the check. The owner
+declares a workspace rule that a Rust change owes it:
+
+```toml
+[[review.host_evidence]]
+kind = "codeql"
+name = "Linux CodeQL (rust)"
+paths = ["**/*.rs"]
+os = "linux"
+command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
+artifact = "evidence/codeql-rust-linux.json"
+```
+
+On a non-Linux follower, a candidate that changes a matching path owes this
+requirement. The reviewer's manifest names it in `owed_external_evidence`. It records the
+command `not_run` and never attempts it. Settlement adds the requirement
+whatever the report says, so the review holds for the owner's run. It neither
+blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
+host could not have run. A Linux follower, or a candidate that changes no
+matching path, owes nothing
+([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
+
 ### Owner fulfilment
 
 A Linux owner fulfils such a hold without an operator. Its clock sweep
@@ -211,7 +233,11 @@ The result is `passed` only when the script exits zero, reports completed
 analysis, and its `results.sarif` has runs and no results. The run then
 attaches `evidence/<name>.json` and its log `evidence/<name>.log.json`, which
 records the exit, SARIF summary and output tails. Receipt of every result
-moves the task to the backlog for a fresh review, which verifies them.
+moves the task to the backlog for a fresh review, which verifies them. When a
+host-evidence rule owed every held check, the owner's next run resumes the
+held candidate (`resumed_held`). It settles the held review without a
+reviewer, as long as the candidate rebuilds to the same tree on the same base.
+Delivery then continues to the pull request.
 
 Any other run attaches only the log and leaves the hold in place with a typed
 reason:

@@ -19,7 +19,10 @@
 #   matching evidence queues a fresh review rather than approving delivery.
 #   The next run resumes the held candidate without implementing it again
 #   (ORB-14450); the review gate counts that evidence on the resumed tree, or
-#   on a rebase of it whose patch is unchanged.
+#   on a rebase of it whose patch is unchanged. When the hold named only
+#   evidence a host-evidence rule owed and the resumed tree is unchanged,
+#   admission decides `evidence_received`: the review step is skipped and
+#   settlement passes the held review on the arrived evidence.
 # - When the run itself terminalizes before PR completion, its recoverable
 #   candidate is published and the task is blocked for reconciliation. A
 #   required command its base fails the same way (`baseline_red`) is one
@@ -245,7 +248,7 @@ spec:
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
 
     - id: review
-      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      when: "{{ steps.review_gate_admit.output.applies }} == true && {{ steps.review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000

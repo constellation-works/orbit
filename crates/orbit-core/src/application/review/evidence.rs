@@ -438,15 +438,34 @@ pub(crate) fn resume_evidence_hold(
     {
         return Ok(());
     }
+    // A hold for owed checks only resumes the held review without a
+    // reviewer when the same candidate is rebuilt on the same base.
+    let next = if hold.requirements.iter().all(|required| {
+        certificate.owed_evidence.iter().any(|owed| {
+            owed.kind == required.kind
+                && owed.command == required.command
+                && owed.artifact == required.artifact
+        })
+    }) {
+        "queued to settle the held review and resume delivery"
+    } else {
+        "queued for fresh review"
+    };
     runtime.with_mutation(|| {
-        let updated = runtime.stores().task_records().update(task_id, TaskRecordUpdateParams {
-            actor: "system".into(),
-            status: Some(TaskStatus::Backlog),
-            expected_status: Some(vec![TaskStatus::InProgress]),
-            status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
-            status_note: Some(format!("run={}; all named external checks arrived for the held candidate; queued for fresh review.", hold.run_id)),
-            ..Default::default()
-        })?;
+        let updated = runtime.stores().task_records().update(
+            task_id,
+            TaskRecordUpdateParams {
+                actor: "system".into(),
+                status: Some(TaskStatus::Backlog),
+                expected_status: Some(vec![TaskStatus::InProgress]),
+                status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
+                status_note: Some(format!(
+                    "run={}; all named external checks arrived for the held candidate; {next}.",
+                    hold.run_id
+                )),
+                ..Default::default()
+            },
+        )?;
         Ok((updated, OrbitEvent::TaskUpdated { id: task_id.into() }))
     })?;
     Ok(())

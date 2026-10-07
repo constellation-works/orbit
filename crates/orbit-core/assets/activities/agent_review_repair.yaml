@@ -139,6 +139,15 @@ spec:
        result path changed. Record it as `required` and `passed`, naming its
        result and log artifacts in `note`; do not request that check again.
        A repair that changes the tree needs evidence for the repaired tree.
+       The manifest's `owed_external_evidence` lists checks a workspace
+       host-evidence rule owes for this candidate on this host. They are owner-fulfilled: Orbit runs
+       each one outside this lane on the OS it names. Do not attempt one, and
+       never report one passed. Record each as a `required` validation record
+       with its exact `command` and outcome `not_run`, and copy each entry
+       into `external_evidence` unchanged. When they are the only remaining
+       work, return `incomplete` with no open finding: the gate holds the
+       candidate for them, and their arrival settles this review without
+       another reviewer. Settlement adds them whatever the report says.
        When the manifest names `evidence_carried`, those entries were checked
        on its `from_tree` and Orbit verified that this candidate carries the
        same patch onto a new base; treat them as verified for `candidate.tree`.

@@ -1898,6 +1898,7 @@ fn before_pr_ship() -> AdmissionShipContract {
         crew: Some(REVIEW_CREW.into()),
         budget: ReviewBudget { minutes: 45 },
         required_validation_commands: Some(vec!["build".into(), "test".into()]),
+        host_evidence: Vec::new(),
     });
     ship
 }
@@ -1968,6 +1969,8 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         baseline_red: Vec::new(),
         host_evidence: Vec::new(),
         issued_at: Utc::now(),
+        owed_evidence: Vec::new(),
+        resumed_hold_attempt: None,
     }
 }
 

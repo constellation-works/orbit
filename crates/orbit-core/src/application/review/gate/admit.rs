@@ -26,6 +26,7 @@ use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
 use super::judgement::write_artifact;
+use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
 use super::release::release_abandoned;
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
@@ -246,7 +247,6 @@ fn admit(
                 "review_validation_contract_missing: this admitted run predates the captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".into(),
             )
         })?;
-    let crew = resolve_reviewer_crew(runtime, admission, context)?;
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
     if let Some(rebase) = rebase
         && candidate.head.commit != rebase.head_sha
@@ -263,6 +263,20 @@ fn admit(
             candidate.head.commit, candidate.base.commit
         )));
     }
+    // A held review whose owed evidence arrived for this exact candidate
+    // settles under its original reviewer; no new reviewer is started.
+    let received = match rebase {
+        None => owed_hold_received(runtime, context, &candidate)?,
+        Some(_) => None,
+    };
+    let reviewer = match &received {
+        Some((_, certificate)) => held_reviewer_json(&certificate.reviewer),
+        None => {
+            let crew = resolve_reviewer_crew(runtime, admission, context)?;
+            reviewer_json(&crew, &admission.crew_source)
+        }
+    };
+    let owed_external_evidence = owed_evidence(runtime, context, &candidate.commits)?;
     let (task_digests, task_meaning_digest) = &context.task_digests;
     let carry = match context.task_ids.as_slice() {
         [task_id] => evidence_carry(
@@ -330,6 +344,7 @@ fn admit(
     let manifest = ReviewManifest {
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
+        owed_external_evidence,
         previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),
@@ -347,7 +362,7 @@ fn admit(
             .iter()
             .map(|task| (task.id.to_string(), task.execution_summary.clone()))
             .collect(),
-        reviewer_crew: crew.name.clone(),
+        reviewer_crew: reviewer["crew"].as_str().unwrap_or_default().to_string(),
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
         budget: ledger.budget,
@@ -371,16 +386,23 @@ fn admit(
         )?;
     }
 
+    let decision = match (&received, resumed) {
+        (Some(_), _) => EVIDENCE_RECEIVED_DECISION,
+        (None, true) => "resumed",
+        (None, false) => "admitted",
+    };
     Ok(json!({
         "applies": true,
-        "decision": if resumed { "resumed" } else { "admitted" },
+        "decision": decision,
+        "held_attempt_id": received.as_ref().map(|(hold, _)| hold.attempt_id.clone()),
         "first_task_id": context.task_ids[0],
         "attempt_id": attempt.attempt_id,
         "attempt_index": attempt.index,
         "lineage_key": lineage_key,
         "timing": admission.timing.as_str(),
         "timing_source": admission.timing_source,
-        "reviewer": reviewer_json(&crew, &admission.crew_source),
+        "reviewer": reviewer,
+        "owed_evidence": manifest.owed_external_evidence,
         "base_sha": candidate.base.commit,
         "base_tree": candidate.base.tree,
         "head_sha": candidate.head.commit,
@@ -441,6 +463,17 @@ fn reviewer_json(crew: &Crew, source: &str) -> Value {
         "provider": crew.assignment.provider,
         "model": crew.assignment.model,
         "reasoning_effort": crew.assignment.effort,
+    })
+}
+
+/// The reviewer a held review settles under: the one that reviewed it.
+fn held_reviewer_json(reviewer: &ReviewerIdentity) -> Value {
+    json!({
+        "crew": reviewer.crew,
+        "crew_source": "held_review",
+        "provider": reviewer.provider,
+        "model": reviewer.model,
+        "reasoning_effort": reviewer.reasoning_effort,
     })
 }
 

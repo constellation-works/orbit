@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The host operating system a host-run check must execute on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceHostOs {
     Linux,
@@ -36,6 +36,15 @@ impl EvidenceHostOs {
         match self {
             Self::Linux => "linux",
             Self::Macos => "macos",
+        }
+    }
+
+    /// The evidence OS of an admission host OS, when a check can name it.
+    pub fn of_host(os: Option<crate::task::HostOs>) -> Option<Self> {
+        match os? {
+            crate::task::HostOs::Linux => Some(Self::Linux),
+            crate::task::HostOs::Macos => Some(Self::Macos),
+            crate::task::HostOs::Windows => None,
         }
     }
 }

@@ -77,6 +77,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                         artifact: "evidence/native.json".into(),
                         os: None,
                     }],
+                    published_ref: None,
                 });
                 let message = "candidate validation failed with its original cause";
                 let pipeline = if held {

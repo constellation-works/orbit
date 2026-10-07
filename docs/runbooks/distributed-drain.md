@@ -107,7 +107,8 @@ candidate's second commit and comments a summary on the owner's task. A
 `reject` or `incomplete` verdict fails the leaf before anything is pushed, and
 the owner blocks the task with the findings already on it. An evidence-only
 `incomplete`, such as a macOS reviewer owing the Linux CodeQL run, holds
-instead. The leaf pushes the held candidate to `orbit-evidence/<branch>` on
+instead. An owner `[[review.host_evidence]]` rule makes that hold
+deterministic: the leaf owes the rule's check whatever its reviewer reports. The leaf pushes the held candidate to `orbit-evidence/<branch>` on
 `origin` and ends `held`. Its settlement releases the claim with the hold, and
 the owner keeps the task `in-progress` under `review_awaiting_evidence`. A
 held leaf is not a failure for the breaker, and the task is not pulled again

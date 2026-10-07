@@ -104,6 +104,7 @@ impl Fixture {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             captured_at: Utc::now(),
+            host_evidence: Vec::new(),
         };
         let run = runtime
             .insert_job_run(

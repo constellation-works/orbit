@@ -657,6 +657,7 @@ impl RuntimeHost for ScriptedHost {
             }
             "review_gate_admit" => json!({
                 "applies": true,
+                "decision": "admitted",
                 "first_task_id": "T-1",
                 "attempt_id": "rvw-1",
                 "lineage_key": "lineage-1",

@@ -27,6 +27,7 @@ use super::context::GateContext;
 use super::judgement::{
     Judgement, repair_author_label, review_fixes_section, verdict_comment, write_artifact,
 };
+use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
 
 /// Close the admitted attempt with an honest verdict.
 ///
@@ -270,7 +271,41 @@ fn settle(
         &attempt.candidate.commit,
     )?;
 
-    let mut judgement = Judgement::from_report(runtime, context, &attempt)?;
+    // A held review whose owed evidence arrived settles without a reviewer,
+    // on exactly the clean candidate its admission pinned.
+    let held = if admission_output.get("decision").and_then(Value::as_str)
+        == Some(EVIDENCE_RECEIVED_DECISION)
+    {
+        if head.commit != attempt.candidate.commit
+            || !uncommitted_paths(&context.workspace_path)?.is_empty()
+        {
+            return Err(OrbitError::Execution(format!(
+                "review_gate_stale: candidate_changed: attempt {attempt_id} settles a held \
+                 review without a reviewer, but the worktree no longer holds the admitted \
+                 candidate {}",
+                attempt.candidate.commit
+            )));
+        }
+        let held_attempt = admission_output
+            .get("held_attempt_id")
+            .and_then(Value::as_str);
+        Some(
+            owed_hold_received(runtime, context, &reviewed)?
+                .filter(|(hold, _)| Some(hold.attempt_id.as_str()) == held_attempt)
+                .ok_or_else(|| {
+                    OrbitError::Execution(format!(
+                        "review_gate_stale: the held review admission {attempt_id} resumed no \
+                         longer settles without a reviewer; admit a fresh attempt"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+    let mut judgement = match &held {
+        Some((hold, certificate)) => Judgement::from_held_certificate(context, hold, certificate),
+        None => Judgement::from_report(runtime, context, &attempt)?,
+    };
     let admitted_selectors = admission_output
         .get("task_selectors")
         .cloned()
@@ -316,6 +351,13 @@ fn settle(
         )?,
         _ => super::super::evidence::EvidenceCarry::None,
     };
+    // Checks a host-evidence rule owes for what this candidate changed are
+    // required whatever the reviewer reported.
+    let owed = match &held {
+        Some((_, certificate)) => certificate.owed_evidence.clone(),
+        None => owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?,
+    };
+    judgement.require_owed_evidence(&owed);
     // [ORB-14478] A claimed leaf's host runs the sandbox-gated checks its
     // reviewer named, before the verdict counts the evidence.
     let host = judgement.fulfil_host_evidence(
@@ -412,6 +454,8 @@ fn settle(
         evidence_carried: judgement.evidence_carried.clone(),
         baseline_red,
         host_evidence: judgement.host_evidence.clone(),
+        owed_evidence: owed,
+        resumed_hold_attempt: held.map(|(hold, _)| hold.attempt_id),
         issued_at: now,
     };
     if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
@@ -427,10 +471,16 @@ fn settle(
                 .tasks
                 .first()
                 .map(orbit_types::task::Task::spec_digest),
+            published_ref: None,
         };
-        if context.claimed {
-            publish_held_candidate(context, &hold.candidate.commit);
-        }
+        let hold = orbit_types::workflow::ReviewEvidenceHold {
+            published_ref: if context.claimed {
+                publish_held_candidate(context, &hold.candidate.commit)
+            } else {
+                None
+            },
+            ..hold
+        };
         let bytes = serde_json::to_vec_pretty(&hold)
             .map_err(|error| OrbitError::Execution(format!("serialize evidence hold: {error}")))?;
         for task in &context.tasks {
@@ -451,22 +501,28 @@ fn settle(
 /// Publish a claimed leaf's held candidate on `origin`, where the owner
 /// fetches it to run a named check. Best-effort: a failed push leaves the
 /// hold intact, and the owner then reports the candidate unreachable instead
-/// of fulfilling it.
-fn publish_held_candidate(context: &GateContext, commit: &str) {
+/// of fulfilling it. Returns the ref it was published to.
+fn publish_held_candidate(context: &GateContext, commit: &str) -> Option<String> {
     match orbit_engine::review_gate::publish_held_candidate(&context.workspace_path, commit) {
-        Ok(target) => tracing::info!(
-            target: "orbit.core.review",
-            run_id = %context.run_id,
-            target = %target,
-            commit,
-            "published the held candidate for owner evidence"
-        ),
-        Err(error) => tracing::warn!(
-            target: "orbit.core.review",
-            run_id = %context.run_id,
-            commit,
-            "could not publish the held candidate for owner evidence: {error}"
-        ),
+        Ok(target) => {
+            tracing::info!(
+                target: "orbit.core.review",
+                run_id = %context.run_id,
+                target = %target,
+                commit,
+                "published the held candidate for owner evidence"
+            );
+            Some(target)
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.review",
+                run_id = %context.run_id,
+                commit,
+                "could not publish the held candidate for owner evidence: {error}"
+            );
+            None
+        }
     }
 }
 

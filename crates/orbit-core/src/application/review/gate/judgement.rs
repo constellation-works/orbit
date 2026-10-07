@@ -163,6 +163,37 @@ impl Judgement {
         })
     }
 
+    /// The judgement a held review settled with, restated for a run that
+    /// settles it without a reviewer once its owed evidence arrived. The
+    /// held requirements are the named evidence; the held records, findings
+    /// and verdict are otherwise the review's own.
+    pub(super) fn from_held_certificate(
+        context: &GateContext,
+        hold: &orbit_types::workflow::ReviewEvidenceHold,
+        certificate: &ReviewCertificate,
+    ) -> Self {
+        Self {
+            verdict: certificate.verdict,
+            external_evidence: hold.requirements.clone(),
+            findings: certificate.findings.clone(),
+            validation: certificate.validation.clone(),
+            validation_complete: false,
+            required_validation_commands: context
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.required_validation_commands.clone()),
+            retained_obligations: certificate.retained_obligations.clone(),
+            retired_validation: certificate.retired_validation.clone(),
+            escalation: certificate.escalation.clone(),
+            summary: String::new(),
+            task_meaning_digest: context.task_digests.1.clone(),
+            selectors_widened: Vec::new(),
+            evidence_carried: None,
+            host_refused: false,
+            host_evidence: certificate.host_evidence.clone(),
+        }
+    }
+
     /// Task criteria, scope, or contract changes during the review
     /// invalidate it. Selectors may grow — the reviewer through the task API,
     /// or Orbit widening for a path it changed; anything else re-establishes

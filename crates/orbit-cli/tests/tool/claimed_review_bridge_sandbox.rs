@@ -1089,6 +1089,7 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
         budget: ReviewBudget::default(),
         remaining: ReviewConsumption { seconds: 1800 },
         issued_at: Utc::now(),
+        owed_external_evidence: Vec::new(),
     }
 }
 

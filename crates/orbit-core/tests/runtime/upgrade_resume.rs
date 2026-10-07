@@ -499,6 +499,7 @@ fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
             runtime.workflow_required_validation_commands().to_vec(),
         ),
         captured_at: Utc::now(),
+        host_evidence: Vec::new(),
     }
 }
 

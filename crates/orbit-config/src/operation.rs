@@ -9,6 +9,10 @@
 //! Each layer states any subset; a value resolves built-in → global →
 //! workspace with its winning layer recorded.
 //!
+//! `[[review.host_evidence]]` declares the checks a claimed leaf's host owes
+//! for the paths its candidate changed ([`HostEvidenceRule`]); a layer that
+//! states the list replaces every rule an earlier layer stated.
+//!
 //! The retired `operation.review_policy` enum and `operation.review_minutes`
 //! are translated when a document is parsed ([`translate_legacy_review_keys`])
 //! and warned as deprecated (`registry::DEPRECATED_CONFIG_KEYS`): a legacy
@@ -22,7 +26,11 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{DEFAULT_REVIEW_MINUTES, ReviewBudget};
+use orbit_types::policy::compile_glob_regex;
+use orbit_types::task::validate_relative_artifact_path;
+use orbit_types::workflow::{
+    DEFAULT_REVIEW_MINUTES, HostEvidenceRule, HostSandboxCommand, ReviewBudget, ReviewEvidenceKind,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::layering::{set_value_at_path, value_at_path};
@@ -33,8 +41,9 @@ use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 /// snapshot fails closed for privileged actions instead of being
 /// reinterpreted. Version 2 added the independent review budget fields
 /// [ORB-11333]; version 3 replaced the review policy enum with
-/// `review.before_pr` and dropped the reviewer-start budget [ORB-13992].
-pub const OPERATION_POLICY_VERSION: u32 = 3;
+/// `review.before_pr` and dropped the reviewer-start budget [ORB-13992];
+/// version 4 added `review.host_evidence`.
+pub const OPERATION_POLICY_VERSION: u32 = 4;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
@@ -52,11 +61,15 @@ pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 /// [`OperationLayer`].
 const REVIEW_BASELINE_COMMANDS_KEY: &str = "review.baseline_commands";
 
+/// Checks a claimed leaf's host owes for the paths it changed.
+pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
+
 /// Every live `[review]` key, as the unknown-key guard sees it.
 const REVIEW_KEYS: &[&str] = &[
     REVIEW_BEFORE_PR_KEY,
     REVIEW_MINUTES_KEY,
     REVIEW_BASELINE_COMMANDS_KEY,
+    REVIEW_HOST_EVIDENCE_KEY,
 ];
 
 /// Every live `[operation]` key, as the unknown-key guard sees it.
@@ -186,6 +199,9 @@ pub struct OperationLayer {
     pub review_minutes: Option<u32>,
     /// Explicit review crew.
     pub review_crew: Option<String>,
+    /// Explicit `[[review.host_evidence]]` rules; an empty list clears the
+    /// rules an earlier layer stated.
+    pub review_host_evidence: Option<Vec<HostEvidenceRule>>,
     /// What a legacy `operation.review_policy` says about after-landing
     /// review: `Some(true)` for `after-landing`, `Some(false)` for any other
     /// value, `None` when the layer does not state the legacy key.
@@ -215,6 +231,13 @@ impl OperationLayer {
                 "operation.review_crew",
                 config_path,
             )?)?,
+            review_host_evidence: read_optional::<Vec<HostEvidenceRule>>(
+                document,
+                REVIEW_HOST_EVIDENCE_KEY,
+                config_path,
+            )?
+            .map(host_evidence_rules)
+            .transpose()?,
             legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
                 .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
         })
@@ -271,6 +294,9 @@ pub struct OperationPolicy {
     /// Crew selected for automatic review: the before-PR reviewer and the
     /// crew of minted after-landing review tasks.
     pub review_crew: OperationField<Option<String>>,
+    /// Checks a claimed leaf's host owes for the paths it changed.
+    #[serde(default = "no_host_evidence")]
+    pub review_host_evidence: OperationField<Vec<HostEvidenceRule>>,
     /// The layer whose legacy `operation.review_policy = after-landing`
     /// still enables the `delivery-code-review` auto-task while that
     /// definition's own flag was never set explicitly. `None` when no
@@ -293,6 +319,7 @@ impl OperationPolicy {
             review_before_pr: OperationField::built_in(false),
             review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
             review_crew: OperationField::built_in(None),
+            review_host_evidence: no_host_evidence(),
             legacy_after_landing: None,
         }
     }
@@ -317,6 +344,8 @@ impl OperationPolicy {
                 source,
             };
         }
+        self.review_host_evidence
+            .set(layer.review_host_evidence.as_ref(), source);
         if let Some(after_landing) = layer.legacy_after_landing {
             self.legacy_after_landing = after_landing.then_some(source);
         }
@@ -332,6 +361,72 @@ impl OperationPolicy {
 
 pub(crate) fn review_minutes(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
     bounded(raw, REVIEW_MINUTES_KEY, 1, MAX_REVIEW_MINUTES)
+}
+
+fn no_host_evidence() -> OperationField<Vec<HostEvidenceRule>> {
+    OperationField::built_in(Vec::new())
+}
+
+/// Refuse a rule Orbit could never fulfil, so a misconfiguration fails at
+/// load instead of holding every matching review forever.
+fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceRule>, OrbitError> {
+    let invalid = |index: usize, why: String| {
+        OrbitError::InvalidInput(format!("{REVIEW_HOST_EVIDENCE_KEY}[{index}] {why}"))
+    };
+    let mut artifacts = std::collections::BTreeSet::new();
+    rules
+        .into_iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let rule = HostEvidenceRule {
+                name: rule.name.trim().to_string(),
+                command: rule.command.trim().to_string(),
+                artifact: rule.artifact.trim().to_string(),
+                paths: rule
+                    .paths
+                    .iter()
+                    .map(|path| path.trim().to_string())
+                    .collect(),
+                ..rule
+            };
+            if !HostEvidenceRule::admits_kind(rule.kind) {
+                return Err(invalid(
+                    index,
+                    "has kind outside codeql and host_sandbox_test".to_string(),
+                ));
+            }
+            if rule.name.is_empty() || rule.command.is_empty() {
+                return Err(invalid(index, "needs a name and a command".to_string()));
+            }
+            if rule.paths.is_empty() {
+                return Err(invalid(index, "needs at least one path glob".to_string()));
+            }
+            for pattern in &rule.paths {
+                compile_glob_regex(pattern).map_err(|error| {
+                    invalid(index, format!("has invalid path glob `{pattern}`: {error}"))
+                })?;
+            }
+            validate_relative_artifact_path(&rule.artifact)
+                .map_err(|error| invalid(index, format!("has an invalid artifact: {error}")))?;
+            if !rule.artifact.ends_with(".json") || rule.artifact.starts_with("./") {
+                return Err(invalid(
+                    index,
+                    format!("artifact `{}` must be a relative .json path", rule.artifact),
+                ));
+            }
+            if !artifacts.insert(rule.artifact.clone()) {
+                return Err(invalid(
+                    index,
+                    format!("repeats artifact `{}`", rule.artifact),
+                ));
+            }
+            if rule.kind == ReviewEvidenceKind::HostSandboxTest {
+                HostSandboxCommand::admit(&rule.command, &[])
+                    .map_err(|refusal| invalid(index, format!("command: {}", refusal.detail)))?;
+            }
+            Ok(rule)
+        })
+        .collect()
 }
 
 pub(crate) fn review_crew(raw: Option<String>) -> Result<Option<String>, OrbitError> {
