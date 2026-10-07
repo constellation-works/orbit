@@ -6,6 +6,151 @@ use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::*;
 
+/// Exercise the owner's actual tool/redaction boundary with the incident's
+/// inherited session metadata, then the follower's real refill action.
+#[test]
+fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
+    if !isolated(
+        module_path!(),
+        "session_metadata_does_not_corrupt_owner_probe_or_pull_pass",
+    ) {
+        return;
+    }
+    let pair = Pair::new(0);
+    let drain = pair.run_drain();
+    let _env = orbit_common::test_env::scoped([
+        ("XDG_SESSION_ID", Some("35912")),
+        (
+            "DBUS_SESSION_BUS_ADDRESS",
+            Some("unix:path=/run/user/1000/bus"),
+        ),
+        ("SESSION_MANAGER", Some("local/host:@/tmp/.ICE-unix/35912")),
+        (
+            "TERM_SESSION_ID",
+            Some("35912AB0-0000-4000-8000-123456789ABC"),
+        ),
+        ("MY_SESSION_TOKEN", Some("35912")),
+    ]);
+    let reply = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    assert_eq!(
+        reply["protocol_fingerprint"],
+        orbit_store::contracts::distributed_drain_protocol_fingerprint()
+    );
+    // Also cover the exact incident substring even if the generated request
+    // shape changes its fingerprint in a later build.
+    let incident = "3531880b5359125003d9ff82a4666593a2fc93756c67758714a336aadcb0a658";
+    assert_eq!(
+        orbit_common::security::redaction::redact_sensitive_env_text(incident),
+        incident
+    );
+    let pass = pair.pass(&drain);
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(pass["degraded"], false, "{pass}");
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+}
+
+/// Both a current owner's typed redaction refusal and an older owner's
+/// corrupted fingerprint must leave the window alive for the next pass.
+#[test]
+fn redacted_owner_identity_retries_without_protocol_skew() {
+    if !isolated(
+        module_path!(),
+        "redacted_owner_identity_retries_without_protocol_skew",
+    ) {
+        return;
+    }
+    let pair = Pair::new(0);
+    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let drain = pair.run_drain();
+    {
+        // A realistic mixed hex credential can overlap a legitimate hash.
+        // It must remain secret: reject the corrupted reply rather than
+        // allowlisting hash-shaped output from redaction.
+        let _env = orbit_common::test_env::scoped([("MY_SESSION_TOKEN", Some(&fingerprint[..16]))]);
+        let error = pair
+            .wire
+            .call("", "orbit.drain.probe", json!({}))
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::OwnerNegotiation(_)), "{error}");
+        let pass = pair.pass(&drain);
+        assert!(error_of(&pass).contains("redaction artefact"), "{pass}");
+        assert_eq!(pass["degraded"], false);
+        assert_eq!(pass["done"], false);
+    }
+    let recovered = pair.pass(&drain);
+    assert!(recovered["error"].is_null(), "{recovered}");
+    assert_eq!(recovered["consecutive_pass_failures"], 0);
+
+    let pulls_before_corrupted_probe = pair.wire.calls("orbit.task.pull").len();
+    *pair.wire.fingerprint.lock().unwrap() = Some(json!(
+        "3531880b5[REDACTED_ENV]5003d9ff82a4666593a2fc93756c67758714a336aadcb0a658"
+    ));
+    let pass = pair.pass(&drain);
+    assert!(
+        error_of(&pass).contains("owner negotiation failed"),
+        "{pass}"
+    );
+    assert_eq!(pass["degraded"], false);
+    assert_eq!(pass["done"], false);
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        pulls_before_corrupted_probe,
+        "a corrupted probe must not send a new pull"
+    );
+    *pair.wire.fingerprint.lock().unwrap() = None;
+    let recovered = pair.pass(&drain);
+    assert!(recovered["error"].is_null(), "{recovered}");
+    assert_eq!(recovered["consecutive_pass_failures"], 0);
+}
+
+/// A scrubbed mutation reply must not imply that admission failed: replaying
+/// its durable request returns the receipt the owner already stored.
+#[test]
+fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
+    if !isolated(
+        module_path!(),
+        "redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let request = json!({
+        "request_id": "redacted-receipt-request", "caller_version": probe["binary_version"],
+        "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, "caller_fingerprint": fingerprint,
+        "caller_before_pr": false, "review_gate": true, "ship": probe["ship"],
+        "run_context": {"run_id": "receipt-drain", "job_name": "workspace_pull_pipeline"},
+    });
+    {
+        let _env = orbit_common::test_env::scoped([("MY_SESSION_TOKEN", Some(&fingerprint[..16]))]);
+        let error = pair
+            .wire
+            .call("", "orbit.task.pull", request.clone())
+            .unwrap_err();
+        assert!(
+            matches!(error, OrbitError::OutcomeUnknown { .. }),
+            "{error}"
+        );
+    }
+    let reply = pair.wire.call("", "orbit.task.pull", request).unwrap();
+    assert_eq!(
+        reply["receipt"]["request"]["request_id"],
+        "redacted-receipt-request"
+    );
+    assert_eq!(
+        reply["receipt"]["request"]["caller_fingerprint"],
+        fingerprint
+    );
+    assert_eq!(reply["receipt"]["claim"]["task_id"], pair.tasks[0]);
+    assert_eq!(
+        pair.owner_claims().len(),
+        1,
+        "replay must not admit a second claim"
+    );
+}
+
 /// Owner admission hands selector-free implementation work to a follower on
 /// its first pass with an empty lock footprint; tagged no-diff stays on owner.
 #[test]

@@ -291,6 +291,13 @@ pub(super) fn trusted_identity(
 /// Compare the owner's derived request shape before sending admission fields.
 /// Missing fingerprints and legacy revision mismatches fail by the same type.
 pub(crate) fn protocol_skew(report: &serde_json::Value) -> Option<OrbitError> {
+    // Older owners may return a scrubbed identity instead of a typed error.
+    // That says nothing about build compatibility and must not end a drain.
+    if let Some(field) = crate::runtime::tool_exec::corrupted_drain_identity(report) {
+        return Some(OrbitError::OwnerNegotiation(format!(
+            "owner reply identity field `{field}` contains an environment redaction artefact; retry next pass"
+        )));
+    }
     let owner = report
         .get("protocol_schema")
         .and_then(serde_json::Value::as_u64);

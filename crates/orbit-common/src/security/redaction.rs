@@ -646,6 +646,10 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 /// This keeps those known prose/sentinel values readable while allowing
 /// all-letter secrets and passphrases from sensitive credential variables to
 /// be scrubbed.
+/// Pure ASCII decimal values shorter than 12 digits are also excluded. Small
+/// counters and session IDs recur inside unrelated hashes, IDs and timestamps;
+/// substring substitution of these low-entropy values corrupts structured
+/// replies. Twelve or more digits remain eligible, as do mixed credentials.
 ///
 /// Eligible values are still matched with a bare substring replace so
 /// embedded tokens in URLs and concatenated log fragments stay scrubbed.
@@ -655,7 +659,9 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 // pub(crate) for sibling-layout tests in utility/tests/redaction.rs.
 pub(crate) fn is_redactable_value(value: &str) -> bool {
     let trimmed = value.trim();
-    trimmed.len() >= 4 && !is_compatibility_ordinary_word(trimmed)
+    trimmed.len() >= 4
+        && !is_compatibility_ordinary_word(trimmed)
+        && !(trimmed.len() < 12 && trimmed.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn is_compatibility_ordinary_word(value: &str) -> bool {
@@ -666,8 +672,18 @@ fn is_compatibility_ordinary_word(value: &str) -> bool {
     .any(|word| value.eq_ignore_ascii_case(word))
 }
 
+/// Match credential names, excluding well-known non-credential session
+/// metadata. Other `SESSION` names retain conservative handling for existing
+/// callers, including child-environment filtering. Credential words take
+/// precedence over the metadata exclusion, so session tokens and keys remain
+/// sensitive even in the XDG namespace.
 pub fn is_sensitive_env_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
+    let session_metadata = upper.starts_with("XDG_SESSION_")
+        || matches!(
+            upper.as_str(),
+            "DBUS_SESSION_BUS_ADDRESS" | "SESSION_MANAGER" | "TERM_SESSION_ID"
+        );
     upper.contains("SECRET")
         || upper.contains("TOKEN")
         || upper.contains("PASSWORD")
@@ -678,7 +694,7 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
         || upper.contains("PRIVATE")
         || upper.contains("CREDENTIAL")
         || upper.contains("COOKIE")
-        || upper.contains("SESSION")
+        || (upper.contains("SESSION") && (upper.contains("KEY") || !session_metadata))
         || upper.contains("BEARER")
         || contains_auth_word(&upper)
 }
