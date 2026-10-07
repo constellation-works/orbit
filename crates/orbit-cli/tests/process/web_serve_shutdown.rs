@@ -26,6 +26,8 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+
+use crate::child_guard::ChildGuard;
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
@@ -171,6 +173,52 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     assert!(status2.success());
 }
 
+/// A failed assertion must not leave a dashboard holding a deleted fixture
+/// root. Catch the unwind outside the child's ownership scope.
+#[test]
+fn dashboard_is_reaped_and_releases_its_port_when_an_assertion_panics() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("create home");
+    let port = free_port();
+    let mut spawned = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut server = spawn_dashboard(&home, port);
+        wait_for_listening(port);
+        assert!(matches!(server.try_wait(), Ok(None)), "dashboard is alive");
+        spawned = Some(server.id());
+        assert_eq!(
+            server.id(),
+            0,
+            "forced assertion failure with a live dashboard"
+        );
+    }));
+    let pid = spawned.expect("dashboard was listening before the forced panic");
+    assert!(
+        result.is_err(),
+        "the assertion must unwind through the guard"
+    );
+    // SAFETY: signal zero only probes the fixture PID; waitpid verifies that
+    // the guard reaped it rather than leaving a zombie behind.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert_eq!(
+        unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD)
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "the dashboard must release its listening port during unwinding"
+    );
+}
+
 fn free_port() -> u16 {
     TcpListener::bind(("127.0.0.1", 0))
         .expect("bind ephemeral port")
@@ -179,7 +227,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn spawn_dashboard(home: &std::path::Path, port: u16) -> Child {
+fn spawn_dashboard(home: &std::path::Path, port: u16) -> ChildGuard {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
     // ORB-11300: the dashboard serves whichever workspace it resolves. Without
     // this the inherited `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair pointed
@@ -194,6 +242,7 @@ fn spawn_dashboard(home: &std::path::Path, port: u16) -> Child {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn orbit web serve")
 }
 

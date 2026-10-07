@@ -1126,6 +1126,7 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn unbound global plugin server");
         let (mut client, initialized) = McpClient::initialized(
             child,

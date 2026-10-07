@@ -43,6 +43,7 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .unwrap();
     let mut params = McpClient::initialize_params(
         "orbit-federated-mux",
@@ -312,6 +313,7 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .unwrap();
     let mut params =
         McpClient::initialize_params("orbit-federated-mux", Some(&owner.work.to_string_lossy()));

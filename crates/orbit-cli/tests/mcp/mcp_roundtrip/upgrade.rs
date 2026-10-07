@@ -13,14 +13,14 @@ use std::collections::BTreeMap;
 /// On Linux this absorbs the parallel-fork `ETXTBSY` race described in
 /// [`orbit_common::test_process`]. Any other spawn error returns on the first
 /// attempt. Other platforms spawn once.
-fn spawn_copied_orbit(command: &mut Command) -> std::io::Result<Child> {
+fn spawn_copied_orbit(command: &mut Command) -> std::io::Result<ChildGuard> {
     #[cfg(target_os = "linux")]
     {
-        orbit_common::test_process::retry_executable_busy(|| command.spawn())
+        orbit_common::test_process::retry_executable_busy(|| command.spawn()).map(ChildGuard::new)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        command.spawn()
+        command.spawn().map(ChildGuard::new)
     }
 }
 
@@ -683,7 +683,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (Child, u16) {
+fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (ChildGuard, u16) {
     let port = TcpListener::bind(("127.0.0.1", 0))
         .expect("ephemeral port")
         .local_addr()
@@ -695,6 +695,7 @@ fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (Child, u16) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn dashboard");
     wait_until(
         || TcpStream::connect(("127.0.0.1", port)).is_ok(),
@@ -718,7 +719,7 @@ fn http_get(port: u16, path: &str) -> String {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn stop(child: &mut Child) {
+fn stop(child: &mut ChildGuard) {
     // Safety: SIGTERM to this test's own child, as a service manager would.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(20);

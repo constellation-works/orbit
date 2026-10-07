@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use crate::child_guard::ChildGuard;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
@@ -203,6 +205,7 @@ impl McpWorkspace {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp serve");
         let mut client = McpClient::new(child);
         self.initialize(&mut client);
@@ -223,6 +226,7 @@ impl McpWorkspace {
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log))
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp serve");
         let mut client = McpClient::new(child);
         self.initialize(&mut client);
@@ -238,6 +242,7 @@ impl McpWorkspace {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp listen");
         let mut client = McpClient::over_tcp(child, connect_when_listening(addr));
         self.initialize(&mut client);
@@ -254,6 +259,7 @@ impl McpWorkspace {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp listen --workspace");
         let mut client = McpClient::over_tcp(child, connect_when_listening(addr));
         let response = client.initialize(McpClient::initialize_params("listen-bound", None));
@@ -326,7 +332,7 @@ fn connect_when_listening(addr: SocketAddr) -> TcpStream {
 // ---------------------------------------------------------------------------
 
 struct McpClient {
-    child: Child,
+    child: ChildGuard,
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
     next_id: i64,
@@ -346,7 +352,7 @@ impl McpClient {
     }
 
     /// Complete the standard MCP handshake for a custom server launch.
-    fn initialized(child: Child, params: Value) -> (Self, Value) {
+    fn initialized(child: ChildGuard, params: Value) -> (Self, Value) {
         let mut client = Self::new(child);
         let response = client.initialize(params);
         (client, response)
@@ -358,7 +364,7 @@ impl McpClient {
         response
     }
 
-    fn new(mut child: Child) -> Self {
+    fn new(mut child: ChildGuard) -> Self {
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
         Self::over_streams(child, Box::new(stdin), Box::new(stdout))
@@ -366,13 +372,13 @@ impl McpClient {
 
     /// A session against `orbit mcp listen`, where the same protocol runs over
     /// an accepted socket instead of the child's stdio.
-    fn over_tcp(child: Child, stream: TcpStream) -> Self {
+    fn over_tcp(child: ChildGuard, stream: TcpStream) -> Self {
         let reader = stream.try_clone().expect("clone the MCP socket for reads");
         Self::over_streams(child, Box::new(stream), Box::new(reader))
     }
 
     fn over_streams(
-        child: Child,
+        child: ChildGuard,
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
     ) -> Self {
@@ -465,15 +471,6 @@ impl McpClient {
             .get("structuredContent")
             .cloned()
             .unwrap_or_else(|| panic!("`{name}` returned no structuredContent: {result}"))
-    }
-}
-
-impl Drop for McpClient {
-    fn drop(&mut self) {
-        // Closing stdin ends the stdio transport; give the server a moment to
-        // exit cleanly, then make sure it is gone.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -1684,6 +1681,7 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
         .stderr(Stdio::piped());
     let child = command
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn the server launched by the generated config");
     let mut client = McpClient::new(child);
     workspace.initialize(&mut client);
@@ -1874,6 +1872,7 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -1970,6 +1969,7 @@ fn task_artifact_get_resolves_globally_outside_any_checkout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -2279,6 +2279,7 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -2358,6 +2359,7 @@ fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_author
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn clean registry-style MCP server");
     let (mut client, initialized) = McpClient::initialized(
         child,
@@ -2419,6 +2421,7 @@ fn ssh_marked_mcp_server_audits_caller_and_server_identity_separately() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn SSH-marked MCP server");
     let (mut client, initialized) = McpClient::initialized(
         child,
@@ -3452,6 +3455,7 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn federated MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -3514,6 +3518,7 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn federated MCP server");
     let (client, _) = McpClient::initialized(
         child,
@@ -4105,6 +4110,7 @@ fn unmanaged_orbit_workspace_env_does_not_bind_mcp() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn unbound MCP server");
     let (mut client, _) =
         McpClient::initialized(child, McpClient::initialize_params("unmanaged-env", None));
@@ -4133,6 +4139,7 @@ fn managed_source_inspection_mcp_search_uses_the_dispatching_workspace() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn inspection MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -4269,6 +4276,7 @@ fn spawn_generated_server(workspace: &McpWorkspace, cwd: &Path, args: &[String])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn the server launched by the generated config");
     let (client, _) = McpClient::initialized(
         child,
@@ -4318,6 +4326,7 @@ fn spawn_unbound_worktree_server(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn worktree-backed MCP server");
     let (client, _) = McpClient::initialized(
         child,
@@ -4780,6 +4789,7 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn SSH-marked MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -4836,6 +4846,7 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn orbit mcp serve");
     McpClient::initialized(child, initialize).0
 }
@@ -5031,7 +5042,10 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         Some(workspace.work.to_str().expect("utf8 checkout")),
     );
     let (mut client, initialized) = McpClient::initialized(
-        child.spawn().expect("spawn read-only MCP server"),
+        child
+            .spawn()
+            .map(ChildGuard::new)
+            .expect("spawn read-only MCP server"),
         initialize,
     );
     assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
