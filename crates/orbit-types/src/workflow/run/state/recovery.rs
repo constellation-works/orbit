@@ -60,6 +60,15 @@ pub struct FinalRecoveryKey {
     pub attempt: u32,
 }
 
+/// Exact HEAD advance observed by the engine around final recovery dispatch.
+/// It authorizes only this worktree's recorded repair, never later HEAD drift.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalRecoveryRepairCommit {
+    pub workspace_path: std::path::PathBuf,
+    pub head_sha_before: String,
+    pub head_sha: String,
+}
+
 /// A run's job-level final recovery [ORB-13907], recorded when it is admitted.
 ///
 /// Admission writes this before the activity is dispatched, so a crash during
@@ -88,6 +97,10 @@ pub struct FinalRecoveryCheckpoint {
     /// as the `escalate` they became.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<FinalRecoveryDecision>,
+    /// A repair committed during recovery, recorded with the resume decision.
+    /// Older run states carry no permission to accept a moved HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_commit: Option<FinalRecoveryRepairCommit>,
     /// What applying the decision did (`resume`, `settled: …` or
     /// `escalated: …`); absent while the decision is only intended.
     #[serde(default, skip_serializing_if = "Option::is_none")]

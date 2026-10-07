@@ -156,6 +156,42 @@ pub(super) fn head_descends_from_pin(
     )
 }
 
+/// Accept only the exact repair HEAD observed during this run's final
+/// recovery, after its resume decision was durably applied. A descendant of
+/// that repair or an unrelated worktree gains no permission from the record.
+pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    task_id: &str,
+    workspace_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    let Some(checkpoint) = host
+        .read_run_state(run_id)?
+        .and_then(|state| state.final_recovery)
+    else {
+        return Ok(false);
+    };
+    if checkpoint.task_id != task_id
+        || checkpoint.outcome.as_deref() != Some("resume")
+        || !matches!(
+            checkpoint.decision,
+            Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+        )
+    {
+        return Ok(false);
+    }
+    let Some(repair) = checkpoint.repair_commit else {
+        return Ok(false);
+    };
+    Ok(repair.head_sha == head_sha
+        && repair.head_sha_before != head_sha
+        && repair.workspace_path == workspace_path.canonicalize()?
+        && head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
+        && head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?)
+}
+
 /// Reject anything that is not a full Git object id.
 ///
 /// The commit step's contract is a base pinned at worktree setup; accepting a
