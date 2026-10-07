@@ -374,6 +374,59 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
 
 #[cfg(unix)]
 #[test]
+fn derived_plugin_groups_expand_tilde_roots_and_anchor_relative_roots() {
+    let fixture = Fixture::new();
+    let source = fixture.source("shapes");
+    write_fixture_plugin(&source);
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("UTF-8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "shapes"])
+        .assert()
+        .success();
+
+    for raw in ["~/.orbit", "~//.orbit", ".orbit"] {
+        let cwd = if raw == ".orbit" {
+            &fixture.home
+        } else {
+            &fixture.work
+        };
+        for use_flag in [false, true] {
+            let mut command = fixture.orbit();
+            command.current_dir(cwd);
+            if use_flag {
+                command
+                    .args(["--root", raw])
+                    .env("ORBIT_ROOT", "unused-env-root");
+            } else {
+                command.env("ORBIT_ROOT", raw);
+            }
+            let output = command
+                .args([
+                    "shapes",
+                    "recommend",
+                    "roots",
+                    "--explain",
+                    "--format",
+                    "json",
+                ])
+                .output()
+                .expect("explain plugin command under selected root");
+            assert!(output.status.success(), "{raw}: {output:?}");
+            let explained = stdout_json(&output);
+            assert_eq!(explained["tool"], "shapes.recommend");
+            assert_eq!(explained["input"]["query"], "roots");
+            assert!(!cwd.join("~").exists());
+            assert!(!cwd.join("unused-env-root").exists());
+        }
+    }
+}
+
+#[test]
 fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
     let fixture = Fixture::new();
     let source = fixture.source("shapes");

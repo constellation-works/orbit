@@ -21,6 +21,13 @@ precedence). Path layout is defined in
 `crates/orbit-types/src/workspace/registry.rs` (`WorkspacePaths`) and
 `crates/orbit-config/src/persistence.rs` (`PersistenceConfig`).
 
+Explicit `--root` and `ORBIT_ROOT` values expand `~` to the process home,
+including quoted values such as `ORBIT_ROOT='~/.orbit'`. Repeated slashes after
+`~/` keep that home prefix (`~//data` means `$HOME/data`). Relative roots are
+anchored to the command's current directory. Workspace discovery, executable
+generation participation and update admission, host and plugin commands,
+registry sweeps, and MCP setup use this same path interpretation.
+
 ### Workspace `.orbit/`
 
 `orbit workspace init` scaffolds `.orbit/resources/` plus

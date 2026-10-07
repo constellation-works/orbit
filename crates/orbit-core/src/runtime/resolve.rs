@@ -40,14 +40,18 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
 /// scratch init. Without those overrides the host-global root is used
 /// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run). Update admission,
 /// plugin root selection, and runtime-less commands use this same precedence.
+/// Explicit values expand `~` and resolve relative paths against the cwd,
+/// matching workspace root resolution.
 pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     if let Some(root) = root_override {
-        return Ok(root.to_path_buf());
+        let cwd = std::env::current_dir()?;
+        return resolve_root_path_value(&root.to_string_lossy(), &cwd);
     }
     if let Ok(explicit) = std::env::var("ORBIT_ROOT") {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
+            let cwd = std::env::current_dir()?;
+            return resolve_root_path_value(trimmed, &cwd);
         }
     }
     resolve_global_root()
@@ -472,7 +476,11 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
     path.join("resources").is_dir() && path.join("state").is_dir()
 }
 
-fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {
+/// Expand an explicit Orbit root, anchoring relative paths to `base_dir`.
+///
+/// Workspace discovery, generation admission and runtime-less surfaces share
+/// this path interpretation; it does not require the root to exist.
+pub fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {
     paths::resolve_path_value(raw, base_dir, "root path")
 }
 
