@@ -9,8 +9,9 @@
 //! attempt of a failing deterministic step. The provider's final response is
 //! scripted independently, so each case shows which of the two decides.
 //! [ORB-14268] Without a decision, only a change the engine observes in the
-//! worktree admits the attempt, and an `external_blocker` decision ends the
-//! step as a typed blocker that final recovery skips.
+//! worktree or validation environment admits the attempt, and an
+//! `external_blocker` decision ends the step as a typed blocker that final
+//! recovery skips.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,7 @@ struct Case<'a> {
     retry_succeeds: bool,
     read_failure: bool,
     claimed: bool,
+    change_validation_env: bool,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
 }
@@ -121,6 +123,7 @@ impl Default for Case<'_> {
             retry_succeeds: true,
             read_failure: false,
             claimed: false,
+            change_validation_env: false,
             prepare: |_| {},
         }
     }
@@ -179,10 +182,12 @@ struct RecoveryHost<'a> {
     retry_succeeds: bool,
     read_failure: bool,
     claimed: bool,
+    change_validation_env: bool,
     deliveries: AtomicUsize,
     hooks: Mutex<Vec<(String, Value)>>,
     task_writes: AtomicUsize,
     slots: Mutex<Vec<StepRecoveryDecisionSlot>>,
+    validation_env_marker: PathBuf,
 }
 
 impl RecoveryHost<'_> {
@@ -233,6 +238,24 @@ impl RuntimeHost for RecoveryHost<'_> {
             command: self.provider.display().to_string(),
             args: Vec::new(),
         })
+    }
+
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let mut environment = self.runtime.validation_environment();
+        if self.change_validation_env && self.validation_env_marker.exists() {
+            if let Some((_, value)) = environment
+                .env
+                .iter_mut()
+                .find(|(name, _)| name == "CARGO_HOME")
+            {
+                *value = "/changed/cargo-home".to_string();
+            } else {
+                environment
+                    .env
+                    .push(("CARGO_HOME".to_string(), "/changed/cargo-home".to_string()));
+            }
+        }
+        environment
     }
 
     fn tool_context_for_activity(
@@ -451,10 +474,12 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         retry_succeeds: case.retry_succeeds,
         read_failure: case.read_failure,
         claimed: case.claimed,
+        change_validation_env: case.change_validation_env,
         deliveries: AtomicUsize::new(0),
         hooks: Mutex::new(Vec::new()),
         task_writes: AtomicUsize::new(0),
         slots: Mutex::new(Vec::new()),
+        validation_env_marker: worktree.join(".orbit/tmp/validation-env-changed"),
     };
     let run_id = format!("run-{}", case.name);
     let audit = V2AuditWriter::with_disk_sinks(
@@ -739,6 +764,34 @@ fn without_a_decision_only_an_observed_change_admits_the_retry() {
     assert_eq!(changed.deliveries, 2, "exactly one post-recovery attempt");
     assert_eq!(changed.post_recovery, ["success"]);
     assert_eq!(changed.result, Ok((true, None)));
+
+    // Changing a toolchain locator also changes the environment validation
+    // runs with, even when the Git worktree remains untouched.
+    let env_changed = run(
+        &fixture,
+        &Case {
+            name: "absent_validation_env_changed",
+            producer: r#"touch "$root/.orbit/tmp/validation-env-changed""#,
+            change_validation_env: true,
+            ..Case::default()
+        },
+    );
+    let decision = env_changed.decision();
+    assert_eq!(decision.status, "absent");
+    assert!(decision.retry_admitted, "{decision:?}");
+    assert!(
+        decision
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("validation environment")),
+        "the record names the change: {decision:?}"
+    );
+    assert_eq!(
+        env_changed.deliveries, 2,
+        "exactly one post-recovery attempt"
+    );
+    assert_eq!(env_changed.post_recovery, ["success"]);
+    assert_eq!(env_changed.result, Ok((true, None)));
 
     // An unsuccessful activity is never retried, whatever it wrote.
     let declared_failed = run(

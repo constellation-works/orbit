@@ -35,7 +35,6 @@ pub use git::fetch_remote_base;
 pub(super) use landing::handoff_land;
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
-pub(crate) use required_command::environment_record;
 pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{

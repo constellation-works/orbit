@@ -7,13 +7,13 @@
 //! the run's base ref, or the environment required validation runs with.
 //! Otherwise the rerun would meet the cause that just failed it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::activity_job::workspace::fingerprint::git_fingerprint;
-use crate::executor::automation::vcs::environment_record;
 use crate::executor::automation::vcs::git::git_output;
 
 /// The failed step's surroundings as observed before recovery ran.
@@ -28,7 +28,7 @@ pub(super) struct RecoveryObservation {
 struct ObservedState {
     worktree: Option<String>,
     base: Option<String>,
-    validation_env: Value,
+    validation_env: Option<String>,
 }
 
 impl RecoveryObservation {
@@ -80,9 +80,26 @@ impl ObservedState {
         Self {
             worktree,
             base,
-            validation_env: environment_record(&ctx.host.validation_subprocess_environment()),
+            validation_env: validation_environment_fingerprint(
+                &ctx.host.validation_subprocess_environment(),
+            ),
         }
     }
+}
+
+/// Hash the effective child environment without retaining or emitting values
+/// that may contain credentials. Sorting by variable name makes the identity
+/// independent of the environment vector's ordering.
+fn validation_environment_fingerprint(
+    environment: &orbit_exec::ValidationEnvironment,
+) -> Option<String> {
+    let mut variables = BTreeMap::new();
+    for (name, value) in &environment.env {
+        variables.insert(name.as_str(), value.as_str());
+    }
+    serde_json::to_vec(&variables)
+        .ok()
+        .map(|bytes| hex_sha256(&bytes))
 }
 
 /// The base ref the failed step works against: its own rendered input's
