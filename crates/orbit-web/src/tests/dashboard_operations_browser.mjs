@@ -289,6 +289,46 @@ try {
     if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
     await drainCheck(`state-${phase}`, 336);
   }
+
+  // ORB-14566: changing concurrency alters the readiness URL but must keep
+  // the panel scope stable while that refresh is pending, then restore focus.
+  await page.evaluate(() => {
+    const input = document.getElementById('auto-drain-concurrency');
+    input.focus();
+    input.value = '6';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    globalThis.focusedDrainInput = input;
+    globalThis.startPendingDrainReadinessRefresh();
+  });
+  await page.waitForFunction(() => globalThis.drainReadinessRequestPending());
+  const pendingDrainRefresh = await page.evaluate(() => {
+    const body = document.getElementById('auto-drain-body');
+    const input = globalThis.focusedDrainInput;
+    return {
+      bodyBusy: body.getAttribute('aria-busy'),
+      inputConnected: input.isConnected,
+      inputFocused: document.activeElement === input,
+      loading: [...body.querySelectorAll('[data-panel-status]')].some(note => note.textContent === 'Loading…'),
+      liveCount: document.getElementById('auto-drain-live').textContent,
+      requestedConcurrency: globalThis.drainReadinessConcurrency(),
+    };
+  });
+  if (pendingDrainRefresh.bodyBusy !== 'true' || !pendingDrainRefresh.inputConnected
+    || !pendingDrainRefresh.inputFocused || pendingDrainRefresh.loading
+    || pendingDrainRefresh.liveCount === '—' || pendingDrainRefresh.requestedConcurrency !== '6') {
+    throw new Error(`Concurrency refresh reset the Drain card or lost focus while pending: ${JSON.stringify(pendingDrainRefresh)}`);
+  }
+  await page.evaluate(() => globalThis.releasePendingDrainReadinessRefresh());
+  const completedDrainRefresh = await page.evaluate(() => ({
+    inputFocused: document.activeElement?.id === 'auto-drain-concurrency',
+    inputValue: document.getElementById('auto-drain-concurrency')?.value,
+    liveCount: document.getElementById('auto-drain-live').textContent,
+  }));
+  if (!completedDrainRefresh.inputFocused || completedDrainRefresh.inputValue !== '6'
+    || completedDrainRefresh.liveCount === '—') {
+    throw new Error(`Concurrency refresh did not restore focus and updated state: ${JSON.stringify(completedDrainRefresh)}`);
+  }
+
   const timeLeft = async target => {
     await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
     return target.locator('#auto-drain-live').textContent();

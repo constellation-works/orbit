@@ -40,6 +40,10 @@ let drainAdmissionsStopped = false;
 let pullDrainRunId = null;
 let pullDrainStopped = false;
 let failReadiness = false;
+let delayReadiness = false;
+let readinessPending = false;
+let releaseReadiness = null;
+let drainReadinessRefresh = null;
 let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
@@ -129,6 +133,11 @@ globalThis.fetch = async (path, options = {}) => {
         { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
       ];
     return response({ items, total: items.length, limit: 100, truncated: false });
+  }
+  if (url.pathname === '/api/workflows/auto/readiness' && delayReadiness) {
+    readinessPending = true;
+    await new Promise(resolve => { releaseReadiness = resolve; });
+    readinessPending = false;
   }
   if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
@@ -760,6 +769,19 @@ globalThis.setDrainFixtureReadiness = async ({ capacity = {}, tasks = null } = {
   drainCapacityOverride = capacity;
   drainTasksOverride = tasks;
   await fetchAndRenderAutoDrainPane();
+};
+globalThis.startPendingDrainReadinessRefresh = () => {
+  delayReadiness = true;
+  drainReadinessRefresh = fetchAndRenderAutoDrainPane();
+};
+globalThis.drainReadinessRequestPending = () => readinessPending;
+globalThis.drainReadinessConcurrency = () => lastReadiness()?.concurrency;
+globalThis.releasePendingDrainReadinessRefresh = async () => {
+  // Later readiness reads in the scenario must not wait on a release.
+  delayReadiness = false;
+  releaseReadiness?.();
+  await drainReadinessRefresh;
+  drainReadinessRefresh = null;
 };
 
 // Late Start/Stop acknowledgements belong to the workspace visit that submitted them.
