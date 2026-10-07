@@ -23,6 +23,14 @@ use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
     digest, display, truncate_chars,
 };
 
+/// Description line naming a compiler-cause identity. Completed repairs are
+/// matched on it, so the rendering and the reader share the prefix.
+pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
+/// Description line naming a concrete normalized error signature (never the
+/// step-name fallback, which is no diagnostic).
+pub(super) const SIGNATURE_LINE: &str =
+    "- Normalized error signature (the dedupe identity, not a quote): `";
+
 /// One root cause, with every current run that exhibited it.
 pub(super) struct FailureCluster {
     /// Dedupe identity across sweeps. Compiler proof replaces the ordinary
@@ -235,6 +243,17 @@ impl FailureCluster {
         fingerprints
     }
 
+    /// The root-cause identity a completed repair's description must repeat:
+    /// the compiler cause, else a concrete signature. A step-name fallback has
+    /// none, so only its exact failure key can match.
+    pub(super) fn signature_line(&self) -> Option<String> {
+        match &self.compiler_cause {
+            Some(cause) => Some(format!("{COMPILER_CAUSE_LINE}{}`", digest(&[cause]))),
+            None if self.signature_is_step_fallback => None,
+            None => Some(format!("{SIGNATURE_LINE}{}`", display(&self.signature))),
+        }
+    }
+
     pub(super) fn run_urls(&self) -> Vec<String> {
         self.runs
             .iter()
@@ -369,10 +388,7 @@ impl FailureCluster {
         ));
         out.push_str(&runner_os_line(runners));
         if let Some(cause) = &self.compiler_cause {
-            out.push_str(&format!(
-                "- Compiler cause identity: `{}`\n",
-                digest(&[cause])
-            ));
+            out.push_str(&format!("{COMPILER_CAUSE_LINE}{}`\n", digest(&[cause])));
         }
         if self.signature_is_step_fallback {
             out.push_str(&format!(
@@ -386,10 +402,7 @@ impl FailureCluster {
                 display(&self.signature)
             ));
         } else {
-            out.push_str(&format!(
-                "- Normalized error signature (the dedupe identity, not a quote): `{}`\n",
-                display(&self.signature)
-            ));
+            out.push_str(&format!("{SIGNATURE_LINE}{}`\n", display(&self.signature)));
         }
         if let Some(repository) = evidence.get("repository").and_then(Value::as_object) {
             if let Some(full_name) = repository.get("full_name").and_then(Value::as_str) {

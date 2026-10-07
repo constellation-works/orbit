@@ -11,7 +11,9 @@
 //! can suppress an older failure, but a queued or in-progress successor is
 //! not that evidence, and an unrelated pull-request run cannot erase a
 //! landing-branch failure. Already-failed jobs inside an in-flight workflow
-//! are current when their evidence is complete; a pending check is not.
+//! are current when their evidence is complete; a pending check is not. A red
+//! run whose workflow is still running a push on its branch at a descendant
+//! commit is held in `pending_supersession` until that run completes.
 //!
 //! Losing the agent's ability to ask a follow-up question mid-diagnosis is the
 //! accepted cost of that boundary. The compensation is that the snapshot is
@@ -33,6 +35,7 @@ use super::partition::{
     partition_runs, run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
     supersede_older_when_cancelled_run_is_actionable, superseded_cancellation_entry,
 };
+use super::pending::defer_for_in_flight_descendants;
 use super::query::{CiQueries, RemoteBranchHeads};
 use super::refs::{RefKind, derive_refs, head_json, probe_branches};
 use super::{
@@ -247,13 +250,18 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
     partition_runs(&refs, &runs, &probes, &mut partition);
     let RunPartition {
         latest,
-        mut current,
+        current,
         mut stale,
         in_flight,
         mixed_candidates,
         mut deferred,
         cancelled_successors,
+        in_flight_successors,
     } = partition;
+    // Before any investigation slot is spent: a red run whose identity is
+    // still running on a descendant commit is not filed this sweep.
+    let (mut current, pending_supersession) =
+        defer_for_in_flight_descendants(queries, current, &in_flight_successors, &mut notes);
 
     for failure in &mut deferred {
         failure["investigated"] = json!(false);
@@ -408,6 +416,10 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         .iter()
         .filter_map(|run| run.get("run_id").cloned())
         .collect::<Vec<_>>();
+    let pending_ids = pending_supersession
+        .iter()
+        .filter_map(|run| run.get("run_id").cloned())
+        .collect::<Vec<_>>();
     let deferred_ids = deferred
         .iter()
         .filter_map(|run| run.get("run_id").cloned())
@@ -457,6 +469,56 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
     let retryable_error_count = retryable_errors.len();
     let unverified_refs = probes.unverified.keys().cloned().collect::<Vec<_>>();
 
+    let summary = json!({
+        "latest_runs_discovered": latest_ids.len(),
+        "latest_run_ids": latest_ids,
+        "current_failures": current_ids.len(),
+        "current_failure_run_ids": current_ids,
+        "branch_failures": branch_failures.len(),
+        "branch_failure_run_ids": branch_failures.iter()
+            .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
+        "investigated_failures": investigated_count,
+        "investigated_failure_run_ids": investigated_ids,
+        "deferred_failures": deferred_ids.len(),
+        "deferred_failure_run_ids": deferred_ids,
+        "pending_supersession": pending_ids.len(),
+        "pending_supersession_run_ids": pending_ids,
+        "inconclusive": inconclusive_count,
+        "inconclusive_run_ids": inconclusive_ids,
+        "superseded_cancellations": superseded_cancellations,
+        "inconclusive_job_ids": inconclusive_job_ids,
+        "retryable_errors": retryable_error_count,
+        "persistent_retryable_errors": persistent_errors.len(),
+        "persistently_incomplete_run_ids": persistently_incomplete.iter()
+            .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
+    });
+    let truncation = json!({
+        "refs_scanned": refs.len(),
+        "runs_listed": runs_listed,
+        "max_runs": bounds.max_runs,
+        "pull_requests_scanned": refs
+            .iter()
+            .filter(|scanned| scanned.kind == RefKind::PullRequest)
+            .count(),
+        "max_pull_requests": bounds.max_pull_requests,
+        "current_failures_discovered": discovered,
+        "current_failures_investigation_attempted": attempted,
+        "current_failures_investigated": investigated_count,
+        "inconclusive": inconclusive_count,
+        "log_max_bytes": bounds.log_max_bytes,
+        "job_log_reads": job_log_reads,
+        "max_job_log_reads": bounds.max_job_log_reads,
+        "checkout_log_reads": checkout_log_reads,
+        "max_checkout_log_reads": bounds.max_checkout_log_reads,
+        "retired_refs": probes.retired.iter().collect::<Vec<_>>(),
+        "closed_pull_request_refs": probes.closed.keys().collect::<Vec<_>>(),
+        "cancellation_annotation_reads": annotation_reads,
+        "max_cancellation_annotation_reads": MAX_CANCELLATION_ANNOTATION_READS,
+        "unverified_refs": unverified_refs,
+        "max_retired_ref_probes": bounds.max_retired_ref_probes,
+        "investigation_cursor": bounds.investigation_cursor,
+        "notes": notes,
+    });
     Ok(json!({
         "schema_version": CI_EVIDENCE_SCHEMA_VERSION,
         "collected": true,
@@ -476,58 +538,13 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
         "stale_or_superseded": stale,
         "in_flight": in_flight,
         "deferred": deferred,
+        "pending_supersession": pending_supersession,
         "inconclusive": inconclusive,
         "retryable_errors": retryable_errors,
         "persistent_retryable_errors": persistent_errors,
         "persistently_incomplete": persistently_incomplete,
-        "summary": {
-            "latest_runs_discovered": latest_ids.len(),
-            "latest_run_ids": latest_ids,
-            "current_failures": current_ids.len(),
-            "current_failure_run_ids": current_ids,
-            "branch_failures": branch_failures.len(),
-            "branch_failure_run_ids": branch_failures.iter()
-                .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
-            "investigated_failures": investigated_count,
-            "investigated_failure_run_ids": investigated_ids,
-            "deferred_failures": deferred_ids.len(),
-            "deferred_failure_run_ids": deferred_ids,
-            "inconclusive": inconclusive_count,
-            "inconclusive_run_ids": inconclusive_ids,
-            "superseded_cancellations": superseded_cancellations,
-            "inconclusive_job_ids": inconclusive_job_ids,
-            "retryable_errors": retryable_error_count,
-            "persistent_retryable_errors": persistent_errors.len(),
-            "persistently_incomplete_run_ids": persistently_incomplete.iter()
-                .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
-        },
-        "truncation": json!({
-            "refs_scanned": refs.len(),
-            "runs_listed": runs_listed,
-            "max_runs": bounds.max_runs,
-            "pull_requests_scanned": refs
-                .iter()
-                .filter(|scanned| scanned.kind == RefKind::PullRequest)
-                .count(),
-            "max_pull_requests": bounds.max_pull_requests,
-            "current_failures_discovered": discovered,
-            "current_failures_investigation_attempted": attempted,
-            "current_failures_investigated": investigated_count,
-            "inconclusive": inconclusive_count,
-            "log_max_bytes": bounds.log_max_bytes,
-            "job_log_reads": job_log_reads,
-            "max_job_log_reads": bounds.max_job_log_reads,
-            "checkout_log_reads": checkout_log_reads,
-            "max_checkout_log_reads": bounds.max_checkout_log_reads,
-            "retired_refs": probes.retired.iter().collect::<Vec<_>>(),
-            "closed_pull_request_refs": probes.closed.keys().collect::<Vec<_>>(),
-            "cancellation_annotation_reads": annotation_reads,
-            "max_cancellation_annotation_reads": MAX_CANCELLATION_ANNOTATION_READS,
-            "unverified_refs": unverified_refs,
-            "max_retired_ref_probes": bounds.max_retired_ref_probes,
-            "investigation_cursor": bounds.investigation_cursor,
-            "notes": notes,
-        }),
+        "summary": summary,
+        "truncation": truncation,
         "collected_at": chrono::Utc::now().to_rfc3339(),
     }))
 }

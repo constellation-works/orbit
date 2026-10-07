@@ -406,9 +406,26 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "retryable_errors": 0,
         "already_repaired_count": 0,
         "already_repaired_run_ids": [],
+        "pending_supersession": 0,
+        "pending_supersession_run_ids": [],
         "persistent_retryable_errors": persistent_errors.len(),
         "persistent_retryable_error_details": persistent_errors,
     })
+}
+
+/// Count every failure held back for a possible repair, with its run ids:
+/// collection's in-flight-descendant holds and filing's landed-repair holds.
+pub(super) fn pending_audit(mut audit: Value, pending: &[Value]) -> Value {
+    let mut run_ids = Vec::new();
+    for entry in pending {
+        match entry.get("run_ids").and_then(Value::as_array) {
+            Some(ids) => run_ids.extend(ids.iter().cloned()),
+            None => run_ids.extend(entry.get("run_id").cloned()),
+        }
+    }
+    audit["pending_supersession"] = json!(pending.len());
+    audit["pending_supersession_run_ids"] = json!(run_ids);
+    audit
 }
 
 pub(super) fn filing_audit(mut audit: Value, filed: &[Value], skipped_existing: &[Value]) -> Value {

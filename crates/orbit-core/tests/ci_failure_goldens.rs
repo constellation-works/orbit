@@ -519,3 +519,191 @@ backend = "cli"
         entry["failure_key"].as_str().unwrap()
     )));
 }
+
+/// Commit `count` empty commits on `repo` and return their ids, oldest first.
+fn commit_chain(repo: &Path, count: usize) -> Vec<String> {
+    let git = |args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.com",
+            ])
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q"]);
+    (0..count)
+        .map(|index| {
+            git(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("commit {index}"),
+            ]);
+            git(&["rev-parse", "HEAD"])
+        })
+        .collect()
+}
+
+/// Record a successful delivery run that committed and merged `task_id` at
+/// `landed`, the way the host pipeline checkpoints it.
+fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &str) {
+    use orbit_types::workflow::{JobRunState, PipelineState};
+
+    // A delivery job whose commit and merge steps are the shipped host actions.
+    let resources = runtime.paths().global_dir.join("resources");
+    std::fs::create_dir_all(resources.join("activities")).unwrap();
+    std::fs::create_dir_all(resources.join("jobs")).unwrap();
+    for activity in ["git_commit", "pr_complete"] {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+            resources.join(format!("activities/{activity}.yaml")),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        resources.join("jobs/fixture_delivery.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_delivery\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - id: commit\n      target: activity:git_commit\n    - id: complete_pr\n      target: activity:pr_complete\n",
+    )
+    .unwrap();
+    let mut run = runtime
+        .insert_job_run(
+            "fixture_delivery",
+            1,
+            chrono::Utc::now(),
+            Some(json!({"task_ids": [task_id]})),
+            None,
+        )
+        .unwrap();
+    run.state = JobRunState::Success;
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    for (index, step_id, output) in [
+        (
+            0,
+            "commit",
+            json!({
+                "phase": "commit", "decision": "performed", "committed": true,
+                "commit_sha": landed, "base_sha": base, "job_run_id": run.run_id, "task_id": task_id,
+            }),
+        ),
+        (
+            1,
+            "complete_pr",
+            json!({
+                "phase": "complete",
+                "merge": {"merged": true, "pr_number": "3507", "landed_commit": landed},
+            }),
+        ),
+    ] {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output(step_id, output);
+    }
+    runtime.write_run_state(&run.run_id, &state).unwrap();
+}
+
+/// A red run that completes after its repair landed is not filed again
+/// [ORB-14422]: the done repair with the same normalized signature landed at a
+/// descendant of the tested commit, so the failure is held until a newer run
+/// reproduces it. A failure tested on a commit that already contains the
+/// landing is still filed, and collection's own holds pass through.
+#[test]
+fn ci_failure_predating_a_landed_repair_is_held_not_refiled() {
+    if !isolated("ci_failure_predating_a_landed_repair_is_held_not_refiled") {
+        return;
+    }
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_types::task::TaskStatus;
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    // first red run, a later red run on an older commit, the repair, and a
+    // commit after the repair.
+    let commits = commit_chain(&repo, 4);
+    let (first, late, landed, after) = (&commits[0], &commits[1], &commits[2], &commits[3]);
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let log = "error: landing stopped on its base is not repaired under the same task";
+
+    let original = file(&runtime, vec![failure(log, 0, first)]);
+    assert_eq!(original["filed_count"], 1, "{original}");
+    let repair = original["filed"][0]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    runtime
+        .apply_task_automation_update(
+            &repair,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(runtime.get_task(&repair).unwrap().status, TaskStatus::Done);
+    record_landing(&runtime, &repair, late, landed);
+
+    // Another job with the same diagnostic, tested before the landing.
+    let coverage = |index: usize, checkout: &str| {
+        let mut run = failure(log, index, checkout);
+        run["failed_jobs"][0]["name"] = json!("Coverage");
+        run
+    };
+    let held = file(&runtime, vec![coverage(1, late)]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["skipped_existing"], json!([]), "{held}");
+    let pending = &held["pending_supersession"][0];
+    assert_eq!(
+        pending["reason"], "repaired_by_descendant_landing",
+        "{held}"
+    );
+    assert_eq!(pending["task_id"], repair.as_str());
+    assert_eq!(pending["landed_commit"], landed.as_str());
+    assert_eq!(pending["tested_commit"], late.as_str());
+    assert_eq!(pending["run_ids"], json!([11]));
+    assert_eq!(held["audit"]["pending_supersession_run_ids"], json!([11]));
+
+    // The landing is an ancestor of this checkout: the failure reproduces on
+    // repaired code, so it is filed as before.
+    let reproduced = file(&runtime, vec![coverage(2, after)]);
+    assert_eq!(reproduced["filed_count"], 1, "{reproduced}");
+    assert_eq!(reproduced["pending_supersession"], json!([]));
+
+    // Collection's in-flight holds are reported by the filing step as well.
+    let in_flight_hold = json!({
+        "run_id": 37561651327u64, "workflow": "CI", "head_branch": "agent-main",
+        "reason": "newer_descendant_run_in_flight",
+        "pending_on": {"run_id": 37561800000u64, "status": "in_progress"},
+    });
+    let output = runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({
+        "ci_evidence": {
+            "schema_version": 2, "collected": true, "outcome_hint": "no_current_failure",
+            "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+            "current_failures": [], "pending_supersession": [in_flight_hold.clone()],
+        }
+    }), ToolContext::default()).unwrap();
+    assert_eq!(output["outcome"], "no_current_failure");
+    assert_eq!(output["pending_supersession"], json!([in_flight_hold]));
+    assert_eq!(
+        output["audit"]["pending_supersession_run_ids"],
+        json!([37561651327u64])
+    );
+}

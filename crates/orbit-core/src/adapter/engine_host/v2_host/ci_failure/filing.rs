@@ -49,10 +49,11 @@ use super::cancellation::{
 };
 use super::evidence::{
     audit_summary, bounded_error, deferral_audit, deferred_errors, exclude_already_repaired,
-    filing_audit, normalize_retryable_error, partition_retryable_errors, repaired_audit,
-    retryable_pipeline_error, run_id_key, split_deferred_failures,
+    filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
+    repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
 };
 use super::grouping::cluster_failures;
+use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
 use super::runner_os;
 
@@ -295,6 +296,13 @@ where
         }));
     }
     let audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
+    // Failures collection held back while a descendant's run is in flight.
+    // Filing adds the ones whose repair already landed on a descendant.
+    let mut pending_supersession = evidence
+        .get("pending_supersession")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let clusters = cluster_failures(&complete);
 
     if !complete.is_empty() && clusters.is_empty() {
@@ -338,9 +346,10 @@ where
             "deferred": [],
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
+            "pending_supersession": pending_supersession,
             "attributed": attributed,
             "excluded_branch_failures": excluded_branch_failures,
-            "audit": audit,
+            "audit": pending_audit(audit, &pending_supersession),
             "detail": if inconclusive.is_empty() {
                 "no landing-branch repair remains; task-branch evidence is retained on its owner and other branch failures are excluded"
             } else {
@@ -395,6 +404,30 @@ where
             }))
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
+    // A failure with no open owner may still predate a completed repair.
+    let mut landed_repairs = LandedRepairs::new(runtime);
+    let descendant_landings = clusters
+        .iter()
+        .zip(&duplicate_matches)
+        .map(|(cluster, duplicate_match)| {
+            if duplicate_match.is_some() {
+                return Ok(None);
+            }
+            landed_repairs.find(cluster, &lookup).map_err(|error| {
+                retryable_pipeline_error(
+                    "dedupe_lookup",
+                    &audit,
+                    vec![json!({
+                        "stage": "registration",
+                        "operation": "find_landed_repair",
+                        "failure_key": cluster.failure_key,
+                        "retryable": true,
+                        "message": bounded_error(&error.to_string()),
+                    })],
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
         .iter()
         .map(|duplicate_match| {
@@ -421,8 +454,11 @@ where
 
     let attributed = retain_branch_observations(runtime, &branch_observations)?;
 
-    for ((cluster, duplicate_match), duplicate_task) in
-        clusters.iter().zip(duplicate_matches).zip(duplicate_tasks)
+    for (((cluster, duplicate_match), duplicate_task), descendant_landing) in clusters
+        .iter()
+        .zip(duplicate_matches)
+        .zip(duplicate_tasks)
+        .zip(descendant_landings)
     {
         if let Some(DuplicateTaskMatch {
             task_id,
@@ -453,6 +489,10 @@ where
                 "match_evidence": evidence,
                 "sources": cluster.filing_entry(&task_id)["sources"],
             }));
+            continue;
+        }
+        if let Some(pending) = descendant_landing {
+            pending_supersession.push(pending);
             continue;
         }
         if filed_keys.contains(&cluster.failure_key) {
@@ -538,7 +578,10 @@ where
         filed.push(filing);
     }
 
-    let final_audit = filing_audit(audit, &filed, &skipped_existing);
+    let final_audit = pending_audit(
+        filing_audit(audit, &filed, &skipped_existing),
+        &pending_supersession,
+    );
     Ok(json!({
         "outcome": OUTCOME_CURRENT_FAILURES,
         "capability": capability,
@@ -555,6 +598,7 @@ where
         "deferred": deferred,
         "inconclusive": inconclusive,
         "already_repaired": already_repaired,
+        "pending_supersession": pending_supersession,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))

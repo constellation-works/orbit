@@ -40,6 +40,14 @@ spec:
     unrelated pull-request run cannot erase a landing-branch failure, and a
     genuinely newer completed non-unsuccessful check of the same identity
     (or a landing-branch success, for non-landing noise) does suppress it.
+    A red run whose workflow has a newer push run on the same branch still
+    queued or in progress at a descendant commit (ancestry from the host
+    checkout, fetching an unseen run commit by id) is moved to
+    `pending_supersession` with `pending_on` naming that run, before any
+    investigation slot is spent; nothing is filed for it this sweep, and the
+    next sweep files only the newest completed run if it still fails. A rerun
+    of the same commit, a successor that is not a proven descendant, or an
+    ancestry query that fails leaves the failure current, with a note.
     Only landing-ref pushes of the observed event commit, or job checkouts
     matching an observed integration/release tip, remain in current_failures.
     Other live branch failures are retained in branch_failures, including
@@ -188,6 +196,12 @@ spec:
             type: array
           deferred:
             type: array
+          pending_supersession:
+            type: array
+            description: >
+              Red runs held while a descendant push run of the same workflow
+              and branch is in flight, each with `reason`
+              (`newer_descendant_run_in_flight`), `evidence` and `pending_on`.
           retryable_errors:
             type: array
           persistent_retryable_errors:

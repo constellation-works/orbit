@@ -47,7 +47,16 @@ spec:
     delivery state and Git applicability. Proven pre-fix observations are
     retained as task artifacts on the existing owner and are not pilot candidates.
     Missing or contradictory proof is reported in repair_assessments as unresolved;
-    ordinary proposed filing and pilot checks remain available. A repeated sweep
+    ordinary proposed filing and pilot checks remain available. A cluster with
+    no open owner is not filed when a `ci-failure-sweep` task completed within
+    30 days with the same failure key or the same normalized signature (compiler
+    cause identity, or a concrete non-fallback signature) and its delivery run
+    merged a landed commit that descends from the cluster's tested commit: the
+    failure predates its repair, so it is listed in `pending_supersession`
+    (reason `repaired_by_descendant_landing`, naming the task and landed commit)
+    and a later sweep files it only if a run on repaired code still fails.
+    Collection's own in-flight holds pass through in the same list, and the
+    audit counts both with their run ids. A repeated sweep
     over a run that is still red,
     or a root cause already owned by a manual task, therefore does not file
     the same work twice. Filing never mutates the covering task's tags or
@@ -211,6 +220,15 @@ spec:
           Bounded completed-owner assessments: covered_by_repair with referenced
           validation and source provenance, or unresolved with a reason. An
           unresolved assessment does not certify coverage or admission.
+        items:
+          type: object
+      pending_supersession:
+        type: array
+        description: >
+          Failures deferred for a possible repair rather than filed: collection's
+          `newer_descendant_run_in_flight` holds and filing's
+          `repaired_by_descendant_landing` holds, each with its reason and
+          evidence. Nothing in this list is a CI pass.
         items:
           type: object
       skipped_over_cap:
