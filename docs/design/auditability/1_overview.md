@@ -71,7 +71,7 @@ Blob writes apply pattern-based redaction at write time, and CLI error audit pat
 
 ### 2.7 Process tracing has a global JSONL feed
 
-The default tracing subscriber appends redacted structured events to `~/.orbit/state/logs/orbit.jsonl` after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials, proc-spawn allowlist denials, and friction record submissions also project stable `tracing::warn!` events beside their canonical stores. Friction records now live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
+The default tracing subscriber appends redacted operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to the separately budgeted `orbit-agent.jsonl` beside it after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials, proc-spawn allowlist denials, and friction record submissions also project stable `tracing::warn!` events beside their canonical stores. Friction records now live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
 
 ---
 

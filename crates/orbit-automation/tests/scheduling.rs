@@ -403,6 +403,7 @@ impl RoutineDispatch for RoutineHost {
 struct AutoHost {
     root: PathBuf,
     minted: Cell<usize>,
+    skip_version: RefCell<Option<String>>,
 }
 
 impl AutoTaskDispatch for AutoHost {
@@ -422,6 +423,18 @@ impl AutoTaskDispatch for AutoHost {
     }
     fn has_open_instance(&self, _: &AutoTaskDefinition) -> Result<Option<String>, OrbitError> {
         Ok(None)
+    }
+    fn skip_reason(
+        &self,
+        _: &AutoTaskDefinition,
+    ) -> Option<orbit_automation::auto_tasks::scheduler::InactivePluginSkip> {
+        self.skip_version.borrow().as_ref().map(|version| {
+            orbit_automation::auto_tasks::scheduler::InactivePluginSkip {
+                plugin: "fixture".into(),
+                version: version.clone(),
+                reason: "inactive fixture plugin".into(),
+            }
+        })
     }
     fn mint_task(&self, _: &AutoTaskDefinition) -> Result<String, OrbitError> {
         let count = self.minted.get() + 1;
@@ -536,6 +549,7 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
         let host = AutoHost {
             root,
             minted: Cell::new(0),
+            skip_version: RefCell::new(None),
         };
         for (now, action, count, slot) in [
             ("2026-10-01T00:07:00Z", "baselined", 0, None),
@@ -772,4 +786,72 @@ fn forged_member_outputs_never_advance_coverage() {
             "{forgery}: correct evidence still advances coverage exactly once"
         );
     }
+}
+
+#[test]
+fn inactive_plugin_warning_is_deduplicated_across_scheduler_passes() {
+    if isolated("inactive_plugin_warning_is_deduplicated_across_scheduler_passes") {
+        return;
+    }
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    struct Capture(Arc<Mutex<Vec<tracing::Level>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit.automation.auto_tasks" {
+                self.0.lock().unwrap().push(*event.metadata().level());
+            }
+        }
+    }
+    let levels = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(levels.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        for workspace in ["one", "two"] {
+            let root = std::env::current_dir()
+                .unwrap()
+                .join(workspace)
+                .join(".orbit");
+            std::fs::create_dir_all(root.join("auto_tasks")).unwrap();
+            std::fs::create_dir_all(root.join("state")).unwrap();
+            std::fs::write(root.join("auto_tasks/parked.yaml"), "schemaVersion: 1\nname: parked\nenabled: true\nschedule:\n  every_minutes: 60\ndedupe: always\ntemplate:\n  title: Parked fixture\n").unwrap();
+            let host = AutoHost {
+                root,
+                minted: Cell::new(0),
+                skip_version: RefCell::new(Some("1.0".into())),
+            };
+            let versions: &[&str] = if workspace == "one" {
+                &["1.0", "1.0", "2.0", "2.0"]
+            } else {
+                &["1.0"]
+            };
+            for version in versions {
+                *host.skip_version.borrow_mut() = Some((*version).into());
+                let outcome = run_auto_task_scheduler_at(
+                    &host,
+                    at("2026-10-07T00:00:00Z"),
+                    SchedulerOptions::default(),
+                )
+                .unwrap();
+                assert!(outcome.errors.is_empty());
+                assert_eq!(outcome.reports.len(), 1);
+                assert_eq!(outcome.reports[0].action, "skipped");
+                assert_eq!(host.minted.get(), 0);
+            }
+        }
+    });
+    assert_eq!(
+        *levels.lock().unwrap(),
+        [
+            tracing::Level::WARN,
+            tracing::Level::DEBUG,
+            tracing::Level::WARN,
+            tracing::Level::DEBUG,
+            tracing::Level::WARN
+        ],
+        "repeat passes must downgrade while a new version or workspace warns once"
+    );
 }

@@ -107,6 +107,9 @@ fn run_tail<W: Write + ?Sized>(
     use_color: bool,
     writer: &mut W,
 ) -> io::Result<()> {
+    if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
+        return run_split_tail(path, &agent_path, args, filters, use_color, writer);
+    }
     if !path.exists() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -226,6 +229,19 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
     writer: &mut W,
     after_first_read: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<InitialWindow> {
+    let (initial, history) = read_initial_window(path, args, filters, after_first_read)?;
+    for line in history {
+        emit_line(&line, args.json, use_color, writer)?;
+    }
+    Ok(initial)
+}
+
+fn read_initial_window(
+    path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    after_first_read: impl FnOnce() -> io::Result<()>,
+) -> io::Result<(InitialWindow, VecDeque<String>)> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut buf = Vec::new();
@@ -258,12 +274,12 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
         }
     }
 
-    for line in matching_lines.into_lines() {
-        emit_line(&line, args.json, use_color, writer)?;
-    }
     // Carry this exact file into follow mode: rotation during the history
     // read must not apply an old offset to the replacement path.
-    Ok(InitialWindow { reader, pending })
+    Ok((
+        InitialWindow { reader, pending },
+        matching_lines.into_lines(),
+    ))
 }
 
 /// A chronological tail window whose storage never exceeds its requested
@@ -305,61 +321,137 @@ fn follow_file<W: Write + ?Sized>(
     writer: &mut W,
     control: FollowControl,
 ) -> io::Result<()> {
-    let mut reader = initial.reader;
-    let mut offset = reader.stream_position()?;
-    // Bytes of a line still being written. Kept undecoded so a write that
-    // ends inside a multi-byte character is completed, not rejected.
-    let mut pending = initial.pending;
+    follow_files(
+        vec![(path.to_path_buf(), Some(initial))],
+        filters,
+        json,
+        use_color,
+        writer,
+        control,
+    )
+}
 
+fn run_split_tail<W: Write + ?Sized>(
+    path: &Path,
+    agent_path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    use_color: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    let mut feeds = Vec::new();
+    let mut history = Vec::new();
+    for path in [path, agent_path] {
+        match read_initial_window(path, args, filters, || Ok(())) {
+            Ok((initial, lines)) => {
+                history.extend(lines.into_iter().filter_map(|line| {
+                    let event: Value = serde_json::from_str(&line).ok()?;
+                    Some((event["timestamp"].as_str().unwrap_or("").to_owned(), line))
+                }));
+                feeds.push((path.to_path_buf(), Some(initial)));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                feeds.push((path.to_path_buf(), None));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    history.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, line) in history
+        .iter()
+        .skip(history.len().saturating_sub(args.lines))
+    {
+        emit_line(line, args.json, use_color, writer)?;
+    }
+    if args.follow {
+        follow_files(
+            feeds,
+            filters,
+            args.json,
+            use_color,
+            writer,
+            FollowControl::Forever,
+        )?;
+    }
+    Ok(())
+}
+
+fn follow_files<W: Write + ?Sized>(
+    mut feeds: Vec<(PathBuf, Option<InitialWindow>)>,
+    filters: &Filters,
+    json: bool,
+    use_color: bool,
+    writer: &mut W,
+    control: FollowControl,
+) -> io::Result<()> {
     loop {
         if control.should_stop() {
             return Ok(());
         }
-        if reader.get_ref().metadata()?.len() < offset {
-            // A copy-truncate rotation invalidates both buffered bytes and
-            // any unfinished record from the previous contents.
-            reader.seek(SeekFrom::Start(0))?;
-            offset = 0;
-            pending.clear();
-        }
-        let n = reader.read_until(b'\n', &mut pending)?;
-        if n == 0 {
-            // Reach EOF on the old descriptor before switching, so its
-            // complete records are drained even if the path was renamed.
-            let replacement = match File::open(path) {
-                Ok(file) => Some(file),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-                Err(err) => return Err(err),
-            };
-            if let Some(file) = replacement {
-                let current = reader.get_ref().metadata()?;
-                if current.len() > offset {
-                    // The old writer appended while we checked the path.
-                    continue;
-                }
-                if !same_file(&current, &file.metadata()?)? {
-                    reader = BufReader::new(file);
-                    offset = 0;
-                    // Never join a torn archive record to the new file.
-                    pending.clear();
-                    continue;
+        let mut progressed = false;
+        for (path, initial) in &mut feeds {
+            if initial.is_none() {
+                match File::open(&*path) {
+                    Ok(file) => {
+                        *initial = Some(InitialWindow {
+                            reader: BufReader::new(file),
+                            pending: Vec::new(),
+                        })
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
                 }
             }
+            let Some(initial) = initial else { continue };
+            let reader = &mut initial.reader;
+            let pending = &mut initial.pending;
+            let mut offset = reader.stream_position()?;
+            // Bound each feed's batch so a busy relay cannot starve operations.
+            for _ in 0..256 {
+                if reader.get_ref().metadata()?.len() < offset {
+                    reader.seek(SeekFrom::Start(0))?;
+                    offset = 0;
+                    pending.clear();
+                }
+                let n = reader.read_until(b'\n', pending)?;
+                if n == 0 {
+                    let replacement = match File::open(&*path) {
+                        Ok(file) => Some(file),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error),
+                    };
+                    if let Some(file) = replacement {
+                        let current = reader.get_ref().metadata()?;
+                        if current.len() > offset {
+                            continue;
+                        }
+                        if !same_file(&current, &file.metadata()?)? {
+                            *reader = BufReader::new(file);
+                            offset = 0;
+                            pending.clear();
+                            progressed = true;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                progressed = true;
+                offset += n as u64;
+                if pending.last() != Some(&b'\n') {
+                    continue;
+                }
+                pending.pop();
+                let full_line = String::from_utf8_lossy(pending).into_owned();
+                pending.clear();
+                if let Ok(value) = serde_json::from_str::<Value>(&full_line)
+                    && filters.matches(&value)
+                {
+                    emit_line(&full_line, json, use_color, writer)?;
+                }
+            }
+        }
+        if !progressed {
             thread::sleep(Duration::from_millis(50));
-            continue;
-        }
-        offset += n as u64;
-        if pending.last() != Some(&b'\n') {
-            // Partial line: keep it and try again next iteration.
-            continue;
-        }
-        pending.pop();
-        let full_line = String::from_utf8_lossy(&pending).into_owned();
-        pending.clear();
-        if let Ok(value) = serde_json::from_str::<Value>(&full_line)
-            && filters.matches(&value)
-        {
-            emit_line(&full_line, json, use_color, writer)?;
         }
     }
 }

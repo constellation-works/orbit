@@ -35,6 +35,7 @@ const LOG_MAX_LIMIT: usize = 500;
 struct LogSnapshot {
     events: Vec<RenderedLogEvent>,
     offset: u64,
+    agent_offset: u64,
 }
 
 const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
@@ -151,8 +152,9 @@ pub(super) async fn stream_log(Query(q): Query<LogQuery>, headers: HeaderMap) ->
         Err(e) => return map_runtime_error(e),
     };
     let resume = stream_resume_offset(q.from, last_event_id_header(&headers));
+    let agent_resume = stream_agent_resume_offset(q.agent_from, last_event_id_header(&headers));
     let stream = ReceiverSseStream {
-        rx: spawn_log_sse_frames(path, filters, permit, resume),
+        rx: spawn_log_sse_frames(path, filters, permit, resume, agent_resume),
     };
     match Response::builder()
         .status(StatusCode::OK)
@@ -197,14 +199,26 @@ fn read_log_snapshot_from_path(
         None => LOG_DEFAULT_LIMIT,
     };
     let filters = log_filters(query)?;
-    let tail = read_recent_rendered_tail(path, &filters, limit)
+    let mut tail = read_recent_rendered_tail(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
+    let mut agent_offset = 0;
+    if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
+        let agent_tail = read_recent_rendered_tail(&agent_path, &filters, limit).map_err(|e| {
+            orbit_core::OrbitError::Io(format!("read log {}: {e}", agent_path.display()))
+        })?;
+        agent_offset = agent_tail.cursor;
+        tail.events.extend(agent_tail.events);
+        tail.events.sort_by(|left, right| left.ts.cmp(&right.ts));
+        let discard = tail.events.len().saturating_sub(limit);
+        tail.events.drain(..discard);
+    }
     // The cursor comes from the scanned extent itself, never a later `stat`:
     // a line appended after the scan lies beyond it and reaches the client
     // through `?from=<offset>` / `Last-Event-ID` instead of being skipped.
     Ok(LogSnapshot {
         events: tail.events,
         offset: tail.cursor,
+        agent_offset,
     })
 }
 
@@ -212,7 +226,17 @@ fn read_log_snapshot_from_path(
 /// not replay from the snapshot offset baked into the EventSource URL.
 fn stream_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
     last_event_id
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .and_then(|raw| raw.trim().split(':').next()?.parse::<u64>().ok())
+        .or(from)
+}
+
+fn stream_agent_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
+    last_event_id
+        .and_then(|raw| {
+            let (operational, agent) = raw.trim().split_once(':')?;
+            operational.parse::<u64>().ok()?;
+            agent.parse::<u64>().ok()
+        })
         .or(from)
 }
 
@@ -239,6 +263,7 @@ fn spawn_log_sse_frames(
     filters: LogFilters,
     permit: OwnedSemaphorePermit,
     resume_offset: Option<u64>,
+    agent_resume_offset: Option<u64>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel(LOG_STREAM_CHANNEL_DEPTH);
     // A fresh stream starts at the file's end as of this request, read here
@@ -249,13 +274,25 @@ fn spawn_log_sse_frames(
     // instead of skipping what was written to it.
     let start_offset =
         resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+    let agent_path = orbit_common::observability::logging::agent_jsonl_log_path(&path);
+    let agent_start_offset = agent_resume_offset.unwrap_or_else(|| {
+        agent_path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|m| m.len())
+            .unwrap_or(0)
+    });
     thread::spawn(move || {
         // Permit is dropped when this thread exits, which happens within one
         // idle poll interval — or one batch of a replay — of the client
         // disconnecting (tx.is_closed()).
         let _permit = permit;
         let mut offset = start_offset;
+        let mut agent_offset = agent_start_offset;
+        let mut complete_offset = start_offset;
+        let mut complete_agent_offset = agent_start_offset;
         let mut lines = LogLineBuffer::default();
+        let mut agent_lines = LogLineBuffer::default();
         let mut backoff = PollBackoff::new();
         loop {
             if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
@@ -265,11 +302,45 @@ fn spawn_log_sse_frames(
             // no sleep between them, re-checking disconnect and shutdown each
             // time; only a caught-up stream waits for the next poll.
             let scanned_from = offset;
-            let caught_up = match read_appended_log_events(&path, &filters, &mut offset, &mut lines)
-            {
-                Ok(batch) => {
+            let mut progressed = false;
+            let mut caught_up =
+                match read_appended_log_events(&path, &filters, &mut offset, &mut lines) {
+                    Ok(batch) => {
+                        complete_offset = batch.cursor;
+                        for (event, event_offset) in batch.events {
+                            let frame = match format_feed_sse_frame(
+                                &event,
+                                event_offset,
+                                agent_path.as_ref().map(|_| complete_agent_offset),
+                            ) {
+                                Ok(frame) => frame,
+                                Err(_) => continue,
+                            };
+                            if tx.blocking_send(frame).is_err() {
+                                return;
+                            }
+                        }
+                        !batch.more
+                    }
+                    Err(_) => true,
+                };
+            progressed |= offset != scanned_from;
+            if let Some(agent_path) = &agent_path {
+                let scanned_from = agent_offset;
+                if let Ok(batch) = read_appended_log_events(
+                    agent_path,
+                    &filters,
+                    &mut agent_offset,
+                    &mut agent_lines,
+                ) {
+                    caught_up &= !batch.more;
+                    complete_agent_offset = batch.cursor;
                     for (event, event_offset) in batch.events {
-                        let frame = match format_sse_frame(&event, event_offset) {
+                        let frame = match format_feed_sse_frame(
+                            &event,
+                            complete_offset,
+                            Some(event_offset),
+                        ) {
                             Ok(frame) => frame,
                             Err(_) => continue,
                         };
@@ -277,13 +348,12 @@ fn spawn_log_sse_frames(
                             return;
                         }
                     }
-                    !batch.more
                 }
-                Err(_) => true,
-            };
+                progressed |= agent_offset != scanned_from;
+            }
             // Progress means bytes were consumed (even if the filter matched
             // none of them), so a busy log with a narrow filter stays fast.
-            let delay = backoff.next_delay(offset != scanned_from);
+            let delay = backoff.next_delay(progressed);
             if caught_up {
                 thread::sleep(delay);
             }
@@ -309,12 +379,18 @@ pub(super) struct LogLineBuffer {
     /// Set once the current record exceeded [`LOG_STREAM_MAX_RECORD_BYTES`];
     /// its remaining bytes are skipped up to and including the next newline.
     pub(super) discarding: bool,
+    /// Cursor after the last complete record. Companion-feed event IDs must
+    /// not advance past an unfinished record that a reconnect cannot rebuild.
+    complete_offset: u64,
+    #[cfg(unix)]
+    identity: Option<(u64, u64)>,
 }
 
 impl LogLineBuffer {
     fn clear(&mut self) {
         self.partial.clear();
         self.discarding = false;
+        self.complete_offset = 0;
     }
 
     fn push(&mut self, bytes: &[u8]) {
@@ -351,6 +427,7 @@ impl LogLineBuffer {
 pub(super) struct AppendedLogBatch {
     pub(super) events: Vec<(RenderedLogEvent, u64)>,
     pub(super) more: bool,
+    pub(super) cursor: u64,
 }
 
 /// Read complete lines appended since `offset`, keeping a trailing partial
@@ -371,10 +448,24 @@ pub(super) fn read_appended_log_events(
     lines: &mut LogLineBuffer,
 ) -> io::Result<AppendedLogBatch> {
     let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    let len = metadata.len();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let identity = (metadata.dev(), metadata.ino());
+        if lines.identity.is_some_and(|prior| prior != identity) {
+            *offset = 0;
+            lines.clear();
+        }
+        lines.identity = Some(identity);
+    }
     if len < *offset {
         *offset = 0;
         lines.clear();
+    }
+    if lines.partial.is_empty() && !lines.discarding {
+        lines.complete_offset = *offset;
     }
     file.seek(SeekFrom::Start(*offset))?;
     let budget = (len - *offset).min(LOG_STREAM_BATCH_BYTES);
@@ -395,6 +486,7 @@ pub(super) fn read_appended_log_events(
         if newline.is_none() {
             continue;
         }
+        lines.complete_offset = *offset;
         if let Some(event) = lines
             .finish()
             .and_then(|line| parse_matching_event(&line, filters))
@@ -406,11 +498,24 @@ pub(super) fn read_appended_log_events(
     Ok(AppendedLogBatch {
         events,
         more: *offset < len,
+        cursor: lines.complete_offset,
     })
 }
 
 fn format_sse_frame(event: &RenderedLogEvent, offset: u64) -> Result<String, serde_json::Error> {
     serde_json::to_string(event).map(|json| format!("id: {offset}\ndata: {json}\n\n"))
+}
+
+fn format_feed_sse_frame(
+    event: &RenderedLogEvent,
+    offset: u64,
+    agent_offset: Option<u64>,
+) -> Result<String, serde_json::Error> {
+    match agent_offset {
+        Some(agent_offset) => serde_json::to_string(event)
+            .map(|json| format!("id: {offset}:{agent_offset}\ndata: {json}\n\n")),
+        None => format_sse_frame(event, offset),
+    }
 }
 
 struct ReceiverSseStream {

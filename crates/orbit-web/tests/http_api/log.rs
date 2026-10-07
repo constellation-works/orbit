@@ -32,6 +32,11 @@ fn stream(response: Response) -> BufReader<Response> {
 
 /// The HTTP client's total request timeout bounds even a missing SSE delimiter/event.
 fn event(reader: &mut impl BufRead) -> (u64, Value) {
+    let (id, value) = feed_event(reader);
+    (id.parse().unwrap(), value)
+}
+
+fn feed_event(reader: &mut impl BufRead) -> (String, Value) {
     let mut id = None;
     let mut data = None;
     loop {
@@ -45,7 +50,7 @@ fn event(reader: &mut impl BufRead) -> (u64, Value) {
         );
         let line = line.trim_end();
         if let Some(value) = line.strip_prefix("id:") {
-            id = Some(value.trim().parse().unwrap());
+            id = Some(value.trim().to_owned());
         }
         if let Some(value) = line.strip_prefix("data:") {
             data = Some(serde_json::from_str(value.trim()).unwrap());
@@ -280,6 +285,137 @@ fn sse_restarts_after_rotation_with_live_and_stale_cursors() {
             append(&path, &line("rotation-sentinel"));
             let (_, received) = event(&mut reconnect);
             assert_step(&received, "rotation-sentinel");
+        },
+    );
+}
+
+#[test]
+fn split_log_snapshot_stream_and_reconnect_preserve_agent_output() {
+    isolated(
+        "log::split_log_snapshot_stream_and_reconnect_preserve_agent_output",
+        || {
+            let fixture = Fixture::new();
+            let path = fixture.path("orbit.jsonl");
+            let agent = fixture.path("orbit-agent.jsonl");
+            let relay = |text: &str| {
+                format!(
+                    "{}\n",
+                    json!({
+                        "timestamp":"2026-10-07T01:00:00Z", "level":"INFO", "target":"orbit_engine::activity_job::cli_runner::supervisor",
+                        "fields":{"provider":"codex", "stream":"stdout", "line":text},
+                    })
+                )
+            };
+            fs::write(&path, line("operational")).unwrap();
+            fs::write(&agent, relay("initial-agent")).unwrap();
+            let server = fixture.split_log_server();
+            let snapshot = json_ok(server.get("/api/log?limit=20"));
+            let events = snapshot["events"].as_array().unwrap();
+            assert_eq!(events.len(), 2);
+            assert_step(&events[0], "operational");
+            assert_eq!(events[1]["agent_stdout"], true);
+            assert_step(&events[1], "initial-agent");
+            append(&agent, &relay("snapshot-gap"));
+            let mut live = stream(server.get(&format!(
+                "/api/log/stream?from={}&agent_from={}",
+                snapshot["offset"], snapshot["agent_offset"]
+            )));
+            let (id, value) = feed_event(&mut live);
+            assert_step(&value, "snapshot-gap");
+            assert!(id.contains(':'));
+            drop(live);
+            append(&path, &line("operational-gap"));
+            append(&agent, &relay("agent-gap"));
+            let mut resumed = stream(
+                server
+                    .request("GET", "/api/log/stream?from=0&agent_from=0")
+                    .header("last-event-id", id)
+                    .send()
+                    .unwrap(),
+            );
+            let (_, value) = feed_event(&mut resumed);
+            assert_step(&value, "operational-gap");
+            let (_, value) = feed_event(&mut resumed);
+            assert_step(&value, "agent-gap");
+            // Replacement is larger than the previous file; inode detection must
+            // reset only this feed rather than relying on a size shrink.
+            fs::rename(&agent, fixture.path("orbit-agent.jsonl.old")).unwrap();
+            fs::write(
+                &agent,
+                relay(&format!("rotated-agent-{}", "x".repeat(4096))),
+            )
+            .unwrap();
+            let (_, value) = feed_event(&mut resumed);
+            assert_step(&value, "rotated-agent-");
+            append(&path, &line("operational-sentinel"));
+            let (_, value) = feed_event(&mut resumed);
+            assert_step(&value, "operational-sentinel");
+        },
+    );
+}
+
+#[test]
+fn split_log_reconnect_preserves_partial_records_in_either_feed() {
+    isolated(
+        "log::split_log_reconnect_preserves_partial_records_in_either_feed",
+        || {
+            for partial_agent in [true, false] {
+                let fixture = Fixture::new();
+                let operational = fixture.path("orbit.jsonl");
+                let agent = fixture.path("orbit-agent.jsonl");
+                let record = |is_agent: bool, text: &str| {
+                    if is_agent {
+                        format!(
+                            "{}\n",
+                            json!({
+                                "timestamp":"2026-10-07T01:00:00Z", "level":"INFO", "target":"orbit_engine::activity_job::cli_runner::supervisor",
+                                "fields":{"provider":"codex", "stream":"stdout", "line":text},
+                            })
+                        )
+                    } else {
+                        line(text)
+                    }
+                };
+                fs::write(&operational, record(false, "initial-operation")).unwrap();
+                fs::write(&agent, record(true, "initial-agent")).unwrap();
+                let server = fixture.split_log_server();
+                let snapshot = json_ok(server.get("/api/log"));
+                let mut live = stream(server.get(&format!(
+                    "/api/log/stream?from={}&agent_from={}",
+                    snapshot["offset"], snapshot["agent_offset"]
+                )));
+                let (partial, trigger) = if partial_agent {
+                    (&agent, &operational)
+                } else {
+                    (&operational, &agent)
+                };
+                let pending = record(partial_agent, "completed-after-reconnect");
+                let cut = pending.len() - 4;
+                append(partial, &pending[..cut]);
+                append(trigger, &record(!partial_agent, "first-handshake"));
+                let (_, value) = feed_event(&mut live);
+                assert_step(&value, "first-handshake");
+                // The second handshake crosses a complete polling cycle, so
+                // the companion's partial record has been scanned before its
+                // raw offset can enter an event ID.
+                append(trigger, &record(!partial_agent, "second-handshake"));
+                let (id, value) = feed_event(&mut live);
+                assert_step(&value, "second-handshake");
+                drop(live);
+                append(partial, &pending[cut..]);
+                let mut resumed = stream(
+                    server
+                        .request("GET", "/api/log/stream")
+                        .header("last-event-id", id)
+                        .send()
+                        .unwrap(),
+                );
+                let (_, value) = feed_event(&mut resumed);
+                assert_step(&value, "completed-after-reconnect");
+                append(trigger, &record(!partial_agent, "sentinel"));
+                let (_, value) = feed_event(&mut resumed);
+                assert_step(&value, "sentinel");
+            }
         },
     );
 }

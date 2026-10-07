@@ -646,10 +646,12 @@ the sweep succeeded.
 | `pr.task_url_template` | unset | URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | `true` | When a task lands (`done`), is rejected or is archived, close its open Orbit-authored PRs: delivery PRs and `[BLOCKED]` preservation PRs. The closing comment names the landing (the done transition's note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and its reason. On `done` the landing PR stays open: any `#N` the note names, or, when the note names no landing and the task leaves `review`, the PR it was reviewed through. A PR qualifies only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of a follower handoff this owner accepted. Human PRs and other tasks' PRs are never touched, and branches are never deleted. A new run, block or requeue closes nothing, so a re-run can resume from its `[BLOCKED]` PR. Tasks with no recorded PR make no forge call. A forge error is logged as a warning and never fails the transition. `false` disables closing. |
 | `pr.delivery_authors` | `[]` | Forge logins (case-insensitive) whose PRs count as Orbit-authored for `pr.close_on_terminal`. Empty uses the login `gh` is authenticated as on this machine. List a follower's login here if it opens PRs this owner has not accepted as a handoff. |
-| `runtime.log_retention_days` | `7` | Delete `~/.orbit/state/logs/orbit.jsonl` archives older than N days (≥ 1). |
-| `runtime.log_max_total_mb` | `500` | Total archive budget in MiB, pruned oldest first (≥ 1). |
-| `runtime.log_max_file_mb` | `100` | Roll the active log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
+| `runtime.log_retention_days` | `7` | Delete archives of both `orbit.jsonl` and `orbit-agent.jsonl` older than N days (≥ 1). |
+| `runtime.log_max_total_mb` | `500` | Operational `orbit.jsonl` archive budget in MiB, pruned oldest first (≥ 1). |
+| `runtime.log_max_file_mb` | `100` | Roll the active operational log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
 | `plugin.legacy_callback_identity` | `false` | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential. Removed next release. |
+
+Agent relay output lives beside the operational feed in `orbit-agent.jsonl`, with an independent 200 MiB archive budget and 50 MiB active-file limit. The dashboard and `orbit log tail` merge both active feeds. Agent volume cannot consume the operational size budget; each feed is still pruned when its own size or age budget is exceeded.
 
 Full log rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`). Short-lived commands roll only an oversized active file. `[review]` and `[operation]` keys resolve built-in → global → workspace, and unknown keys in either table fail load.
 

@@ -23,7 +23,7 @@ Auditability is split across four channels:
 
 1. **Command audit records.** SQLite rows in the configured audit database; queried through `orbit audit`.
 2. **V2 activity/job and loop events.** SQLite rows in `v2_audit_events`, with loop rows created only when a run emits loop events; redacted content-addressed blobs remain under `.orbit/state/audit/blobs/`.
-3. **Global tracing events.** Redacted JSONL under `~/.orbit/state/logs/orbit.jsonl`.
+3. **Global tracing events.** Operational JSONL under `~/.orbit/state/logs/orbit.jsonl` and agent relay in `orbit-agent.jsonl` beside it, both redacted.
 4. **Invocation metrics.** SQLite records keyed by job run, activity, task, agent, model, usage, and tool-call summaries.
 
 The split is deliberate: command rows stay compact and queryable; envelopes preserve workflow structure; loop audit preserves provider/tool detail; tracing gives operators a live feed before workspace context exists; metrics answer cost and scoreboard questions without scraping transcripts. [T20260426-0519] moved file-backed run traces under `.orbit/state/audit/` while command audit rows remained in SQLite.
@@ -204,9 +204,9 @@ After [ORB-10590], a record carries an author-settable `title` — its handle in
 
 ## 9. Global Process Tracing JSONL
 
-`crates/orbit-common/src/observability/logging.rs` installs a default subscriber with one `EnvFilter`, stderr formatting, and an optional non-blocking JSONL file layer at `~/.orbit/state/logs/orbit.jsonl` after [T20260426-2343]. The retained `WorkerGuard` lets routine event emission avoid synchronous disk writes; because statics are never dropped, the CLI calls `shutdown_jsonl_writer` when `main` returns and leaves early through `logging::exit`, which drains the queue before `std::process::exit`.
+`crates/orbit-common/src/observability/logging.rs` installs a default subscriber with independent stderr/file filters, stderr formatting, and a non-blocking JSONL layer routing operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to `orbit-agent.jsonl` beside it after [T20260426-2343]. The retained writer guards let routine event emission avoid synchronous disk writes; because statics are never dropped, the CLI calls `shutdown_jsonl_writer` when `main` returns and leaves early through `logging::exit`, which drains the queue before `std::process::exit`.
 
-Each record contains timestamp, level, target, and structured fields. After [T20260426-2349], both stderr and JSONL use `RedactingFields`, which scrubs string values, `Debug`-formatted values, and unstructured messages while preserving numeric and boolean JSON types. This global feed is the live landing zone for subprocess output [T20260426-2313], policy-denial and friction projections [T20260427-0023], and other `tracing` events emitted before workspace runtime context exists. After [T20260508-8], CLI subprocess line events include `cwd` when Activity/Job resolved one, matching the audit-started event while omitting the field when the child inherits the parent cwd. It is operational telemetry, not the canonical workflow envelope.
+Each record contains timestamp, level, target, and structured fields. After [T20260426-2349], both stderr and JSONL use `RedactingFields`, which scrubs string values, `Debug`-formatted values, and unstructured messages while preserving numeric and boolean JSON types. The merged global feeds are the live landing zone for subprocess output [T20260426-2313], policy-denial and friction projections [T20260427-0023], and other `tracing` events emitted before workspace runtime context exists. After [T20260508-8], CLI subprocess line events include `cwd` when Activity/Job resolved one, matching the audit-started event while omitting the field when the child inherits the parent cwd. It is operational telemetry, not the canonical workflow envelope.
 
 ---
 

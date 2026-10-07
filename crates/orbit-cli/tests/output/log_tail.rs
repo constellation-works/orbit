@@ -200,3 +200,44 @@ fn follow_truncation_resets_offset_and_discards_the_previous_partial_record() {
         follower.expect_no_record();
     }
 }
+
+#[test]
+fn tail_merges_agent_history_and_follows_both_feeds() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let agent = fixture.work.join("orbit-agent.jsonl");
+    fs::write(
+        &path,
+        format!("{}\n", event("operational", "WARN", "orbit.test")),
+    )
+    .unwrap();
+    fs::write(
+        &agent,
+        format!("{}\n", event("agent-history", "WARN", "orbit.test")),
+    )
+    .unwrap();
+    let follower = Follower::start(&fixture, &path, true);
+    follower.expect_record("agent-history", true);
+    append(
+        &path,
+        format!("{}\n", event("operational-live", "WARN", "orbit.test")).as_bytes(),
+    );
+    append(
+        &agent,
+        format!("{}\n", event("agent-live", "WARN", "orbit.test")).as_bytes(),
+    );
+    follower.expect_record("operational-live", true);
+    follower.expect_record("agent-live", true);
+    fs::rename(&agent, fixture.work.join("orbit-agent.jsonl.old")).unwrap();
+    fs::write(
+        &agent,
+        format!("{}\n", event("agent-rotated", "WARN", "orbit.test")),
+    )
+    .unwrap();
+    follower.expect_record("agent-rotated", true);
+    append(
+        &path,
+        format!("{}\n", event("operational-sentinel", "WARN", "orbit.test")).as_bytes(),
+    );
+    follower.expect_record("operational-sentinel", true);
+}

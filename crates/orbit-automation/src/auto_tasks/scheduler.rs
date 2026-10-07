@@ -12,7 +12,22 @@ use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
     SkipIfUnchanged,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
+
+/// A plugin-inactive skip with stable provenance for warning deduplication.
+pub struct InactivePluginSkip {
+    /// Plugin namespace that seeded the definition.
+    pub plugin: String,
+    /// Seeded plugin version.
+    pub version: String,
+    /// Operator-facing explanation.
+    pub reason: String,
+}
+
+type SkipWarningKey = (PathBuf, String, String, String);
+static SKIP_WARNINGS: OnceLock<Mutex<HashSet<SkipWarningKey>>> = OnceLock::new();
 
 #[cfg(test)]
 use std::sync::{Arc, Barrier};
@@ -44,7 +59,7 @@ pub trait AutoTaskDispatch {
     /// The one caller is a definition a plugin seeded whose plugin is no
     /// longer active: it stays on disk, does not fire, and the reason names
     /// the plugin. Hosts without plugins answer `None`.
-    fn skip_reason(&self, _definition: &AutoTaskDefinition) -> Option<String> {
+    fn skip_reason(&self, _definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
         None
     }
 
@@ -168,14 +183,35 @@ fn fire_definition(
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
     // A plugin-seeded definition whose plugin is inactive cannot admit work.
-    if let Some(reason) = host.skip_reason(definition) {
-        tracing::warn!(
-            target: "orbit.automation.auto_tasks",
-            auto_task = %definition.name,
-            reason = %reason,
-            "skipping auto-task definition",
+    if let Some(skip) = host.skip_reason(definition) {
+        let workspace = host.state_dir();
+        let key = (
+            workspace.canonicalize().unwrap_or(workspace),
+            definition.name.clone(),
+            skip.plugin,
+            skip.version,
         );
-        return Ok(skipped(definition, &reason));
+        let first = SKIP_WARNINGS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key);
+        if first {
+            tracing::warn!(
+                target: "orbit.automation.auto_tasks",
+                auto_task = %definition.name,
+                reason = %skip.reason,
+                "skipping auto-task definition",
+            );
+        } else {
+            tracing::debug!(
+                target: "orbit.automation.auto_tasks",
+                auto_task = %definition.name,
+                reason = %skip.reason,
+                "skipping auto-task definition",
+            );
+        }
+        return Ok(skipped(definition, &skip.reason));
     }
 
     // Dry runs leave no cursor state or lock file behind. They perform no

@@ -6,8 +6,9 @@
 //!
 //! `init_default_subscriber` writes human-readable fmt output to stderr and,
 //! when possible, also appends machine-readable JSON Lines to
-//! `$HOME/.orbit/state/logs/orbit.jsonl`. The JSONL feed is global rather than
-//! workspace-local because logging starts before CLI argument parsing and
+//! `$HOME/.orbit/state/logs/orbit.jsonl`. Agent stdout/stderr uses the separately
+//! budgeted `orbit-agent.jsonl` beside it. Readers merge both feeds. Logging is
+//! global rather than workspace-local because logging starts before CLI argument parsing and
 //! runtime root resolution.
 //!
 //! The JSONL file is opened on the first tracing event, not at subscriber
@@ -50,12 +51,12 @@ use tracing::{
     field::{Field, Visit},
     span,
 };
-use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
+use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
     field::{RecordFields, VisitOutput},
     fmt::{
-        self, FmtContext, FormattedFields,
+        self, FmtContext, FormattedFields, MakeWriter,
         format::{DefaultVisitor, FormatEvent, FormatFields, Writer},
     },
     layer::SubscriberExt,
@@ -68,7 +69,18 @@ use crate::security::redaction;
 
 /// The JSONL writer's guard. Statics are never dropped, so the guard is held
 /// in an `Option` that [`shutdown_jsonl_writer`] can take and drop at exit.
-static FILE_GUARD: OnceLock<Mutex<Option<WorkerGuard>>> = OnceLock::new();
+static FILE_GUARD: OnceLock<Mutex<Option<Vec<WorkerGuard>>>> = OnceLock::new();
+
+// A reserved tracing field selects the independent agent-output writer while
+// retaining relay targets and their existing RUST_LOG filters.
+const AGENT_OUTPUT_FIELD: &str = "agent_output";
+
+/// Companion relay feed for the canonical operational log. Custom file paths
+/// with other filenames remain single-file readers.
+pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
+    (operational.file_name()? == "orbit.jsonl")
+        .then(|| operational.with_file_name("orbit-agent.jsonl"))
+}
 
 const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
 const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
@@ -382,8 +394,8 @@ pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str
 
     match global_jsonl_log_path() {
         Ok(path) => {
-            let (file_layer, guard) = jsonl_layer_at_path(&path);
-            if FILE_GUARD.set(Mutex::new(Some(guard))).is_ok() {
+            let (file_layer, guards) = split_jsonl_layer_at_path(&path);
+            if FILE_GUARD.set(Mutex::new(Some(guards))).is_ok() {
                 let _ = Registry::default()
                     .with(stderr_layer)
                     .with(file_layer.with_filter(env_filter(file_default)))
@@ -472,10 +484,11 @@ pub fn rotate_global_jsonl_best_effort() {
     let Ok(path) = global_jsonl_log_path() else {
         return;
     };
-    super::log_rotation::rotate_and_prune(
-        &path,
-        &super::log_rotation::LogRotationConfig::load_global_best_effort(),
-    );
+    let config = super::log_rotation::LogRotationConfig::load_global_best_effort();
+    super::log_rotation::rotate_and_prune(&path, &config);
+    if let Some(agent_path) = agent_jsonl_log_path(&path) {
+        super::log_rotation::rotate_and_prune(&agent_path, &config.agent_output());
+    }
 }
 
 /// Pre-emission scrubber for callers that need to sanitize text before writing
@@ -564,23 +577,49 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
 /// arrive, so a few thousand absorb any realistic burst.
 pub(super) const JSONL_QUEUE_LINES: usize = 4_096;
 
-// Visible to sibling-layout logging tests so file-layer behavior can be
-// exercised without nesting tests under this source file.
-pub(super) fn jsonl_layer_at_path<S>(
+struct SplitJsonlWriter {
+    operational: NonBlocking,
+    agent: NonBlocking,
+}
+
+impl<'a> MakeWriter<'a> for SplitJsonlWriter {
+    type Writer = NonBlocking;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.operational.clone()
+    }
+
+    fn make_writer_for(&'a self, metadata: &tracing::Metadata<'_>) -> Self::Writer {
+        if metadata.fields().field(AGENT_OUTPUT_FIELD).is_some() {
+            self.agent.clone()
+        } else {
+            self.operational.clone()
+        }
+    }
+}
+
+fn split_jsonl_layer_at_path<S>(
     path: &Path,
-) -> (impl Layer<S> + Send + Sync + 'static + use<S>, WorkerGuard)
+) -> (
+    impl Layer<S> + Send + Sync + 'static + use<S>,
+    Vec<WorkerGuard>,
+)
 where
-    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    let (writer, guard) = NonBlockingBuilder::default()
+    let agent_path = path.with_file_name("orbit-agent.jsonl");
+    let (operational, operational_guard) = NonBlockingBuilder::default()
         .buffered_lines_limit(JSONL_QUEUE_LINES)
         .finish(LazyJsonlWriter::new(path.to_path_buf()));
+    let (agent, agent_guard) = NonBlockingBuilder::default()
+        .buffered_lines_limit(JSONL_QUEUE_LINES)
+        .finish(LazyJsonlWriter::new(agent_path));
     let layer = fmt::layer()
         .event_format(RedactingJsonEventFormat)
         .fmt_fields(RedactingFields::json())
         .with_ansi(false)
-        .with_writer(writer);
-    (layer, guard)
+        .with_writer(SplitJsonlWriter { operational, agent });
+    (layer, vec![operational_guard, agent_guard])
 }
 
 /// Opens the JSONL file on first write. Construction is disk-free so
@@ -594,6 +633,7 @@ enum JsonlFile {
 struct LazyJsonlWriter {
     path: PathBuf,
     file: JsonlFile,
+    bytes_since_check: usize,
 }
 
 impl LazyJsonlWriter {
@@ -601,6 +641,7 @@ impl LazyJsonlWriter {
         Self {
             path,
             file: JsonlFile::Closed,
+            bytes_since_check: 0,
         }
     }
 
@@ -631,7 +672,16 @@ impl LazyJsonlWriter {
 
 impl Write for LazyJsonlWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.file()?.write(buf)
+        // Reopen periodically so long-lived producers enforce size budgets
+        // and stop appending to an inode another process has rotated away.
+        // Never split a formatted record across two files.
+        if self.bytes_since_check >= 1024 * 1024 {
+            self.file = JsonlFile::Closed;
+            self.bytes_since_check = 0;
+        }
+        let written = self.file()?.write(buf)?;
+        self.bytes_since_check = self.bytes_since_check.saturating_add(written);
+        Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -643,10 +693,16 @@ impl Write for LazyJsonlWriter {
 }
 
 fn open_jsonl_file(path: &Path) -> io::Result<File> {
-    super::log_rotation::rotate_if_active_exceeds_budget(
-        path,
-        &super::log_rotation::LogRotationConfig::load_global_best_effort(),
-    );
+    let config = super::log_rotation::LogRotationConfig::load_global_best_effort();
+    let config = if path
+        .file_name()
+        .is_some_and(|name| name == "orbit-agent.jsonl")
+    {
+        config.agent_output()
+    } else {
+        config
+    };
+    super::log_rotation::rotate_if_active_exceeds_budget(path, &config);
     if let Some(parent) = path.parent() {
         create_private_dir_all(parent).map_err(|err| {
             io::Error::new(
