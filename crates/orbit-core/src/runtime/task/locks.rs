@@ -217,8 +217,8 @@ pub(crate) fn reserve(
 /// legacy v2 dispatch admission gate uses a compatibility no-op instead: a
 /// task that has not declared any context yet has nothing to serialize
 /// against, so admitting it trivially is correct there ([`Self::Admit`]).
-/// Distributed pull admission must not use that compatibility path: its
-/// ready-queue contract excludes empty surfaces before creating a claim.
+/// Distributed pull admission likewise admits empty footprints, preserving
+/// claim identity without holding a context lock.
 ///
 /// Neither value reaches an inherited-only `epic` root: that refusal is decided
 /// ahead of this policy, because the surface such a root is missing is one its

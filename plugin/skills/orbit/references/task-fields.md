@@ -5,6 +5,11 @@ The connected tool schema is authoritative for supported fields.
 
 ## Behavior-affecting optional fields
 
+- `context_files: ["file:<path>", "dir:<path>", "symbol:<path>#<name>:<kind>"]`
+  — optional selectors used for context-lock serialization. Local auto, ship
+  and owner pull admit an otherwise eligible backlog task with an empty list
+  on the next pass without a context lock. Declared selectors keep their
+  existing conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
   status first. Not an `orbit.task.add` input: it is refused with the other
   `RETIRED_TASK_ADD_INPUT_FIELDS`, so set it with `orbit.task.update` after

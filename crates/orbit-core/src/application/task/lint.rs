@@ -71,9 +71,9 @@ impl OrbitRuntime {
     ///
     /// A task that declares nothing has no lock surface to reserve, and one
     /// whose every selector is unusable is the same refusal with a different
-    /// remedy. The legacy v2 dispatch admission path permits an empty surface,
-    /// but an operator task-scope reservation refuses it and distributed pull
-    /// admission will exclude it. Pruning history, when it exists, names
+    /// remedy. Local and distributed pull admission both admit an empty surface
+    /// without a context lock, but an operator task-scope reservation refuses
+    /// it. Pruning history, when it exists, names
     /// exactly what the task used to declare, so the diagnostic points at the
     /// evidence-backed repair rather than asking for a guess ([ORB-12490]).
     fn lint_context_surface(
@@ -98,19 +98,19 @@ impl OrbitRuntime {
         if !declared.retained.is_empty() {
             return Ok(());
         }
-        // This is advisory: legacy v2 admission permits an empty surface, so
-        // no task type is blocked by this lint finding. The operator
-        // reservation and distributed pull paths still need a real surface.
+        // This is advisory: admission permits an empty surface, so no task
+        // type is blocked by this lint finding. Only the operator
+        // reservation path still needs a real surface.
         let severity = TaskLintSeverity::Warning;
 
         // Only an empty surface needs the history read, so the sweep over
         // every active task does not load history it will not use.
         let restoration = self.plan_context_file_restore(task.id.as_str())?;
         let remedy = if restoration.restored.is_empty() {
-            "Declare the files this task will modify with `orbit task update --context` before claiming an operator task-scope reservation or entering distributed pull admission; legacy v2 admission currently permits an empty surface.".to_string()
+            "Declare the files this task will modify with `orbit task update --context` before claiming an operator task-scope reservation; admission permits an empty surface and holds no context lock for it.".to_string()
         } else {
             format!(
-                "Task history records {} previously pruned selector(s); restore them with `orbit task lint {} --restore-pruned`, or declare the scope with `orbit task update --context` before claiming an operator task-scope reservation or entering distributed pull admission.",
+                "Task history records {} previously pruned selector(s); restore them with `orbit task lint {} --restore-pruned`, or declare the scope with `orbit task update --context` before claiming an operator task-scope reservation.",
                 restoration.restored.len(),
                 task.id
             )
@@ -118,7 +118,7 @@ impl OrbitRuntime {
         findings.push(TaskLintFinding {
             severity,
             check: "context_surface".to_string(),
-            message: "task declares no usable `context_files`; legacy v2 admission permits an empty surface, but operator task-scope reservation refuses it and distributed pull admission will exclude it".to_string(),
+            message: "task declares no usable `context_files`; admission permits an empty surface and holds no context lock for it, but operator task-scope reservation refuses it".to_string(),
             fix_it: remedy,
         });
         Ok(())

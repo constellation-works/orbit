@@ -46,7 +46,7 @@ The queue is a logical owner-side query, not a required maintained table:
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
 - **Invalid entries:** dangling/rejected dependencies, dependencies archived before reaching
-  `done`, or invalid/empty lock surfaces are excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
+  `done`, or invalid lock surfaces are excluded with diagnostics. An empty surface is not invalid: it is admitted without a context lock. They do not prevent unrelated valid work from being admitted.
   Missing filesystem targets are valid declarations, not grounds for pruning: retain canonical
   selectors for new files and symbols, and freeze the full footprint on the claim through review.
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty
@@ -168,6 +168,10 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
    task writes reject but an older stored task may carry, is satisfied by no executor.
    Remote admission also defers `no-diff-expected` tasks to the owner and records
    the reason in `deferred_conflicts`. The tag supplies no verified NoDiff report.
+   `context_files` are optional: an otherwise eligible backlog task with empty context is
+   admitted on this pass with an empty footprint and holds no context lock. A live pilot
+   preparation checkpoint still defers its tasks until that run settles. Undeclared edit
+   conflicts are handled by rebase and conflict repair at landing.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
    record its execution machine and drain context, transition `backlog → in-progress`, append a

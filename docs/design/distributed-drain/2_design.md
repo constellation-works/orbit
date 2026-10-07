@@ -80,13 +80,13 @@ including the interval before a leaf run exists. Owner and follower drains use t
 **Footprints.** There is no epic path ([§7.1](#71-epic-machinery)); an `epic`-tagged task is an
 ordinary entry using its own `context_files`, and sequencing is expressed with dependencies.
 
-- Local auto, ship (including explicit selection), and owner pull admission hold tasks with empty
-  `context_files` unless tagged exactly `no-diff-expected`. Local exclusion and readiness use the
-  typed `unprepared` reason; owner pull records an `unprepared` diagnostic in `invalid_candidates`.
-  Both name task-pilot or an operator setting the context scope as the remedy. Side-effect-only
-  tasks carrying the exemption can be claimed with an empty footprint. Invalid declared selectors
-  still fail canonicalization. The low-level v2 reservation compatibility path can admit an empty
-  surface as a no-op, while `orbit.task.locks.reserve` refuses an empty task-scope reservation.
+- `context_files` are optional for local auto, ship (including explicit selection), and owner
+  pull admission. A backlog task with no selectors is admitted on the next pass without holding
+  a context lock; it needs no `no-diff-expected` tag or pilot preparation. Conflicts from undeclared
+  edits are handled at landing by rebase and conflict repair. Remote pull still leaves tagged
+  `no-diff-expected` work on the owner. Invalid declared selectors still fail canonicalization.
+  The v2 reservation path admits an empty surface as a no-op, while `orbit.task.locks.reserve`
+  refuses an empty task-scope reservation.
 - Context is never pruned by filesystem existence. Selectors are canonicalized and held to
   repository boundaries, but selectors for not-yet-created files and symbols are preserved;
   `allow_missing_context` governs explicit operator existence checks and records the exact
@@ -969,7 +969,7 @@ Acceptance criteria, not reported as passing.
 | Pull commits, response lost | Same request returns the same claim; no second task consumed |
 | Idle result replayed after new work arrives | Same request stays idle; a new poll may claim |
 | Crash before/after local run creation or before binding response | Same claim reconciled; at most one leaf per claim; pending admission holds capacity |
-| Invalid dependency or empty lock surface | Diagnostic exclusion; other eligible tasks progress |
+| Invalid dependency or invalid lock surface | Diagnostic exclusion; other eligible tasks progress |
 | Reservation expires during valid execution | No automatic revocation or duplicate admission; status lock remains |
 | Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
 | Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |

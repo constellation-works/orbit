@@ -134,8 +134,10 @@ linked worktree gets the existence relaxation automatically for that task,
 without recording creation intent, and the response lists the
 stored-but-unresolved selectors as `context_files_unverified`.
 Missing-file selectors remain valid declarations; do not prune them because a
-checkout cannot yet resolve them. Do not invent paths to satisfy admission. Unknown targets can be prepared by task-pilot before
-execution; empty context does not guarantee eligibility for every admission path.
+checkout cannot yet resolve them. `context_files` are optional for local auto,
+ship and owner pull admission; empty context holds no context lock. Do not
+invent paths to satisfy admission. Task-pilot can prepare unknown targets,
+and a live preparation checkpoint still holds its tasks until that run settles.
 
 Put read-only designs, conventions and examples in prose links. A design document
 belongs in the footprint only if this task will change it. Cross-workspace edits

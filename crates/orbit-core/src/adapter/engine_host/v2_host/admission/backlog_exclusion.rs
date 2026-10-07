@@ -78,9 +78,6 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
-    /// The task has no declared context surface. Task-pilot or an operator
-    /// must prepare it before admission; side-effect-only work is exempt.
-    Unprepared,
     /// A live task-pilot run holds a successful preparation checkpoint for
     /// this task. Delivery waits until that run settles its assessment.
     ActivePilotPreparation,
@@ -323,10 +320,6 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                 excluded.push(exclusion);
                 continue;
             }
-            if let Some(exclusion) = unprepared_exclusion(&task) {
-                excluded.push(exclusion);
-                continue;
-            }
             if !clears_complexity_gate(&task) {
                 excluded.push(BacklogTaskExclusion {
                     id: task.id,
@@ -511,13 +504,6 @@ fn backlog_snapshot_in_mode(
         }
     }
     backlog = kept;
-    backlog.retain(|task| {
-        let Some(exclusion) = unprepared_exclusion(task) else {
-            return true;
-        };
-        excluded.push(exclusion);
-        false
-    });
     backlog.retain(|task| {
         if clears_complexity_gate(task) {
             return true;
@@ -830,19 +816,6 @@ fn pilot_decision_detail(field: &str) -> String {
          `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`. \
          A later pilot assessment supersedes that decision."
     )
-}
-
-fn unprepared_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
-    (!task.has_prepared_context()).then(|| BacklogTaskExclusion {
-        id: task.id.clone(),
-        reason: BacklogTaskExclusionReason::Unprepared,
-        conflicts: Vec::new(),
-        crew: None,
-        detail: Some(
-            "Run task-pilot or set context_files before admission; this task declares no context scope."
-                .to_string(),
-        ),
-    })
 }
 
 fn active_pilot_preparations(
