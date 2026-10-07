@@ -116,6 +116,13 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &super::TaskListFilter,
         limit: usize,
     ) -> Result<super::TaskCandidates, OrbitError>;
+    /// Select a fully indexed page from the generated index alone, reading no
+    /// envelope; `None` when the filter or the index cannot answer that way.
+    fn task_candidate_keys(
+        &self,
+        filter: &super::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<super::TaskCandidateKeys>, OrbitError>;
     fn query_task_rows(
         &self,
         filter: &super::TaskListFilter,

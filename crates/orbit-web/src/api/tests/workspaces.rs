@@ -192,3 +192,211 @@ fn stale_build_during_rebind_never_republishes_as_current() {
         "the open runtime is never tagged as the wrong (old) checkout"
     );
 }
+
+/// The aggregate run list reads one bounded, index-ordered page per
+/// workspace and never writes. 20k runs across five workspaces used to cost a
+/// full per-workspace sort on every request, plus the stale-run reconciliation
+/// that operator reads perform [ORB-14595].
+#[test]
+fn aggregate_job_runs_page_is_bounded_and_observational() {
+    if !enter_isolated_child(
+        module_path!(),
+        "aggregate_job_runs_page_is_bounded_and_observational",
+    ) {
+        return;
+    }
+    use super::super::workspaces::{AllJobRunsState, all_job_runs_json};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    let repos = names
+        .iter()
+        .map(|name| seed_workspace(&global_root, tmp.path(), name).1)
+        .collect::<Vec<_>>();
+    let bindings = names
+        .iter()
+        .zip(&repos)
+        .map(|(name, repo)| (*name, repo.as_path()))
+        .collect::<Vec<_>>();
+    write_registry(&global_root, &bindings);
+    let state = registry_state(&global_root);
+    let store = state
+        .runtime_for("alpha")
+        .expect("alpha runtime")
+        .sqlite_store()
+        .expect("store");
+    {
+        let connection = store.connection();
+        let conn = connection.lock().expect("store connection");
+        for name in names {
+            conn.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3999)
+                 INSERT INTO job_runs(run_id, workspace_id, job_id, attempt, state,
+                     scheduled_at, started_at, finished_at, duration_ms, created_at)
+                 SELECT printf('jrun-%05d', i), ?1, 'bulk', 1, 'success', ts, ts, ts, 0, ts
+                 FROM (SELECT i, strftime('%Y-%m-%dT%H:%M:%S+00:00', '2026-01-01',
+                     '+' || i || ' minutes') AS ts FROM n)",
+                [format!("ws_{name}")],
+            )
+            .expect("seed runs");
+        }
+    }
+
+    let page = |state_filter| all_job_runs_json(&state, 50, state_filter);
+    // Warm: every workspace runtime is open and the store pages are cached.
+    let warm = page(AllJobRunsState::All);
+    assert_eq!(warm["items"].as_array().expect("items").len(), 50);
+    assert_eq!(warm["truncated"], true);
+    assert_eq!(warm["unavailable"], serde_json::json!([]));
+    assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
+
+    // A terminal run whose timing is incomplete is exactly what reconciling
+    // reads repair. The dashboard must show it as stored.
+    let alpha = state.runtime_for("alpha").expect("alpha runtime");
+    let mut incomplete = super::test_support::seed_run(
+        &alpha,
+        "jrun-incomplete",
+        "bulk",
+        orbit_core::JobRunState::Failed,
+    );
+    incomplete.finished_at = None;
+    incomplete.duration_ms = None;
+    store
+        .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
+        .expect("store incomplete run");
+
+    let started = std::time::Instant::now();
+    let all = page(AllJobRunsState::All);
+    let failed = page(AllJobRunsState::Failed);
+    let elapsed = started.elapsed();
+    assert_eq!(all["items"].as_array().expect("items").len(), 50);
+    assert_eq!(failed["items"][0]["run_id"], "jrun-incomplete");
+    assert!(
+        elapsed < std::time::Duration::from_millis(300),
+        "two warm aggregate pages over 20k runs took {elapsed:?}"
+    );
+    let stored = alpha
+        .show_job_run_observed("jrun-incomplete")
+        .expect("incomplete run");
+    assert_eq!(
+        (stored.state, stored.finished_at),
+        (orbit_core::JobRunState::Failed, None),
+        "a dashboard GET must not reconcile runs"
+    );
+}
+
+/// The aggregate task list chooses its page from the task index and opens
+/// only the page's bundles. A cold dashboard used to parse every registered
+/// `task.yaml` first [ORB-14595]. The off-page envelopes here are overwritten
+/// in place with unparseable bytes that keep their file's stamp, so any read
+/// of them would fail the workspace out of the list.
+#[test]
+fn aggregate_task_page_opens_only_the_returned_bundles() {
+    if !enter_isolated_child(
+        module_path!(),
+        "aggregate_task_page_opens_only_the_returned_bundles",
+    ) {
+        return;
+    }
+    use axum::extract::{RawQuery, State};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (_bravo_orbit, bravo_repo) = seed_workspace(&global_root, tmp.path(), "bravo");
+    let alpha = OrbitRuntime::from_roots(&global_root, &alpha_orbit)
+        .expect("alpha runtime")
+        .with_actor(ActorIdentity::human("human"));
+    for title in ["alpha newer", "alpha newest"] {
+        alpha
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: "page".to_string(),
+                ..Default::default()
+            })
+            .expect("add task");
+    }
+    let bravo =
+        OrbitRuntime::from_roots(&global_root, &bravo_repo.join(".orbit")).expect("bravo runtime");
+    let off_page = [&alpha, &bravo].map(|runtime| {
+        let tasks = runtime.list_tasks().expect("list tasks");
+        let seeded = tasks.iter().find(|task| task.description == "seed");
+        seeded.expect("seeded task").id.clone()
+    });
+    drop(bravo);
+    drop(alpha);
+    write_registry(
+        &global_root,
+        &[("alpha", &alpha_repo), ("bravo", &bravo_repo)],
+    );
+
+    let list = |state: DashboardState| {
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(async {
+                let response = super::super::workspaces::list_all_tasks(
+                    State(state),
+                    RawQuery(Some("limit=2".to_string())),
+                )
+                .await;
+                super::test_support::body_json(response).await
+            });
+        let titles = response["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|task| task["title"].as_str().expect("title").to_string())
+            .collect::<Vec<_>>();
+        (
+            titles,
+            response["total"].clone(),
+            response["truncated"].clone(),
+        )
+    };
+    let expected = (
+        vec!["alpha newest".to_string(), "alpha newer".to_string()],
+        serde_json::json!(4),
+        serde_json::json!(true),
+    );
+    // A first listing proves every envelope against the index, in any
+    // process; the proofs outlive its in-memory cache.
+    assert_eq!(list(registry_state(&global_root)), expected);
+
+    for id in off_page {
+        let envelope = find_envelope(&global_root.join("tasks"), &id).expect("task envelope");
+        let modified = std::fs::metadata(&envelope)
+            .and_then(|metadata| metadata.modified())
+            .expect("envelope mtime");
+        let len = std::fs::metadata(&envelope).expect("envelope").len();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&envelope)
+            .expect("open envelope in place");
+        std::io::Write::write_all(&mut file, &vec![b'{'; len as usize]).expect("overwrite");
+        file.set_modified(modified).expect("keep mtime");
+    }
+
+    // A cold dashboard: new runtimes, empty caches.
+    assert_eq!(list(registry_state(&global_root)), expected);
+}
+
+/// The `task.yaml` of `task_id`'s bundle somewhere under `dir`.
+fn find_envelope(dir: &Path, task_id: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .find_map(|path| {
+            if path.file_name().is_some_and(|name| name == task_id) {
+                Some(path.join("task.yaml"))
+            } else {
+                find_envelope(&path, task_id)
+            }
+        })
+}

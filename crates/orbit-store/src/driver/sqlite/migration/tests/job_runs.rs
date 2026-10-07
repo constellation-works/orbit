@@ -103,7 +103,10 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
     conn.execute_batch("DROP TRIGGER interrupt_v38;")
         .expect("remove interruption");
     ledger::run_migrations(&conn, ledger::MIGRATIONS).expect("rerun v38");
-    assert_eq!(current_schema_version(&conn).expect("version"), 38);
+    assert_eq!(
+        current_schema_version(&conn).expect("version"),
+        ledger::SUPPORTED_SCHEMA_VERSION
+    );
     assert!(!table_has_column(&conn, "job_runs", "pipeline_state_json").expect("column probe"));
     assert_eq!(stored_states(&conn, "job_run_states"), before);
     let null_rows: i64 = conn

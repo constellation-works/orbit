@@ -31,14 +31,17 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
     let path = root.path().join("store.sqlite");
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    // Recreate schema v36 so the next open applies the index migration at v37
-    // and the job-state migration at v38. Compatibility is rewritten by the
-    // opener.
+    // Recreate schema v36 so the next open applies the index migration at v37,
+    // the job-state migration at v38 and the run recency indexes at v39.
+    // Compatibility is rewritten by the opener.
     conn.execute_batch(
         "DROP INDEX idx_audit_events_command_subcommand_timestamp;
         DROP TABLE job_run_states;
         ALTER TABLE job_runs ADD COLUMN pipeline_state_json TEXT;
-        DELETE FROM schema_meta WHERE key IN ('migration.v0037', 'migration.v0038');
+        DROP INDEX idx_job_runs_ws_recency;
+        DROP INDEX idx_job_runs_ws_state_recency;
+        DELETE FROM schema_meta
+            WHERE key IN ('migration.v0037', 'migration.v0038', 'migration.v0039');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",

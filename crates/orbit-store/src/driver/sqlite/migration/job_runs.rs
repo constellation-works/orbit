@@ -78,6 +78,42 @@ pub(super) fn apply_job_runs_job_created_and_retry_indexes(
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v39 `job_runs_recency_index`: cover the dashboard's run listings, which
+/// order each workspace by `COALESCE(finished_at, started_at, created_at)
+/// DESC, run_id ASC` (`JobRunOrder::Recency`), with or without one `state`.
+///
+/// The order is an expression no column index covers, so a bounded recency
+/// page materialized and sorted every run of the workspace before applying
+/// its `LIMIT`. These expression indexes repeat the listing's `ORDER BY`
+/// verbatim — SQLite matches an indexed expression only when it is written
+/// identically — so the page walks the index and stops at its limit.
+///
+/// Like v19, this indexes only the current `job_runs` shape; a legacy table is
+/// left to open time.
+pub(super) fn apply_job_runs_recency_index(conn: &Connection) -> Result<(), OrbitError> {
+    for column in [
+        "workspace_id",
+        "state",
+        "finished_at",
+        "started_at",
+        "created_at",
+    ] {
+        if !table_has_column(conn, "job_runs", column)? {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_job_runs_ws_recency
+            ON job_runs(workspace_id, COALESCE(finished_at, started_at, created_at) DESC, run_id ASC);
+
+            CREATE INDEX IF NOT EXISTS idx_job_runs_ws_state_recency
+            ON job_runs(workspace_id, state, COALESCE(finished_at, started_at, created_at) DESC, run_id ASC);
+        "#,
+    )
+    .map_err(store_error)
+}
+
 pub(super) fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
     if !table_exists(conn, "job_runs")? {
         return Ok(());

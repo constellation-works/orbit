@@ -4,6 +4,7 @@ use orbit_common::OrbitError;
 use rusqlite::{Connection, TransactionBehavior, types::Value};
 
 use super::REGISTRY_SCHEMA_VERSION;
+use super::envelope_stamps::{ensure_envelope_stamps, has_envelope_stamps};
 use super::util::now_string;
 
 pub(super) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
@@ -243,6 +244,11 @@ fn is_known_additive_v6(conn: &Connection) -> Result<bool, OrbitError> {
     let reference = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
     apply_schema(&reference)?;
     ensure_action_keys(&reference)?;
+    // Envelope stamps are a derived cache any format may carry; they are
+    // created on first use, not by schema setup, so mirror them when present.
+    if has_envelope_stamps(conn)? {
+        ensure_envelope_stamps(&reference)?;
+    }
     for query in [
         "SELECT name, type, wr, strict FROM pragma_table_list
          WHERE schema = 'main' AND name NOT GLOB 'sqlite_*' ORDER BY name",

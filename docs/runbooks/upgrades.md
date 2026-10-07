@@ -580,6 +580,13 @@ table. The repaired executable ensures that table when opening a writable v5
 registry, without raising the reader-compatibility floor. A complete v5 registry
 can still open read-only; missing additive storage requires a writable open.
 
+A v5 registry may also carry `task_envelope_stamps`, a derived cache created the
+first time a task listing records which `task.yaml` files it has already checked
+against the index. It does not change the registry version; an older binary
+ignores it, and a reader trusts a stamp only while the file and its index row
+still match, so a stale or missing stamp costs one re-parse. `orbit task reindex`
+rebuilds the index rows and leaves stamps to be re-recorded on the next listing.
+
 ### Recover a task registry marked version 6
 
 A previous build marked this additive table as registry v6, causing v5 readers
@@ -841,6 +848,17 @@ read the dropped column, so a newer writer waits for them to quiesce (see
   into job_run_states` reports `moved_runs`, `elapsed_ms` and `freelist_bytes`.
   The freelist left behind is small (about one 64-run batch); reclaiming it
   takes `VACUUM`, which needs exclusive access and is never run automatically.
+
+## Job run recency indexes (schema v39)
+
+Store schema v39 adds two expression indexes on `job_runs`, keyed by workspace
+(and state) and the run's recency, `COALESCE(finished_at, started_at,
+created_at)`. Recency-ordered run pages, such as the dashboard's all-workspace
+Recent Runs, then read only their page instead of sorting every run in the
+workspace. The migration is additive: older binaries keep reading and writing,
+so it waits for nothing. Building the indexes reads `job_runs` once while the
+opening process holds the store write lock, which takes well under a second for
+tens of thousands of runs.
 
 ## Verify the upgrade
 

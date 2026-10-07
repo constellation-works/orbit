@@ -42,7 +42,7 @@ use invocation::{
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
     apply_job_run_id_allocations, apply_job_run_states, apply_job_runs_created_index,
-    apply_job_runs_job_created_and_retry_indexes,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
 use operation_mode::apply_remove_operation_mode;

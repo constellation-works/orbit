@@ -496,10 +496,11 @@ fn job_run_filter_sql(
 /// [`JobRunOrder`]. `run_id ASC` breaks ties deterministically in both
 /// variants; timestamps are stored as fixed-width RFC 3339 text, so a
 /// lexical `DESC` sort matches chronological order. `CreatedAt` is covered by
-/// `idx_job_runs_workspace_created`; `Recency` is a query-time expression
-/// over the same rows the `workspace_id` prefix of that index already
-/// narrows to, so a per-workspace sort stays cheap without a dedicated index
-/// [ORB-11251].
+/// `idx_job_runs_workspace_created`. `Recency` [ORB-11251] is covered by the
+/// v39 expression indexes `idx_job_runs_ws_recency` and, under a `state`
+/// filter, `idx_job_runs_ws_state_recency`; SQLite uses an expression index
+/// only when the `ORDER BY` spells the indexed expression identically, so
+/// keep this text in step with the migration.
 fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
     match order_by {
         JobRunOrder::CreatedAt => "created_at DESC, run_id ASC",
@@ -654,3 +655,7 @@ fn parse_job_target_type(raw: &str) -> rusqlite::Result<JobTargetType> {
         )
     })
 }
+
+#[cfg(test)]
+#[path = "tests/queries.rs"]
+mod tests;
