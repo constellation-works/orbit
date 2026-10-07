@@ -383,6 +383,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
     workflow_required_validation_commands: Vec<String>,
+    /// Commands review settlement may rerun to confirm a red-base claim
+    /// (`[review] baseline_commands`, default empty) [ORB-14434].
+    review_baseline_commands: Vec<String>,
     /// `[workflow.validation_env]`: how required validation and `local_shell`
     /// resolve PATH and toolchain locators [ORB-13987].
     validation_env: orbit_exec::ValidationEnvPolicy,
@@ -422,6 +425,7 @@ impl OrbitRuntimeSettings {
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
         workflow_required_validation_commands: Vec<String>,
+        review_baseline_commands: Vec<String>,
         validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
@@ -446,6 +450,7 @@ impl OrbitRuntimeSettings {
             workflow_auto_ship,
             resource_throttle,
             workflow_required_validation_commands,
+            review_baseline_commands,
             validation_env,
             workflow_distributed_completion,
             task_pilot_freshness,
@@ -499,6 +504,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {
         &self.workflow_required_validation_commands
+    }
+
+    pub(crate) fn review_baseline_commands(&self) -> &[String] {
+        &self.review_baseline_commands
     }
 
     pub(crate) fn validation_env(&self) -> &orbit_exec::ValidationEnvPolicy {

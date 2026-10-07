@@ -39,6 +39,6 @@ pub use ledger::{
 pub use records::{RecordGap, RetiredValidation, record_gap};
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
 pub use verdict::{
-    NegativeControl, RetainedObligation, ReviewAssurance, ReviewValidation, ReviewVerdict,
-    ValidationOutcome, ValidationRole,
+    NegativeControl, RetainedObligation, ReviewAssurance, ReviewBaselineClaim, ReviewValidation,
+    ReviewVerdict, ValidationOutcome, ValidationRole,
 };

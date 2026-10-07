@@ -2,6 +2,7 @@
 //! report into an honest verdict and certificate [ORB-11333].
 
 mod admit;
+mod baseline;
 mod context;
 mod judgement;
 mod release;

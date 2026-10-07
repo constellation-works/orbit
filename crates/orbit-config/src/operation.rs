@@ -47,8 +47,17 @@ pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
 /// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].
 pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 
+/// Commands settlement may rerun to confirm a red-base claim [ORB-14434].
+/// Not review policy: [`crate::ConfigSnapshot`] reads it, not
+/// [`OperationLayer`].
+const REVIEW_BASELINE_COMMANDS_KEY: &str = "review.baseline_commands";
+
 /// Every live `[review]` key, as the unknown-key guard sees it.
-const REVIEW_KEYS: &[&str] = &[REVIEW_BEFORE_PR_KEY, REVIEW_MINUTES_KEY];
+const REVIEW_KEYS: &[&str] = &[
+    REVIEW_BEFORE_PR_KEY,
+    REVIEW_MINUTES_KEY,
+    REVIEW_BASELINE_COMMANDS_KEY,
+];
 
 /// Every live `[operation]` key, as the unknown-key guard sees it.
 const OPERATION_KEYS: &[&str] = &["operation.review_crew"];

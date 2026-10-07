@@ -712,6 +712,13 @@ impl OrbitRuntime {
             .workflow_required_validation_commands()
     }
 
+    /// Commands before-PR review settlement may rerun on the host to confirm
+    /// a reviewer's red-base claim (`[review] baseline_commands`), beside
+    /// the required validation commands [ORB-14434].
+    pub(crate) fn review_baseline_commands(&self) -> &[String] {
+        self.context.settings().review_baseline_commands()
+    }
+
     /// The note a drain submission shows when this host declares no required
     /// validation commands, so "no check" reads as a configured choice rather
     /// than a silent gap. `None` when commands are configured.

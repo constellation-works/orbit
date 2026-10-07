@@ -228,6 +228,12 @@ define_config_settings! {
         section: ConfigSection::Review, order: 20,
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
+    review_baseline_commands: Vec<String> => Vec<String> {
+        key: "review.baseline_commands", value_type: "array<string>",
+        description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it; a claim about any other command cannot be confirmed and settles the review incomplete. Default empty.",
+        section: ConfigSection::Review, order: 30,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default().into_iter().map(|command| command.trim().to_string()).filter(|command| !command.is_empty()).collect::<Vec<_>>()),
+    },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",
         description: "Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",

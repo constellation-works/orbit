@@ -144,6 +144,17 @@ impl GateContext {
         }
     }
 
+    /// The ref the base is synchronized from, as delivery names it: the
+    /// remote-tracking branch under remote sync, the local branch otherwise.
+    /// A red-base hold watches it to learn when the base turns green.
+    pub(super) fn base_ref(&self) -> String {
+        if self.base_sync == "local" {
+            self.base_branch.clone()
+        } else {
+            format!("origin/{}", self.base_branch)
+        }
+    }
+
     pub(super) fn lineage_key(&self) -> String {
         lineage_key(
             &self.workspace_id,

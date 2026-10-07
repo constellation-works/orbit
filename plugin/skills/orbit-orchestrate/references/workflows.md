@@ -103,6 +103,12 @@ Context selectors are preparation hints, not what the task means: a task
 pilot or operator editing them keeps the candidate, and the resumed review
 reads the current selectors.
 
+A candidate held for a red base resumes like any candidate from `commit` or
+later. That includes one the before-PR review held because its only failed
+check also fails on the pinned base. It is `resumed_validated` once the base
+passes, and a fresh review judges it. The implementer runs only if a required
+command now fails. A claimed leaf's resume always runs the implementer.
+
 A resumed held candidate on the hold's own base has the held tree, so the
 evidence matches it directly. On a moved base the review gate counts the
 evidence only while the candidate's whole patch over its base is unchanged

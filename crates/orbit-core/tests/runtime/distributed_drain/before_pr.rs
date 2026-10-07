@@ -229,6 +229,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             check: None,
             control: None,
             sources: Vec::new(),
+            baseline: None,
         }],
         required_validation_commands: Some(vec![]),
         validation_complete: true,
@@ -248,6 +249,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         validation_scope: vec![],
         selectors_widened: vec![],
         evidence_carried: None,
+        baseline_red: Vec::new(),
         issued_at: Utc::now(),
     };
     let content = serde_json::to_vec(&certificate).unwrap();
