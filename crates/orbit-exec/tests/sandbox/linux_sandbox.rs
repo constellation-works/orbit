@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used, clippy::print_stdout, clippy::unwrap_used)]
 #![cfg(target_os = "linux")]
 
+use std::os::unix::fs::MetadataExt;
 use std::process::Stdio;
 
 use orbit_common::OrbitError;
@@ -473,6 +474,19 @@ fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writabl
     }
     let wrapper = std::path::PathBuf::from(&probe.trusted_path);
     let directory = wrapper.parent().expect("wrapper directory");
+    // The writes below hit the host's real wrapper whenever the invoking user
+    // may modify it, so only run when the premise (a different owner) holds.
+    // SAFETY: geteuid cannot fail and touches no memory.
+    let euid = unsafe { libc::geteuid() };
+    let owner = std::fs::metadata(&wrapper).expect("wrapper metadata").uid();
+    if euid == 0 || owner == euid {
+        println!(
+            "skipping trusted-wrapper write test: euid {euid} could modify the host wrapper \
+             {} (owner {owner}); run as an unprivileged user",
+            wrapper.display()
+        );
+        return;
+    }
     let before = std::fs::read(&wrapper).expect("read wrapper");
     let resolved = profile(vec![format!("{}/**", directory.display())]);
     let script = format!(
