@@ -89,6 +89,28 @@ require a passing affected-test record. Distributed review contracts freeze
 the owner's list at admission; existing claims need a fresh admission after
 a policy change.
 
+## Browser checks on a prepared host
+
+The website and dashboard browser checks below need Playwright, a Chromium
+build, its shared libraries and a font configuration. A host can prepare
+these once instead of having each run download a browser into `.orbit/tmp/`.
+The prepared host provides `~/.local/chromium-deps/env.sh`. When that file
+exists, source it before a browser check:
+
+```bash
+. ~/.local/chromium-deps/env.sh
+node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
+  "$PLAYWRIGHT_MODULE" .orbit/tmp/dashboard-browser
+```
+
+The file exports `LD_LIBRARY_PATH`, `FONTCONFIG_FILE`,
+`PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE`. Pass `$PLAYWRIGHT_MODULE`
+wherever a command below asks for `/absolute/path/to/playwright/index.mjs`.
+Without the file, set up the dependencies under `.orbit/tmp/` as the sections
+below describe. Skia FontConfig crashes and missing `lib*.so` errors come from
+the host environment, not the change under test. Record them as host
+evidence; don't count them as a failed check.
+
 ## Website changelog validation
 
 After changing the changelog renderer, run `npm ci`, `npm run build`, and
