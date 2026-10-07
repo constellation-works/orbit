@@ -400,7 +400,7 @@ pub(super) fn side_root_store<'a>(roots: &[&'a Path], dir: &Path) -> Option<(&'a
                 && relative
                     .components()
                     .all(|part| matches!(part, std::path::Component::Normal(_)));
-            Some((*root, relative.to_str()?.to_string())).filter(|_| named)
+            named.then_some((*root, relative.to_str()?.to_string()))
         })
         .max_by_key(|(root, _)| root.as_os_str().len());
     if store.is_none() {
