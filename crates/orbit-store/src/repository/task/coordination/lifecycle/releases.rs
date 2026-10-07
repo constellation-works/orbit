@@ -41,16 +41,34 @@ impl TaskCommitBoundary {
     }
 
     /// The candidate a claim's failure or release preserved, with the spec
-    /// it answered to; `None` when the leaf ended without one.
+    /// it answered to; `None` when the leaf ended without one. A release for
+    /// an evidence hold keeps the held candidate from the branch its leaf
+    /// published it to, so the run after the evidence arrives resumes it.
     pub(super) fn preserve_candidate(
         &self,
         task_id: &str,
         evidence: &ClaimEvidence,
     ) -> Result<Option<PreservedClaimCandidate>, OrbitError> {
+        let held = evidence.evidence_hold.as_ref().and_then(|hold| {
+            let branch = hold.published_ref.as_deref()?.strip_prefix("refs/heads/")?;
+            Some(ClaimCandidateRef {
+                branch: branch.to_string(),
+                head_sha: hold.candidate.commit.clone(),
+                pull_request: None,
+                source_run_id: Some(hold.run_id.clone()),
+                // Complete: its review held only for evidence, so a claim
+                // that resumes it continues rather than repairs a verdict.
+                failed_step_id: None,
+                published: true,
+                durable_ref: None,
+                carry_failure: None,
+            })
+        });
         let Some(candidate) = evidence
             .failure
             .as_ref()
             .and_then(|failure| failure.candidate.clone())
+            .or(held)
         else {
             return Ok(None);
         };

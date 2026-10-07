@@ -74,7 +74,8 @@ typed reason. Each attempt is audited as `review.evidence_fulfilment`. See
 [owner fulfilment](codeql-local.md#owner-fulfilment).
 
 Receipt of all matching evidence queues the task in `backlog` with
-`review_evidence_received` for a fresh review. It does not approve the candidate
+`review_evidence_received` for a fresh review, unless the hold names only owed
+evidence (below). It does not approve the candidate
 or resume the terminal held run. The next delivery run resumes the held
 candidate instead of implementing again: its `resume_candidate` step reports
 `resumed_held` (see the orchestrate skill's preserved-candidate reference).
@@ -158,6 +159,24 @@ and validation environment are in the log artifact beside the named result
 orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | .host_evidence'
 orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+```
+
+A workspace `[[review.host_evidence]]` rule makes this deterministic for a
+claimed leaf. A Rust change on a macOS leaf owes the Linux CodeQL run, and a
+sandbox-gated test on a host of the rule's OS owes a run outside the agent
+sandbox. Orbit adds each owed requirement whatever the reviewer reported:
+`owed_external_evidence` in the manifest and `owed_evidence` in the certificate
+list them. A verdict whose only gaps are owed checks holds rather than blocking.
+A reviewer's claimed pass of an owed check also holds, with an `owed_evidence`
+escalation. Once the evidence arrives, the owner's next run resumes the held
+candidate and its admission decides `evidence_received`. Settlement then
+reuses the held certificate without a reviewer, and the certificate's
+`resumed_hold_attempt` names it
+([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
+
+```bash
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+  | jq '.content | fromjson | {owed_evidence, resumed_hold_attempt}'
 ```
 
 `sandbox_unavailable` means the host itself cannot apply the sandbox: run the

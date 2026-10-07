@@ -494,6 +494,7 @@ fn claim_review_admission(
         crew_source: CLAIM_SOURCE.into(),
         budget: review.budget,
         required_validation_commands: review.required_validation_commands.clone(),
+        host_evidence: review.host_evidence.clone(),
         captured_at: now,
     })
 }

@@ -131,6 +131,7 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
         required_validation_commands: Some(
             runtime.workflow_required_validation_commands().to_vec(),
         ),
+        host_evidence: policy.review_host_evidence.value.clone(),
         captured_at: Utc::now(),
     }
 }

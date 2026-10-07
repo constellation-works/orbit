@@ -1236,6 +1236,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             captured_at: Utc::now(),
+            host_evidence: Vec::new(),
         };
         let run = runtime
             .insert_job_run(

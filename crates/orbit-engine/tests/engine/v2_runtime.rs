@@ -1433,6 +1433,7 @@ impl RuntimeHost for ReviewerHost {
             })),
             "review_gate_admit" => Ok(json!({
                 "applies": true,
+                "decision": "admitted",
                 "first_task_id": "T-1",
                 "attempt_id": "rvw-1",
                 "lineage_key": "lineage-1",

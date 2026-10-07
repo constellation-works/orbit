@@ -212,6 +212,11 @@ pub struct AdmissionReviewContract {
     /// contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The owner's `review.host_evidence` rules: checks the leaf's host owes
+    /// for the paths its candidate changed, which the leaf's review gate
+    /// synthesizes as requirements whatever its reviewer reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_evidence: Vec<orbit_types::workflow::HostEvidenceRule>,
 }
 
 impl AdmissionShipContract {

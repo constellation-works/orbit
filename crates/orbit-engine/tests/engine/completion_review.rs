@@ -495,6 +495,7 @@ impl CompletionReviewHost {
         }
         json!({
             "applies": true,
+            "decision": "admitted",
             "first_task_id": "T-1",
             "attempt_id": attempt_id,
             "lineage_key": "lineage-1",

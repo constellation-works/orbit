@@ -642,6 +642,57 @@ certificate holds a passed required record for that command. A held
 `host_sandbox_test` that the leaf's host could not fulfil waits for an
 operator's result.
 
+A reviewer may forget to name owed evidence, or report a check as passed
+when its host could not have run it. To close that gap, the workspace
+declares what a claimed leaf owes, and Orbit derives the requirement instead of
+reading it from the report. Each `[[review.host_evidence]]` rule
+([config](../../CONFIG.md#other-sections)) names a `kind` (`codeql` or
+`host_sandbox_test`), a display `name`, workspace-relative `paths` globs, an
+`os`, the exact `command` and the result `artifact`. The owner captures the
+rules in the review contract each claim carries. A rule is owed when a claimed
+leaf's candidate changes a matching path and one of these holds:
+
+- a `codeql` rule runs on a host of another OS, and the owner fulfils it on
+  `os`;
+- a `host_sandbox_test` rule runs on a host of that `os`, which runs it
+  outside the agent sandbox at settlement, as above.
+
+A local run owes nothing, because its host is the owner.
+
+Admission lists owed requirements in the reviewer's manifest
+(`owed_external_evidence`) and its own output (`owed_evidence`). The reviewer records each one as
+a `required` `not_run` check, never attempts it, and copies it into
+`external_evidence`. Settlement adds each owed requirement whatever the report
+says:
+
+- it replaces a reviewer requirement for the same check;
+- it resets the check's required record to `not_run`;
+- it excludes a reviewer record that ran the same CodeQL program with another
+  command;
+- it turns a passing verdict `incomplete`, with an `owed_evidence` escalation.
+
+So a verdict whose only gaps are owed checks holds for them, while an open
+finding or any other gap blocks as before. A reviewer that skipped or claimed
+an owed check cannot ship the candidate unverified. The certificate records
+the requirements in `owed_evidence`.
+
+When owed evidence arrives, a fresh reviewer is not needed. Receipt moves the
+task to backlog with `review_evidence_received`. The owner's own next run then
+resumes the published held candidate without the implementer (`resumed_held`).
+Its admission decides `evidence_received` when all of these hold:
+
+- the hold names only checks its certificate recorded as owed;
+- every one of them has arrived;
+- the certificate made no repair commit;
+- the rebuilt candidate has the held tree on the held base, under the same
+  task meaning.
+
+On that decision the review step is skipped. Settlement takes the findings,
+records and verdict from the held certificate, which `resumed_hold_attempt`
+names, and the arrived evidence passes it. Every publication and validation
+gate still applies. A different tree or base, a reviewer repair, or other
+evidence sends the candidate to a fresh review as above.
+
 ## 5. Budgets
 
 The ledger is keyed by workspace, sorted task set, base branch, and delivery

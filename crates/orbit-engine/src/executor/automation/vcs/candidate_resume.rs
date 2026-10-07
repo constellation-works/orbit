@@ -64,9 +64,12 @@
 //! is `fresh` with that typed reason, and every outcome is written to the
 //! task's history naming the claim and the machine that committed it. A
 //! claim candidate was always committed, so its implementer runs as a
-//! claimed leaf's does. A prior run on this machine that recorded no
-//! failure handoff — a claim's leaf this machine executed — falls back to
-//! the candidate the owner kept from that run's claim.
+//! claimed leaf's does — unless the task's latest decision is the evidence
+//! receipt for the hold that claim's leaf settled into: the owner kept the
+//! held candidate from the branch the leaf published it to, and a clean
+//! apply is `resumed_held`, as for a local hold. A prior run on this machine
+//! that recorded no failure handoff — a claim's leaf this machine executed —
+//! falls back to the candidate the owner kept from that run's claim.
 //!
 //! A repair claim's leaf passes `claim_repair` instead [ORB-14261]: the
 //! candidate an owner's landing stopped on a base conflict or stale base.
@@ -280,6 +283,19 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             let prior_run_id = input_string_field(input, "prior_job_run_id");
             preserved_candidate(host, &task, prior_run_id)?
         }
+    };
+    // A claim candidate whose leaf's evidence hold was the task's latest
+    // decision until its evidence arrived is the held candidate itself.
+    let preserved = match preserved {
+        Preserved::Usable(mut candidate)
+            if candidate.claim.is_some()
+                && evidence_received(&host.get_task_history(&task.id)?, &candidate.run_id) =>
+        {
+            candidate.held = true;
+            candidate.needs_review_repair = false;
+            Preserved::Usable(candidate)
+        }
+        preserved => preserved,
     };
     let (candidate, outcome) = match preserved {
         Preserved::None(reason) => return Ok(output(&Outcome::Fresh(reason), None, &base_sha)),

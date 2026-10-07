@@ -106,6 +106,10 @@ pub struct ReviewAdmission {
     /// contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The workspace's `review.host_evidence` rules: checks a claimed leaf's
+    /// host owes for the paths it changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_evidence: Vec<super::super::HostEvidenceRule>,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
 }

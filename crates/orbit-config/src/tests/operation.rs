@@ -234,3 +234,105 @@ fn invalid_legacy_values_still_fail_closed() {
         );
     }
 }
+
+const CODEQL_RULE: &str = "[[review.host_evidence]]\n\
+    kind = \"codeql\"\n\
+    name = \"Rust CodeQL (Linux)\"\n\
+    paths = [\"**/*.rs\"]\n\
+    os = \"linux\"\n\
+    command = \"scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls\"\n\
+    artifact = \"evidence/codeql-rust-linux.json\"\n";
+
+#[test]
+fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(
+        global.path(),
+        "[[review.host_evidence]]\nkind = \"host_sandbox_test\"\nname = \"Seatbelt\"\n\
+         paths = [\"crates/orbit-exec/**\"]\nos = \"macos\"\n\
+         command = \"cargo test -p orbit-exec --test seatbelt\"\n\
+         artifact = \"evidence/seatbelt-macos.json\"\n",
+    );
+    write_config(workspace.path(), CODEQL_RULE);
+
+    let config =
+        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("the rules load");
+    let rules = &config.operation.review_host_evidence;
+    assert_eq!(rules.source, OperationLayerSource::Workspace);
+    assert_eq!(rules.value.len(), 1, "{rules:?}");
+    assert_eq!(rules.value[0].name, "Rust CodeQL (Linux)");
+    assert_eq!(
+        rules.value[0].kind,
+        orbit_types::workflow::ReviewEvidenceKind::CodeQl
+    );
+    assert_eq!(
+        rules.value[0].os,
+        orbit_types::workflow::EvidenceHostOs::Linux
+    );
+
+    let (unset, _) = load_workspace("[review]\nbefore_pr = true\n");
+    assert!(unset.operation.review_host_evidence.value.is_empty());
+}
+
+#[test]
+fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    let rule = |kind: &str, paths: &str, command: &str, artifact: &str| {
+        format!(
+            "[[review.host_evidence]]\nkind = \"{kind}\"\nname = \"Check\"\npaths = {paths}\n\
+             os = \"linux\"\ncommand = \"{command}\"\nartifact = \"{artifact}\"\n"
+        )
+    };
+    for body in [
+        rule("hosted_ci", "[\"**/*.rs\"]", "ci", "evidence/ci.json"),
+        rule(
+            "codeql",
+            "[]",
+            "scripts/codeql-rust-local.sh",
+            "evidence/a.json",
+        ),
+        rule("codeql", "[\"**/*.rs\"]", " ", "evidence/a.json"),
+        rule(
+            "codeql",
+            "[\"**/*.rs\"]",
+            "scripts/codeql-rust-local.sh",
+            "evidence/a.log",
+        ),
+        rule(
+            "codeql",
+            "[\"**/*.rs\"]",
+            "scripts/codeql-rust-local.sh",
+            "../a.json",
+        ),
+        rule(
+            "host_sandbox_test",
+            "[\"**/*.rs\"]",
+            "cargo test -p x --test y; rm -r x",
+            "evidence/a.json",
+        ),
+        format!(
+            "{}{}",
+            rule(
+                "codeql",
+                "[\"**/*.rs\"]",
+                "scripts/codeql-rust-local.sh",
+                "evidence/a.json"
+            ),
+            rule(
+                "codeql",
+                "[\"**/*.rs\"]",
+                "scripts/codeql-rust-local.sh",
+                "evidence/a.json"
+            ),
+        ),
+        format!("{CODEQL_RULE}timeout = 5\n"),
+    ] {
+        write_config(workspace.path(), &body);
+        assert!(
+            ResolvedConfig::load(&roots(global.path(), workspace.path())).is_err(),
+            "refused: {body}"
+        );
+    }
+}

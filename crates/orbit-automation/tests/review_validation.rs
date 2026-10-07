@@ -378,6 +378,8 @@ fn certificate_with(
         baseline_red: Vec::new(),
         host_evidence: Vec::new(),
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
+        owed_evidence: Vec::new(),
+        resumed_hold_attempt: None,
     }
 }
 

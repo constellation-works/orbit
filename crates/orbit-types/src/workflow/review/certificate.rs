@@ -23,6 +23,11 @@ pub struct ReviewManifest {
     /// on an earlier tree whose patch this candidate carries unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_carried: Option<super::super::ReviewEvidenceCarried>,
+    /// Checks a workspace host-evidence rule owes for this candidate on the
+    /// executing host. Orbit's machinery fulfils them; the reviewer records
+    /// each as `not_run` and never attempts it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owed_external_evidence: Vec<super::super::ReviewEvidenceRequirement>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +152,16 @@ pub struct ReviewCertificate {
     /// result and log a claimed leaf's handoff pins for the owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<super::super::HostEvidenceRecord>,
+    /// Requirements a workspace host-evidence rule owed for this candidate,
+    /// whatever the reviewer reported. A verdict whose only gaps are these
+    /// holds for them rather than blocking or passing unverified.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owed_evidence: Vec<super::super::ReviewEvidenceRequirement>,
+    /// The held attempt this certificate settles without a new reviewer:
+    /// its only gaps were owed evidence, which has since arrived for the
+    /// unchanged candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_hold_attempt: Option<String>,
     pub issued_at: DateTime<Utc>,
 }
 

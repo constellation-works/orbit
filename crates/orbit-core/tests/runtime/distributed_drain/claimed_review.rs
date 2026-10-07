@@ -58,13 +58,13 @@ impl OwnerCoordinator for ToOwner {
 /// with its implementation committed in the follower's checkout.
 pub(super) struct ReviewedLeaf {
     pub(super) pair: Pair,
-    drain: String,
+    pub(super) drain: String,
     pub(super) leaf: String,
     pub(super) task: String,
     /// The follower runtime bound to the leaf's claim, as its worker runs.
     pub(super) bound: OrbitRuntime,
     pub(super) base: SourceRevision,
-    gate_input: Value,
+    pub(super) gate_input: Value,
 }
 
 impl ReviewedLeaf {
@@ -75,7 +75,17 @@ impl ReviewedLeaf {
     /// [`Self::admit`] with `follower_config` as the follower's workspace
     /// `config.toml`.
     pub(super) fn admit_with_follower_config(follower_config: &str) -> Self {
-        let pair = Pair::with_configs(&before_pr_owner(REVIEW_CREW), follower_config, &[None]);
+        Self::admit_with_configs("", follower_config)
+    }
+
+    /// [`Self::admit_with_follower_config`] with `owner_config` appended to
+    /// the before-PR owner's workspace `config.toml`.
+    pub(super) fn admit_with_configs(owner_config: &str, follower_config: &str) -> Self {
+        let pair = Pair::with_configs(
+            &format!("{}{owner_config}", before_pr_owner(REVIEW_CREW)),
+            follower_config,
+            &[None],
+        );
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         let task = pair.claimed_task(&leaf);
@@ -305,8 +315,7 @@ impl ReviewedLeaf {
 
     /// The leaf's worker ends held, as the executor ends a run whose gate
     /// settled into an evidence hold.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    fn leaf_holds(&self, hold: &ReviewEvidenceHold) {
+    pub(super) fn leaf_holds(&self, hold: &ReviewEvidenceHold) {
         let jobs = &self.pair.follower_jobs;
         let mut state = self
             .pair
@@ -378,7 +387,7 @@ impl ReviewedLeaf {
 
     /// The reviewer's manifest read, through the leaf's binding as its tool
     /// call is.
-    fn read_manifest(&self) -> Result<Value, String> {
+    pub(super) fn read_manifest(&self) -> Result<Value, String> {
         self.bound
             .run_tool(
                 "orbit.task.artifact.get",
