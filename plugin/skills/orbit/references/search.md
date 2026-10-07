@@ -33,9 +33,16 @@ record to judge relevance. `--kind` accepts `task`, `friction`, or `all`.
 Repeated `--tag` values use AND. `--status` takes `kind:value` tokens, such as
 `task:open`; explicit statuses override `--all` for that kind.
 
-Ordinary searches hide closed history. `all: true` includes normally hidden
-statuses; use a bounded all-status pass before concluding a repair was never
-done. Task listing has different defaults and is not an equivalent search.
+Default task searches and `task:open` cover proposed, backlog, in-progress,
+review, and blocked. `--all` / `all: true` adds done, rejected, archived, and
+someday, covering every task status. Before filing a task or concluding a repair
+was never done, use a bounded all-status pass so deferred work and closed history
+also participate in the duplicate check. Explicit task statuses still override
+`all`. Task listing has different defaults and is not an equivalent search.
+
+Friction queries default to open; `--all` / `all: true` adds triaged and resolved.
+The tool's `kind: friction` listing without a query already covers every friction
+status unless an explicit `friction:` status narrows it.
 
 `workspaces` or `all_workspaces` can widen search when advertised and authorized.
 Managed runs may only search their own workspace. Federated hits identify their

@@ -59,6 +59,105 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     assert_eq!(updated["tags"], json!(["docs"]));
 }
 
+#[test]
+fn search_status_modes_include_blocked_and_deferred_tasks() {
+    let workspace = TestWorkspace::new();
+    let routing = workspace.run(
+        &["workspace", "show", "--format", "json"],
+        None,
+        "verify fixture routing",
+    );
+    let routing: Value = serde_json::from_slice(&routing.stdout).expect("workspace JSON");
+    assert_eq!(routing["registered"], true);
+    assert_eq!(
+        routing["checkout"]["repo_root"],
+        fs::canonicalize(&workspace.work)
+            .expect("canonical fixture checkout")
+            .to_string_lossy()
+            .to_string()
+    );
+
+    workspace.add_task("Proposed task", &[]);
+    let blocked = workspace.add_task("Blocked task", &[]);
+    let blocked_id = blocked["id"].as_str().expect("blocked task id");
+    for status in ["backlog", "in-progress", "blocked"] {
+        workspace.run(
+            &[
+                "task",
+                "update",
+                blocked_id,
+                "--plan",
+                "Exercise search status visibility",
+                "--status",
+                status,
+            ],
+            None,
+            "prepare blocked task",
+        );
+    }
+    for (title, status) in [("Someday task", "someday"), ("Rejected task", "rejected")] {
+        let task = workspace.add_task(title, &[]);
+        workspace.run(
+            &[
+                "task",
+                "update",
+                task["id"].as_str().expect("task id"),
+                "--status",
+                status,
+            ],
+            None,
+            "prepare hidden task",
+        );
+    }
+
+    // Exercise both public entry points. Explicit statuses must keep their
+    // precedence over all, including the open alias and comma-separated sets.
+    for (all, status, expected) in [
+        (false, None, vec!["Proposed task", "Blocked task"]),
+        (
+            true,
+            None,
+            vec![
+                "Proposed task",
+                "Blocked task",
+                "Someday task",
+                "Rejected task",
+            ],
+        ),
+        (
+            true,
+            Some("task:open"),
+            vec!["Proposed task", "Blocked task"],
+        ),
+        (true, Some("task:someday"), vec!["Someday task"]),
+        (
+            true,
+            Some("task:blocked,task:someday"),
+            vec!["Blocked task", "Someday task"],
+        ),
+    ] {
+        let mut args = vec!["search", "tag-search", "--kind", "task", "--json"];
+        let mut input = json!({"query": "tag-search", "kind": "task", "all": all});
+        if all {
+            args.push("--all");
+        }
+        if let Some(status) = status {
+            args.extend(["--status", status]);
+            input["status"] = json!([status]);
+        }
+        let cli = workspace.run(&args, None, "CLI search status mode");
+        assert_orbit_search_titles(&cli, &expected);
+
+        let input = input.to_string();
+        let tool = workspace.run(
+            &["tool", "run", "orbit.search", "--input", &input],
+            None,
+            "tool search status mode",
+        );
+        assert_orbit_search_titles(&tool, &expected);
+    }
+}
+
 /// ORB-10310: `orbit task list` is status-neutral and bounded by `--limit`.
 #[test]
 fn task_list_is_status_neutral_and_bounded_by_limit() {

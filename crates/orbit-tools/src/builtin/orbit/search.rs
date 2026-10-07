@@ -44,7 +44,7 @@ impl Tool for OrbitSearchTool {
             ToolParam {
                 name: "all".to_string(),
                 description:
-                    "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved."
+                    "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved."
                         .to_string(),
                 param_type: "boolean".to_string(),
                 required: false,
@@ -52,7 +52,7 @@ impl Tool for OrbitSearchTool {
             ToolParam {
                 name: "status".to_string(),
                 description:
-                    "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
+                    "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind."
                         .to_string(),
                 param_type: "string_list".to_string(),
                 required: false,
