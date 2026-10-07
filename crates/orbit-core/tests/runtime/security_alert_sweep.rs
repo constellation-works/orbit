@@ -30,7 +30,7 @@ fn snapshot() -> Value {
         "collection_status": "fully_collected",
         "repository": {"full_name": "acme/orbit"},
         "open_alerts": [
-            {"number": 71, "severity": "moderate", "ecosystem": "cargo", "package": "rustls", "manifest_path": "Cargo.lock"},
+            {"number": 71, "severity": "moderate", "ecosystem": "rust", "package": "rustls", "manifest_path": "Cargo.lock"},
             {"number": 72, "severity": "low", "ecosystem": "npm", "package": "low-package", "manifest_path": "website/package-lock.json"}
         ],
         "open_dependabot_pull_requests": []

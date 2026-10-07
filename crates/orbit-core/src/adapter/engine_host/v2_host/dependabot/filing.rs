@@ -736,7 +736,20 @@ fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: 
     let Some(branch_ecosystem) = segments.next() else {
         return false;
     };
-    if !branch_ecosystem.eq_ignore_ascii_case(ecosystem) {
+    let expected_branch_ecosystem = if ecosystem.eq_ignore_ascii_case("npm") {
+        "npm_and_yarn"
+    } else if ecosystem.eq_ignore_ascii_case("rust") {
+        "cargo"
+    } else if ecosystem.eq_ignore_ascii_case("actions") {
+        "github_actions"
+    } else if ecosystem.eq_ignore_ascii_case("go") {
+        "go_modules"
+    } else if ecosystem.eq_ignore_ascii_case("rubygems") {
+        "bundler"
+    } else {
+        ecosystem
+    };
+    if !branch_ecosystem.eq_ignore_ascii_case(expected_branch_ecosystem) {
         return false;
     }
     let Some(last) = segments.next_back() else {
