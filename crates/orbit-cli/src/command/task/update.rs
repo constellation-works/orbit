@@ -2,6 +2,7 @@ use clap::{ArgAction, Args};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
+use serde_json::{Map, Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -314,6 +315,98 @@ impl Execute for TaskUpdateArgs {
             format!("Updated task '{}'", task.id),
         )
         .into())
+    }
+}
+
+impl TaskUpdateArgs {
+    /// The `orbit.task.update` input for a write delivered to the host that
+    /// holds the task [ORB-14449].
+    ///
+    /// Flags with no tool field are refused rather than dropped: `--force` is
+    /// a human override on that host, and `--approve`, `--artifact` and
+    /// `--discard-candidate` are not tool writes.
+    pub(crate) fn remote_tool_input(&self, host_ssh: &str) -> Result<Value, OrbitError> {
+        let unsupported = [
+            ("--force", self.force),
+            ("--approve", self.approve),
+            ("--artifact", !self.artifacts.is_empty()),
+            ("--discard-candidate", self.discard_candidate),
+        ]
+        .into_iter()
+        .filter_map(|(flag, set)| set.then_some(flag))
+        .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "{} cannot be routed to the host that holds task {}; run it there: `ssh {host_ssh} \
+                 orbit task update {} …`",
+                unsupported.join(", "),
+                self.id,
+                self.id
+            )));
+        }
+        let mut input = Map::new();
+        input.insert("id".into(), json!(self.id));
+        let strings = [
+            ("title", &self.title),
+            ("description", &self.description),
+            ("plan", &self.plan),
+            ("execution_summary", &self.execution_summary),
+            ("comment", &self.comment),
+            ("planned_by", &self.planned_by),
+            ("implemented_by", &self.implemented_by),
+            ("pr_status", &self.pr_status),
+            ("job_run_id", &self.job_run_id),
+            ("crew", &self.crew),
+            ("orchestrator", &self.orchestrator),
+        ];
+        for (key, value) in strings {
+            if let Some(value) = value {
+                input.insert(key.into(), json!(value));
+            }
+        }
+        if !self.acceptance_criteria.is_empty() {
+            input.insert(
+                "acceptance_criteria".into(),
+                json!(self.acceptance_criteria),
+            );
+        }
+        if let Some(dependencies) = parse_replacement_list(self.dependencies.clone()) {
+            input.insert("dependencies".into(), json!(dependencies));
+        }
+        if !self.tags.is_empty() {
+            input.insert("tags".into(), json!(self.tags));
+        }
+        if let Some(context) = parse_replacement_list(self.context_files.clone()) {
+            input.insert("context_files".into(), json!(context));
+        }
+        if self.allow_missing_context {
+            input.insert("allow_missing_context".into(), json!(true));
+        }
+        if self.allow_drop_system_tags {
+            input.insert("allow_drop_system_tags".into(), json!(true));
+        }
+        if let Some(status) = self.status {
+            input.insert("status".into(), json!(TaskStatus::from(status).to_string()));
+        }
+        if let Some(task_type) = self.task_type {
+            input.insert("type".into(), json!(task_type.to_string()));
+        }
+        if let Some(priority) = self.priority {
+            input.insert("priority".into(), json!(priority.to_string()));
+        }
+        if let Some(complexity) = self.complexity {
+            input.insert("complexity".into(), json!(complexity.to_string()));
+        }
+        if input.len() == 1 {
+            return Err(OrbitError::InvalidInput(
+                "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
+                    .to_string(),
+            ));
+        }
+        if let (_, Some(model)) = super::mutation_identity(self.model.clone()) {
+            input.insert("model".into(), json!(model));
+        }
+        Ok(Value::Object(input))
     }
 }
 

@@ -60,7 +60,7 @@ Rejected alternatives: treating a machine-id-only TOML row as local membership (
 
 **Recorded:** 2026-08 · [ORB-11009] · [ORB-11010] (PR #1139)
 
-**Amended by:** host-registry [A task id routes to the host its prefix names](../host-registry/4_decisions.md#a-task-id-routes-to-the-host-its-prefix-names). An id-only call to an id-routed task tool goes to its prefix's host ([ORB-14449], specified). Selector-bearing calls keep this rule, and `--host` resolves by copying the host's listed `selector`, never by concatenation.
+**Amended by:** host-registry [A task id routes to the host its prefix names](../host-registry/4_decisions.md#a-task-id-routes-to-the-host-its-prefix-names). An id-only call to an id-routed task tool goes to its prefix's host ([ORB-14449]). Selector-bearing calls keep this rule, and `--host` resolves by copying the host's listed `selector`, never by concatenation.
 
 ### Context
 
@@ -226,6 +226,6 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-12564] — argv-propagated remote operator; destination-side caller authorization removed
 - [ORB-12563] — the same rationale applied to the dashboard
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
-- [ORB-14449] — task-prefix routing and `--host` (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

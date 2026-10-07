@@ -141,6 +141,23 @@ impl DrainOwnerTransport for FederatedDrainOwner {
             .call_tool("orbit.task.show", input, ToolSessionContext::default())
     }
 
+    fn task_prefix_host(&self, prefix: &str) -> Result<Option<String>, OrbitError> {
+        Ok(
+            orbit_registry::hosts::load_task_prefix_table(&self.global_root)?
+                .host_for_prefix(prefix)
+                .map(|entry| entry.machine_id.clone()),
+        )
+    }
+
+    fn show_task_by_id(&self, input: Value) -> Result<Value, OrbitError> {
+        crate::hosts::routed_client(
+            &self.global_root,
+            &self.machine_id,
+            orbit_mcp::McpSessionAuthority::Agent,
+        )?
+        .call_tool("orbit.task.show", input, ToolSessionContext::default())
+    }
+
     fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
         Arc::new(FederatedWorkerRoute {
             owner: FederatedDrainOwner {

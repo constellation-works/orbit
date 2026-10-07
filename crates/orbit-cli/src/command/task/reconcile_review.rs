@@ -82,35 +82,39 @@ pub struct ReconcileAcceptBaselineArgs {
     pub reason: String,
 }
 
-impl Execute for TaskReconcileReviewCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input = match self.command {
-            TaskReconcileReviewSubcommand::Inspect(args) => {
-                json!({"action": "inspect", "id": args.id})
-            }
-            TaskReconcileReviewSubcommand::Submit(args) => {
+impl TaskReconcileReviewSubcommand {
+    /// The `orbit.task.reconcile_review` input, without a workspace selector.
+    pub(crate) fn tool_input(&self) -> Value {
+        let mut input = match self {
+            Self::Inspect(args) => json!({"action": "inspect", "id": args.id}),
+            Self::Submit(args) => {
                 json!({"action": "submit", "id": args.id, "request_key": args.request})
             }
-            TaskReconcileReviewSubcommand::Status(args) => {
-                json!({
-                    "action": "status",
-                    "id": args.id,
-                    "reconciliation_id": args.reconciliation,
-                })
-            }
-            TaskReconcileReviewSubcommand::AcceptBaseline(args) => {
-                json!({
-                    "action": "accept_baseline",
-                    "id": args.id,
-                    "reconciliation_id": args.reconciliation,
-                    "command": args.command,
-                    "remediation_commit": args.remediation,
-                    "reason": args.reason,
-                })
-            }
+            Self::Status(args) => json!({
+                "action": "status",
+                "id": args.id,
+                "reconciliation_id": args.reconciliation,
+            }),
+            Self::AcceptBaseline(args) => json!({
+                "action": "accept_baseline",
+                "id": args.id,
+                "reconciliation_id": args.reconciliation,
+                "command": args.command,
+                "remediation_commit": args.remediation,
+                "reason": args.reason,
+            }),
         };
         if let Value::Object(object) = &mut input {
             object.retain(|_, value| !value.is_null());
+        }
+        input
+    }
+}
+
+impl Execute for TaskReconcileReviewCommand {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let mut input = self.command.tool_input();
+        if let Value::Object(object) = &mut input {
             object.insert("workspace".into(), json!(runtime.paths().repo_root));
         }
         let value = runtime.run_tool("orbit.task.reconcile_review", input)?;
@@ -119,7 +123,7 @@ impl Execute for TaskReconcileReviewCommand {
     }
 }
 
-fn reconciliation_text(value: &Value) -> String {
+pub(crate) fn reconciliation_text(value: &Value) -> String {
     let mut lines = Vec::new();
     if let Some(eligible) = value.get("eligible").and_then(Value::as_bool) {
         lines.push(format!("Eligible: {eligible}"));

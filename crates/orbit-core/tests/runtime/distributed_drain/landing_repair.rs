@@ -268,6 +268,8 @@ impl OwnerLocal {
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::new(true),
+            prefix_hosts: Mutex::default(),
+            by_id_reads: Mutex::default(),
         });
         let jobs = orbit_store::compose::workspace_job_run_store(
             owner.sqlite_store().unwrap(),

@@ -98,6 +98,11 @@ impl WorkspaceDescriptor {
         }
     }
 
+    /// The route token a caller copies, when the workspace is addressable.
+    pub fn selector(&self) -> Option<&str> {
+        self.selector.as_deref()
+    }
+
     /// Attach the crew keys the destination reported for this workspace.
     pub(super) fn with_crews(mut self, crews: Map<String, Value>) -> Self {
         self.crews = crews;

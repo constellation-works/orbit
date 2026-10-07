@@ -152,6 +152,12 @@ pub struct AutoCommand {
         conflicts_with_all = ["complete", "approve_proposed", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
     )]
     pub pull: Option<String>,
+    /// Owner host for `--pull <workspace>`, by registered host name or
+    /// `machine_id` (see `orbit host list`). Orbit reads that host's live
+    /// workspace list and pulls from the selector it lists. Without it,
+    /// `--pull` takes only a full host-qualified selector.
+    #[arg(long, value_name = "HOST", requires = "pull")]
+    pub host: Option<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,

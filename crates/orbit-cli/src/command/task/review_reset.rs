@@ -1,7 +1,7 @@
 use crate::command::{CommandOut, Execute, Payload};
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Renew one selected review budget, retaining attempts and the operator decision.
 #[derive(Args)]
@@ -21,20 +21,25 @@ pub struct TaskReviewResetArgs {
     #[arg(long)]
     pub json: bool,
 }
+/// What a reset prints beside its ledger, here or routed to another host.
+pub(crate) const REVIEW_RESET_TEXT: &str =
+    "Review budget reset; previous attempts and the decision remain in the ledger.";
+
+impl TaskReviewResetArgs {
+    /// The `orbit.task.review_reset` input, without a workspace selector.
+    pub(crate) fn tool_input(&self) -> Value {
+        json!({
+            "id": self.id, "lineage_key": self.lineage, "reason": self.reason,
+            "adopt_configured_budget": self.adopt_configured_budget,
+        })
+    }
+}
+
 impl Execute for TaskReviewResetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let value = runtime.run_tool(
-            "orbit.task.review_reset",
-            json!({
-                "workspace": runtime.paths().repo_root,
-                "id": self.id, "lineage_key": self.lineage, "reason": self.reason,
-                "adopt_configured_budget": self.adopt_configured_budget,
-            }),
-        )?;
-        Ok(Payload::detail(
-            value,
-            "Review budget reset; previous attempts and the decision remain in the ledger.",
-        )
-        .into())
+        let mut input = self.tool_input();
+        input["workspace"] = json!(runtime.paths().repo_root);
+        let value = runtime.run_tool("orbit.task.review_reset", input)?;
+        Ok(Payload::detail(value, REVIEW_RESET_TEXT).into())
     }
 }

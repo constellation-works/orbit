@@ -20,6 +20,7 @@ mod config;
 mod descriptor;
 mod host;
 mod probe;
+mod task_route;
 
 #[cfg(test)]
 mod tests;
@@ -37,4 +38,7 @@ pub use self::probe::{
     CompositeDestinationProbe, DEFAULT_PROBE_TIMEOUT, DEFAULT_ROUTED_DELIVERY_TIMEOUT,
     DestinationProbe, DestinationSnapshot, InProcessDestinationProbe, RoutedSession,
     SshDestinationProbe,
+};
+pub use self::task_route::{
+    ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, id_only_task_target, is_id_routed_tool,
 };

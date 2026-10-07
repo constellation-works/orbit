@@ -100,6 +100,8 @@ orbit run auto --pull <owner-machine>/<ws_id> --for 8h --concurrency 3
 ```
 
 The selector is the owner workspace's `selector` from federated discovery.
+`orbit run auto --pull <workspace> --host <owner>` resolves the same selector
+from the owner's live workspace list.
 Each task the replica claims runs as a local run that implements, validates,
 pushes, and opens a pull request, then hands it to the owner, which moves the
 task to `review`.

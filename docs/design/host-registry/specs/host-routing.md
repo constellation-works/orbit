@@ -4,7 +4,7 @@ summary: "Spec: task ids route to the host their prefix names; --host names a ho
 last_validated: 2026-10-07
 title: Spec — Host routing
 owner: opus
-status: Draft
+status: Implemented
 feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
@@ -18,8 +18,8 @@ by id, made without an explicit workspace selector, is delivered to that host. I
 is the local host's, the call runs in-process. If it is a registered remote host's, the call
 goes there over the federated route. Any other prefix fails closed. Separately, `--host`
 names a host for workspace and pull selection, and resolves to the host-qualified selector
-that the host itself lists. Status: specified; implementation is [ORB-14449], which depends
-on [host-commands](./host-commands.md) ([ORB-14448]).
+that the host itself lists. Status: implemented in [ORB-14449], on top of
+[host-commands](./host-commands.md) ([ORB-14448]).
 
 ## Why This Exists
 

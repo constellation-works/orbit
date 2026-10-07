@@ -7,6 +7,7 @@ mod doctor_permissions;
 pub mod friction;
 pub mod gc;
 pub mod host;
+pub(crate) mod host_route;
 pub mod init;
 pub mod job;
 pub mod locks;

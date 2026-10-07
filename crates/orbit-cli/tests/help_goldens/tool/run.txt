@@ -34,6 +34,9 @@ Options:
       --full
           Return the tool's full unfiltered JSON output. This still expands compact list and artifact.put output. Task writes still omit `comments` and `history`; request them with `--input '{"fields":["comments","history"]}'`
 
+      --host <HOST>
+          Host that the input's `workspace` (or `--workspace`) names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and delivers the call to the selector it lists
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 

@@ -13,16 +13,16 @@ mod list;
 pub(crate) mod output;
 mod publication;
 mod recheck_blocked;
-mod reconcile_review;
+pub(crate) mod reconcile_review;
 mod reindex;
-mod review_reset;
+pub(crate) mod review_reset;
 pub(crate) mod show;
-mod update;
+pub(crate) mod update;
 
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;
 
-fn mutation_identity(model: Option<String>) -> (Option<String>, Option<String>) {
+pub(crate) fn mutation_identity(model: Option<String>) -> (Option<String>, Option<String>) {
     if model.is_some() {
         return (None, model);
     }

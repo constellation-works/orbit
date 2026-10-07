@@ -60,6 +60,12 @@ pub struct ToolRunArgs {
     /// Compatibility alias for pretty-printing JSON error output
     #[arg(long, hide = true)]
     pub pretty: bool,
+    /// Host that the input's `workspace` (or `--workspace`) names, by
+    /// registered host name or `machine_id` (see `orbit host list`). Orbit
+    /// reads that host's live workspace list and delivers the call to the
+    /// selector it lists.
+    #[arg(long, value_name = "HOST")]
+    pub host: Option<String>,
     #[arg(skip)]
     pub(crate) parsed_input: OnceLock<Result<Value, String>>,
 }
@@ -92,6 +98,12 @@ impl ToolRunArgs {
             .get_or_init(|| self.load_input())
             .clone()
             .map_err(OrbitError::InvalidInput)
+    }
+
+    /// Replace the parsed input, as `--host` does when it resolves the
+    /// input's `workspace` to the selector that host lists.
+    pub(crate) fn replace_input(&mut self, input: Value) {
+        self.parsed_input = OnceLock::from(Ok(input));
     }
 
     fn load_input(&self) -> Result<Value, String> {
@@ -275,7 +287,7 @@ fn is_task_write_tool(tool_name: &str) -> bool {
 /// Task writes omit `comments`/`history` unless the tool-side `fields`/`field`
 /// projection asks for them. CLI `--fields` is otherwise a post-filter, so a
 /// write asked for those sidecars must also request them from the tool.
-fn request_write_sidecars_from_cli_fields(
+pub(crate) fn request_write_sidecars_from_cli_fields(
     tool_name: &str,
     input: &mut Value,
     cli_fields: &[String],
@@ -308,7 +320,7 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
         .any(|field| WRITE_SIDECAR_FIELDS.contains(&field.as_str()))
 }
 
-fn shape_tool_output(
+pub(crate) fn shape_tool_output(
     tool_name: &str,
     output: Value,
     full: bool,

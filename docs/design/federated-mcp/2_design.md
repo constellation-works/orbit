@@ -39,7 +39,7 @@ The stable key is `machine_id` (`hm_…`), not renameable `host_id`. Example for
 
 A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
 
-Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector; the v1 id-only default does not apply in this namespace. It is specified to change so that an id-only call routes by task-id prefix ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
+Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. The v1 id-only default for `orbit.task.show` does not apply in this namespace. Instead, an id-only call to an id-routed task tool routes by task-id prefix to the host that holds it ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). A call that carries a selector is routed by that selector. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
 
 ## 3. Capabilities mapped onto owner and replica
 
@@ -160,6 +160,6 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-11017] — federated workspace param is the host-qualified selector
 - [ORB-11044] — implicit local membership: local workspaces listed and routed without SSH
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
-- [ORB-14449] — task-prefix routing and `--host` (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

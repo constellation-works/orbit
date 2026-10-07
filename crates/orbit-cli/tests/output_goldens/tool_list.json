@@ -1271,9 +1271,9 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "Explicit workspace selector from discovery",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "action",
@@ -1329,9 +1329,9 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "Explicit workspace selector from discovery",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "id",

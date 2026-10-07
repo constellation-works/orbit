@@ -8,6 +8,11 @@
 //! Anything that can change (reachability, version, protocol, workspaces) is
 //! read live from the host and never persisted here.
 //!
+//! The same file is the task-id routing table: [`TaskPrefixTable`] maps this
+//! machine's `machine.task_prefix` and each entry's `task_prefix` to the host
+//! that writes those ids, so a call addressing one task by id goes to the host
+//! its prefix names and nowhere else [ORB-14449].
+//!
 //! One release of compatibility: when only the legacy
 //! `~/.orbit/mcp-destinations.toml` exists, its rows are read as routes with
 //! no name or prefix. The first `orbit host` mutation migrates them and
@@ -23,6 +28,7 @@ use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_types::identity::{
     validate_machine_id, validate_machine_name, validate_stored_task_prefix,
 };
+use orbit_types::task::task_id_prefix;
 use serde::{Deserialize, Serialize};
 
 use crate::machine_identity::MachineIdentity;
@@ -147,6 +153,84 @@ impl ResolvedHost<'_> {
     }
 }
 
+/// Where one task id routes [ORB-14449].
+///
+/// A task id's prefix names its only writer, so the prefix alone picks the
+/// host. Nothing here probes or searches: the table is the host file plus this
+/// machine's own `machine.task_prefix`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskPrefixRoute {
+    /// This host's prefix, an id with no parseable prefix, or any id before
+    /// this machine has a `[machine]` identity: run in-process, as before.
+    Local,
+    /// A registered host's prefix.
+    Host(HostEntry),
+    /// A prefix neither this host nor any entry claims.
+    Unregistered { prefix: String },
+}
+
+/// The prefix table one process builds: the local `machine.task_prefix` and
+/// each host-file entry's `task_prefix`. Legacy destination rows carry no
+/// prefix and contribute nothing. Host-file validation keeps prefixes unique,
+/// so a lookup is exact.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskPrefixTable {
+    local: Option<String>,
+    hosts: Vec<HostEntry>,
+}
+
+impl TaskPrefixTable {
+    pub fn new(local_prefix: Option<String>, hosts: Vec<HostEntry>) -> Self {
+        Self {
+            local: local_prefix,
+            hosts,
+        }
+    }
+
+    /// This machine's own prefix, absent before `orbit init`.
+    pub fn local_prefix(&self) -> Option<&str> {
+        self.local.as_deref()
+    }
+
+    /// The registered host that holds `prefix`, if any.
+    pub fn host_for_prefix(&self, prefix: &str) -> Option<&HostEntry> {
+        self.hosts.iter().find(|entry| entry.task_prefix == prefix)
+    }
+
+    /// Where `task_id` routes.
+    pub fn route(&self, task_id: &str) -> TaskPrefixRoute {
+        let Some(prefix) = task_id_prefix(task_id.trim()) else {
+            return TaskPrefixRoute::Local;
+        };
+        if self.local.as_deref() == Some(prefix) {
+            return TaskPrefixRoute::Local;
+        }
+        if let Some(entry) = self.host_for_prefix(prefix) {
+            return TaskPrefixRoute::Host(entry.clone());
+        }
+        if self.local.is_none() {
+            return TaskPrefixRoute::Local;
+        }
+        TaskPrefixRoute::Unregistered {
+            prefix: prefix.to_string(),
+        }
+    }
+}
+
+/// The refusal for an id whose prefix no host claims. Routing never searches
+/// hosts, so the caller registers the host or names a workspace explicitly.
+pub fn unknown_task_prefix(task_id: &str, prefix: &str) -> OrbitError {
+    OrbitError::host_registry(
+        HostRegistryCode::UnknownTaskPrefix,
+        format!(
+            "task {task_id} has prefix '{prefix}', which is neither this host's nor a registered \
+             host's. Run `orbit host list` to see the registered hosts, or `orbit host add \
+             <ssh-target>` to register the host that minted it; to read a local mirror, pass \
+             --workspace explicitly"
+        ),
+    )
+}
+
 /// The bytes both files held when they were loaded. A commit compares them
 /// again under the lock, so a concurrent edit is refused rather than lost.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,7 +291,20 @@ pub fn load_host_routes(global_root: &Path) -> Result<Vec<HostRoute>, OrbitError
     Ok(load_host_registry(global_root)?.hosts.routes())
 }
 
+/// The prefix table from the host file and this machine's identity.
+pub fn load_task_prefix_table(global_root: &Path) -> Result<TaskPrefixTable, OrbitError> {
+    Ok(load_host_registry(global_root)?.task_prefix_table())
+}
+
 impl HostRegistry {
+    /// The prefix table task-id routing reads [ORB-14449].
+    pub fn task_prefix_table(&self) -> TaskPrefixTable {
+        TaskPrefixTable::new(
+            self.local.as_ref().map(|local| local.task_prefix.clone()),
+            self.hosts.entries().to_vec(),
+        )
+    }
+
     /// This machine's identity, absent before `orbit init`.
     pub fn local(&self) -> Option<&MachineIdentity> {
         self.local.as_ref()

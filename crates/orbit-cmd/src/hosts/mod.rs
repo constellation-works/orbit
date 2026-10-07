@@ -10,6 +10,7 @@
 mod doctor;
 mod mutate;
 mod probe;
+mod route;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,10 @@ pub use doctor::doctor_hosts_row;
 pub use mutate::{HostChange, HostChangeEntry, add_host, remove_host, rename_host};
 pub use probe::local_host_facts;
 use probe::{LiveHost, error_class, in_parallel, local_binary_version, local_protocol_fingerprint};
+pub use route::{
+    HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, remote_task_holder,
+    resolve_host_workspace, route_task_id, routed_client, selector_remote_host, task_prefix_remote,
+};
 
 /// One host as `orbit host list` and `show` report it.
 #[derive(Debug, Clone, Serialize)]

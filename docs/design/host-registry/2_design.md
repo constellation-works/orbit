@@ -60,7 +60,7 @@ machine.name is the changeable display name. `orbit config set --global machine.
 
 RegisteredRuntimeFactory projects task_prefix into the global task allocator before opening a runtime. A pristine legacy allocator may adopt the configured prefix. Once allocation or task bindings have begun, a conflicting prefix fails closed rather than renaming issued IDs.
 
-The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md). The prefix is also specified as the routing key: an id-addressed task call goes to the host its prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449], not yet implemented). The host file already records each registered host's prefix and refuses duplicates, so that table exists before the routing does.
+The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md). The prefix is also the routing key: an id-addressed task call goes to the host its prefix names ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The prefix table is the local `machine.task_prefix` plus each host-file entry's prefix; the host file refuses duplicate prefixes, so a lookup is exact.
 
 ## 2a. Remote hosts
 
@@ -141,6 +141,8 @@ RegisteredRuntimeFactory also carries replica ownership into Core's coordination
 
 The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` is the one exception, on both the human subcommand and `orbit tool run orbit.task.show`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, publication, remove and teardown are the current workspace CLI surface. `orbit host add|list|show|rename|remove` manages remote hosts ([§2a](#2a-remote-hosts), [specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). It opens no workspace runtime, leaves `[machine]` alone, and lists the local host first, read in-process; change the machine display name with `orbit config set --global machine.name <value>`. `orbit doctor` adds a `hosts` row that probes every registered host. `workspace init --role replica` reports whether the owner has a host entry and never adds one. There is no workspace owner-link command.
 
+Before any runtime opens, the CLI routes a call that addresses one task by id (`task show`, `update`, `artifact get|put`, `review-reset`, `reconcile-review`, and `orbit tool run` of an id-routed tool) by the id's prefix when it carries no `--workspace`, tool-input `workspace`, `--root` or `ORBIT_ROOT`. A local prefix runs in-process as above. A registered host's prefix is delivered there over the federated client route with the caller's own authority, and the answer names that host. Any other prefix fails with `unknown_task_prefix`, and an unreachable holder with `owner_unreachable`, which names a local mirror's workspace when one exists. A claimed worker never prefix-routes. A selector naming a registered remote host is delivered there the same way. `--host <host>` on `orbit task …` and `orbit tool run` (with `--workspace`) and on `orbit run auto --pull` reads that host's live list and substitutes the selector it lists; host-local commands reject `--host` with the `ssh <target> orbit …` to run instead ([specs/host-routing.md](./specs/host-routing.md#--host)).
+
 ### Web
 
 The specified Settings › Hosts view and `/api/hosts` routes manage the serving host's host file through the same registry operations as `orbit host` ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]).
@@ -149,7 +151,7 @@ Orbit Web loads local workspaces from orbit-registry, derives checkout-path heal
 
 ### MCP
 
-orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` is the exception: an id-only call follows the globally unique task ID through the host task registry. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
+orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` is the exception: an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
 
 orbit.workspace.list returns active logical workspaces that have a checkout registered on the accepting machine. Its envelope carries the accepting machine's `machine_id` and, additively, its `machine_name`, `task_prefix`, `binary_version` and `protocol_fingerprint`; the private federated discovery path carries the same keys. This includes locally registered replicas and excludes active checkoutless catalog entries; owner_machine_id is not a discovery filter. Remote MCP uses direct SSH stdio, and the local proxy does not resolve workspaces, inspect checkouts or read the remote registry.
 
@@ -173,13 +175,17 @@ Older databases may retain tables and migration records from the removed fleet-r
 | task prefix conflicts after allocation | Runtime construction refused |
 | hosts.toml malformed, unknown key, future schema or duplicate name/id/prefix | Every consumer refuses; original bytes retained |
 | hosts.toml and mcp-destinations.toml both present | `host_file_conflict` on every consumer |
+| id-only task call, prefix neither local nor registered | `unknown_task_prefix`; no host is dialed |
+| id-only task call, prefix's host does not answer | `owner_unreachable`; no local mirror fallback |
+| id-only task call to a v1 MCP server, prefix is a registered remote host's | `task_prefix_remote` |
+| `--host` unknown, unreachable, or not listing the workspace | `unknown_host`, `unreachable_destination`, `stale_route` |
 | Web refresh cannot load registry | Last valid in-memory snapshot retained |
 | initial Web registry load fails | Server startup fails |
 
 ## Task References
 
 - [ORB-14448] host file and `orbit host` commands
-- [ORB-14449] task-prefix routing and `--host` selection (specified)
+- [ORB-14449] task-prefix routing and `--host` selection
 - [ORB-14451] dashboard Settings › Hosts (specified)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
