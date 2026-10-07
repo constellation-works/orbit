@@ -214,7 +214,7 @@ fn print_initial_window<W: Write + ?Sized>(
 }
 
 struct InitialWindow {
-    offset: u64,
+    reader: BufReader<File>,
     pending: Vec<u8>,
 }
 
@@ -258,11 +258,12 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
         }
     }
 
-    let offset = reader.stream_position()?;
     for line in matching_lines.into_lines() {
         emit_line(&line, args.json, use_color, writer)?;
     }
-    Ok(InitialWindow { offset, pending })
+    // Carry this exact file into follow mode: rotation during the history
+    // read must not apply an old offset to the replacement path.
+    Ok(InitialWindow { reader, pending })
 }
 
 /// A chronological tail window whose storage never exceeds its requested
@@ -304,9 +305,8 @@ fn follow_file<W: Write + ?Sized>(
     writer: &mut W,
     control: FollowControl,
 ) -> io::Result<()> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(initial.offset))?;
-    let mut reader = BufReader::new(file);
+    let mut reader = initial.reader;
+    let mut offset = reader.stream_position()?;
     // Bytes of a line still being written. Kept undecoded so a write that
     // ends inside a multi-byte character is completed, not rejected.
     let mut pending = initial.pending;
@@ -315,11 +315,40 @@ fn follow_file<W: Write + ?Sized>(
         if control.should_stop() {
             return Ok(());
         }
+        if reader.get_ref().metadata()?.len() < offset {
+            // A copy-truncate rotation invalidates both buffered bytes and
+            // any unfinished record from the previous contents.
+            reader.seek(SeekFrom::Start(0))?;
+            offset = 0;
+            pending.clear();
+        }
         let n = reader.read_until(b'\n', &mut pending)?;
         if n == 0 {
+            // Reach EOF on the old descriptor before switching, so its
+            // complete records are drained even if the path was renamed.
+            let replacement = match File::open(path) {
+                Ok(file) => Some(file),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err),
+            };
+            if let Some(file) = replacement {
+                let current = reader.get_ref().metadata()?;
+                if current.len() > offset {
+                    // The old writer appended while we checked the path.
+                    continue;
+                }
+                if !same_file(&current, &file.metadata()?)? {
+                    reader = BufReader::new(file);
+                    offset = 0;
+                    // Never join a torn archive record to the new file.
+                    pending.clear();
+                    continue;
+                }
+            }
             thread::sleep(Duration::from_millis(50));
             continue;
         }
+        offset += n as u64;
         if pending.last() != Some(&b'\n') {
             // Partial line: keep it and try again next iteration.
             continue;
@@ -332,6 +361,22 @@ fn follow_file<W: Write + ?Sized>(
         {
             emit_line(&full_line, json, use_color, writer)?;
         }
+    }
+}
+
+fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(left.dev() == right.dev() && left.ino() == right.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (left, right);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "following log rotation requires Unix file identity (use WSL2 on Windows)",
+        ))
     }
 }
 

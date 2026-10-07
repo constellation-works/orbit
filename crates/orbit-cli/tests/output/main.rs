@@ -16,6 +16,8 @@ mod help_examples;
 mod help_goldens;
 mod help_skips_log_io;
 mod json_output_stability;
+#[cfg(unix)]
+mod log_tail;
 mod machine_readable_confirmations;
 mod output_goldens;
 mod table_rendering;
