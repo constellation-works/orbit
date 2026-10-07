@@ -17,6 +17,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use fs2::FileExt;
@@ -29,6 +30,12 @@ use crate::OrbitError;
 
 const PARTICIPANTS_DIR: &str = ".generation-participants";
 const PENDING_RECORD: &str = ".generation-pending.json";
+/// A registration being written, before it is renamed into place.
+const STAGED_EXTENSION: &str = "staged";
+/// How long a staged registration may stay unlocked before it is abandoned.
+const STAGED_GRACE: Duration = Duration::from_secs(60);
+/// How long a pending claim retries past a reader probing the record.
+const CLAIM_SETTLE: Duration = Duration::from_millis(20);
 /// Records are small JSON; anything larger is not one of ours.
 const MAX_RECORD_BYTES: u64 = 16 * 1024;
 
@@ -109,7 +116,8 @@ impl Drop for Registration {
     }
 }
 
-/// Register `record` under `root`. Call with the admission lock held.
+/// Register `record` under `root`. Call with admission held, shared or
+/// exclusive.
 ///
 /// `None` means this process cannot write under the root (a read-only mount,
 /// a sandboxed child): it still participates through the generation lock,
@@ -134,30 +142,41 @@ pub(super) fn register(root: &Path, record: &ParticipantRecord) -> Option<Regist
         record.pid,
         nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
-    let path = dir.join(name);
-    if !path.starts_with(&dir) {
+    let path = dir.join(&name);
+    let staged = dir.join(format!("{name}.{STAGED_EXTENSION}"));
+    if !path.starts_with(&dir) || !staged.starts_with(&dir) {
         return None;
     }
+    // Concurrent joiners collect records while this one registers, so the
+    // record is created, locked and written under a name they skip, and only
+    // then renamed into place: no collector sees it unlocked.
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .open(&path)
+        .open(&staged)
         .ok()?;
-    let registration = Registration {
-        file: file.try_clone().ok()?,
-        path,
-    };
-    FileExt::try_lock_exclusive(&file).ok()?;
-    let encoded = serde_json::to_vec(record).ok()?;
-    file.write_all(&encoded).ok()?;
-    file.sync_data().ok()?;
-    Some(registration)
+    let registered = (|| {
+        FileExt::try_lock_exclusive(&file).ok()?;
+        let encoded = serde_json::to_vec(record).ok()?;
+        file.write_all(&encoded).ok()?;
+        file.sync_data().ok()?;
+        std::fs::rename(&staged, &path).ok()?;
+        Some(Registration {
+            file: file.try_clone().ok()?,
+            path: path.clone(),
+        })
+    })();
+    if registered.is_none() {
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(&path);
+    }
+    registered
 }
 
 /// Every live participant under `root` other than `except`. With `collect`,
-/// records whose owner has exited are removed; pass it only while holding the
-/// admission lock, so no registration is between create and lock.
+/// records whose owner has exited are removed, as are staged records a
+/// crashed registration left behind.
 pub(super) fn live_participants(
     root: &Path,
     except: Option<&Registration>,
@@ -176,9 +195,16 @@ pub(super) fn live_participants(
     let mut live = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.starts_with(&dir) || path.extension().and_then(|ext| ext.to_str()) != Some("json")
-        {
+        if !path.starts_with(&dir) {
             continue;
+        }
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("json") => {}
+            Some(STAGED_EXTENSION) if collect => {
+                collect_abandoned_stage(&path);
+                continue;
+            }
+            _ => continue,
         }
         if except.is_some_and(|own| own.path == path) {
             continue;
@@ -200,6 +226,26 @@ pub(super) fn live_participants(
     }
     live.sort_by_key(|record| (record.started_at, record.pid));
     live
+}
+
+/// Remove a staged record nobody holds that is too old to be one a live
+/// registration created and has yet to lock.
+pub(super) fn collect_abandoned_stage(path: &Path) {
+    let abandoned = std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > STAGED_GRACE);
+    if !abandoned {
+        return;
+    }
+    let Ok(file) = File::open(path) else {
+        return;
+    };
+    if FileExt::try_lock_shared(&file).is_ok() {
+        let _ = FileExt::unlock(&file);
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn read_record<T: for<'de> Deserialize<'de>>(file: &mut File) -> Option<T> {
@@ -240,7 +286,7 @@ impl Drop for PendingClaim {
     }
 }
 
-/// Record `switch` as pending. Call with the admission lock held, after
+/// Record `switch` as pending. Call with exclusive admission held, after
 /// [`pending_switch`] found none.
 pub(super) fn claim_pending(
     root: &Path,
@@ -262,8 +308,15 @@ pub(super) fn claim_pending(
                 "cannot record the pending generation switch: {error}"
             ))
         })?;
-    FileExt::try_lock_exclusive(&file)
-        .map_err(|_| refusal("another generation switch is already pending"))?;
+    // A `pending_switch` reader holds the record shared for an instant; only a
+    // claim that outlasts a short retry is another waiter's.
+    let settle = std::time::Instant::now() + CLAIM_SETTLE;
+    while FileExt::try_lock_exclusive(&file).is_err() {
+        if std::time::Instant::now() >= settle {
+            return Err(refusal("another generation switch is already pending"));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let claim = PendingClaim {
         file: file.try_clone().map_err(refusal)?,
     };

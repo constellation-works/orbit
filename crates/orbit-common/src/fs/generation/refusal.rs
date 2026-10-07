@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use super::registry::ParticipantRecord;
+use super::QUIESCE_TIMEOUT_ENV;
+use super::registry::{ParticipantRecord, PendingSwitch};
 use crate::OrbitError;
 
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
@@ -18,6 +19,10 @@ pub(super) const WRITES_WHILE_FOREIGN: &str = "another executable generation is 
 
 pub(super) const SWITCH_PENDING: &str = "a generation switch is pending";
 
+/// Remedy when admission was only busy with other ordinary startups.
+const CONTENDED: &str = "Retry the command; nothing is upgrading. If startups on this host \
+     routinely take this long, raise the admission wait";
+
 pub(crate) fn refusal(detail: impl std::fmt::Display) -> OrbitError {
     refused(detail, QUIESCE)
 }
@@ -31,6 +36,44 @@ fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
         "upgrade admission refused: {detail}; leave the installation and stores unchanged. \
          {remedy}"
     ))
+}
+
+pub(super) fn switch_pending(switch: &PendingSwitch) -> String {
+    format!(
+        "{SWITCH_PENDING}: pid {} ({}) is waiting until {} to migrate to {}",
+        switch.pid,
+        switch.role,
+        switch
+            .deadline
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        switch.target
+    )
+}
+
+/// An upgrade holds admission: `pending`, a switch waiting for the live
+/// participants to yield, or else an update or takeover holding the
+/// generation exclusively.
+pub(super) fn upgrade_holds_admission(pending: Option<&PendingSwitch>) -> OrbitError {
+    match pending {
+        Some(switch) => refusal(format!(
+            "an upgrade is pending ({})",
+            switch_pending(switch)
+        )),
+        None => refusal(
+            "an upgrade is in progress: an Orbit update or generation takeover holds admission",
+        ),
+    }
+}
+
+/// Admission stayed held past `wait` by other startups alone.
+pub(super) fn contended(wait: Duration) -> OrbitError {
+    refused(
+        format!(
+            "admission stayed contended by other starting Orbit processes for {wait:?}, \
+             with no upgrade pending"
+        ),
+        &format!("{CONTENDED} ({QUIESCE_TIMEOUT_ENV}, in seconds)"),
+    )
 }
 
 pub(super) fn quiesce_timeout(
