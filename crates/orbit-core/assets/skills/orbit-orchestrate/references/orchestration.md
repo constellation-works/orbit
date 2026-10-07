@@ -47,8 +47,10 @@ it expires still finishes.
 It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
 backlog every pass, so a slot is refilled as soon as its own task finishes and a
 task filed mid-window starts without waiting for the batch around it. That
-number is the only bound: the delivery jobs impose no active-run limit of their
-own, so size it to what the host can carry.
+number is a workspace-wide bound: workers left running by stopped coordinators,
+explicit `run ship` deliveries, and unsettled pull admissions all consume slots.
+A wrapper and its delivery consume one slot together. The delivery jobs impose
+no active-run limit of their own, so size the ceiling to what the host can carry.
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
@@ -74,6 +76,14 @@ idempotent when nothing is running. `orbit run show` reports
 `Admissions: stopped by ...` and lists remaining children. To cancel workers
 already in flight, `orbit run cancel <child-run-id> --confirm` each one —
 do not cancel the coordinator for this.
+
+If you stop and restart instead of retuning in place, the replacement counts
+those still-running workers against its new ceiling: with K inherited slots and
+a ceiling of N, it admits at most N-K new tasks (zero when K exceeds N).
+`run show` reports `Capacity: occupied=… inherited=… limit=…` (JSON:
+`drain_summary.capacity`) from the last admission pass, before that pass starts
+new work. The `Leaves:` outcomes remain those of the displayed coordinator's
+own children; inherited work is not counted as its success or failure.
 
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run

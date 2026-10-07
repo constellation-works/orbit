@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_engine::DispatchError;
-use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
+use orbit_types::workflow::{DrainAdmissionPass, DrainCapacity, DrainWaitingTask};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -16,7 +16,6 @@ use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
 use super::action_failed;
 use super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, live_admissions_stop, live_leaf_runs, live_worker_limit,
-    shared_leaf_occupancy,
 };
 
 /// Wait before re-listing when the backlog has admissible work but every slot
@@ -126,7 +125,16 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // wrappers, every leaf definition they or a claim bind, and pending
     // admissions no run represents yet — not this classifier's own wrapper
     // count.
-    let occupancy = shared_leaf_occupancy(runtime)
+    let jobs = runtime.stores().jobs();
+    let occupancy = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map_or_else(
+            || jobs.drain_leaf_occupancy(),
+            |id| jobs.drain_leaf_occupancy_for_run(id),
+        )
         .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
     // Between iterations nothing of this drain is in flight in-process: a
     // drain worker yields to a pending generation switch or hands itself over
@@ -209,6 +217,11 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         input,
         DrainAdmissionPass {
             recorded_at: Utc::now(),
+            capacity: occupancy.inherited.map(|inherited| DrainCapacity {
+                active_leaf_runs: occupancy.occupied as u64,
+                inherited_leaf_runs: inherited as u64,
+                max_active_leaf_runs,
+            }),
             queued: (pending.len() - admitted.len()) as u64,
             deferred: selection
                 .deferred
@@ -245,6 +258,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
+        "inherited_leaf_runs": occupancy.inherited,
         "wrapper_leaf_runs": live_leaves.len(),
         "leaf_occupancy_by_pipeline": occupancy.per_pipeline,
         "free_slots": free_slots,

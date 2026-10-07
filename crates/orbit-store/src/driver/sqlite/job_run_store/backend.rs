@@ -202,7 +202,13 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         super::pull::unsettled(&self.store, &self.workspace_id)
     }
     fn drain_leaf_occupancy(&self) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
-        super::pull::drain_occupancy(&self.store, &self.workspace_id)
+        super::pull::drain_occupancy(&self.store, &self.workspace_id, None)
+    }
+    fn drain_leaf_occupancy_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
+        super::pull::drain_occupancy(&self.store, &self.workspace_id, Some(run_id))
     }
     fn mutate_local_pull(
         &self,

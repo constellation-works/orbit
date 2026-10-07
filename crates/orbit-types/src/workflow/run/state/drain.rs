@@ -175,6 +175,17 @@ pub struct DrainApprovalReport {
     pub held_by_reason: BTreeMap<String, u64>,
 }
 
+/// Workspace capacity observed before a local drain's latest admission wave.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainCapacity {
+    /// Shared slots occupied by live deliveries and unsettled pull admissions.
+    pub active_leaf_runs: u64,
+    /// Occupied slots outside this coordinator's dispatch lineage or claims.
+    pub inherited_leaf_runs: u64,
+    /// Effective ceiling, including an operator's live resize.
+    pub max_active_leaf_runs: u64,
+}
+
 /// What a drain's most recent admission pass left waiting.
 ///
 /// The classifier's own output lives only inside the running loop, so this is
@@ -187,6 +198,10 @@ pub struct DrainAdmissionPass {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error_code: Option<String>,
     pub recorded_at: DateTime<Utc>,
+    /// Capacity at this pass, before it dispatches new work. Absent in older
+    /// records and in pull passes, which use owner-side admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<DrainCapacity>,
     /// Admissible tasks the pass did not admit: no free slot, or a lock
     /// conflict.
     pub queued: u64,

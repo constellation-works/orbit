@@ -83,6 +83,7 @@ impl crate::OrbitRuntime {
                     0
                 };
                 let pass = DrainAdmissionPass {
+                    capacity: None,
                     last_pass_error_code: error_code.map(ToOwned::to_owned).or_else(|| {
                         was_degraded
                             .then(|| previous.and_then(|pass| pass.last_pass_error_code.clone()))

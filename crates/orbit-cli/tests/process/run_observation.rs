@@ -37,7 +37,7 @@ const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
 
-fn isolated_security_sweep(test: &str) -> bool {
+fn isolated_run_observation(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
@@ -65,7 +65,7 @@ fn isolated_security_sweep(test: &str) -> bool {
 
 #[test]
 fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
-    if !isolated_security_sweep(
+    if !isolated_run_observation(
         "run_observation::successful_security_sweep_shows_filing_floor_source_and_excluded_alerts",
     ) {
         return;
@@ -126,7 +126,7 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
 
 #[test]
 fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
-    if !isolated_security_sweep(
+    if !isolated_run_observation(
         "run_observation::shipped_security_job_uses_config_unless_run_input_overrides_it",
     ) {
         return;
@@ -1112,6 +1112,234 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     assert_eq!(fixture.run_state(&run_id), "cancelled");
 }
 
+/// A stopped coordinator's workers retain workspace slots, including a
+/// delivery whose wrapper has finished. A replacement records that inherited
+/// occupancy without attributing those workers' outcomes to itself.
+#[test]
+fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
+    if !isolated_run_observation(
+        "run_observation::replacement_drain_counts_and_reports_inherited_workers_until_they_finish",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+    use orbit_types::workflow::{ChildDispatch, PipelineState};
+    use serde_json::json;
+
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let tasks: Vec<_> = (0..7)
+        .map(|index| {
+            let file = format!("task-{index}.rs");
+            fs::write(fixture.work.join(&file), "fixture\n").unwrap();
+            runtime
+                .add_task(TaskAddParams {
+                    title: format!("independent task {index}"),
+                    description: "Fixture delivery".into(),
+                    acceptance_criteria: vec!["Delivery completes".into()],
+                    plan: "Fixture plan".into(),
+                    context_files: vec![format!("file:{file}")],
+                    task_type: Some(TaskType::Feature),
+                    complexity: TaskComplexity::Low,
+                    status: Some(if index < 2 {
+                        TaskStatus::InProgress
+                    } else {
+                        TaskStatus::Backlog
+                    }),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        })
+        .collect();
+    let sequence = std::cell::Cell::new(0);
+    let seed = |job: &str, status: &str, input: Value, children: &[(&str, &str)]| {
+        let index = sequence.get();
+        sequence.set(index + 1);
+        let id = format!("jrun-inherited-{index}");
+        let now = chrono::Utc::now();
+        fixture.db().execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?6,?6,?6,?7)",
+            params![id, fixture.workspace_id(), job, status, input.to_string(), now.to_rfc3339(), std::process::id()],
+        ).unwrap();
+        let mut state = PipelineState::new(id.clone(), job.into(), input);
+        for (child, child_job) in children {
+            state.record_child_dispatch(ChildDispatch::submitted(
+                (*child).into(),
+                (*child_job).into(),
+                "dispatch".into(),
+                false,
+                false,
+                now,
+            ));
+        }
+        runtime.write_run_state(&id, &state).unwrap();
+        id
+    };
+    let old_leaf = seed(
+        "task_local_pipeline",
+        "running",
+        json!({"task_ids": [tasks[0]]}),
+        &[],
+    );
+    let old_wrapper = seed(
+        "task_auto_pipeline",
+        "running",
+        json!({"task_ids": [tasks[0]]}),
+        &[(&old_leaf, "task_local_pipeline")],
+    );
+    let detached_leaf = seed(
+        "task_pr_pipeline",
+        "retrying",
+        json!({"task_ids": [tasks[1]]}),
+        &[],
+    );
+    let finished_wrapper = seed(
+        "task_auto_pipeline",
+        "success",
+        json!({"task_ids": [tasks[1]]}),
+        &[(&detached_leaf, "task_pr_pipeline")],
+    );
+    let old = seed(
+        "workspace_auto_pipeline",
+        "running",
+        json!({"max_active_leaf_runs": 2}),
+        &[
+            (&old_wrapper, "task_auto_pipeline"),
+            (&finished_wrapper, "task_auto_pipeline"),
+        ],
+    );
+    fixture.json(&["run", "auto", "--stop", "--json"]);
+    assert!(
+        runtime
+            .read_run_state(&old)
+            .unwrap()
+            .unwrap()
+            .drain_admissions_stop
+            .is_some()
+    );
+    // The stopped coordinator's loop ends, without cancelling either worker.
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET state='success' WHERE run_id=?1",
+            [&old],
+        )
+        .unwrap();
+    let replacement = seed(
+        "workspace_auto_pipeline",
+        "running",
+        json!({"max_active_leaf_runs": 3}),
+        &[],
+    );
+    let classify = || {
+        orbit_engine::RuntimeHost::run_deterministic(
+            &runtime,
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"run_id": replacement, "max_active_leaf_runs": 3, "mode": "pr"}),
+            orbit_tools::ToolContext::default(),
+        )
+        .unwrap()
+    };
+    let verify = |occupied: u64, inherited: u64, offered: usize, limit: u64| {
+        let wave = classify();
+        assert_eq!(wave["active_leaf_runs"], occupied, "{wave:#}");
+        assert_eq!(wave["inherited_leaf_runs"], inherited, "{wave:#}");
+        assert_eq!(
+            wave["free_slots"],
+            limit.saturating_sub(occupied),
+            "{wave:#}"
+        );
+        assert_eq!(
+            wave["loose_task_ids"].as_array().unwrap().len(),
+            offered,
+            "{wave:#}"
+        );
+        let shown = fixture.json(&["run", "show", &replacement, "--no-reconcile", "--json"]);
+        let capacity = json!({"active_leaf_runs": occupied, "inherited_leaf_runs": inherited, "max_active_leaf_runs": limit});
+        assert_eq!(
+            shown["pipeline_state"]["drain_last_pass"]["capacity"],
+            capacity
+        );
+        assert_eq!(shown["drain_summary"]["capacity"], capacity);
+        let output = fixture
+            .orbit()
+            .args(["run", "show", &replacement, "--no-reconcile"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains(&format!(
+                "occupied={occupied} inherited={inherited} limit={limit}"
+            )),
+            "{text}"
+        );
+        wave
+    };
+    // A ceiling below inherited occupancy must offer no new work.
+    fixture.json(&["run", "concurrency", &replacement, "--set", "1", "--json"]);
+    verify(2, 2, 0, 1);
+    fixture.json(&["run", "concurrency", &replacement, "--set", "3", "--json"]);
+    let wave = verify(2, 2, 1, 3);
+    let own_task = wave["loose_task_ids"][0].as_str().unwrap();
+    let own_leaf = seed(
+        "task_local_pipeline",
+        "running",
+        json!({"task_ids": [own_task]}),
+        &[],
+    );
+    let own_wrapper = seed(
+        "task_auto_pipeline",
+        "running",
+        json!({"task_ids": [own_task]}),
+        &[(&own_leaf, "task_local_pipeline")],
+    );
+    let mut state = runtime.read_run_state(&replacement).unwrap().unwrap();
+    state.record_child_dispatch(ChildDispatch::submitted(
+        own_wrapper.clone(),
+        "task_auto_pipeline".into(),
+        "dispatch".into(),
+        false,
+        false,
+        chrono::Utc::now(),
+    ));
+    runtime.write_run_state(&replacement, &state).unwrap();
+    verify(3, 2, 0, 3);
+    // Even if our wrapper ends first, its live descendant is ours, not inherited.
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET state='success' WHERE run_id=?1",
+            [&own_wrapper],
+        )
+        .unwrap();
+    verify(3, 2, 0, 3);
+    for id in [&old_wrapper, &old_leaf] {
+        fixture
+            .db()
+            .execute("UPDATE job_runs SET state='success' WHERE run_id=?1", [id])
+            .unwrap();
+    }
+    verify(2, 1, 1, 3);
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET state='success' WHERE run_id=?1",
+            [&detached_leaf],
+        )
+        .unwrap();
+    verify(1, 0, 2, 3);
+    let shown = fixture.json(&["run", "show", &replacement, "--no-reconcile", "--json"]);
+    assert_eq!(shown["drain_summary"]["admitted"], 1);
+    assert_eq!(shown["drain_summary"]["succeeded"], 1);
+    assert_eq!(shown["drain_summary"]["failed"], 0);
+}
+
 /// Worker-limit adjustment only writes a drain control record. The fixture's
 /// live test PID prevents orphan reconciliation; this record is never passed
 /// to cancellation or any process-control command.
@@ -1307,6 +1535,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         serde_json::json!({}),
     );
     state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        capacity: None,
         recorded_at: now,
         queued: 0,
         deferred: Vec::new(),
@@ -1418,6 +1647,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         serde_json::json!({}),
     );
     state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        capacity: None,
         recorded_at: now,
         queued: 0,
         deferred: Vec::new(),
