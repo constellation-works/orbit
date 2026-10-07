@@ -353,9 +353,12 @@ impl TaskCommitBoundary {
             .iter()
             .filter(|task| task.status == TaskStatus::Backlog)
         {
-            // Side-effect-only work stays on the owner. A tag is not the
-            // verified NoDiff report an executor must deliver [ORB-14259].
+            // Side-effect-only work goes to an executor whose protocol
+            // includes the verified NoDiff handoff [ORB-14259]. Admission
+            // refuses an older caller revision before this point, so the
+            // deferral guards a relaxed schema check.
             if identity.is_remote()
+                && request.caller_schema < NO_DIFF_HANDOFF_PROTOCOL_SCHEMA
                 && task
                     .tags
                     .iter()
@@ -363,7 +366,10 @@ impl TaskCommitBoundary {
             {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
-                    reason: "no-diff-expected work stays on the owner; a claimed NoDiff delivery requires a verified handoff report".into(),
+                    reason: format!(
+                        "no-diff-expected work waits for an executor with the NoDiff handoff (protocol revision {NO_DIFF_HANDOFF_PROTOCOL_SCHEMA}); the executor runs revision {}",
+                        request.caller_schema
+                    ),
                 });
                 continue;
             }

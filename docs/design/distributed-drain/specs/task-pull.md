@@ -178,8 +178,12 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
    (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
-   Remote admission also defers `no-diff-expected` tasks to the owner and records
-   the reason in `deferred_conflicts`. The tag supplies no verified NoDiff report.
+   `no-diff-expected` tasks are claimable by a remote executor: its claimed leaf hands off
+   `NoDiff` with a verified report, files findings on the owner through the claimed-owner
+   broker and opens no PR [ORB-14474]. Admission defers one to the owner, recording the reason
+   in `deferred_conflicts`, only for a caller below revision 9, the first with the NoDiff
+   handoff. The schema check refuses such a caller first, so the deferral guards a relaxed check.
+   The tag itself supplies no verified report; the leaf must still write one.
    `context_files` are optional: an otherwise eligible backlog task with empty context is
    admitted on this pass with an empty footprint and holds no context lock. A live pilot
    preparation checkpoint still defers its tasks until that run settles. Undeclared edit

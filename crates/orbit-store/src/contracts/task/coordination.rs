@@ -253,6 +253,11 @@ impl AdmissionShipContract {
 /// exclusion source and the receipt's resumable candidate [ORB-14257].
 pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 10;
 
+/// The first protocol revision whose claimed leaf hands off `NoDiff`
+/// [ORB-14259]. Admission offers `no-diff-expected` work only to an executor
+/// at this revision or later.
+pub const NO_DIFF_HANDOFF_PROTOCOL_SCHEMA: u32 = 9;
+
 /// The pull wire shape, derived from the same request and nested types that
 /// admission deserializes. No field list or manually bumped revision can drift
 /// from these types. Keep the draft explicit across generator upgrades.

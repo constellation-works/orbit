@@ -423,8 +423,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   with no signed-in user is caught by its first claimed leaf (below). The
   result is kept for the drain's window. Every pull request declares the
   runnable crews and this host's OS, and the owner admits only tasks this host
-  can run. Tagged `no-diff-expected` work stays on the owner; the receipt
-  records that a tag does not supply a verified NoDiff handoff. If no
+  can run. Tagged `no-diff-expected` work is claimable: the follower's leaf
+  hands off `NoDiff` instead of opening a PR. Pin work that must stay on the
+  owner with an `os:` tag or a crew. If no
   crew is runnable, the drain requests nothing and reports
   `no_runnable_crew`. After you install a CLI or sign a provider in, start a
   new drain to pick it up.
