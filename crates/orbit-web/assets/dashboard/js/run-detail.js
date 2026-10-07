@@ -22,6 +22,7 @@ const $ = (id) => document.getElementById(id);
 
 const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app orchestrators
 const LIVE_RUN_STATES = new Set(["pending", "running", "retrying"]);
+const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
 
 // Run detail module-scoped state (was in app.js)
 let activeRunId = null;
@@ -91,7 +92,12 @@ function buildCancelRunButton(run, host) {
 }
 
 function buildReplayRunButton(run, host) {
-  return hasCtx("buildReplayRunButton") ? _runDetailCtx.buildReplayRunButton(run, host) : null;
+  const button = hasCtx("buildReplayRunButton") ? _runDetailCtx.buildReplayRunButton(run, host) : null;
+  if (button && !TERMINAL_RUN_STATES.has(run.state)) {
+    button.disabled = true;
+    button.title = "Replay is available after this run finishes.";
+  }
+  return button;
 }
 
 // --- public state accessors (re-exported by app.js routerContext + runDetailContext) ---
@@ -223,7 +229,7 @@ export function renderRunDetailMeta() {
   const run = detail.run || {};
   $("run-detail-title").textContent = `Run ${run.run_id || activeRunId || "?"}`;
   const stepCount = Array.isArray(detail.steps) ? detail.steps.length : 0;
-  $("run-detail-count").textContent = `${stepCount} steps`;
+  $("run-detail-count").textContent = `${stepCount} ${stepCount === 1 ? "step" : "steps"}`;
 
   const grid = el("div", { class: "run-meta-grid" });
   const addCell = (label, value) => {
@@ -269,13 +275,15 @@ export function renderRunDetailMeta() {
     lineage.addEventListener("click", () => navigateToRun(sourceId));
     actions.appendChild(lineage);
   }
-  if (run.run_id) actions.appendChild(buildReplayRunButton(run, wrap));
+  const replay = run.run_id ? buildReplayRunButton(run, wrap) : null;
+  if (replay) actions.appendChild(replay);
   // The claim rides beside the run in the detail payload; the cancel
   // confirmation reads it off the run it is handed.
   if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, wrap));
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
+  if (run.state === "held") wrap.appendChild(buildRunHold(run));
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
   if (leaves) wrap.appendChild(leaves);
@@ -431,7 +439,7 @@ function buildRunFailure(run, steps) {
   const code = run.error_code || (step && step.error_code) || pass.last_pass_error_code;
   const message = run.error_message || (step && step.error_message) || pass.last_pass_error || "";
   const where = step
-    ? `at step ${step.step_index} of ${steps.length} · ${step.target_id || step.target_type || "step"}`
+    ? `at step ${Number(step.step_index) + 1} of ${steps.length} · ${step.target_id || step.target_type || "step"}`
     : "";
   const verb = run.state === "timeout" ? "Timed out" : run.state === "interrupted" ? "Interrupted" : "Failed";
   const head = el("div", { class: "run-failure-head" }, [
@@ -443,6 +451,16 @@ function buildRunFailure(run, steps) {
   box.setAttribute("aria-label", "Why this run failed");
   if (message) box.appendChild(el("pre", { class: "run-failure-message mono", text: message }));
   if (code === "protocol_skew") box.appendChild(el("p", { text: "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain." }));
+  return box;
+}
+
+function buildRunHold(run) {
+  const box = el("section", { class: "run-hold" }, [
+    el("strong", { text: "Delivery held" }),
+    el("pre", { class: "run-hold-message mono", text: run.error_message || "Delivery is awaiting required external evidence." }),
+    el("p", { text: "Record the required external evidence for this task. Its receipt queues a fresh review; delivery resumes when that review clears the hold." }),
+  ]);
+  box.setAttribute("aria-label", "Why this run is held");
   return box;
 }
 
@@ -511,16 +529,23 @@ export function renderRunSteps() {
     ])]);
     return;
   }
+  const header = el("div", { class: "step-header" }, [
+    el("span", { class: "idx", text: "Step" }),
+    el("span", { class: "target", text: "Target" }),
+    el("span", { text: "State" }),
+    el("span", { class: "duration", text: "Duration" }),
+    el("span", { class: "exit", text: "Exit code" }),
+  ]);
   const frag = document.createDocumentFragment();
   for (const step of steps) {
     const exit = step.exit_code;
     const exitClass = exit != null && exit !== 0 ? "exit fail" : "exit";
     const row = el("div", { class: "step-row" }, [
-      el("span", { class: "idx", text: `#${step.step_index}` }),
+      el("span", { class: "idx", text: `#${Number(step.step_index) + 1}` }),
       el("span", { class: "target", text: `${step.target_type}:${step.target_id}` }),
       el("span", {}, [stateCell(step.state)]),
       el("span", { class: "duration", text: fmtDuration(step.duration_ms) }),
-      el("span", { class: exitClass, text: exit == null ? "-" : String(exit) }),
+      el("span", { class: exitClass, text: exit == null ? "-" : String(exit), title: exit == null ? "No exit code recorded" : `Exit code ${exit}` }),
     ]);
     row.dataset.key = `step-${step.step_index}`;
     // Expansion is part of the row's identity: without it the keyed diff reuses
@@ -541,21 +566,18 @@ export function renderRunSteps() {
       frag.appendChild(buildStepDetail(step));
     }
   }
-  syncNodes(body, [...notices, ...Array.from(frag.children)]);
+  syncNodes(body, [...notices, header, ...Array.from(frag.children)]);
 }
 
 export function renderRunKnowledge() {
   const panel = $("run-knowledge-panel");
   if (!panel) return;
-  panel.style.display = "block";
   const km = activeRunDetail && activeRunDetail.run && activeRunDetail.run.knowledge_metrics;
   panel.innerHTML = "";
+  panel.style.display = km == null || Object.keys(km).length === 0 ? "none" : "block";
+  if (panel.style.display === "none") return;
   const header = el("div", { class: "knowledge-header", text: "Knowledge Pack" });
   panel.appendChild(header);
-  if (km == null) {
-    panel.appendChild(el("div", { class: "knowledge-empty", text: "no knowledge metrics for this run" }));
-    return;
-  }
   const grid = el("div", { class: "knowledge-grid" });
   const baseline = Number(km.raw_read_token_baseline || 0);
   const packTokens = km.knowledge_pack_tokens == null ? null : Number(km.knowledge_pack_tokens);
@@ -646,7 +668,7 @@ export function renderRunGantt() {
     label.setAttribute("class", "gantt-lane-label");
     label.setAttribute("x", String(8));
     label.setAttribute("y", String(y + ROW_H / 2 + 3));
-    const name = String(step.target_id || `#${step.step_index}`);
+    const name = String(step.target_id || `#${Number(step.step_index) + 1}`);
     label.textContent = name.length > 34 ? `${name.slice(0, 33)}…` : name;
     svg.appendChild(label);
   });
@@ -693,7 +715,8 @@ export function renderRunGantt() {
     bar.setAttribute("y", String(y));
     bar.setAttribute("width", String(w));
     bar.setAttribute("height", String(BAR_H));
-    bar.setAttribute("fill", `var(--state-${step.state}, var(--fg-dim))`);
+    bar.setAttribute("data-state", step.state);
+    bar.setAttribute("fill", "var(--dot)");
     bar.addEventListener("mousemove", (e) => showGanttTooltip(e, step));
     bar.addEventListener("mouseleave", hideGanttTooltip);
     bar.addEventListener("click", () => {
@@ -741,13 +764,22 @@ export function renderRunGantt() {
   }
 
   panel.appendChild(svg);
+  const legend = el("div", { class: "gantt-legend" });
+  legend.setAttribute("aria-label", "Timeline legend");
+  for (const state of [...new Set(steps.map(step => step.state))]) {
+    legend.appendChild(stateCell(state));
+  }
+  if ((activeRunEvents || []).some(event => event.body_kind === "step_retry")) {
+    legend.appendChild(el("span", { class: "gantt-retry-key", text: "● Retry" }));
+  }
+  panel.appendChild(legend);
 }
 
 function showGanttTooltip(e, step) {
   const tip = $("gantt-tooltip");
   if (!tip) return;
   const lines = [
-    `step_index: ${step.step_index}`,
+    `step: ${Number(step.step_index) + 1}`,
     `state: ${step.state}`,
     `exit_code: ${step.exit_code == null ? "-" : step.exit_code}`,
     `duration_ms: ${step.duration_ms == null ? "-" : step.duration_ms}`,
@@ -788,14 +820,31 @@ function buildLogBlock(record, stream) {
     record.timed_out ? "timeout" : null,
     record[`${stream}_truncated`] ? "truncated" : null,
   ].filter(Boolean).join(" · ");
+  const toggle = el("button", { class: "back-action log-wrap-toggle", text: "Wrap lines", title: "Toggle line wrapping" });
+  toggle.setAttribute("aria-pressed", "true");
   block.appendChild(el("div", { class: "step-log-head" }, [
     el("span", { class: "label", text: stream }),
     el("span", { class: "meta", text: meta }),
+    toggle,
   ]));
-  const pre = el("pre");
-  for (const line of preview.split("\n")) {
+  const pre = el("pre", { class: "wrap" });
+  toggle.addEventListener("click", () => {
+    const wrapped = pre.classList.toggle("wrap");
+    toggle.setAttribute("aria-pressed", String(wrapped));
+  });
+  const formatted = isErr ? preview : preview.split("\n").map(line => {
+    // Logs may mix JSON frames, plain text and a truncated final frame.
+    // Preserve unrecognized lines and render every value as text, never HTML.
+    try {
+      const value = JSON.parse(line);
+      return value && typeof value === "object" ? JSON.stringify(value, null, 2) : line;
+    } catch (_) {
+      return line;
+    }
+  }).join("\n");
+  for (const line of formatted.split("\n")) {
     const row = el("span", {
-      class: isErr && /\bERROR\s+[^:]+:/.test(line) ? "log-line error-line" : "log-line",
+      class: isErr && /\bERROR\s+[^:]+:/.test(line) ? "step-log-line error-line" : "step-log-line",
       text: line || " ",
     });
     pre.appendChild(row);
@@ -817,6 +866,7 @@ function stepDetailHash(step, logs) {
   return JSON.stringify({
     step,
     logs,
+    logsError: activeRunLogsError,
     knowledge: knowledgeMetricsForStep(step),
   });
 }
@@ -839,16 +889,14 @@ function buildStepDetail(step) {
 
   if (step.error_message) addBlock("error", `${step.error_code || ""} ${step.error_message}`);
   addBlock("agent_response", step.agent_response_json);
-  if (logs.length > 0) {
+  const blocks = logs.flatMap(record => [buildLogBlock(record, "stdout"), buildLogBlock(record, "stderr")]).filter(Boolean);
+  if (blocks.length > 0) {
     const section = el("div", { class: "step-log-section" });
     section.appendChild(el("div", { class: "label", text: "agent logs" }));
-    for (const record of logs) {
-      const stdout = buildLogBlock(record, "stdout");
-      const stderr = buildLogBlock(record, "stderr");
-      if (stdout) section.appendChild(stdout);
-      if (stderr) section.appendChild(stderr);
-    }
+    for (const block of blocks) section.appendChild(block);
     wrap.appendChild(section);
+  } else {
+    wrap.appendChild(el("div", { class: "step-logs-empty", text: activeRunLogsError ? "Logs unavailable. Use Refresh to retry." : "No logs recorded for this step" }));
   }
   const km = knowledgeMetricsForStep(step);
   if (km) addBlock("knowledge_metrics (run)", km);

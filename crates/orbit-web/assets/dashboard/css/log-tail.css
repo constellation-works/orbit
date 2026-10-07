@@ -1,6 +1,4 @@
-/* Live log tail in the Tasks dock: status bar, stream, and filters.
-   run-detail.css also styles .log-line (step logs); this file loads later,
-   so where both set a property, these values apply to both. */
+/* Live log tail in the Tasks dock: status bar, stream, and filters. */
 
 @media (max-width: 760px) {
   .log-statusbar { overflow: hidden; }
