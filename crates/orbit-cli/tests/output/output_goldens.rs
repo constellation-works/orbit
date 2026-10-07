@@ -803,6 +803,50 @@ fn config_show_effective_provenance_matches_golden() {
     assert_golden("config_show_effective.json", &fixture.redact(&rendered));
 }
 
+/// The configuration reference's "Settable keys" table promises to match
+/// `orbit config keys`. Compare the two as sets, in both directions, so a key
+/// added to the registry without a docs row (or a docs row for a key the
+/// registry no longer has) fails here instead of drifting.
+#[test]
+fn config_reference_lists_every_registry_key() {
+    let fixture = Fixture::new();
+    let listed = parse_json_stdout(
+        &fixture.run(&["config", "keys", "--json"], &[]),
+        "config keys",
+    );
+    let registry: std::collections::BTreeSet<String> = listed["keys"]
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .map(|entry| entry["key"].as_str().expect("key name").to_string())
+        .collect();
+
+    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../website/src/content/docs/reference/config.md");
+    let page = std::fs::read_to_string(&page)
+        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
+    let table = page
+        .split("\n## Settable keys\n")
+        .nth(1)
+        .expect("config.md has a `## Settable keys` section")
+        .split("\n## ")
+        .next()
+        .expect("section body");
+    let row_key = Regex::new(r"(?m)^\| `([^`]+)` \|").expect("row regex");
+    let documented: std::collections::BTreeSet<String> = row_key
+        .captures_iter(table)
+        .map(|captures| captures[1].to_string())
+        .collect();
+
+    let missing: Vec<_> = registry.difference(&documented).collect();
+    let stale: Vec<_> = documented.difference(&registry).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "reference/config.md `Settable keys` table diverges from `orbit config keys`: \
+         keys missing from the page {missing:?}; page rows with no registry key {stale:?}"
+    );
+}
+
 #[test]
 fn no_ansi_escapes_under_any_color_configuration() {
     let fixture = Fixture::new();

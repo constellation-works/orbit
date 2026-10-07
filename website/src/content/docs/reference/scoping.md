@@ -9,13 +9,14 @@ sidebar:
 
 Each artifact type follows one of three strategies. **Workspace only** keeps
 it per repository. **Global only** keeps one copy on the machine. **Merge by
-key** combines global defaults with workspace overrides, and the workspace
-entry wins for the same key.
+key** combines global defaults with workspace entries, and the workspace
+entry wins for the same key, except that shipped activities and jobs always
+keep their names (see the table).
 
 | Artifact | Strategy | Meaning |
 |----------|----------|---------|
 | Tasks | Workspace only | Each repository has its own backlog and lifecycle state. |
-| Activities and jobs | Merge by key | Workspace definitions override global defaults by name. |
+| Activities and jobs | Merge by key | Workspace files add new names. A shipped default keeps its name: a workspace file with the same name is ignored when a run resolves it. |
 | Policies | Merge by key | Profiles override by name; global deny rules accumulate. |
 | Job runs | Workspace only | Run artifacts stay in the workspace. |
 | Skills | Merge by key | Global defaults live in `~/.orbit/skills`; workspace entries override by skill name. |
@@ -27,7 +28,7 @@ entry wins for the same key.
 .orbit/
   auto_tasks/        # auto-task definitions
   frictions/         # friction tag taxonomy (tags.yaml)
-  resources/         # activities/, executors/, jobs/, policies/ overrides
+  resources/         # workspace-local activities/, executors/, jobs/, policies/
   routines/          # routine definitions
   state/
     audit/
@@ -50,5 +51,6 @@ Task bundles are not under `.orbit/`. They live in the global root at
 ## Rule of thumb
 
 Keep anything that describes this repository's work in the workspace. Keep
-reusable execution defaults as global assets, and override them in the
-workspace when needed.
+reusable execution defaults as global assets. Override a policy profile or
+skill in the workspace when needed; for an activity or job, add one under a
+new name, because a shipped name is never replaced.

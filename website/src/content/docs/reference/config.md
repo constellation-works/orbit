@@ -162,7 +162,7 @@ crew or the workspace default.
 
 ## Settable keys
 
-`orbit config set` accepts these keys. `orbit config keys` prints the same list.
+`orbit config set` accepts these keys, except the two read-only `machine.*` identity keys. `orbit config keys` prints the same list, and the docs test suite fails when this table and that list diverge.
 
 | Key | Type | Default | Purpose |
 |---|---|---|---|
@@ -186,7 +186,13 @@ crew or the workspace default.
 | `workflow.resource_throttle.memory_resume_percent` | integer | `85` | Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | integer | `90` | Disk high-water mark, per observed filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | integer | `85` | Resume below this disk percentage. |
+| `workflow.validation_env.login_shell` | bool | `true` | Resolve the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see from the owner's shell, using `-i -l -c` and falling back to `-l -c`. `false` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. |
+| `workflow.validation_env.interactive` | bool | `true` | Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found; on startup failure, nonzero exit, timeout, or a missing marker it falls back to `-l -c`. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
+| `workflow.validation_env.path` | array&lt;string&gt; | `[]` | `PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
+| `workflow.validation_env.path_mode` | string | `prepend` | How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
 | `machine.name` | string | Set by `orbit init` | Global only. This machine's display name, and the one `[machine]` value you can change. |
+| `machine.id` | string | Set by `orbit init` | Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
+| `machine.task_prefix` | string | Set by `orbit init` | Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
 | `machine.worker_containment` | bool | `true` | Global only. Run each detached pipeline worker in its own systemd user scope, bounded by the `machine.worker_*` limits. Needs Linux with a user manager; otherwise workers run uncontained. |
 | `machine.worker_containment_strict` | bool | `false` | Global only. Refuse to launch a detached worker when no systemd user scope is available. Requires `machine.worker_containment = true`. |
 | `machine.worker_memory_high` | string | `40%` | Global only. Worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. |
@@ -195,14 +201,18 @@ crew or the workspace default.
 | `tasks.id_start` | integer | Unset | Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `automation.stall_window_minutes` | integer | `60` | Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
 | `scoring.enabled` | bool | `true` | Record scoreboard metrics for task runs. |
+| `pr.close_on_terminal` | bool | `true` | Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
+| `pr.delivery_authors` | array&lt;string&gt; | `[]` | Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal`. Empty means the login the forge CLI is authenticated as on this machine. |
 | `pr.task_url_template` | string | Unset | URL template that links a task ID in PR descriptions. |
 | `execution.env.pass` | array&lt;string&gt; | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` | Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. |
 | `execution.codex.sandbox` | string | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
 | `execution.codex.approval_policy` | string | Unset | Codex approval policy: `untrusted`, `on-request`, or `never`. |
+| `execution.proc_spawn_max_timeout_minutes` | integer | `45` | Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
 | `plugin.legacy_callback_identity` | bool | `false` | Deprecated; removed in the next release. Also accept the environment token and process ancestry as a plugin callback credential. |
 | `runtime.log_max_file_mb` | integer | `100` | Roll the active JSONL log past this size. At least 1 and at most `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer | `500` | Total size budget for JSONL log archives; the oldest are pruned first. |
 | `runtime.log_retention_days` | integer | `7` | Delete JSONL log archives older than this. |
+| `security_alert_sweep.min_severity` | string | `moderate` | Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
 | `review.before_pr` | bool | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
 | `review.minutes` | integer | `30` | Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
 | `operation.review_crew` | string | Unset | Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
@@ -229,8 +239,6 @@ Notes:
   them.
 - `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
   retired and ignored with a warning.
-- `orbit config keys` also lists `machine.id` and `machine.task_prefix`.
-  `orbit init` writes both once; neither is settable.
 
 Crew fields are settable as `crews.<name>.<field>`, where the field is
 `model`, `provider`, `enabled`, `effort`, `description`, or `tags`; for

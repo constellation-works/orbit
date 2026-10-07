@@ -51,7 +51,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
   </a>
   <a class="orbit-card" href="./scheduling/" data-tag="03">
     <h3>Routines and auto-tasks</h3>
-    <p>The sweep clock, routines that fire jobs, auto-tasks that file chores, and the limits on unattended work.</p>
+    <p>The host scheduler clock, routines that fire jobs, auto-tasks that file chores, and the limits on unattended work.</p>
   </a>
   <a class="orbit-card" href="./policies/" data-tag="04">
     <h3>Policies</h3>
