@@ -129,23 +129,26 @@ pub(crate) fn instructions(
     let source = Source::new(&runtime.paths().repo_root);
 
     // `git ls-tree` matches pathspecs literally and rejects glob magic, so
-    // `**/AGENTS.md` lists nothing. List the pinned tree and keep instruction
-    // basenames. `-z` keeps a path that contains spaces or quotes intact.
-    // Dirty worktree files are not in that tree, so they cannot certify it.
-    let paths = source.git_preserving_output(&[
-        "ls-tree",
-        "-r",
-        "-z",
-        "--name-only",
-        "--full-tree",
-        revision,
-    ])?;
+    // `**/AGENTS.md` lists nothing. Stream the pinned tree and keep
+    // instruction basenames: the full listing of a large repository passes
+    // the cap on one command's output, so it is filtered, not buffered. `-z`
+    // keeps a path that contains spaces or quotes intact. Dirty worktree
+    // files are not in that tree, so they cannot certify it.
+    let paths = source.git_matching_paths(
+        &[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            revision,
+        ],
+        |path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")),
+    )?;
 
     let mut instructions = Vec::new();
 
-    for path in paths.split('\0').filter(|path| {
-        !path.is_empty() && matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md"))
-    }) {
+    for path in &paths {
         if instructions.len() >= 50 {
             return Err(AutomationError::Deferred("instruction_scan_budget".into()));
         }

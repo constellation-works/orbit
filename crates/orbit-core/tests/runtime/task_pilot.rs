@@ -965,6 +965,57 @@ fn instruction_edits_change_the_preparation_fingerprint() {
     );
 }
 
+/// A tree whose full path listing is larger than the 1 MiB cap on one
+/// command's output still yields its instruction files: the listing is
+/// filtered as it is read, not buffered as evidence.
+#[test]
+fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.task("large tree instruction material");
+    let routine = instructions_routine();
+    let now = Utc::now();
+    let empty = pending_fingerprint(&workspace, &routine, &task.id, now);
+
+    let bulk = workspace.repo.join("bulk").join("d".repeat(100));
+    std::fs::create_dir_all(&bulk).unwrap();
+    for index in 0..10_000 {
+        std::fs::write(bulk.join(format!("file_{index:05}.txt")), "x\n").unwrap();
+    }
+    workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
+    workspace.commit_file("bulk/nested/CLAUDE.md", "nested claude\n", "nested claude");
+    workspace.git(&["add", "-A"]);
+    workspace.git(&["commit", "-m", "bulk files"]);
+    let listing = workspace
+        .git(&["ls-tree", "-r", "-z", "--name-only", "--full-tree", "HEAD"])
+        .len();
+    assert!(
+        listing > 1_048_576,
+        "the fixture must list more than the source output cap, got {listing} bytes"
+    );
+
+    let listed = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(1));
+    assert_ne!(
+        listed, empty,
+        "instruction files of an oversized tree enter the snapshot"
+    );
+
+    workspace.commit_file(
+        "bulk/nested/CLAUDE.md",
+        "nested claude revised\n",
+        "edit nested claude",
+    );
+    let edited = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(2));
+    assert_ne!(
+        edited, listed,
+        "an instruction edit deep in an oversized tree changes the fingerprint"
+    );
+}
+
 /// A `material_v1` assessment stored against an empty instruction snapshot
 /// does not carry forward once the pinned revision's tracked instruction
 /// files are part of that hash. The member is piloted again once.
