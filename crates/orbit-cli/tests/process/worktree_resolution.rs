@@ -906,8 +906,30 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
 /// partition and a populated one whose checkout is confirmed absent. The
 /// partitions of a live checkout, of a checkout that fails to stat for any
 /// reason other than absence, and with no binding at all keep their bundles.
+/// [ORB-14516] Empty and removed mount points are ambiguous absence and must
+/// keep their partitions too; a dangling parent symlink forces read_dir to fail.
 #[test]
 fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
+    const TEST: &str = "worktree_resolution::doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts";
+    const CHILD: &str = "ORBIT_TEST_ORPHAN_TASK_STORE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempdir().expect("isolated child home");
+        let mut command = StdCommand::new(std::env::current_exe().expect("test binary"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .expect("isolated task-store repair fixture");
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     write_machine_identity(&home);
@@ -919,13 +941,26 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     let partitions = home.join(".orbit/tasks/workspaces");
     let deleted_volume = temp.path().join("deleted-volume");
     let file_volume = temp.path().join("file-volume");
+    let empty_mount = temp.path().join("empty-mount");
+    let removed_mount = temp.path().join("removed-mount");
+    #[cfg(unix)]
+    let dangling_parent = temp.path().join("dangling-parent");
 
     let mut partition_of = std::collections::BTreeMap::new();
-    for (name, repo) in [
+    let checkouts = vec![
         ("live", temp.path().join("live")),
         ("gone", deleted_volume.join("gone")),
         ("unreachable", file_volume.join("unreachable")),
-    ] {
+        ("empty-mount", empty_mount.join("proj")),
+        ("removed-mount", removed_mount.join("proj")),
+    ];
+    #[cfg(unix)]
+    let checkouts = {
+        let mut checkouts = checkouts;
+        checkouts.push(("dangling-parent", dangling_parent.join("proj")));
+        checkouts
+    };
+    for (name, repo) in checkouts {
         fs::create_dir_all(&repo).expect("create checkout");
         init_git_repo(&repo);
         let before = task_store_partitions(&partitions);
@@ -957,14 +992,63 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     fs::create_dir_all(partitions.join("ws_residue")).expect("create empty partition");
     fs::create_dir_all(partitions.join("ws_unowned/ORB-00077")).expect("create unowned bundle");
 
-    // Confirmed absent: the readable parent answers that the checkout is gone.
-    fs::remove_dir_all(&deleted_volume).expect("delete checkout");
+    // Confirmed absent: the immediate parent is readable and still populated.
+    fs::remove_dir_all(deleted_volume.join("gone")).expect("delete checkout");
+    fs::write(deleted_volume.join("sibling"), b"still mounted").expect("populate parent");
     // Not absence: resolving the checkout fails with ENOTDIR.
     fs::remove_dir_all(&file_volume).expect("remove volume");
     fs::write(&file_volume, b"not a directory").expect("replace volume with a file");
+    // Unmounting exposes either an empty mount point or no mount point at all.
+    fs::remove_dir_all(empty_mount.join("proj")).expect("empty mount point");
+    fs::remove_dir_all(&removed_mount).expect("remove mount point");
+    #[cfg(unix)]
+    {
+        fs::remove_dir_all(&dangling_parent).expect("remove symlink parent checkout");
+        std::os::unix::fs::symlink(temp.path().join("offline-volume"), &dangling_parent)
+            .expect("create dangling parent symlink");
+        assert!(fs::symlink_metadata(&dangling_parent).is_ok());
+        assert_eq!(
+            fs::metadata(dangling_parent.join("proj"))
+                .expect_err("checkout stat must enter confirm_absence")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(
+            fs::read_dir(&dangling_parent).is_err(),
+            "ORB-14516: existing parent symlink must exercise the read_dir failure arm"
+        );
+    }
+
+    let global_root = home.join(".orbit");
+    let classified = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+        .expect("inspect partition classifications")
+        .expect("partitions exist");
+    assert_eq!(
+        classified
+            .stale
+            .iter()
+            .map(|p| p.path.clone())
+            .collect::<Vec<_>>(),
+        vec![partitions.join(&partition_of["gone"])],
+        "ORB-14516: only absence beneath a populated immediate parent is stale"
+    );
+    let unreachable_names = partition_of
+        .keys()
+        .copied()
+        .filter(|name| !matches!(*name, "live" | "gone"))
+        .collect::<Vec<_>>();
+    for name in &unreachable_names {
+        assert!(
+            classified
+                .unreachable
+                .iter()
+                .any(|p| p.partition.path == partitions.join(&partition_of[name])),
+            "ORB-14516: {name} must be unreachable: {classified:?}"
+        );
+    }
 
     let before = task_store_partitions(&partitions);
-    for name in ["live", "gone", "unreachable"] {
+    for name in partition_of.keys() {
         assert_eq!(
             before[&partition_of[name]].len(),
             1,
@@ -1011,6 +1095,28 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         expected,
         "only the empty partition and the confirmed-absent checkout's partition may go"
     );
+    for name in unreachable_names {
+        assert!(
+            orbit_cmd::task_store::partition_is_bound(&global_root, &partition_of[name])
+                .expect("check retained binding"),
+            "ORB-14516: the repair must retain {name}'s binding for remount recovery"
+        );
+    }
+    for mount in [&empty_mount, &removed_mount] {
+        fs::create_dir_all(mount.join("proj")).expect("restore checkout after remount");
+    }
+    let restored = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+        .expect("inspect restored checkouts")
+        .expect("partitions exist");
+    for name in ["empty-mount", "removed-mount"] {
+        assert!(
+            restored
+                .unreachable
+                .iter()
+                .all(|p| p.partition.path != partitions.join(&partition_of[name])),
+            "ORB-14516: remounted {name} must become a live claim"
+        );
+    }
 }
 
 /// `--fix-stale-locks` clears a dead holder record while preserving its file.

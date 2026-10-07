@@ -149,15 +149,18 @@ all. Partition ownership is therefore always resolved through the task registry.
 is present on disk; a catalog checkout supplies the same per-checkout evidence when `workspace init`
 has only a path-free task-registry registration. The shared external Orbit root (`--root
 <data-dir>`) is not used as checkout evidence because several checkouts may share it. A missing
-checkout is reported as stale, and an unreadable path is reported as unreachable. Checkoutless
+checkout beneath a populated, readable immediate parent is reported as stale. An unreadable path,
+an empty parent, or a missing parent is reported as unreachable. Checkoutless
 catalog entries and the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
 lands in remain claims. `orphan-task-stores` names each
 reported workspace id, its partition path, and its task-bundle count.
 
 **Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
 repair only when its bound checkout is *confirmed gone*: `repo_root` stats as absent, and the
-nearest ancestor directory that does exist is readable and therefore able to testify that the path
-below it is missing. Any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
+immediate parent directory can be fully listed, contains other entries, and has no entry for the
+checkout. An empty parent may be the directory exposed by an unmounted volume; a missing parent
+may be a removed mount point. Neither confirms deletion, and doctor never walks farther up to
+infer absence from a different ancestor. Any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
 `ENOTCONN` from a dropped mount, a path that resolves through a non-directory — classifies the
 binding as **unreachable**: the checkout may be intact behind the failure, so the partition is
 retained, reported with the failing path and error, and never deleted by
@@ -181,8 +184,11 @@ it must be run once per affected checkout.
 
 For an **unreachable** partition, restore access first — remount the volume, repair the directory
 permissions that hide the checkout — and re-run `orbit doctor`. A reachable checkout becomes a live
-claim again and the row clears itself; a checkout that is genuinely gone once its parent is
-readable becomes a confirmed-stale binding, which the repair can then remove.
+claim again and the row clears itself. A checkout that is genuinely gone beneath a populated,
+readable immediate parent becomes a confirmed-stale binding, which the repair can then remove.
+A deleted checkout whose parent is empty or also deleted stays unreachable; reclaim its task
+partition only as a deliberate manual step, or use `orbit workspace teardown` before deleting
+the checkout.
 
 For a partition whose binding is confirmed stale, the missing `repo_root` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
@@ -211,9 +217,10 @@ then the same repair. Skipping the repair after `workspace remove` leaves the bu
 and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
-first. One residual limitation: a volume unmounted from a mountpoint that is itself still present
-and readable reports its checkout as absent, and the partition is then treated as confirmed stale.
-Remount before running the repair on a host with removable or network-mounted checkouts.
+first. Empty and removed mount points are preserved, but bindings contain paths rather than a
+persisted mount identity. A mount point that exposes other entries after unmounting can still be
+mistaken for a populated checkout parent. Remount before running the repair on a host with
+removable or network-mounted checkouts; directory contents alone cannot prove a volume is mounted.
 
 The repair deletes partition directories, so it refuses to run without `--confirm`. It resolves the
 claims once, deletes empty unclaimed partitions and populated partitions whose checkout is
