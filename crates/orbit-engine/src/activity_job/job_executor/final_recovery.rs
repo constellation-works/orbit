@@ -15,13 +15,16 @@
 //! decision idempotently, so a crash anywhere in the first application
 //! converges on the same outcome.
 
-use orbit_types::workflow::{FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, PipelineState};
+use orbit_types::workflow::{
+    FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, FinalRecoveryRepairCommit, PipelineState,
+};
 
 use super::*;
 use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied,
 };
+use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
 /// What the executor does after the hook.
 #[derive(Debug, PartialEq, Eq)]
@@ -162,6 +165,7 @@ pub(super) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision,
             resume_step_index: None,
+            repair_commit: None,
             workspace_path: worktree.workspace_path.into(),
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         };
@@ -178,6 +182,14 @@ pub(super) fn attempt_final_recovery(
         Err(error) => return skip(&format!("admission failed: {error}")),
     }
 
+    // These observations belong to the engine, not the activity's response.
+    // A worktree without a resolvable HEAD may still settle a task, but cannot
+    // authorize a moved HEAD in a later commit step.
+    let head_before = git_output(
+        std::path::Path::new(&worktree.workspace_path),
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .ok();
     let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
         .and_then(|input| dispatch_final_recovery(ctx, step, activity, &input));
     let decision = match dispatch {
@@ -192,17 +204,58 @@ pub(super) fn attempt_final_recovery(
                 .to_string(),
         },
     };
-    let (decision, resume_index) = admit_resume_step(job, step_index, decision);
+    let (mut decision, mut resume_index) = admit_resume_step(job, step_index, decision);
+    let repair_commit = resume_index
+        .and_then(|_| observe_repair_commit(&worktree.workspace_path, head_before.as_deref()));
+    if repair_commit.is_some()
+        && let Some(commit_index) = job.steps[1..=step_index].iter().position(|step| {
+            matches!(&step.body, JobV2StepBody::Target(target)
+                if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
+                    if spec.action == "git_commit"))
+        })
+    {
+        // A repair is a new candidate. Even a request to resume settlement
+        // must rerun commit, validation, admission and review first.
+        let index = resume_index.unwrap_or(step_index).min(commit_index + 1);
+        if let FinalRecoveryDecision::Resume { step_id, .. } = &mut decision {
+            *step_id = job.steps[index].id.clone();
+        }
+        resume_index = Some(index);
+    }
 
     let application = FinalRecoveryApplication {
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
         resume_step_index: resume_index.map(|index| index as u32),
+        repair_commit,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
     conclude(job, ctx, step, activity, &application, resume_index)
+}
+
+fn observe_repair_commit(
+    workspace_path: &str,
+    head_before: Option<&str>,
+) -> Option<FinalRecoveryRepairCommit> {
+    let workspace_path = std::path::Path::new(workspace_path).canonicalize().ok()?;
+    let head_sha_before = head_before?.to_string();
+    let head_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"]).ok()?;
+    if head_sha == head_sha_before
+        || !git_command_success(
+            &workspace_path,
+            &["merge-base", "--is-ancestor", &head_sha_before, &head_sha],
+        )
+        .ok()?
+    {
+        return None;
+    }
+    Some(FinalRecoveryRepairCommit {
+        workspace_path,
+        head_sha_before,
+        head_sha,
+    })
 }
 
 /// Hand `application` to the host and turn its answer into the verdict.

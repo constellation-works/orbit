@@ -209,6 +209,7 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         failed_step_id: "implement".into(),
         task_id: task.clone(),
         observed: None,
+        repair_commit: None,
         base_ref: Some("main".into()),
         admitted_at: Utc::now(),
         decision: Some(FinalRecoveryDecision::Reject {

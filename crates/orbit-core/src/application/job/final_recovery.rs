@@ -104,6 +104,7 @@ fn admit(
                     base_ref: request.base_ref.clone(),
                     admitted_at: Utc::now(),
                     decision: None,
+                    repair_commit: None,
                     outcome: None,
                 });
                 state.updated_at = Utc::now();
@@ -307,6 +308,7 @@ fn record_decision(
             if let Some(checkpoint) = state.final_recovery.as_mut() {
                 checkpoint.decision = Some(application.decision.clone());
                 checkpoint.outcome = outcome.clone();
+                checkpoint.repair_commit = application.repair_commit.clone();
             }
             if let Some(from) = application.resume_step_index {
                 state.step_states.retain(|index, _| *index < from);

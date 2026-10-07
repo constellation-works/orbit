@@ -45,6 +45,14 @@ The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
 records `accept_with_fixes`.
 
+Final recovery may repair a rejected candidate once. If it appends a commit,
+the engine records the exact HEAD advance around that invocation and resumes
+at commit or an earlier requested step. Required validation and before-PR
+review run again for the new candidate; the rejected attempt cannot approve
+it. The commit guard accepts only the recorded repair HEAD in the same
+worktree, descended from the pinned base. Any later unrecorded HEAD change
+still fails with `worktree_head_changed`.
+
 An evidence hold applies only when every remaining requirement is a named
 unavailable external check and the report contains no open defect or failed
 required check. `review-evidence-hold.json` pins the attempt, candidate,

@@ -22,6 +22,7 @@ use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::TempDir;
 
+mod repair_commit;
 mod terminalization;
 
 struct Fixture {
@@ -153,6 +154,7 @@ impl Fixture {
                 failed_step_id: "implement".to_string(),
                 decision,
                 resume_step_index,
+                repair_commit: None,
                 workspace_path: self.repo.clone(),
                 completion_done: false,
             },

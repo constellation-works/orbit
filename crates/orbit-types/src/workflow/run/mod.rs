@@ -29,7 +29,7 @@ pub use state::{
     CrewExclusionSource, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
     DrainCancelRequest, DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint,
     FinalRecoveryCheckpoint, FinalRecoveryKey, FinalRecoveryObservedTask,
-    OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,
+    FinalRecoveryRepairCommit, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER, PROVIDER_REFUSAL_ERROR_CODE,
     PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
     PipelineState, PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle,

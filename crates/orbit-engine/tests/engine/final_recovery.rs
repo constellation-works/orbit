@@ -510,6 +510,7 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
         failed_step_id: "work".to_string(),
         task_id: "T-1".to_string(),
         observed: None,
+        repair_commit: None,
         base_ref: Some("main".to_string()),
         admitted_at: Utc::now(),
         decision: Some(decision),

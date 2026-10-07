@@ -132,6 +132,9 @@ pub struct FinalRecoveryApplication {
     /// Top-level index a `resume` reruns from. Durable step checkpoints at and
     /// after it are stale once the run goes back there.
     pub resume_step_index: Option<u32>,
+    /// Engine-observed HEAD advance during this recovery dispatch. Never read
+    /// from the recovery activity's response.
+    pub repair_commit: Option<orbit_types::workflow::FinalRecoveryRepairCommit>,
     /// The run's assigned worktree, where a `complete_no_diff` commit is
     /// resolved.
     pub workspace_path: std::path::PathBuf,

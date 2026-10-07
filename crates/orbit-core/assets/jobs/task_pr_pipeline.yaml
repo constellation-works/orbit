@@ -12,7 +12,8 @@
 #   the implementation; `review_validate` attributes its paths (widening
 #   selectors) and reruns owner validation on that head. A `reject` verdict, or fixes that fail
 #   there, stop delivery through the failure handoff with the findings on the
-#   task. Nothing goes back to the implementer and there is no second review.
+#   task. Final recovery may append a repair commit once; that new candidate
+#   reruns commit, owner validation and fresh before-PR review before delivery.
 # - An evidence-only verdict ends the run as `held`, before recovery or the
 #   failure handoff. The task stays in-progress awaiting named artifacts;
 #   matching evidence queues a fresh review rather than approving delivery.

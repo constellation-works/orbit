@@ -21,7 +21,8 @@ use super::super::handoff::{
 use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
-    PinnedHead, head_descends_from_pin, validate_pinned_head, verify_clean_tree,
+    PinnedHead, head_descends_from_pin, head_matches_final_recovery, validate_pinned_head,
+    verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
 use super::git_ops::{
@@ -301,7 +302,18 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             )?;
             let tagged_descendant =
                 no_diff_expected && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
-            if !preserved_failure_head && !allow_moved_head && !tagged_descendant {
+            if !preserved_failure_head
+                && !allow_moved_head
+                && !tagged_descendant
+                && !head_matches_final_recovery(
+                    host,
+                    batch_id,
+                    &task.id,
+                    &workspace_path,
+                    &base_sha,
+                    &head_sha,
+                )?
+            {
                 return Err(changed_head_error(
                     &task.id,
                     &workspace_path,
