@@ -617,16 +617,17 @@ through the task journal.
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
 
-- Admission refuses while `review.before_pr` is on at either endpoint; the drain declares the
-  value it captured at submission ([V1 review policy is
-  none](./4_decisions.md#v1-review-policy-is-none), narrowed to the before-PR switch by
-  [ORB-13992]). After-landing review is the owner's `delivery-code-review` auto-task and never
-  affects admission. Its `deliveries_landed` batches list a landed follower PR under the claimed
-  task, which the owner reads from the handoff it accepted for that repository, landing branch and
-  PR number [ORB-13894]. Review evidence is the typed
-  `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
-  the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
-  handoff awaiting completion authority, not that a review occurred.
+- The owner captures its `review.before_pr` contract at admission. When that policy is on, the
+  owner admits only PR-mode executors that declare `review_gate`; the executor's captured
+  `caller_before_pr` is diagnostic. Local ship mode is refused because it has no claimed leaf on
+  which to run the gate. After-landing review is the owner's `delivery-code-review` auto-task and
+  never affects admission. Its `deliveries_landed` batches list a landed follower PR under the
+  claimed task, which the owner reads from the handoff it accepted for that repository, landing
+  branch and PR number [ORB-13894]. The handoff carries typed before-PR review evidence when the
+  captured contract requires it, or `{ policy: none, disposition: not_required }` otherwise. Task
+  status `review` means a delivery handoff awaiting completion authority, not that a review
+  occurred. The claimed-leaf gate and its owner-captured policy are described in
+  [the decision](./4_decisions.md#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured).
 - Validation runs on the exact candidate/base pair and refuses staged, tracked or relevant
   untracked candidate changes before checks, after each check and at handoff. Artifacts must live
   in the owner's store; a follower-local path is not evidence.
@@ -719,7 +720,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 | Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); the first typed `provider_unavailable` authentication leaf excludes every crew of that provider |
 | Binary version and type-derived pull request fingerprint match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
-| Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
+| Owner's before-PR policy and executor gate capability | The owner captures the review contract at admission; when before-PR is on, only a PR-mode executor that declares `review_gate` is admitted |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
 | Repository readable and credentials configured for push and PR operations | Git transport checks and provider authentication; `gh auth status` alone does not prove Git push permission |
 
@@ -772,7 +773,7 @@ mutation has an idempotency or reconciliation contract before step recovery retr
 | Tasks, dependencies, comments, history, coordination artifacts, claim state | Owner for reads and writes; no replica-local fallback |
 | Ready ordering, lock admission, claim settlement, handoff acceptance | Owner transactions |
 | Worktree, Git operations, agent execution, build/test, local run/step state and logs | Executing host |
-| Review policy | `none` only in v1; typed not-required disposition and validation evidence live on owner |
+| Review policy | The owner captures the before-PR contract; a declared claimed-leaf gate runs on the executor, and typed review evidence or a not-required disposition is verified and retained by the owner |
 | Completion authority, landing intent, merge verification, task completion | Owner |
 
 **Worker invocation.** `WorkerInvocation` carries owner destination/workspace, task, claim,
@@ -897,9 +898,9 @@ reports:
   mutations of it.
 
 It also reports the owner's review switches and the verdict of `orbit_store::admission_refusal`,
-without raising it: the claim contract admits only with `review.before_pr` off, while a workspace
-with before-PR review on keeps shipping through its legacy leaf and review gate. After-landing
-review does not change the verdict.
+without raising it: when the captured owner contract has `review.before_pr` on, only a PR-mode
+claim whose executor declares `review_gate` is admitted; local ship mode is refused because it
+cannot run the claimed-leaf gate. After-landing review does not change the verdict.
 
 ### 7.4 Host shutdown hold
 
@@ -964,7 +965,7 @@ Acceptance criteria, not reported as passing.
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
-| `review.before_pr` on or off, after-landing auto-task on or off | Only `before_pr` off admits, whatever after-landing says; typed not-required handoff needs no reviewed SHA or artifact |
+| `review.before_pr` on or off, after-landing auto-task on or off | With before-PR off, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with it on, admit only a PR-mode executor declaring `review_gate` and require its typed review evidence. After-landing does not affect admission |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
 | Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |
@@ -978,8 +979,6 @@ Acceptance criteria, not reported as passing.
 ## 9. Concerns & Honest Limitations
 
 - **Receipt metadata grows** as permanent tombstones (§2).
-- **No before-PR review.** Only `review.before_pr` off admits; gating a pulled candidate needs a
-  protocol extension. After-landing review still covers what pulled work lands.
 - **Manual recovery limits availability.** A dead or unreachable follower can hold its task's
   footprint indefinitely; claim age and TTL are diagnostics, not failure detectors.
 - **Revocation cannot stop remote compute or retract external writes.** An old attempt may push
