@@ -43,6 +43,9 @@ template:
   tags:
   - delivery-code-review
   - no-diff-expected
+  required_tools:
+  - orbit.task.add
+  - orbit.task.artifact.put
   priority: medium
   complexity: hard
   crew: system

@@ -141,6 +141,14 @@ template:
   tags:
   - run-failure-patterns
   - no-diff-expected
+  required_tools:
+  - orbit.friction.add
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
   priority: medium
   complexity: medium
   # The portable system lane is seeded per machine and compatibility-aliased
