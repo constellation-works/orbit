@@ -70,6 +70,8 @@ use orbit_types::workflow::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+#[path = "allocation_admission/dependencies.rs"]
+mod dependencies;
 #[path = "allocation_admission/reservation_grants.rs"]
 mod reservation_grants;
 

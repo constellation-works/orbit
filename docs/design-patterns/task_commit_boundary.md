@@ -129,6 +129,14 @@ Ordinary operations remain concurrent under shared host and partition locks. Adm
 exclude ordinary writers across the host registry while checking cross-workspace
 dependencies. Recovery nesting is tracked per partition rather than by a process-wide depth.
 
+Owner admission applies the shared completed-archive dependency rule to status history
+from canonical bundles inside that lock, after recovering each registered dependency owner.
+An archived prerequisite counts as done only when its readable history reached done and
+then remained done or archived. Queue depth and claim selection use the same projection;
+the prerequisite's stored status stays archived. Abandoned or reopened archives, rejected
+or missing prerequisites, and histories without completion remain unsatisfied. Damaged
+event logs abort admission without changing a dependent or creating a claim.
+
 Internal distributed admission builds on this journal. Dependent rows can be finalized from
 the reservation result inside the deciding SQLite transaction, so the receipt captures the
 actual reservation ID and expiry atomically. Idle receipts use a SQL-only transaction because
