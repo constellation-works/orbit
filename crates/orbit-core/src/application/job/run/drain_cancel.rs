@@ -19,6 +19,7 @@
 //!   itself cannot be confirmed stopped, cancellation fails before finalizing
 //!   the drain or changing its carried claims. A local auto drain's
 //!   `--force` also stops the children its cancel would otherwise detach,
+//!   returning their tasks to backlog unless blocking was requested and
 //!   reporting unconfirmed stops in `unstopped_children`.
 //!
 //! A drain that is queued, or whose worker is conclusively gone, has nothing
@@ -509,15 +510,7 @@ impl OrbitRuntime {
         for child in children {
             // Keep every child's failure in the result, including unreadable
             // or missing run records, and continue stopping its siblings.
-            match self.cancel_job_run_cascading(
-                &child,
-                CancellationRequest {
-                    block_task: true,
-                    ..request
-                },
-                signal_run_owner_confirmed,
-                0,
-            ) {
+            match self.cancel_job_run_cascading(&child, request, signal_run_owner_confirmed, 0) {
                 Ok(cancelled) if cancelled.outcome == "cancelled" => {
                     result.forced_runs.push(child);
                 }
