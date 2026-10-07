@@ -187,15 +187,7 @@ body {
 @media (min-width: 1024px) {
   .sl-markdown-content table.orbit-config-keys th:first-child,
   .sl-markdown-content table.orbit-config-keys td:first-child {
-    width: 66%;
-  }
-
-  .sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code:not(pre code) {
-    white-space: nowrap;
-  }
-
-  .sl-markdown-content table.orbit-config-keys td.orbit-config-key-cell code wbr {
-    display: none;
+    width: 68%;
   }
 }
 
