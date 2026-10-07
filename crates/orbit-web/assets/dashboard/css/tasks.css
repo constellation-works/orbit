@@ -36,7 +36,7 @@
 
 /* A task opened by ID that the current filter or page would hide. */
 .pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
-.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
+.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); cursor: default; }
 .panel > header.tasks-head .count { flex: 0 0 auto; }
 #tasks-panel > .controls { border-bottom: 0; padding-bottom: 6px; }
 
