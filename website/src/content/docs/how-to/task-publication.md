@@ -36,7 +36,8 @@ hold sensitive detail.
 From the workspace's checkout:
 
 ```bash
-orbit workspace publication bind --remote git@example.com:backups/my-tasks.git \
+orbit workspace publication bind \
+  --remote git@example.com:backups/my-tasks.git \
   --publication-id pub_my_tasks
 orbit task publication publish
 orbit task publication status

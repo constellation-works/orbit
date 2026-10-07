@@ -157,6 +157,21 @@ body {
   overflow: hidden;
 }
 
+.sl-markdown-content table.orbit-config-keys {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.sl-markdown-content table.orbit-config-keys th:first-child,
+.sl-markdown-content table.orbit-config-keys td:first-child {
+  width: 38%;
+}
+
+.sl-markdown-content table.orbit-config-keys code:not(pre code) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .sl-markdown-content table.sl-table-options th:first-child,
 .sl-markdown-content table.sl-table-options td:first-child,
 .sl-markdown-content table.orbit-table-options th:first-child,

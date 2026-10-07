@@ -164,59 +164,59 @@ crew or the workspace default.
 
 `orbit config set` accepts these keys, except the two read-only `machine.*` identity keys. `orbit config keys` prints the same list, and the docs test suite fails when this table and that list diverge.
 
-| Key | Type | Default | Purpose |
-|---|---|---|---|
-| `workflow.base_branch` | string | `main` | Base branch for ship, auto, and the task pilot when the registered workspace has none. |
-| `workflow.default_crew` | string | See [Crews](#crews) | Crew for a task that names none and gets no override. |
-| `workflow.system_crew` | string | `system` | Crew for system activities such as step-failure recovery and the task pilot. |
-| `workflow.auto_ship` | bool | `false` | Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
-| `workflow.low_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for low-complexity tasks with no crew. |
-| `workflow.medium_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for medium-complexity tasks with no crew. |
-| `workflow.hard_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for hard-complexity tasks with no crew. |
-| `workflow.xhard_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for xhard-complexity tasks with no crew. |
-| `workflow.final_recovery_crews` | array&lt;string&gt; | `["sol:100", "opus:20"]` | Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. |
-| `workflow.required_validation_commands` | array&lt;string&gt; | `[]` | Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
-| `workflow.distributed_completion` | string | `review` | How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
-| `workflow.task_pilot_freshness.material_fields` | array&lt;string&gt; | `title`, `description`, `criteria`, `plan`, `selectors` | Task fields whose edit makes an accepted task-pilot assessment stale. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. |
-| `workflow.task_pilot_freshness.source_sensitivity` | string | `ignore` | Whether a branch-head move makes an accepted task-pilot assessment stale: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
-| `workflow.resource_throttle.enabled` | bool | `true` | Start no new task while host CPU, memory, or disk pressure stays high. Disabled, pressure is still reported. |
-| `workflow.resource_throttle.cpu_high_percent` | integer | `90` | CPU high-water mark. |
-| `workflow.resource_throttle.cpu_resume_percent` | integer | `85` | Resume below this CPU percentage. |
-| `workflow.resource_throttle.memory_high_percent` | integer | `90` | Memory high-water mark. |
-| `workflow.resource_throttle.memory_resume_percent` | integer | `85` | Resume below this memory percentage. |
-| `workflow.resource_throttle.disk_high_percent` | integer | `90` | Disk high-water mark, per observed filesystem. |
-| `workflow.resource_throttle.disk_resume_percent` | integer | `85` | Resume below this disk percentage. |
-| `workflow.validation_env.login_shell` | bool | `true` | Resolve the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see from the owner's shell, using `-i -l -c` and falling back to `-l -c`. `false` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. |
-| `workflow.validation_env.interactive` | bool | `true` | Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found; on startup failure, nonzero exit, timeout, or a missing marker it falls back to `-l -c`. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
-| `workflow.validation_env.path` | array&lt;string&gt; | `[]` | `PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
-| `workflow.validation_env.path_mode` | string | `prepend` | How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
-| `machine.name` | string | Set by `orbit init` | Global only. This machine's display name, and the one `[machine]` value you can change. |
-| `machine.id` | string | Set by `orbit init` | Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
-| `machine.task_prefix` | string | Set by `orbit init` | Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
-| `machine.worker_containment` | bool | `true` | Global only. Run each detached pipeline worker in its own systemd user scope, bounded by the `machine.worker_*` limits. Needs Linux with a user manager; otherwise workers run uncontained. |
-| `machine.worker_containment_strict` | bool | `false` | Global only. Refuse to launch a detached worker when no systemd user scope is available. Requires `machine.worker_containment = true`. |
-| `machine.worker_memory_high` | string | `40%` | Global only. Worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. |
-| `machine.worker_memory_max` | string | `50%` | Global only. Worker scope `MemoryMax=` (OOM point), same format. |
-| `machine.worker_tasks_max` | integer | `4096` | Global only. Worker scope `TasksMax=`. |
-| `tasks.id_start` | integer | Unset | Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
-| `automation.stall_window_minutes` | integer | `60` | Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
-| `scoring.enabled` | bool | `true` | Record scoreboard metrics for task runs. |
-| `pr.close_on_terminal` | bool | `true` | Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
-| `pr.delivery_authors` | array&lt;string&gt; | `[]` | Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal`. Empty means the login the forge CLI is authenticated as on this machine. |
-| `pr.task_url_template` | string | Unset | URL template that links a task ID in PR descriptions. |
-| `execution.env.pass` | array&lt;string&gt; | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` | Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. |
-| `execution.codex.sandbox` | string | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
-| `execution.codex.approval_policy` | string | Unset | Codex approval policy: `untrusted`, `on-request`, or `never`. |
-| `execution.proc_spawn_max_timeout_minutes` | integer | `45` | Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
-| `plugin.legacy_callback_identity` | bool | `false` | Deprecated; removed in the next release. Also accept the environment token and process ancestry as a plugin callback credential. |
-| `runtime.log_max_file_mb` | integer | `100` | Roll the active JSONL log past this size. At least 1 and at most `runtime.log_max_total_mb`. |
-| `runtime.log_max_total_mb` | integer | `500` | Total size budget for JSONL log archives; the oldest are pruned first. |
-| `runtime.log_retention_days` | integer | `7` | Delete JSONL log archives older than this. |
-| `security_alert_sweep.min_severity` | string | `moderate` | Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
-| `review.before_pr` | bool | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
-| `review.minutes` | integer | `30` | Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
-| `review.baseline_commands` | array&lt;string&gt; | `[]` | Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. |
-| `operation.review_crew` | string | Unset | Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
+| Key | Type, default and purpose |
+|---|---|
+| `workflow.base_branch` | string · **Default:** `main`<br>Base branch for ship, auto, and the task pilot when the registered workspace has none. |
+| `workflow.default_crew` | string · **Default:** See [Crews](#crews)<br>Crew for a task that names none and gets no override. |
+| `workflow.system_crew` | string · **Default:** `system`<br>Crew for system activities such as step-failure recovery and the task pilot. |
+| `workflow.auto_ship` | bool · **Default:** `false`<br>Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew. |
+| `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
+| `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
+| `workflow.final_recovery_crews` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. |
+| `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
+| `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
+| `workflow.task_pilot_freshness.material_fields` | array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields whose edit makes an accepted task-pilot assessment stale. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. |
+| `workflow.task_pilot_freshness.source_sensitivity` | string · **Default:** `ignore`<br>Whether a branch-head move makes an accepted task-pilot assessment stale: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
+| `workflow.resource_throttle.enabled` | bool · **Default:** `true`<br>Start no new task while host CPU, memory, or disk pressure stays high. Disabled, pressure is still reported. |
+| `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. |
+| `workflow.resource_throttle.cpu_resume_percent` | integer · **Default:** `85`<br>Resume below this CPU percentage. |
+| `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. |
+| `workflow.resource_throttle.memory_resume_percent` | integer · **Default:** `85`<br>Resume below this memory percentage. |
+| `workflow.resource_throttle.disk_high_percent` | integer · **Default:** `90`<br>Disk high-water mark, per observed filesystem. |
+| `workflow.resource_throttle.disk_resume_percent` | integer · **Default:** `85`<br>Resume below this disk percentage. |
+| `workflow.validation_env.login_shell` | bool · **Default:** `true`<br>Resolve the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see from the owner's shell, using `-i -l -c` and falling back to `-l -c`. `false` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. |
+| `workflow.validation_env.interactive` | bool · **Default:** `true`<br>Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found; on startup failure, nonzero exit, timeout, or a missing marker it falls back to `-l -c`. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
+| `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
+| `workflow.validation_env.path_mode` | string · **Default:** `prepend`<br>How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
+| `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name, and the one `[machine]` value you can change. |
+| `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
+| `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
+| `machine.worker_containment` | bool · **Default:** `true`<br>Global only. Run each detached pipeline worker in its own systemd user scope, bounded by the `machine.worker_*` limits. Needs Linux with a user manager; otherwise workers run uncontained. |
+| `machine.worker_containment_strict` | bool · **Default:** `false`<br>Global only. Refuse to launch a detached worker when no systemd user scope is available. Requires `machine.worker_containment = true`. |
+| `machine.worker_memory_high` | string · **Default:** `40%`<br>Global only. Worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. |
+| `machine.worker_memory_max` | string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. |
+| `machine.worker_tasks_max` | integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=`. |
+| `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
+| `automation.stall_window_minutes` | integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
+| `scoring.enabled` | bool · **Default:** `true`<br>Record scoreboard metrics for task runs. |
+| `pr.close_on_terminal` | bool · **Default:** `true`<br>Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
+| `pr.delivery_authors` | array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal`. Empty means the login the forge CLI is authenticated as on this machine. |
+| `pr.task_url_template` | string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |
+| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. |
+| `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
+| `execution.codex.approval_policy` | string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
+| `execution.proc_spawn_max_timeout_minutes` | integer · **Default:** `45`<br>Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
+| `plugin.legacy_callback_identity` | bool · **Default:** `false`<br>Deprecated; removed in the next release. Also accept the environment token and process ancestry as a plugin callback credential. |
+| `runtime.log_max_file_mb` | integer · **Default:** `100`<br>Roll the active JSONL log past this size. At least 1 and at most `runtime.log_max_total_mb`. |
+| `runtime.log_max_total_mb` | integer · **Default:** `500`<br>Total size budget for JSONL log archives; the oldest are pruned first. |
+| `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete JSONL log archives older than this. |
+| `security_alert_sweep.min_severity` | string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
+| `review.before_pr` | bool · **Default:** `false`<br>Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
+| `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
+| `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. |
+| `operation.review_crew` | string · **Default:** Unset<br>Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
 
 Notes:
 
