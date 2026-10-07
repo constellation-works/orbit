@@ -215,6 +215,7 @@ crew or the workspace default.
 | `security_alert_sweep.min_severity` | string | `moderate` | Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
 | `review.before_pr` | bool | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
 | `review.minutes` | integer | `30` | Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
+| `review.baseline_commands` | array&lt;string&gt; | `[]` | Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. |
 | `operation.review_crew` | string | Unset | Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
 
 Notes:
