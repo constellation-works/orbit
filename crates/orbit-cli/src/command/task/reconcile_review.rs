@@ -84,34 +84,26 @@ pub struct ReconcileAcceptBaselineArgs {
 
 impl Execute for TaskReconcileReviewCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let (input, message) = match self.command {
-            TaskReconcileReviewSubcommand::Inspect(args) => (
-                json!({"action": "inspect", "id": args.id}),
-                "Reconciliation eligibility for the task's merged delivery.",
-            ),
-            TaskReconcileReviewSubcommand::Submit(args) => (
-                json!({"action": "submit", "id": args.id, "request_key": args.request}),
-                "Reconciliation admitted; follow it with `orbit task reconcile-review status`.",
-            ),
-            TaskReconcileReviewSubcommand::Status(args) => (
-                json!({
-                    "action": "status",
-                    "id": args.id,
-                    "reconciliation_id": args.reconciliation,
-                }),
-                "Reconciliations of the task, newest first.",
-            ),
-            TaskReconcileReviewSubcommand::AcceptBaseline(args) => (
-                json!({
-                    "action": "accept_baseline",
-                    "id": args.id,
-                    "reconciliation_id": args.reconciliation,
-                    "command": args.command,
-                    "remediation_commit": args.remediation,
-                    "reason": args.reason,
-                }),
-                "Baseline disposition recorded; validation of the merged head stays incomplete.",
-            ),
+        let input = match self.command {
+            TaskReconcileReviewSubcommand::Inspect(args) => {
+                json!({"action": "inspect", "id": args.id})
+            }
+            TaskReconcileReviewSubcommand::Submit(args) => {
+                json!({"action": "submit", "id": args.id, "request_key": args.request})
+            }
+            TaskReconcileReviewSubcommand::Status(args) => json!({
+                "action": "status",
+                "id": args.id,
+                "reconciliation_id": args.reconciliation,
+            }),
+            TaskReconcileReviewSubcommand::AcceptBaseline(args) => json!({
+                "action": "accept_baseline",
+                "id": args.id,
+                "reconciliation_id": args.reconciliation,
+                "command": args.command,
+                "remediation_commit": args.remediation,
+                "reason": args.reason,
+            }),
         };
         let mut input = input;
         if let Value::Object(object) = &mut input {
@@ -119,6 +111,67 @@ impl Execute for TaskReconcileReviewCommand {
             object.insert("workspace".into(), json!(runtime.paths().repo_root));
         }
         let value = runtime.run_tool("orbit.task.reconcile_review", input)?;
-        Ok(Payload::detail(value, message).into())
+        let text = reconciliation_text(&value);
+        Ok(Payload::detail(value, text).into())
+    }
+}
+
+fn reconciliation_text(value: &Value) -> String {
+    let mut lines = Vec::new();
+    if let Some(eligible) = value.get("eligible").and_then(Value::as_bool) {
+        lines.push(format!("Eligible: {eligible}"));
+        for field in ["refusal", "binding", "contract", "next_step"] {
+            if let Some(detail) = value.get(field).filter(|detail| !detail.is_null()) {
+                detail_lines(field, detail, &mut lines);
+            }
+        }
+    }
+    if let Some(records) = value.get("reconciliations").and_then(Value::as_array) {
+        if records.is_empty() {
+            lines.push("No reconciliations recorded.".into());
+        }
+        lines.extend(records.iter().map(reconciliation_line));
+    } else if value.get("reconciliation_id").is_some() {
+        lines.push(reconciliation_line(value));
+    }
+    lines.join("\n")
+}
+
+fn reconciliation_line(record: &Value) -> String {
+    let mut fields = Vec::new();
+    for field in [
+        "reconciliation_id",
+        "outcome",
+        "run_id",
+        "run_state",
+        "next_step",
+    ] {
+        let text = match record.get(field) {
+            Some(Value::Null) | None if field == "outcome" => "pending".into(),
+            Some(Value::Null) | None => continue,
+            Some(value) => display_value(value),
+        };
+        fields.push(format!("{field}: {text}"));
+    }
+    fields.join("; ")
+}
+
+fn detail_lines(prefix: &str, value: &Value, lines: &mut Vec<String>) {
+    if let Value::Object(fields) = value {
+        for (field, detail) in fields {
+            detail_lines(&format!("{prefix}.{field}"), detail, lines);
+        }
+    } else {
+        lines.push(format!("{prefix}: {}", display_value(value)));
+    }
+}
+
+fn display_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t"),
+        other => other.to_string(),
     }
 }

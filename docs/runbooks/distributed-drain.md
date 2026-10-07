@@ -744,7 +744,13 @@ record lives in the owner's review store, separate from review-gate
 certificates, and never changes the original run's identity or the merged pull
 request. Agents cannot submit or dispose one.
 
-`status` names the outcome and the exact next step:
+`inspect` prints eligibility, the refusal when present, and the binding and
+contract fields in the default text output. `submit` and `accept-baseline`
+print the reconciliation id, outcome (or `pending`), run state when available,
+and the exact next step. `--format json` retains the complete tool document.
+
+`status` prints one line per reconciliation, newest first, with its id,
+outcome and exact next step:
 
 - `accepted`: complete the task from review.
 - `refused`: the reviewer left open findings (they are filed as one follow-up
