@@ -128,9 +128,23 @@ body {
   text-underline-offset: 0.2em;
 }
 
-.sl-markdown-content code {
+:not(pre) > code {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.sl-markdown-content code:not(pre code) {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  white-space: nowrap;
+}
+
+.sl-markdown-content code.is-long:not(pre code) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .sl-markdown-content table {
@@ -141,6 +155,13 @@ body {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
   overflow: hidden;
+}
+
+.sl-markdown-content table.sl-table-options th:first-child,
+.sl-markdown-content table.sl-table-options td:first-child,
+.sl-markdown-content table.orbit-table-options th:first-child,
+.sl-markdown-content table.orbit-table-options td:first-child {
+  white-space: nowrap;
 }
 
 .sl-markdown-content table th,

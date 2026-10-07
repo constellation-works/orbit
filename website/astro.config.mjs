@@ -1,8 +1,101 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { satteri } from '@astrojs/markdown-satteri';
+import { defineHastPlugin } from 'satteri';
+
+function findFirstTh(node) {
+  for (const child of node.children || []) {
+    if (child.tagName === 'th') return child;
+    const found = findFirstTh(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function addClasses(node, ctx, ...classNames) {
+  const current = node.properties?.className || node.properties?.class || [];
+  const list = Array.isArray(current)
+    ? [...current]
+    : typeof current === 'string'
+      ? current.split(/\s+/).filter(Boolean)
+      : [];
+  for (const name of classNames) {
+    if (!list.includes(name)) {
+      list.push(name);
+    }
+  }
+  ctx.setProperty(node, 'className', list);
+}
+
+function processRawHtml(html) {
+  const parts = html.split(/(<pre[\s\S]*?<\/pre>)/gi);
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i].replace(/<code([^>]*)>([\s\S]*?)<\/code>/gi, (match, attrs, content) => {
+      const text = content
+        .replace(/<[^>]+>/g, '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&');
+      if (text.length > 38) {
+        if (/class\s*=\s*["']/.test(attrs)) {
+          attrs = attrs.replace(/class\s*=\s*(["'])([^"']*)\1/, (_m, q, cls) => {
+            const classes = cls.split(/\s+/).filter(Boolean);
+            if (!classes.includes('is-long')) classes.push('is-long');
+            return `class=${q}${classes.join(' ')}${q}`;
+          });
+        } else {
+          attrs = ` class="is-long"${attrs}`;
+        }
+        return `<code${attrs}>${content}</code>`;
+      }
+      return match;
+    });
+  }
+  return parts.join('');
+}
+
+const inlineCodePlugin = defineHastPlugin({
+  name: 'inline-code-wrap',
+  raw(node, ctx) {
+    if (typeof node.value === 'string' && node.value.includes('<code')) {
+      const updated = processRawHtml(node.value);
+      if (updated !== node.value) {
+        ctx.replaceNode(node, { type: 'raw', value: updated });
+      }
+    }
+  },
+  element: {
+    filter: ['code', 'table'],
+    visit(node, ctx) {
+      if (node.tagName === 'code') {
+        const parent = ctx.parent(node);
+        if (parent?.tagName === 'pre') {
+          return;
+        }
+        const text = ctx.textContent(node);
+        if (text.length > 38) {
+          addClasses(node, ctx, 'is-long');
+        }
+      }
+
+      if (node.tagName === 'table') {
+        const firstTh = findFirstTh(node);
+        if (firstTh && /^(options?|flags?)$/i.test(ctx.textContent(firstTh).trim())) {
+          addClasses(node, ctx, 'sl-table-options', 'orbit-table-options');
+        }
+      }
+    },
+  },
+});
 
 export default defineConfig({
   site: 'https://orbit-cli.com',
+  markdown: {
+    processor: satteri({
+      hastPlugins: [inlineCodePlugin],
+    }),
+  },
   vite: {
     // src/pages/changelog.astro imports the repository's CHANGELOG.md, one
     // directory above the site root; the dev server refuses that path unless
