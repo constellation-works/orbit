@@ -28,16 +28,15 @@ import { captureWorkspaceVisit, el, fetchJson, postJson, makeToggleRow, isAggreg
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
-// One read per short window, shared by however many rows are expanded. The
-// memo expires after CONSOLE_TTL_MS so a detail that is opened or rebuilt later
+// One task-scoped read per short window, shared by however many panels show
+// it. The memo expires after CONSOLE_TTL_MS so a detail that is opened or rebuilt later
 // (the dashboard refreshes tasks on its own timer and never re-reads claims)
 // shows current authority rather than a panel hours out of date. It is also
 // invalidated on every action and workspace change, so a decision is never
 // rendered from the state that preceded it.
 export const CONSOLE_TTL_MS = 10000;
-let cachedConsole = null;
-let cachedAt = 0;
-let inflightConsole = null;
+const cachedConsoles = new Map();
+const inflightConsoles = new Map();
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -46,51 +45,53 @@ let lastFeedback = null;
 /// Drop the memoized read. Called after any owner action and by the workspace
 /// selector, since claim state is per-workspace.
 export function invalidateDistributedConsole() {
-  cachedConsole = null;
-  cachedAt = 0;
-  inflightConsole = null;
+  cachedConsoles.clear();
+  inflightConsoles.clear();
   lastFeedback = null;
 }
 
-function freshConsole() {
-  return cachedConsole && Date.now() - cachedAt < CONSOLE_TTL_MS ? cachedConsole : null;
+function freshConsole(taskId) {
+  const entry = cachedConsoles.get(taskId);
+  return entry && Date.now() - entry.at < CONSOLE_TTL_MS ? entry.payload : null;
 }
 
-export function peekDistributedConsole() {
-  return freshConsole();
+export function peekDistributedConsole(taskId) {
+  return freshConsole(taskId);
 }
 
-export function loadDistributedConsole({ force = false } = {}) {
+export function loadDistributedConsole({ taskId, force = false } = {}) {
   // Claim state is per-workspace. The aggregate view has no concrete workspace
   // to scope to — the endpoint would 400 — so answer as "nothing here" rather
   // than painting a failure across every task detail.
-  if (isAggregateView()) return Promise.resolve(null);
+  if (isAggregateView() || !taskId) return Promise.resolve(null);
   if (force) invalidateDistributedConsole();
-  const fresh = freshConsole();
+  const key = String(taskId);
+  const fresh = freshConsole(key);
   if (fresh) return Promise.resolve(fresh);
-  if (!inflightConsole) {
+  if (!inflightConsoles.has(key)) {
     // Revision plus request identity: a response issued for workspace A must
     // not populate the memo after a switch (or a forced re-read) the way
     // requestPanel rejects A→B→A and overlapping refreshes.
     const revision = getWorkspaceRevision();
-    const request = fetchJson(CONSOLE_PATH)
+    // One task's whole history, settled claims in full: the panel renders
+    // them, and the endpoint's default (active, compact) would hide them.
+    const request = fetchJson(`${CONSOLE_PATH}?task=${encodeURIComponent(key)}&state=all&detail=true`)
       .then((payload) => {
         const body = payload || {};
-        if (inflightConsole !== request || revision !== getWorkspaceRevision()) {
+        if (inflightConsoles.get(key) !== request || revision !== getWorkspaceRevision()) {
           return body;
         }
-        cachedConsole = body;
-        cachedAt = Date.now();
-        inflightConsole = null;
-        return cachedConsole;
+        cachedConsoles.set(key, { payload: body, at: Date.now() });
+        inflightConsoles.delete(key);
+        return body;
       })
       .catch((error) => {
-        if (inflightConsole === request) inflightConsole = null;
+        if (inflightConsoles.get(key) === request) inflightConsoles.delete(key);
         throw error;
       });
-    inflightConsole = request;
+    inflightConsoles.set(key, request);
   }
-  return inflightConsole;
+  return inflightConsoles.get(key);
 }
 
 export function claimsForTask(payload, taskId) {
@@ -611,7 +612,7 @@ const DECIDED_REFUSALS = {
 /// through the handoff approval instead. `null` means no claim is involved
 /// and the ordinary approval applies.
 export async function claimedReviewApproval(taskId) {
-  const payload = await loadDistributedConsole({ force: true });
+  const payload = await loadDistributedConsole({ taskId, force: true });
   const live = claimsForTask(payload, taskId).filter(
     (claim) => claim.phase === "handed_off" || claim.unsettled,
   );
@@ -803,7 +804,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   };
 
   const refresh = (recorded) =>
-    !visit.isCurrent() ? Promise.resolve(false) : loadDistributedConsole({ force: true }).then(
+    !visit.isCurrent() ? Promise.resolve(false) : loadDistributedConsole({ taskId, force: true }).then(
       (payload) => {
         render(payload);
         return true;
@@ -814,10 +815,10 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
       },
     );
 
-  const cached = peekDistributedConsole();
+  const cached = peekDistributedConsole(taskId);
   if (cached) return Promise.resolve(render(cached));
   container.appendChild(el("div", { class: "claim-note", text: "reading claim state…" }));
-  return loadDistributedConsole().then(render, (error) => failed(error));
+  return loadDistributedConsole({ taskId }).then(render, (error) => failed(error));
 }
 
 function actionSummary(body) {

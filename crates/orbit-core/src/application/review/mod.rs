@@ -48,7 +48,9 @@ pub(crate) use gate::{
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach
 /// `orbit-store`, so these are the only shapes they need.
-pub use handoff::{ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal};
+pub use handoff::{
+    DistributedClaimState, ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal,
+};
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
 pub use switches::{

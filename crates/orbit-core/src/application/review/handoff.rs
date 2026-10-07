@@ -2,6 +2,8 @@
 //! Trusted callers obtain observations from Git/provider state and repository check
 //! policy, including the existing already-landed verifier for no-diff work. They
 //! must never manufacture observations by copying the worker's handoff payload.
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationResult, ExecutionClaimPhase,
@@ -134,6 +136,17 @@ impl OrbitRuntime {
 /// Response shape version of [`OrbitRuntime::distributed_claim_console`].
 pub const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
 
+/// Claim lifecycle states selected by the owner's read-only console.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributedClaimState {
+    /// Claims that still hold execution authority or a protected footprint.
+    Active,
+    /// Claims whose execution lifecycle has settled.
+    Settled,
+    /// Both active and settled claims.
+    All,
+}
+
 /// Why an owner console read or action was refused before the store saw it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffConsoleRefusal {
@@ -200,10 +213,31 @@ impl OrbitRuntime {
         self.distributed_claim_console_at(chrono::Utc::now())
     }
 
+    /// Read the owner claim console with bounded task and lifecycle selection.
+    /// Settled claims are compact summaries unless `detail` is true.
+    pub fn distributed_claim_console_filtered(
+        &self,
+        task_id: Option<&str>,
+        state: DistributedClaimState,
+        detail: bool,
+    ) -> Result<serde_json::Value, OrbitError> {
+        self.distributed_claim_console_filtered_at(task_id, state, detail, chrono::Utc::now())
+    }
+
     /// [`Self::distributed_claim_console`] observed at `now`, so a reservation
     /// expiry can be projected without waiting out its real TTL.
     pub(crate) fn distributed_claim_console_at(
         &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<serde_json::Value, OrbitError> {
+        self.distributed_claim_console_filtered_at(None, DistributedClaimState::All, true, now)
+    }
+
+    fn distributed_claim_console_filtered_at(
+        &self,
+        task_id: Option<&str>,
+        state: DistributedClaimState,
+        detail: bool,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<serde_json::Value, OrbitError> {
         if let Err(error) = self.ensure_coordination_task_write_permitted() {
@@ -217,31 +251,80 @@ impl OrbitRuntime {
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
-        let claims = self.stores().tasks().inspect_execution_claims()?;
-        let requests = self.stores().tasks().landing_start_requests()?;
-        let attempts = self.stores().tasks().landing_attempts()?;
+        let inspected_claims = self.stores().tasks().inspect_execution_claims()?;
+        let claims = inspected_claims
+            .iter()
+            .filter(|claim| {
+                task_id.is_none_or(|task_id| claim.claim.task_id == task_id)
+                    && match state {
+                        DistributedClaimState::Active => claim.claim.phase.is_unsettled(),
+                        DistributedClaimState::Settled => !claim.claim.phase.is_unsettled(),
+                        DistributedClaimState::All => true,
+                    }
+            })
+            .collect::<Vec<_>>();
         let local_machine = self.automation_machine_identity().map(str::to_string);
+
+        // Read accepted handoffs once and join in memory. The old projection did
+        // one indexed store read per claim and linearly searched landing records
+        // twice for each accepted handoff.
+        let needs_detail = claims
+            .iter()
+            .any(|claim| claim.claim.phase.is_unsettled() || detail);
+        let accepted = if needs_detail {
+            self.stores().tasks().accepted_handoffs()?
+        } else {
+            Vec::new()
+        };
+        let accepted_by_claim = accepted
+            .iter()
+            .map(|accepted| (accepted.handoff.claim_id.as_str(), accepted))
+            .collect::<HashMap<_, _>>();
+        let has_selected_handoffs = claims.iter().any(|claim| {
+            (claim.claim.phase.is_unsettled() || detail)
+                && accepted_by_claim.contains_key(claim.claim.claim_id.as_str())
+        });
+        let requests = if has_selected_handoffs {
+            self.stores().tasks().landing_start_requests()?
+        } else {
+            Vec::new()
+        };
+        let requests_by_handoff = requests
+            .iter()
+            .map(|request| (request.handoff_id.as_str(), request))
+            .collect::<HashMap<_, _>>();
+        let attempts = if has_selected_handoffs {
+            self.stores().tasks().landing_attempts()?
+        } else {
+            Vec::new()
+        };
+        let attempts_by_handoff = attempts
+            .iter()
+            .map(|attempt| (attempt.handoff_id.as_str(), attempt))
+            .collect::<HashMap<_, _>>();
 
         let mut rows = Vec::with_capacity(claims.len());
         for claim in &claims {
-            let accepted = self
-                .stores()
-                .tasks()
-                .find_accepted_handoff(&claim.claim.claim_id)?;
-            let handoff = accepted.as_ref().map(|accepted| {
-                let request = requests
-                    .iter()
-                    .find(|request| request.handoff_id == accepted.handoff_id);
-                let attempt = attempts
-                    .iter()
-                    .find(|attempt| attempt.handoff_id == accepted.handoff_id);
-                handoff_json(
-                    accepted,
-                    request,
-                    attempt,
-                    claim.unresolved_merge_intent.as_deref(),
-                )
-            });
+            if !claim.claim.phase.is_unsettled() && !detail {
+                rows.push(settled_claim_summary_json(claim));
+                continue;
+            }
+            let handoff = accepted_by_claim
+                .get(claim.claim.claim_id.as_str())
+                .map(|accepted| {
+                    let request = requests_by_handoff
+                        .get(accepted.handoff_id.as_str())
+                        .copied();
+                    let attempt = attempts_by_handoff
+                        .get(accepted.handoff_id.as_str())
+                        .copied();
+                    handoff_json(
+                        accepted,
+                        request,
+                        attempt,
+                        claim.unresolved_merge_intent.as_deref(),
+                    )
+                });
             rows.push(claim_json(claim, handoff, local_machine.as_deref(), now));
         }
 
@@ -451,6 +534,17 @@ impl ExpectedCandidate {
             candidate.base.commit,
         )))
     }
+}
+
+fn settled_claim_summary_json(claim: &ClaimInspection) -> serde_json::Value {
+    let location = &claim.claim.executed_on;
+    serde_json::json!({
+        "claim_id": claim.claim.claim_id,
+        "task_id": claim.claim.task_id,
+        "host": location.machine_name.as_deref().unwrap_or(&location.machine_id),
+        "outcome": phase_label(claim.claim.phase),
+        "settled_at": claim.updated_at,
+    })
 }
 
 fn mutation_json(handoff_id: &str, result: &ClaimMutationResult) -> serde_json::Value {
