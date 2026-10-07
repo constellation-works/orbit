@@ -142,6 +142,78 @@ fn fires(store: &Store, name: &str) -> Vec<orbit_store::RoutineFireRecord> {
     store.routine_recent_fires(name, 32).expect("recent fires")
 }
 
+/// Fault injection at dispatch: finish the in-flight fire, then leave the
+/// next workspace's cursor and history untouched for the next tick.
+#[test]
+fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
+    struct BlockingDispatch {
+        delegate: FakeDispatch,
+        deadline: std::time::Instant,
+    }
+    impl RoutineDispatch for BlockingDispatch {
+        fn live_workspace_drain(&self, _: &Path) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
+        fn submit(
+            &self,
+            dir: &Path,
+            job: &str,
+            actor: &str,
+            slot: &str,
+        ) -> Result<String, OrbitError> {
+            std::thread::sleep(
+                self.deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    + std::time::Duration::from_millis(20),
+            );
+            self.delegate.submit(dir, job, actor, slot)
+        }
+        fn run_state(&self, _: &Path, _: &str) -> Option<JobRunState> {
+            None
+        }
+        fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
+            RunOwnerLiveness::Unknown
+        }
+    }
+    let store = store();
+    let first = routine("first", "* * * * *", true, "forbid", 0);
+    let mut next = routine("next", "* * * * *", true, "forbid", 0);
+    next.source_workspace = "following".into();
+    next.source_orbit_dir = "/following/.orbit".into();
+    let baseline = ts(2026, 1, 1, 0, 0, 0).to_rfc3339();
+    for name in ["first", "next"] {
+        store.routine_record_baseline(name, &baseline).unwrap();
+    }
+    let next_cursor = store.routine_cursor("next").unwrap();
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_millis(100);
+    let dispatch = BlockingDispatch {
+        delegate: FakeDispatch::default(),
+        deadline,
+    };
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![first, next]),
+        &dispatch,
+        SweepOptions {
+            deadline: Some(deadline),
+            ..SweepOptions::default()
+        },
+        ts(2026, 1, 1, 0, 1, 0),
+    )
+    .unwrap();
+    assert_eq!(
+        reports[0].action, "fired",
+        "in-flight dispatch finishes and is recorded"
+    );
+    assert_eq!(reports[1].source, "following");
+    assert_eq!(reports[1].reason.as_deref(), Some("tick_deadline"));
+    assert_eq!(dispatch.delegate.submit_count(), 1);
+    assert_eq!(store.routine_cursor("next").unwrap(), next_cursor);
+    assert!(fires(&store, "next").is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
 // ---- overlap: forbid + interrupted source run [ORB-10597] -----------------
 
 /// Seed an `overlap: forbid` routine with one dispatched fire whose run is

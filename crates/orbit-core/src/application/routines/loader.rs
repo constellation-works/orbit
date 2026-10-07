@@ -29,6 +29,8 @@ pub struct DiscoveredWorkspaces {
     /// [replica-local](runs_in_replica) routines; no other routine, auto-task
     /// or task recovery runs in them.
     pub replicas: Vec<(Workspace, OrbitRuntime)>,
+    /// Registered workspaces not opened because this tick exhausted its budget.
+    pub skipped_workspaces: Vec<String>,
 }
 
 /// The one shipped job a replica checkout schedules for itself [ORB-14173].
@@ -150,6 +152,17 @@ impl DiscoveredWorkspaces {
 /// workspaces and fail-closed discovery errors.
 pub trait RoutineWorkspaceProvider {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError>;
+
+    /// Discover within a tick budget, finishing the current open before
+    /// skipping remaining checkouts. Providers without iterative discovery
+    /// still yield at the next scheduler boundary.
+    fn discover_workspaces_until(
+        &self,
+        global_root: &Path,
+        _deadline: std::time::Instant,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        self.discover_workspaces(global_root)
+    }
 }
 
 fn collect_routines(workspaces: &[&(Workspace, OrbitRuntime)]) -> RoutineCollection {

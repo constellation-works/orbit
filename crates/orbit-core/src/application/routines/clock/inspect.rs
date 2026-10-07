@@ -61,6 +61,11 @@ pub enum ClockUnitVerdict {
     /// The unit runs this binary but still uses the legacy `orbit sweep`
     /// invocation instead of `orbit clock tick`.
     InvocationMismatch,
+    /// The systemd unit lacks a finite startup deadline or group cleanup.
+    SafetyMismatch {
+        /// Which recovery setting is missing or unsafe.
+        reason: String,
+    },
     /// The unit exists but its program could not be probed.
     Unrunnable {
         /// Why `--version` did not yield a version string.
@@ -112,6 +117,9 @@ impl ClockUnitInspection {
             ClockUnitVerdict::InvocationMismatch => format!(
                 " | program: {program} (stale: invokes `orbit sweep`; run `orbit clock repair` to rewrite)"
             ),
+            ClockUnitVerdict::SafetyMismatch { reason } => format!(
+                " | program: {program} (unsafe clock unit: {reason}; run `orbit clock repair`)"
+            ),
             ClockUnitVerdict::Unrunnable { reason } => {
                 format!(" | program: {program} (version unavailable: {reason})")
             }
@@ -157,6 +165,10 @@ impl ClockUnitInspection {
                 display_opt_path(&self.unit_path),
                 display_opt_path(&self.program_path)
             ),
+            ClockUnitVerdict::SafetyMismatch { reason } => format!(
+                "clock unit {} cannot recover safely from a hung tick: {reason}",
+                display_opt_path(&self.unit_path)
+            ),
         }
     }
 
@@ -169,6 +181,10 @@ impl ClockUnitInspection {
             ),
             ClockUnitVerdict::InvocationMismatch => Some(
                 "Run `orbit clock repair` to rewrite the stale unit to `orbit clock tick`."
+                    .to_string(),
+            ),
+            ClockUnitVerdict::SafetyMismatch { .. } => Some(
+                "Run `orbit clock repair` to install a finite TimeoutStartSec and KillMode=mixed."
                     .to_string(),
             ),
             ClockUnitVerdict::Unrunnable { .. } => Some(
@@ -235,6 +251,8 @@ pub(crate) fn inspect_clock_unit_at(
                     ClockUnitVerdict::InvocationMismatch
                 } else if program_version != running_version {
                     ClockUnitVerdict::VersionMismatch
+                } else if let Some(reason) = systemd_unit_safety_issue(&unit_path, platform) {
+                    ClockUnitVerdict::SafetyMismatch { reason }
                 } else if same_program(&program_path, &running.path) {
                     ClockUnitVerdict::Matching
                 } else {
@@ -251,6 +269,94 @@ pub(crate) fn inspect_clock_unit_at(
             }
         },
     }
+}
+
+/// Inspect the installed service settings without spawning the manager.
+pub(super) fn systemd_unit_safety_issue(path: &Path, platform: ClockPlatform) -> Option<String> {
+    if platform != ClockPlatform::Systemd {
+        return None;
+    }
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => return Some(format!("could not read recovery settings: {error}")),
+    };
+    let mut in_service = false;
+    let mut timeout = None;
+    let mut kill_mode = None;
+    for line in contents.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_service = line == "[Service]";
+        }
+        if !in_service {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            match key.trim() {
+                "TimeoutStartSec" => timeout = Some(value.trim()),
+                "KillMode" => kill_mode = Some(value.trim()),
+                _ => {}
+            }
+        }
+    }
+    systemd_recovery_issue(timeout, kill_mode)
+}
+
+pub(super) fn systemd_recovery_issue(
+    timeout: Option<&str>,
+    kill_mode: Option<&str>,
+) -> Option<String> {
+    let mut issues = Vec::new();
+    if !timeout.is_some_and(finite_systemd_duration) {
+        issues.push("missing finite TimeoutStartSec");
+    }
+    if kill_mode != Some("mixed") {
+        issues.push("missing KillMode=mixed");
+    }
+    (!issues.is_empty()).then(|| issues.join("; "))
+}
+
+/// systemd durations may combine positive numbers with unit suffixes. Zero
+/// disables TimeoutStartSec, and infinity must never count as a deadline.
+fn finite_systemd_duration(value: &str) -> bool {
+    let mut positive = false;
+    for part in value.split_whitespace() {
+        let end = part
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(part.len());
+        let Ok(number) = part[..end].parse::<f64>() else {
+            return false;
+        };
+        if !number.is_finite() || number < 0.0 {
+            return false;
+        }
+        if !matches!(
+            &part[end..],
+            "" | "us"
+                | "ms"
+                | "s"
+                | "sec"
+                | "second"
+                | "seconds"
+                | "m"
+                | "min"
+                | "minute"
+                | "minutes"
+                | "h"
+                | "hr"
+                | "hour"
+                | "hours"
+                | "d"
+                | "day"
+                | "days"
+                | "w"
+                | "week"
+                | "weeks"
+        ) {
+            return false;
+        }
+        positive |= number > 0.0;
+    }
+    positive
 }
 
 /// Run `<program> --version` with a short timeout. Never panics.

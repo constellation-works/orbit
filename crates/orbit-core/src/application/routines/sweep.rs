@@ -7,8 +7,9 @@
 //! is a clean no-op, because launchd/systemd will invoke this forever.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use super::RoutineMachineIdentity;
 use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
@@ -20,6 +21,7 @@ use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
 use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 use chrono::Utc;
+use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_automation::routines::sweep::run_sweep_core;
 pub use orbit_automation::routines::sweep::{
     AutoTaskSweepReport, RoutineDispatch, RoutineSweepReport, RunOwnerLiveness, SweepOptions,
@@ -221,6 +223,13 @@ pub(crate) fn run_sweep_at_with_providers_at(
     host_signals: &dyn HostSignalProbe,
     now_utc: chrono::DateTime<Utc>,
 ) -> Result<SweepOutcome, OrbitError> {
+    let deadline = options
+        .deadline
+        .unwrap_or_else(|| Instant::now() + TICK_DEADLINE);
+    let options = SweepOptions {
+        deadline: Some(deadline),
+        ..options
+    };
     // One pass per host at a time: overlapping invocations from a slow prior
     // pass must not double-fire. flock releases on process death, so a
     // crashed sweep never wedges the next one. `lock_busy` means a pass that
@@ -243,14 +252,34 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // five-minute intervals instead of retaining the old 120-second default.
     let options = configured_sweep_options(global_root, options)?;
     // One runtime per active workspace; discovery and dispatch share them.
-    let discovered = workspace_provider.discover_workspaces(global_root)?;
-    refresh_discovered_token_scoreboards(&discovered.entries);
+    let discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
+    let mut skipped_workspaces: BTreeSet<String> =
+        discovered.skipped_workspaces.iter().cloned().collect();
+    for entry in &discovered.entries {
+        if tick_allows_workspace(deadline, &entry.0, &mut skipped_workspaces) {
+            refresh_discovered_token_scoreboards(std::slice::from_ref(entry));
+        }
+    }
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
     let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 
     // [ORB-14173] Replica checkouts contribute only their host-local
     // worktree GC routines; the rest are reported as owner work below.
-    let host = collect_host_routines(&discovered);
+    let host = if Instant::now() < deadline {
+        collect_host_routines(&discovered)
+    } else {
+        skipped_workspaces.extend(
+            discovered
+                .entries
+                .iter()
+                .chain(&discovered.replicas)
+                .map(|(workspace, _)| workspace.name.clone()),
+        );
+        super::loader::HostRoutines {
+            collection: super::loader::RoutineCollection::default(),
+            owner_only: Vec::new(),
+        }
+    };
     let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
@@ -261,6 +290,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // a pending host shutdown does not hold it.
     if !options.dry_run {
         for (workspace, runtime) in discovered.entries.iter().chain(&discovered.replicas) {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
             deliver_recorded_pull_settlements(workspace, runtime);
         }
     }
@@ -301,6 +333,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
             auto_task_reports: Vec::new(),
             load_errors,
             no_workspace_loaded,
+            deadline_exceeded: Instant::now() >= deadline,
+            skipped_workspaces: skipped_workspaces.into_iter().collect(),
         });
     }
 
@@ -316,6 +350,12 @@ pub(crate) fn run_sweep_at_with_providers_at(
     };
 
     let mut reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
+    skipped_workspaces.extend(
+        reports
+            .iter()
+            .filter(|report| report.reason.as_deref() == Some("tick_deadline"))
+            .map(|report| report.source.clone()),
+    );
     // A definition targeting a retired job is skipped, not broken: one
     // non-noteworthy row per pass, never a load error on every tick.
     reports.extend(collection.retired.iter().map(|routine| RoutineSweepReport {
@@ -345,6 +385,17 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // becomes one row and never prevents the remaining workspaces from running.
     let mut auto_task_reports = Vec::new();
     for (workspace, runtime) in &discovered.entries {
+        if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+            auto_task_reports.push(AutoTaskSweepReport {
+                name: "auto-tasks".into(),
+                source: workspace.name.clone(),
+                action: "skipped",
+                reason: Some("tick_deadline".into()),
+                slot: None,
+                task_id: None,
+            });
+            continue;
+        }
         match run_auto_task_scheduler_with_cache(
             runtime,
             now_utc,
@@ -400,6 +451,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).
     if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
         for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
             match runtime.auto_resume_upgrade_interrupted_runs(now_utc) {
                 Ok(resumed) => {
                     if !resumed.is_empty() {
@@ -426,6 +480,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // `workflow.final_recovery_crews` pool.
     if !options.dry_run {
         for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
             match runtime.run_blocked_task_recovery_tick(now_utc) {
                 Ok(tick) => {
                     if !tick.dispatched.is_empty() || !tick.settled.is_empty() {
@@ -447,6 +504,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
             }
             // A held review whose only missing evidence is a Linux CodeQL
             // run gets that run here, on a Linux owner; one at a time.
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
             match runtime.run_review_evidence_fulfilment_tick(now_utc) {
                 Ok(tick) => {
                     if !tick.dispatched.is_empty() {
@@ -468,6 +528,11 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    let deadline_exceeded = Instant::now() >= deadline;
+    if deadline_exceeded {
+        tracing::error!(target: "orbit.core.sweep", skipped_workspaces = ?skipped_workspaces,
+            "sweep.tick_deadline: tick budget exhausted; remaining work waits for the next tick");
+    }
     Ok(SweepOutcome {
         machine_name: local_machine.machine_name,
         machine_id: local_machine.machine_id,
@@ -476,7 +541,21 @@ pub(crate) fn run_sweep_at_with_providers_at(
         auto_task_reports,
         load_errors,
         no_workspace_loaded,
+        deadline_exceeded,
+        skipped_workspaces: skipped_workspaces.into_iter().collect(),
     })
+}
+
+fn tick_allows_workspace(
+    deadline: Instant,
+    workspace: &Workspace,
+    skipped: &mut BTreeSet<String>,
+) -> bool {
+    if Instant::now() < deadline {
+        return true;
+    }
+    skipped.insert(workspace.name.clone());
+    false
 }
 
 /// Deliver one checkout's recorded pull settlements, logging what is still

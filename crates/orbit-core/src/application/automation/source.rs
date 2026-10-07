@@ -7,9 +7,10 @@ use orbit_automation::{
     delivery::{digest, recovery::HISTORY_REPLAY_COMMIT_LIMIT},
 };
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
-    with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, git_fetch_lock_target,
+    should_retry_git_ref_cas,
 };
+use orbit_common::fs::{file_lock::FileLockOptions, io::with_exclusive_file_lock_options};
 use orbit_types::workflow::automation::recovery::{HistoryMapping, HistoryReplayRecord, refusal};
 use orbit_types::workflow::automation::*;
 use serde_json::Value;
@@ -17,7 +18,7 @@ use std::{
     collections::BTreeMap,
     io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -32,6 +33,29 @@ const OUTPUT_LIMIT: u64 = 1_048_576;
 /// Largest listing [`Source::git_matching_paths`] streams through a filter.
 /// Only the kept paths are held in memory, so this bounds disk, not evidence.
 const LISTING_LIMIT: u64 = 256 * 1_048_576;
+
+/// A source command owns its descendants as well as its direct child. Drop
+/// cleans up on timeout, I/O failure and a leader exiting before its helpers.
+struct SourceChild(Child);
+
+impl Drop for SourceChild {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Ok(group) = i32::try_from(self.0.id()) {
+            // SAFETY: this child was made a group leader with process_group(0).
+            // No caller memory is accessed; never signal our own group or a
+            // reused PID that now belongs to a different process group.
+            unsafe {
+                let current = libc::getpgid(group);
+                if group > 1 && group != libc::getpgrp() && (current < 0 || current == group) {
+                    libc::killpg(group, libc::SIGKILL);
+                }
+            }
+        }
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 /// A delivery pass could not fetch `origin/<branch>`. Observation is not
 /// advanced and the local branch is not consulted in its place.
@@ -186,23 +210,31 @@ impl<'a> Source<'a> {
             command.env(key, value);
         }
 
-        let mut child = command
-            .current_dir(self.root)
-            .stdin(stdin)
-            .stdout(output)
-            .stderr(errors)
-            .spawn()
-            .map_err(|e| {
-                AutomationError::Deferred(format!(
-                    "source_spawn_failed: {}: {e}",
-                    command_line(program, args)
-                ))
-            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = SourceChild(
+            command
+                .current_dir(self.root)
+                .stdin(stdin)
+                .stdout(output)
+                .stderr(errors)
+                .spawn()
+                .map_err(|e| {
+                    AutomationError::Deferred(format!(
+                        "source_spawn_failed: {}: {e}",
+                        command_line(program, args)
+                    ))
+                })?,
+        );
 
         let start = Instant::now();
 
         loop {
             if let Some(status) = child
+                .0
                 .try_wait()
                 .map_err(|e| AutomationError::Deferred(e.to_string()))?
             {
@@ -224,8 +256,6 @@ impl<'a> Source<'a> {
                     .unwrap_or(true);
 
             if over_budget {
-                let _ = child.kill();
-                let _ = child.wait();
                 return Err(AutomationError::Deferred("source_budget".into()));
             }
 
@@ -410,24 +440,34 @@ impl<'a> Source<'a> {
     /// ancestry check can report `history_diverged`. The fetch uses whatever
     /// remains of the source deadline, not the two-second local-command budget.
     fn fetch_origin_branch(&self, branch: &str) -> Result<(), AutomationError> {
-        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
-            Some(budget) if !budget.is_zero() => budget,
-            _ => return Err(AutomationError::Deferred("source_deadline".into())),
-        };
         let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-        let root = self.root.to_path_buf();
-        match with_git_fetch_lock(&root, || self.fetch_origin_branch_locked(&spec, budget)) {
+        // Resolve through the bounded source runner too: the shared helper's
+        // unbounded rev-parse would otherwise sit outside this pass's budget.
+        let common = self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+        let options = FileLockOptions {
+            timeout: self.remaining_budget()?,
+            ..FileLockOptions::default()
+        };
+        match with_exclusive_file_lock_options(
+            &git_fetch_lock_target(Path::new(&common)),
+            "git fetch",
+            options,
+            || self.fetch_origin_branch_locked(&spec),
+        ) {
             Ok(()) => Ok(()),
             Err(FetchLockError::Io(error)) => Err(fetch_failure(&error.to_string())),
             Err(FetchLockError::Deferred(error)) => Err(error),
         }
     }
 
-    fn fetch_origin_branch_locked(
-        &self,
-        spec: &str,
-        budget: Duration,
-    ) -> Result<(), FetchLockError> {
+    fn remaining_budget(&self) -> Result<Duration, AutomationError> {
+        SOURCE_DEADLINE
+            .checked_sub(self.started.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| AutomationError::Deferred("source_deadline".into()))
+    }
+
+    fn fetch_origin_branch_locked(&self, spec: &str) -> Result<(), FetchLockError> {
         let args = [
             "fetch",
             "--no-tags",
@@ -437,6 +477,7 @@ impl<'a> Source<'a> {
         ];
         let mut last_error = AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
         for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
+            let budget = self.remaining_budget().map_err(FetchLockError::Deferred)?;
             match self.command_with("git", &args, &[("GIT_TERMINAL_PROMPT", "0")], None, budget) {
                 Ok(_) => return Ok(()),
                 Err(error) => {

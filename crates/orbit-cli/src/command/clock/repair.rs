@@ -65,6 +65,7 @@ fn drift_name(drift: &ClockUnitDrift) -> &'static str {
         ClockUnitDrift::ProgramMissing { .. } => "program_missing",
         ClockUnitDrift::ProgramMoved { .. } => "program_moved",
         ClockUnitDrift::InvocationStale => "invocation_stale",
+        ClockUnitDrift::SafetyStale => "safety_stale",
     }
 }
 
