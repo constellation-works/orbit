@@ -131,9 +131,11 @@ impl Filters {
 pub(crate) struct RenderedLogEvent {
     pub ts: String,
     pub source: String,
+    pub target: String,
     pub code: String,
     pub level: String,
     pub message_html: String,
+    pub agent_stdout: bool,
 }
 
 pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitError> {
@@ -377,9 +379,12 @@ pub(crate) fn render_log_event_for_web(event: &Value) -> RenderedLogEvent {
     RenderedLogEvent {
         ts,
         source: format_source(target, &fields),
+        target: redact_all(target),
         code: format_code(target, level_raw, &fields),
         level: normalize_level(level_raw).to_string(),
         message_html: format_message_html(target, &fields),
+        agent_stdout: is_agent_relay(target, &fields)
+            && fields.get("stream").and_then(Value::as_str) == Some("stdout"),
     }
 }
 
@@ -410,9 +415,10 @@ pub(crate) fn format_source(target: &str, fields: &Value) -> String {
     }
 
     target
-        .rsplit_once('.')
-        .map(|(_, tail)| tail.to_string())
-        .unwrap_or_else(|| target.to_string())
+        .rsplit([':', '.'])
+        .next()
+        .unwrap_or(target)
+        .to_string()
 }
 
 pub(crate) fn format_code(target: &str, level: &str, fields: &Value) -> String {
@@ -548,39 +554,71 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
             code_value(getf("step_id").to_string()),
             code_value(getn("max_iterations")),
         ),
-        "orbit_engine::activity_job::cli_runner" => {
-            let stream = getf("stream");
-            let line = getf("line");
-            if !stream.is_empty() {
-                format!("[{}] {}", code_value(stream.to_string()), escape_html(line))
-            } else {
-                escape_html(line)
-            }
+        _ if is_agent_relay(target, fields) => format_agent_message(fields),
+        _ => format_generic_fields(fields),
+    }
+}
+
+fn is_agent_relay(target: &str, fields: &Value) -> bool {
+    matches!(
+        target,
+        "orbit_engine::activity_job::cli_runner"
+            | "orbit_engine::activity_job::cli_runner::supervisor"
+    ) && fields.get("line").and_then(Value::as_str).is_some()
+}
+
+fn format_agent_message(fields: &Value) -> String {
+    let line = fields.get("line").and_then(Value::as_str).unwrap_or("");
+    let event = serde_json::from_str::<Value>(line).ok();
+    let kind = event
+        .as_ref()
+        .and_then(|event| event.get("type"))
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.is_empty());
+    let stream = fields
+        .get("stream")
+        .and_then(Value::as_str)
+        .unwrap_or("output");
+    // The kind and abbreviated run fit ahead of the raw relay and its context
+    // in the narrow dock. The complete run remains in the tooltip and fields.
+    let mut summary = escape_html(&kind.map_or_else(|| format!("agent {stream}"), str::to_string));
+    if let Some(run) = fields.get("job_run_id").and_then(Value::as_str) {
+        summary.push_str(" · ");
+        summary.push_str(&code_value(run.to_string()));
+    }
+    let context = format_generic_fields(fields);
+    if !context.is_empty() {
+        summary.push(' ');
+        summary.push_str(&context);
+    }
+    summary
+}
+
+fn format_generic_fields(fields: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Value::Object(map) = fields {
+        if let Some(message) = map.get("message").and_then(Value::as_str) {
+            parts.push(escape_html(message));
         }
-        _ => {
-            let mut parts: Vec<String> = Vec::new();
-            if let Value::Object(map) = fields {
-                if let Some(message) = map.get("message").and_then(Value::as_str) {
-                    parts.push(escape_html(message));
-                }
-                for (k, v) in map {
-                    if k == "message" {
-                        continue;
-                    }
-                    let value_str = match v {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    parts.push(format!(
-                        "<b>{}</b>={}",
-                        escape_html(k),
-                        code_value(value_str)
-                    ));
-                }
-            }
-            parts.join(" ")
+        // Message first; bulky location and run context last, regardless of
+        // the tracing serializer's field order.
+        for (key, value) in map
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "message" | "cwd" | "job_run_id"))
+            .chain(
+                ["cwd", "job_run_id"]
+                    .into_iter()
+                    .filter_map(|key| map.get_key_value(key)),
+            )
+        {
+            let value = match value {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            parts.push(format!("<b>{}</b>={}", escape_html(key), code_value(value)));
         }
     }
+    parts.join(" ")
 }
 
 fn html_pairs(pairs: &[(&str, String)]) -> String {
@@ -593,7 +631,55 @@ fn html_pairs(pairs: &[(&str, String)]) -> String {
 }
 
 fn code_value(value: String) -> String {
-    format!("<code>{}</code>", escape_html(&value))
+    let short = shorten_context_value(&value);
+    if short != value {
+        format!(
+            "<code title=\"{}\">{}</code>",
+            escape_html(&value),
+            escape_html(&short)
+        )
+    } else {
+        format!("<code>{}</code>", escape_html(&value))
+    }
+}
+
+fn shorten_context_value(value: &str) -> String {
+    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+    let relative = home
+        .as_deref()
+        .and_then(|home| Path::new(value).strip_prefix(home).ok());
+    // A temporary home can itself live in a managed checkout. Only worktrees
+    // below that home override `~`; an outer checkout is not useful context.
+    let path = relative.and_then(Path::to_str).unwrap_or(value);
+    if Path::new(value).is_absolute()
+        && let Some(worktree) = path
+            .rsplit_once("/.orbit/state/worktrees/orbit-")
+            .map(|(_, worktree)| worktree)
+            .or_else(|| path.strip_prefix(".orbit/state/worktrees/orbit-"))
+    {
+        return worktree.to_string();
+    }
+    if value.starts_with("jrun-") {
+        let parts: Vec<_> = value.split('-').collect();
+        if let ["jrun", date, time, suffix] = parts.as_slice()
+            && date.len() == 8
+            && time.len() == 4
+            && date
+                .chars()
+                .chain(time.chars())
+                .all(|ch| ch.is_ascii_digit())
+        {
+            return format!("jrun-…-{suffix}");
+        }
+    }
+    if let Some(relative) = relative {
+        return if relative.as_os_str().is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{}", relative.display())
+        };
+    }
+    value.to_string()
 }
 
 fn escape_html(raw: &str) -> String {

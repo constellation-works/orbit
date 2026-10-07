@@ -106,7 +106,7 @@
 .log-line:hover { background: rgba(255,255,255,0.03); }
 .log-line.expanded { background: rgba(255,255,255,0.02); border-bottom-color: var(--hair); }
 .log-line .t  { color: var(--fg-dim); font-feature-settings: "tnum"; white-space: nowrap; }
-.log-line .ag { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-line .ag { color: var(--fg-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The level text is replaced by the row keyline; the element stays for
    assistive tech and for the title tooltip. */

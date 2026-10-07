@@ -5,7 +5,7 @@ tags: [operations, logs, tracing, rotation, routines]
 paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
-last_validated: 2026-10-05
+last_validated: 2026-10-07
 ---
 
 # Inspect and Retain Logs
@@ -53,6 +53,31 @@ The dashboard log snapshot (`/api/log`) and Errors tab
 (`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
 to show valid records on either side. File access and read errors still fail the
 request.
+
+The Tasks dock's Log mode and the bottom status bar put the message before
+structured context. Agent relays show the provider event kind (or the stream
+name for plain output) and a compact run identifier first. Targets show their
+last segment; hover to see the complete target. Home paths use `~`, and managed
+worktree paths show the run and relative path; shortened values retain the full
+value in their tooltip. The **agent** toggle hides stdout relays independently
+of the severity filters and remembers the choice in this browser. Stderr and
+orchestration events remain subject to the severity filters, and the status bar
+continues to show the latest event.
+
+To validate the dashboard with a prepared Playwright module and Chromium, run
+the isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
+filters, and reload persistence):
+
+```sh
+ORBIT_PLAYWRIGHT_MODULE="$PWD/.orbit/tmp/browser/node_modules/playwright/index.mjs" \
+ORBIT_LOG_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/log-browser" \
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.orbit/tmp/browser/browsers" \
+./scripts/build-budget.py -- cargo test -p orbit-web --test http_api \
+  log::dashboard_log_message_priority_and_agent_filter -- --ignored --nocapture
+```
+
+On minimal Linux images, also supply the prepared browser's
+`LD_LIBRARY_PATH` and `FONTCONFIG_FILE` for its private libraries and fonts.
 
 ## Rotation and retention
 

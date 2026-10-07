@@ -64,9 +64,9 @@ function loadLogPanelPrefs() {
     const parsed = raw ? JSON.parse(raw) : {};
     // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
     const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
-    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain" };
+    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain", showAgent: parsed.showAgent !== false };
   } catch (_) {
-    return { dockMode: "drain" };
+    return { dockMode: "drain", showAgent: true };
   }
 }
 
@@ -387,7 +387,10 @@ function updateLogStatusBar(ev) {
   const ag = $("log-statusbar-source");
   const m = $("log-statusbar-message");
   if (t) t.textContent = timeStr;
-  if (ag) ag.textContent = ev.source || "";
+  if (ag) {
+    ag.textContent = ev.source || "";
+    ag.title = ev.target || ev.source || "";
+  }
   if (m) {
     m.innerHTML = ev.message_html || "";
     m.dataset.level = getLogClass(ev.level, ev.code);
@@ -415,6 +418,7 @@ function renderLogEvent(ev, isFresh) {
   const row = el("div", { class: "log-line" + (isFresh ? " fresh" : "") });
   row.dataset.code = ev.code || "";
   row.dataset.level = ev.level || "info";
+  row.dataset.agentStdout = String(ev.agent_stdout === true);
 
   let timeStr = ev.ts || "";
   if (timeStr && timeStr.includes("T")) {
@@ -425,7 +429,7 @@ function renderLogEvent(ev, isFresh) {
   }
 
   const tSpan = el("span", { class: "t", text: timeStr });
-  const agSpan = el("span", { class: "ag", text: ev.source || "" });
+  const agSpan = el("span", { class: "ag", text: ev.source || "", title: ev.target || ev.source || "" });
   const lvClass = getLogClass(ev.level, ev.code);
   // ORB-10972: the dock is 336px, so the level is carried by a coloured
   // keyline on the row rather than a 42px text column — that width goes to the
@@ -515,6 +519,7 @@ export function initLogTail() {
   wireDockSplitter();
   wireLogWrapToggle();
   fitLogPanelToViewport();
+  syncLogFilterPills();
   loadLogSnapshot();
 
   const followBtn = $("log-follow-tail");
@@ -536,7 +541,17 @@ export function initLogTail() {
     });
   }
 
-  document.querySelectorAll("#side-dock .filter-pill").forEach(pill => {
+  const agentBtn = $("log-show-agent");
+  if (agentBtn) {
+    agentBtn.addEventListener("click", () => {
+      logPanelPrefs = { ...logPanelPrefs, showAgent: !logPanelPrefs.showAgent };
+      saveLogPanelPrefs(logPanelPrefs);
+      syncLogFilterPills();
+      applyLogFilters();
+    });
+  }
+
+  document.querySelectorAll("#side-dock .filter-pill[data-filter]").forEach(pill => {
     pill.addEventListener("click", () => {
       const filter = pill.dataset.filter;
       if (filter === "all") {
@@ -629,10 +644,15 @@ function enforceLogBounds() {
 // carries the same fact for assistive tech, so both are written from the one
 // active-filter set rather than from the click target.
 function syncLogFilterPills() {
-  for (const pill of document.querySelectorAll("#side-dock .filter-pill")) {
+  for (const pill of document.querySelectorAll("#side-dock .filter-pill[data-filter]")) {
     const on = activeLogFilters.has(pill.dataset.filter);
     pill.classList.toggle("on", on);
     pill.setAttribute("aria-pressed", String(on));
+  }
+  const agentBtn = $("log-show-agent");
+  if (agentBtn) {
+    agentBtn.classList.toggle("on", logPanelPrefs.showAgent);
+    agentBtn.setAttribute("aria-pressed", String(logPanelPrefs.showAgent));
   }
 }
 
@@ -655,6 +675,7 @@ function applyLogFilters() {
       if (activeLogFilters.has("deny") && lvClass === "deny") show = true;
       if (activeLogFilters.has("warn") && lvClass === "warn") show = true;
     }
+    if (!logPanelPrefs.showAgent && row.dataset.agentStdout === "true") show = false;
     row.style.display = show ? "" : "none";
     if (show) visibleCount++;
   }
