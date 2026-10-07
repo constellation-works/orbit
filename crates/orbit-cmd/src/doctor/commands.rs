@@ -25,6 +25,34 @@ pub struct WorkspaceDoctorResult {
     pub message: String,
     /// Exact repair command or explicit manual next step for warning/error rows.
     pub remediation: Option<String>,
+    /// Wall-clock duration of the probe in milliseconds. Rows from one probe share its duration.
+    pub duration_ms: u64,
+}
+
+impl WorkspaceDoctorResult {
+    /// Measure a single diagnostic, including unsuccessful or skipped outcomes.
+    pub fn timed(probe: impl FnOnce() -> Self) -> Self {
+        let start = std::time::Instant::now();
+        let mut row = probe();
+        row.duration_ms = elapsed_ms(start);
+        row
+    }
+
+    /// Measure a probe that expands into several rows (for example config findings).
+    /// Each row reports the shared probe duration, so these values are not additive.
+    pub fn timed_many<I: IntoIterator<Item = Self>>(probe: impl FnOnce() -> I) -> Vec<Self> {
+        let start = std::time::Instant::now();
+        let mut rows = probe().into_iter().collect::<Vec<_>>();
+        let duration_ms = elapsed_ms(start);
+        for row in &mut rows {
+            row.duration_ms = duration_ms;
+        }
+        rows
+    }
+}
+
+fn elapsed_ms(start: std::time::Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(super) fn check(
@@ -45,6 +73,7 @@ pub(super) fn check(
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }
 
@@ -59,6 +88,7 @@ pub(super) fn actionable_check(
         status,
         message,
         remediation: Some(remediation),
+        duration_ms: 0,
     }
 }
 
@@ -92,7 +122,15 @@ pub trait DoctorCommands {
     /// Run every workspace-level doctor check. Individual checks never abort
     /// the diagnosis: probe failures surface as `Warning`/`Error` rows and
     /// absent subsystems as `Skipped`.
-    fn doctor_workspace(&self) -> Result<Vec<WorkspaceDoctorResult>, OrbitError>;
+    fn doctor_workspace(&self) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
+        self.doctor_workspace_with_depth(false)
+    }
+
+    /// Run workspace diagnostics, optionally scanning every database page with SQLite quick_check.
+    fn doctor_workspace_with_depth(
+        &self,
+        deep: bool,
+    ) -> Result<Vec<WorkspaceDoctorResult>, OrbitError>;
 
     /// Clear records left by dead holders, without disturbing a lock that
     /// is currently held by another process. Lock files remain in place so
@@ -131,30 +169,37 @@ pub trait DoctorCommands {
 }
 
 impl DoctorCommands for OrbitRuntime {
-    fn doctor_workspace(&self) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
-        let mut results = doctor_check_config(self);
+    fn doctor_workspace_with_depth(
+        &self,
+        deep: bool,
+    ) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
+        let mut results = WorkspaceDoctorResult::timed_many(|| doctor_check_config(self));
         results.extend([
-            doctor_check_database(self),
-            doctor_check_disk_space(self),
-            doctor_check_search_index(self),
-            doctor_check_stale_locks(self),
-            doctor_check_job_runs(self),
-            doctor_check_pull_settlements(self),
-            doctor_check_pull_protocol(self),
-            doctor_check_task_reservations(self),
-            doctor_check_task_relations(self),
-            doctor_check_infra_blocked_tasks(self),
-            doctor_check_blocked_task_recovery(self),
-            doctor_check_stalled_automation(self),
-            doctor_check_review(self),
-            doctor_check_host_shutdown(self),
-            doctor_check_validation_env(self),
-            doctor_check_orphan_task_stores(self),
-            doctor_check_tracked_orbit_files(self),
-            doctor_check_plugin_builds(self),
+            WorkspaceDoctorResult::timed(|| doctor_check_database(self, deep)),
+            WorkspaceDoctorResult::timed(|| doctor_check_disk_space(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_search_index(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_stale_locks(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_job_runs(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_pull_settlements(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_pull_protocol(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_task_reservations(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_task_relations(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_infra_blocked_tasks(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_blocked_task_recovery(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_stalled_automation(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_review(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_host_shutdown(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_validation_env(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_orphan_task_stores(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_tracked_orbit_files(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_plugin_builds(self)),
         ]);
-        results.extend(doctor_check_unpublished_bundle_dirs(self));
-        results.extend(doctor_check_definition_artifacts(self));
+        results.extend(WorkspaceDoctorResult::timed_many(|| {
+            doctor_check_unpublished_bundle_dirs(self)
+        }));
+        results.extend(WorkspaceDoctorResult::timed_many(|| {
+            doctor_check_definition_artifacts(self)
+        }));
         Ok(results)
     }
 

@@ -359,7 +359,7 @@ Task bundles restored by file copy (for example, an rsync of `~/.orbit/tasks/`) 
 
 ## Verification
 
-Run `orbit doctor` and confirm that the `database` row reports `ok`; see
+Run `orbit doctor --deep` and confirm that the `database` row reports `ok`; see
 [Check Orbit health](./health-checks.md) for exit-code semantics. Then show or search a
 known task to confirm that task bundles were reindexed.
 

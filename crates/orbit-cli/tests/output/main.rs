@@ -11,6 +11,7 @@
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 
+mod doctor;
 mod error_output;
 mod help_examples;
 mod help_goldens;

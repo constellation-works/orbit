@@ -18,11 +18,14 @@ database recovery, or upgrade.
 Without repair flags, `orbit doctor` diagnoses workspace and host infrastructure, definition
 artifacts, routed provider CLIs, MCP configuration, and the clock unit. Individual probes
 normally report a row on failure; runtime/store startup failures can prevent a report.
+Default database checks read the header and schema ledger without scanning data pages.
+Use `orbit doctor --deep` after a restore or when corruption is suspected to also run
+SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer on a cold cache.
 
 | Check | What it reports | Status and next step |
 |---|---|---|
 | `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
-| `database` | Store DB `PRAGMA quick_check` and schema-ledger version versus this binary | `ok` when integrity and version match; `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
+| `database` | Store DB readability and schema-ledger version versus this binary; `--deep` adds `PRAGMA quick_check` | `ok` when readability and version match (and integrity passes with `--deep`); `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
 | `disk-space` | Free space on the volume holding the local `.orbit` | `warning` below 1 GiB or 5%, or when the probe fails; `error` below 256 MiB or 1%. Free space on that volume. |
 | `search-index` | Lexical index chunk count and indexed-task count versus stored-task count | `ok` when task counts agree, including an empty workspace; `warning` on a count mismatch or read failure. A mismatch names `orbit search reindex`; this check does not inspect embeddings or prove freshness when counts agree. |
 | `stale-locks` | Immediate `*.lock` files in the workspace-local `state_dir` whose recorded holder PID is dead | `ok` with the number scanned when none are stale; otherwise `warning` with holder details and `orbit doctor --fix-stale-locks`. No recursive scan of task, learning, or ADR trees. |
@@ -54,7 +57,12 @@ normally report a row on failure; runtime/store startup failures can prevent a r
 The state-permission probe checks the global and workspace Orbit roots themselves, then
 recurses through global `state/`, `tasks/`, `cache/`, `frictions/` and workspace `state/`,
 `tasks/`, `frictions/`. Missing roots are ignored. Configured roots are resolved first;
-child symlinks are not followed. The separate filesystem-lock probe scans only immediate
+child symlinks are not followed. The scan never enters `state/worktrees/` contents or any
+`target/` directory, including the `target/` directory's own mode: Orbit does not own run
+checkout contents or Cargo output. Entries disappearing during a walk are skipped; other
+access errors still report an error. Warnings count writable Orbit-owned directories and
+group them by distinct scanned roots so an operator can find the actionable subtrees.
+The separate filesystem-lock probe scans only immediate
 files in `state_dir`; on non-Unix platforms holder PIDs are conservatively treated as alive.
 
 Explicit repair flags prepend these additional rows before the diagnostics. They are not
@@ -76,16 +84,19 @@ Example excerpt (other checks omitted; counts vary by workspace):
 ```text
 $ orbit doctor --format table
 │ CHECK         STATUS    DETAILS                                           │
-│ database      ok        quick_check ok; schema version 35 matches this binary │
+│ database      ok        database readable (integrity scan: orbit doctor --deep); schema version 37 matches this binary │
 │ search-index  ok        26430 chunks, 3707 indexed tasks / 3707 stored tasks │
 │ stale-locks   ok        3 lock file(s) scanned, none stale                  │
 …
 ```
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit
-zero. `--json` emits an array of objects with `check`, `status`, `message`, and `remediation`
+zero. `--json` emits an array of objects with `check`, `status`, `message`, `remediation`, and `duration_ms`
 fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. Human
-output prints the same guidance as an `Action:` line. Lock files flagged by `stale-locks`
+output prints the same guidance as an `Action:` line and includes elapsed seconds on rows
+that take more than one second. Durations include unsuccessful and skipped probes; multiple
+rows emitted by a single probe share its duration, so row durations are not additive.
+Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
 the lock file so queued openers and new openers share the same inode; do not delete it.

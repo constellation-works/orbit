@@ -587,12 +587,16 @@ spec:
     // Other readiness checks can fail on a host without provider CLIs;
     // the build section is independently required to report intact provenance.
     let doctor = parse_json_stdout(&doctor_output, "doctor");
-    let build_row = doctor
+    let mut build_row = doctor
         .as_array()
         .expect("doctor rows")
         .iter()
         .find(|row| row["check"] == "plugin-builds")
-        .expect("source builds row");
+        .expect("source builds row")
+        .clone();
+    // Wall-clock measurement is variable; preserve the JSON field contract in the golden.
+    assert!(build_row["duration_ms"].is_u64());
+    build_row["duration_ms"] = json!(0);
     assert_eq!(
         build_row["status"], "ok",
         "intact provenance is informational"

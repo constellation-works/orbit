@@ -155,8 +155,8 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
     }
 }
 
-/// `PRAGMA quick_check` plus migration-ledger schema version vs binary.
-pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+/// Cheap database/header and schema-ledger checks; full page integrity is opt-in.
+pub(super) fn doctor_check_database(runtime: &OrbitRuntime, deep: bool) -> WorkspaceDoctorResult {
     let store = match runtime.sqlite_store_for_diagnostics() {
         Ok(store) => store,
         Err(error) => {
@@ -167,24 +167,29 @@ pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
             );
         }
     };
-    if let Err(error) = store.quick_check() {
+    if deep && let Err(error) = store.quick_check() {
         return check(
             "database",
             WorkspaceDoctorStatus::Error,
             format!("integrity check failed: {error}"),
         );
     }
+    let probe = if deep {
+        "quick_check ok"
+    } else {
+        "database readable (integrity scan: orbit doctor --deep)"
+    };
     match store.schema_version() {
         Ok(version) if version == SUPPORTED_SCHEMA_VERSION => check(
             "database",
             WorkspaceDoctorStatus::Ok,
-            format!("quick_check ok; schema version {version} matches this binary"),
+            format!("{probe}; schema version {version} matches this binary"),
         ),
         Ok(version) if version < SUPPORTED_SCHEMA_VERSION => check(
             "database",
             WorkspaceDoctorStatus::Warning,
             format!(
-                "quick_check ok; schema version {version} is behind this binary \
+                "{probe}; schema version {version} is behind this binary \
                  ({SUPPORTED_SCHEMA_VERSION}) — migrations apply on next store open"
             ),
         ),
@@ -199,7 +204,7 @@ pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
         Err(error) => check(
             "database",
             WorkspaceDoctorStatus::Warning,
-            format!("quick_check ok; cannot read migration ledger: {error}"),
+            format!("{probe}; cannot read migration ledger: {error}"),
         ),
     }
 }
