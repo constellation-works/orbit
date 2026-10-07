@@ -817,13 +817,13 @@
       },
       {
         "name": "all",
-        "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
+        "description": "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "status",
-        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind.",
+        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind.",
         "param_type": "string_list",
         "required": false
       },

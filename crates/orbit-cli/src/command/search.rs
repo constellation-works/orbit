@@ -29,11 +29,15 @@ pub struct SearchCommand {
     /// Filter by tag (AND semantics). Applies to task and friction results.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',', global = true)]
     pub tags: Vec<String>,
-    /// Include normally-hidden statuses for the queried kind. Task adds
-    /// done/rejected/archived; friction adds triaged/resolved.
+    /// Include every status for the queried kind. Task defaults to
+    /// proposed/backlog/in-progress/review/blocked; --all adds
+    /// done/rejected/archived/someday. Friction defaults to open; --all adds
+    /// triaged/resolved.
     #[arg(long, global = true)]
     pub all: bool,
     /// Explicit per-kind status override, e.g. task:open,friction:open.
+    /// task:open covers proposed/backlog/in-progress/review/blocked.
+    /// Overrides --all for the named kind.
     #[arg(long, value_delimiter = ',', global = true)]
     pub status: Vec<String>,
     /// Search this registered workspace as well. Repeat or comma-separate to

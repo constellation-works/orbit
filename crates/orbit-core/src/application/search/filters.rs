@@ -129,6 +129,7 @@ fn task_open_statuses() -> &'static [TaskStatus] {
         TaskStatus::Backlog,
         TaskStatus::InProgress,
         TaskStatus::Review,
+        TaskStatus::Blocked,
     ]
 }
 
@@ -141,7 +142,12 @@ pub(super) fn resolve_task_statuses(
     }
     let mut set = task_open_statuses().to_vec();
     if params.all {
-        set.extend([TaskStatus::Done, TaskStatus::Rejected, TaskStatus::Archived]);
+        set.extend([
+            TaskStatus::Done,
+            TaskStatus::Rejected,
+            TaskStatus::Archived,
+            TaskStatus::Someday,
+        ]);
     }
     set
 }
