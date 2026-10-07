@@ -453,7 +453,7 @@ try {
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
     const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
-      .concat(['#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
+      .concat(['#log-show-agent', '#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
     const layout = await page.evaluate((selectors) => {
       const bar = document.querySelector('#side-dock .log-filters');
       const barBox = bar.getBoundingClientRect();

@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+use std::process::Command;
 
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
@@ -61,6 +62,77 @@ fn assert_step(value: &Value, step: &str) {
     assert!(
         value["message_html"].as_str().unwrap().contains(step),
         "expected log event {step}: {value}"
+    );
+}
+
+/// Exercises the real snapshot/SSE formatter and shipped dashboard in Chromium.
+/// Browser dependencies and evidence paths are supplied explicitly; ordinary
+/// test runs do not download a browser or silently skip its assertions.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_LOG_BROWSER_EVIDENCE_DIR"]
+fn dashboard_log_message_priority_and_agent_filter() {
+    isolated(
+        "log::dashboard_log_message_priority_and_agent_filter",
+        || {
+            let fixture = Fixture::new();
+            let log = fixture.path("process.log");
+            let relay = |stream: &str, cwd: &Path, line: &str| {
+                json!({
+                    "timestamp": "2026-10-07T01:00:00Z",
+                    "level": if stream == "stderr" { "ERROR" } else { "INFO" },
+                    "target": "orbit_engine::activity_job::cli_runner::supervisor",
+                    "fields": {
+                        "cwd": cwd, "job_run_id": "jrun-20261007-0722-c12",
+                        "provider": "codex", "stream": stream, "line": line,
+                    },
+                })
+            };
+            fs::write(&log, line("dispatch")).unwrap();
+            append(
+                &log,
+                &format!(
+                    "{}\n",
+                    relay(
+                        "stderr",
+                        &fixture.path("workspace/project"),
+                        "agent diagnostic"
+                    )
+                ),
+            );
+            append(
+                &log,
+                &format!(
+                    "{}\n",
+                    relay(
+                        "stdout",
+                        &fixture
+                            .path("repo/.orbit/state/worktrees/orbit-jrun-20261007-0722-c12/src"),
+                        r#"{"type":"item.started","item":{"type":"command_execution"}}"#,
+                    )
+                ),
+            );
+            let server = fixture.server(false);
+            let output = Command::new("node")
+                .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/http_api/log_browser.mjs"))
+                .arg(
+                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
+                        .expect("prepared Playwright module"),
+                )
+                .arg(
+                    std::env::var_os("ORBIT_LOG_BROWSER_EVIDENCE_DIR")
+                        .expect("browser evidence directory"),
+                )
+                .arg(&server.origin)
+                .arg(&log)
+                .output()
+                .expect("launch dashboard log browser fixture");
+            assert!(
+                output.status.success(),
+                "dashboard log browser check failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        },
     );
 }
 

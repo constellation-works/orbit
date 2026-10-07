@@ -28,7 +28,15 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     let stderr = home.path().join("stderr.log");
     let mut command = fixture_command(home.path());
     command
-        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        // Explicitly selected browser fixtures are ignored in the ordinary
+        // suite, but must still execute in their isolated child.
+        .args([
+            "--exact",
+            name,
+            "--include-ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(CHILD_TEST, name)
         .stdout(File::create(&stdout).unwrap())
         .stderr(File::create(&stderr).unwrap());
