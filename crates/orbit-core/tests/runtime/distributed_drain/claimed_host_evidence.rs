@@ -123,6 +123,9 @@ const PROBE: &str = "set -e\n\
 /// both, and the owner accepts it only with them. On macOS the probe applies
 /// a real Seatbelt profile, so a pass shows no `sandbox_apply` EPERM.
 #[test]
+// The macOS skip notice goes to stderr so a host without a working
+// sandbox-exec says why the test returned early.
+#[cfg_attr(target_os = "macos", allow(clippy::print_stderr))]
 fn a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept() {
     if !isolated(
         module_path!(),
