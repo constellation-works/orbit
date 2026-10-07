@@ -869,7 +869,26 @@ fn create_new_text(path: &Path, content: &str) -> io::Result<()> {
         .write(true)
         .create_new(true)
         .open(path)?;
-    file.write_all(content.as_bytes())
+    let result = file.write_all(content.as_bytes());
+    drop(file);
+    if let Err(write_error) = result {
+        match fs::remove_file(path) {
+            Ok(()) => return Err(write_error),
+            Err(cleanup_error) if cleanup_error.kind() == io::ErrorKind::NotFound => {
+                return Err(write_error);
+            }
+            Err(cleanup_error) => {
+                return Err(io::Error::new(
+                    write_error.kind(),
+                    format!(
+                        "{write_error}; failed to remove incomplete managed asset '{}': {cleanup_error}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn retired_preservation_root(active_dir: &Path, asset_kind: &str) -> (PathBuf, PathBuf) {
