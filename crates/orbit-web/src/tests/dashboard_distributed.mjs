@@ -179,7 +179,13 @@ globalThis.fetch = async (path, options = {}) => {
 };
 
 const distributed = await import("./js/distributed.js");
-const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation, CONSOLE_TTL_MS } = distributed;
+const {
+  buildDistributedBlock,
+  buildExecutionProvenance,
+  invalidateDistributedConsole,
+  formatExecutionLocation,
+  CONSOLE_TTL_MS,
+} = distributed;
 const { setWorkspace } = await import("./js/common.js");
 await import("./js/tasks.js");
 
@@ -210,11 +216,78 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   const unknown = formatExecutionLocation(null);
   assert.ok(unknown.includes("unknown"), unknown);
   assert.ok(!/owner/i.test(unknown), `unknown provenance must not name an owner: ${unknown}`);
-  assert.equal(formatExecutionLocation({ known: true, machine_id: "hm_a" }), "machine hm_a");
+  assert.equal(formatExecutionLocation({ known: true, machine_id: "hm_a" }), "on hm_a");
   assert.equal(
     formatExecutionLocation({ known: true, machine_id: "hm_a", machine_name: "box" }),
-    "machine hm_a · name box",
+    "on box",
   );
+  const fallbackId = "hm_ba054a1afbfb914";
+  const fallback = buildExecutionProvenance({ known: true, machine_id: fallbackId });
+  assert.equal(fallback.textContent, "on hm_ba05…");
+  assert.equal(fallback.title, `Execution machine id: ${fallbackId}`);
+  const named = buildExecutionProvenance({ known: true, machine_id: fallbackId, machine_name: "Mac follower" });
+  assert.equal(named.textContent, "on Mac follower");
+  assert.equal(named.title, `Execution machine id: ${fallbackId}`);
+}
+
+// The actual task renderer and shipped CSS keep remote execution provenance on
+// one line, so it cannot make an in-progress row taller than its neighbours.
+{
+  const { renderTasks } = await import("./js/tasks.js");
+  assert.equal(window.innerWidth, 1440, "the task-row height check uses the reported viewport");
+  document.querySelector('.tab-pane[data-tab="tasks"]').classList.add("active");
+  const machineId = "hm_ba054a1afbfb914";
+  const task = (id, machine, navigable) => ({
+    id,
+    title: `Task ${id}`,
+    status: "in-progress",
+    job_run_id: `run-${id}`,
+    job_run_navigable: navigable,
+    job_run_machine: machine,
+  });
+  const context = {
+    getActiveStatuses: () => new Set(["in-progress"]),
+    statusOrder: ["in-progress"],
+    getTaskPagination: () => ({}),
+  };
+  renderTasks([
+    task("ORB-1", { machine_id: machineId }, false),
+    task("ORB-2", { machine_id: machineId, machine_name: "Mac follower" }, false),
+    task("ORB-3", null, true),
+  ], context);
+  const rows = Array.from(document.querySelectorAll("#tasks-body .row:not(.header)"));
+  assert.equal(rows.length, 3, "the in-progress fixture rows are rendered");
+  const heights = rows.map((row) => row.getBoundingClientRect().height);
+  assert.ok(heights.every((height) => height === heights[0]), `remote rows must match neighbour heights at 1440px: ${heights.join(", ")}`);
+  const fallback = rows[0].querySelector(".task-quick-cell .exec-origin");
+  assert.equal(fallback.textContent, "on hm_ba05…");
+  assert.equal(fallback.title, `Execution machine id: ${machineId}`);
+  const named = rows[1].querySelector(".task-quick-cell .exec-origin");
+  assert.equal(named.textContent, "on Mac follower");
+  assert.equal(named.title, `Execution machine id: ${machineId}`);
+}
+
+// Run detail uses the same visible location and retains its full-id tooltip.
+{
+  const runDetail = await import("./js/run-detail.js");
+  const machineId = "hm_ba054a1afbfb914";
+  runDetail.initRunDetail({
+    buildReplayRunButton: () => document.createElement("button"),
+    runIsCancellable: () => false,
+  });
+  for (const [location, label] of [
+    [{ machine_id: machineId }, "on hm_ba05…"],
+    [{ machine_id: machineId, machine_name: "Mac follower" }, "on Mac follower"],
+  ]) {
+    runDetail.setActiveRunDetail({
+      run: { run_id: "fixture-run", job_id: "fixture-job", state: "completed", attempt: 1, executed_on: location },
+      steps: [],
+    });
+    runDetail.renderRunDetailMeta();
+    const provenance = document.querySelector("#run-detail-meta .exec-origin");
+    assert.equal(provenance.textContent, label);
+    assert.equal(provenance.title, `Execution machine id: ${machineId}`);
+  }
 }
 
 {
@@ -223,7 +296,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
   assert.equal(block.style.display, "", "a task with a claim shows the block");
   assert.equal(block.querySelector("h4").getAttribute("aria-expanded"), "true");
-  assert.ok(text.includes("machine hm_follower · name runner-2"), "execution is machine-qualified");
+  assert.ok(text.includes("on runner-2"), "execution names the machine");
 
   // The bound run lives in the follower's job store: name the machine to inspect
   // rather than linking into this checkout.

@@ -244,6 +244,13 @@
   gap: 2px;
   min-width: 0;
 }
+.task-quick-cell .exec-origin {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-quick {
   height: 28px;
   padding: 0 11px;
