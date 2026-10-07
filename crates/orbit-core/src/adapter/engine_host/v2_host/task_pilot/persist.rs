@@ -306,10 +306,22 @@ fn assessment_history_summary(assessment: &Value) -> String {
         .unwrap_or_default()
         .split(['.', '!', '?'])
         .next()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let rationale = rationale
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let rationale = rationale
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+        .replace("drain-approval-held:", "drain approval held:");
     let short = rationale.chars().take(64).collect::<String>();
     let truncated = rationale.chars().count() > 64;
     format!(
