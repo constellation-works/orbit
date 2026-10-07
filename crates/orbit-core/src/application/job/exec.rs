@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use super::crew_pools;
 use super::log_best_effort;
 
 use orbit_common::{NotFoundKind, OrbitError};
@@ -85,6 +86,8 @@ impl OrbitRuntime {
     /// Re-run a completed or historical job run from step 0 using the current
     /// catalog definition and the source run's persisted input.
     ///
+    /// Automatic crews are readmitted under current pools and provider holds;
+    /// a recorded explicit crew choice is retained.
     /// Explicitly discards checkpoints — replay is the "run everything again"
     /// surface, including agent steps. Use `submit_resume_run`
     /// to continue from the failed step instead.
@@ -105,6 +108,13 @@ impl OrbitRuntime {
             &mut input,
             None,
             false,
+        )?;
+        self.install_auto_crew_admission(
+            &source.job_id,
+            &mut input,
+            None,
+            false,
+            &mut crew_pools::random_crew_ticket,
         )?;
         let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
         self.run_job_v2_from_yaml_with_retry_source(&job_path, input, Some(source.run_id), 1, None)
@@ -152,6 +162,7 @@ impl OrbitRuntime {
         if let Some(object) = input.as_object_mut() {
             object.remove(orbit_types::workflow::REVIEW_ADMISSION_KEY);
         }
+        crew_pools::strip_auto_crew_admission(&source.job_id, &mut input);
         Ok((source, input))
     }
 
