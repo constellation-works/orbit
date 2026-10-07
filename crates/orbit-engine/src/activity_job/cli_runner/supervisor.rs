@@ -1,5 +1,20 @@
 //! CLI subprocess supervisor.
 //!
+//! # Stdin ownership / cancellation contract
+//!
+//! The stdin writer owns its prompt buffer and pipe until it finishes. On
+//! Unix it polls a nonblocking pipe for space alongside the same owned cancel
+//! signal as output readers. Every write checks cancellation, including when
+//! the pipe is continuously writable. Once the child exits, times out, or
+//! `wait` fails, the supervisor cancels the writer before killing the process
+//! group, then joins it within the output readers' shared cleanup window,
+//! abandoning undelivered bytes and closing the pipe on the owning thread. A failed
+//! nonblocking setup fails supervision after killing and reaping the child;
+//! it never starts a blocking writer. Without a wakeup pair, the writer checks
+//! cancellation every [`CANCEL_FLAG_POLL_INTERVAL`]. Stdin has no separate
+//! delivery or cleanup budget. Native non-Unix stdin supervision
+//! is unsupported; Windows runs Orbit through WSL2.
+//!
 //! # Output drain / truncation contract
 //!
 //! stdout/stderr readers belong to the supervisor until it returns. After the
@@ -37,9 +52,11 @@
 //! interrupt an escaped holder; that path is not tested here.
 
 use std::collections::VecDeque;
-use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::io::Write;
+use std::io::{self, Read};
 use std::path::Path;
-use std::process::{Child, ExitStatus};
+use std::process::{Child, ChildStdin, ExitStatus};
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -67,7 +84,7 @@ pub(crate) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
-/// How often a reader without a wakeup fd rechecks its cancel flag.
+/// How often a pipe worker without a wakeup fd rechecks its cancel flag.
 #[cfg(unix)]
 const CANCEL_FLAG_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// Upper bound on bytes a cancelled reader drains. Matches Linux's default
@@ -270,7 +287,7 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// Test seam for supervising an already-spawned child with its ownership
     /// guards intact. Production always spawns from the request fields.
     pub(super) spawned_child: Option<SpawnedChild>,
-    /// Test seam for exercising output capture when the pollable cancellation
+    /// Test seam for exercising pipe workers when the pollable cancellation
     /// channel cannot be constructed.
     #[cfg(unix)]
     pub(super) cancel_pair: Option<CancelPairHook<'a>>,
@@ -289,27 +306,41 @@ struct OutputReaderHandle {
     finished: mpsc::Receiver<()>,
     join: thread::JoinHandle<()>,
     #[cfg(unix)]
-    cancel: ReaderCancel,
+    cancel: PipeCancel,
 }
 
-/// Supervisor-owned half of a reader's cancellation. The flag is always
-/// present; the stream only wakes a reader parked in `poll` sooner.
+struct StdinWriterHandle {
+    join: thread::JoinHandle<()>,
+    #[cfg(unix)]
+    cancel: PipeCancel,
+}
+
+impl StdinWriterHandle {
+    fn cancel(self) -> thread::JoinHandle<()> {
+        #[cfg(unix)]
+        self.cancel.cancel();
+        self.join
+    }
+}
+
+/// Supervisor-owned half of a pipe worker's cancellation. The flag is always
+/// present; the stream only wakes a worker parked in `poll` sooner.
 #[cfg(unix)]
-struct ReaderCancel {
+struct PipeCancel {
     requested: Arc<AtomicBool>,
     wakeup: Option<UnixStream>,
 }
 
 #[cfg(unix)]
-impl ReaderCancel {
+impl PipeCancel {
     fn cancel(self) {
         self.requested.store(true, Ordering::Release);
-        // Closing our end makes the reader's end readable (EOF).
+        // Closing our end makes the worker's end readable (EOF).
         drop(self.wakeup);
     }
 }
 
-/// Reader-owned half of [`ReaderCancel`].
+/// Worker-owned half of [`PipeCancel`].
 #[cfg(unix)]
 struct CancelWatch {
     requested: Arc<AtomicBool>,
@@ -398,12 +429,28 @@ pub(super) fn spawn_with_timeout(
         on_spawn(child.id());
     }
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let bytes = stdin_bytes.to_vec();
-        thread::spawn(move || {
-            let _ = stdin.write_all(&bytes);
-        });
-    }
+    let stdin_writer = match child
+        .stdin
+        .take()
+        .map(|stdin| {
+            spawn_stdin_writer(
+                stdin,
+                stdin_bytes,
+                #[cfg(unix)]
+                cancel_pair,
+            )
+        })
+        .transpose()
+    {
+        Ok(writer) => writer,
+        Err(err) => {
+            kill_child_process_tree(&mut child);
+            return Err(SpawnError {
+                permanent: err.kind() == io::ErrorKind::Unsupported,
+                message: format!("stdin {program}: {err}"),
+            });
+        }
+    };
 
     let output_limit = output_capture_limit.unwrap_or_else(default_output_capture_limit);
     let stdout_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
@@ -474,6 +521,7 @@ pub(super) fn spawn_with_timeout(
         Err(err) => (None, Some(err), false),
     };
 
+    let stdin_join = stdin_writer.map(StdinWriterHandle::cancel);
     kill_child_process_tree(&mut child);
 
     // The join is bounded on every exit path, not only after a timeout. A
@@ -483,6 +531,12 @@ pub(super) fn spawn_with_timeout(
     // join there never returns, no finish event is emitted, and the run's
     // reservation is never released.
     let reader_join_deadline = Instant::now() + OUTPUT_READER_JOIN_TIMEOUT;
+    if let Some(join) = stdin_join {
+        // The nonblocking writer observes cancellation within one poll
+        // interval, fitting inside the readers' existing shared window.
+        // Join before returning to release its prompt and owned descriptors.
+        let _ = join.join();
+    }
     if let Some(h) = stdout_reader {
         join_output_reader(h, reader_join_deadline);
     }
@@ -567,6 +621,70 @@ fn default_output_capture_limit() -> usize {
 }
 
 #[cfg(unix)]
+fn pipe_cancellation(cancel_pair: Option<CancelPairHook<'_>>) -> (PipeCancel, CancelWatch) {
+    let pair_result = cancel_pair.map_or_else(UnixStream::pair, |make_pair| make_pair());
+    // Without a pair the worker falls back to timed polls of the cancel flag.
+    let (wakeup, cancel_wakeup) = match pair_result {
+        Ok((wakeup, cancel)) => (Some(wakeup), Some(cancel)),
+        Err(_) => (None, None),
+    };
+    let requested = Arc::new(AtomicBool::new(false));
+    (
+        PipeCancel {
+            requested: Arc::clone(&requested),
+            wakeup: cancel_wakeup,
+        },
+        CancelWatch { requested, wakeup },
+    )
+}
+
+#[cfg(unix)]
+fn spawn_stdin_writer(
+    stdin: ChildStdin,
+    bytes: &[u8],
+    cancel_pair: Option<CancelPairHook<'_>>,
+) -> io::Result<StdinWriterHandle> {
+    let fd = stdin.into_raw_fd();
+    // SAFETY: `into_raw_fd` transferred sole ownership of the stdin pipe.
+    let mut writer = unsafe { File::from_raw_fd(fd) };
+    // Unlike a ready read, a large write can block even after POLLOUT.
+    // Nonblocking mode is mandatory before starting the worker.
+    set_nonblocking(writer.as_raw_fd())?;
+    let (cancel, watch) = pipe_cancellation(cancel_pair);
+    let bytes = bytes.to_vec();
+    let join = thread::Builder::new().spawn(move || {
+        let mut remaining = bytes.as_slice();
+        while !remaining.is_empty() {
+            match poll_pipe_or_cancel(writer.as_raw_fd(), libc::POLLOUT, &watch) {
+                PollOutcome::Ready => match writer.write(remaining) {
+                    Ok(0) => break,
+                    Ok(n) => remaining = &remaining[n..],
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(_) => break,
+                },
+                PollOutcome::Cancelled | PollOutcome::Failed => break,
+            }
+        }
+    })?;
+    Ok(StdinWriterHandle { join, cancel })
+}
+
+#[cfg(not(unix))]
+fn spawn_stdin_writer(_stdin: ChildStdin, _bytes: &[u8]) -> io::Result<StdinWriterHandle> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "bounded provider stdin supervision requires Unix (use WSL2 on Windows)",
+    ))
+}
+
+#[cfg(unix)]
 fn spawn_output_reader<R>(
     handle: R,
     buf: SharedOutputCapture,
@@ -583,21 +701,7 @@ where
     // The reader only calls `read` after `poll` reports the pipe ready, so a
     // failure here cannot turn it into a blocking reader.
     let _ = set_nonblocking(reader.as_raw_fd());
-    let pair_result = cancel_pair.map_or_else(UnixStream::pair, |make_pair| make_pair());
-    // Without a pair the reader falls back to timed polls of the cancel flag.
-    let (wakeup, cancel_wakeup) = match pair_result {
-        Ok((wakeup, cancel)) => {
-            let _ = wakeup.set_nonblocking(true);
-            let _ = cancel.set_nonblocking(true);
-            (Some(wakeup), Some(cancel))
-        }
-        Err(_) => (None, None),
-    };
-    let requested = Arc::new(AtomicBool::new(false));
-    let watch = CancelWatch {
-        requested: Arc::clone(&requested),
-        wakeup,
-    };
+    let (cancel, watch) = pipe_cancellation(cancel_pair);
 
     // One reader sends one completion signal; capacity one cannot block it.
     let (finished_tx, finished) = mpsc::sync_channel(1);
@@ -611,10 +715,7 @@ where
     OutputReaderHandle {
         finished,
         join,
-        cancel: ReaderCancel {
-            requested,
-            wakeup: cancel_wakeup,
-        },
+        cancel,
     }
 }
 
@@ -696,13 +797,13 @@ fn read_cancelable_output(
     let mut line_buf = Vec::new();
     let mut cancelled = false;
     loop {
-        match poll_reader_or_cancel(reader.as_raw_fd(), watch) {
+        match poll_pipe_or_cancel(reader.as_raw_fd(), libc::POLLIN, watch) {
             PollOutcome::Failed => break,
             PollOutcome::Cancelled => {
                 cancelled = true;
                 break;
             }
-            PollOutcome::Readable => match reader.read(&mut chunk) {
+            PollOutcome::Ready => match reader.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => append_output_chunk(buf, context, &chunk[..n], &mut line_buf),
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -795,17 +896,17 @@ fn queued_bytes(fd: RawFd) -> Option<usize> {
 
 #[cfg(unix)]
 enum PollOutcome {
-    Readable,
+    Ready,
     Cancelled,
     Failed,
 }
 
 #[cfg(unix)]
-fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
+fn poll_pipe_or_cancel(pipe_fd: RawFd, events: libc::c_short, watch: &CancelWatch) -> PollOutcome {
     let mut fds = [
         libc::pollfd {
-            fd: reader_fd,
-            events: libc::POLLIN,
+            fd: pipe_fd,
+            events,
             revents: 0,
         },
         libc::pollfd {
@@ -814,7 +915,7 @@ fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
             revents: 0,
         },
     ];
-    // With a wakeup fd the reader can park indefinitely; without one it must
+    // With a wakeup fd the worker can park indefinitely; without one it must
     // wake periodically to observe the cancel flag.
     let (nfds, timeout_ms) = if watch.wakeup.is_some() {
         (2, -1)
@@ -822,7 +923,7 @@ fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
         (1, CANCEL_FLAG_POLL_INTERVAL.as_millis() as libc::c_int)
     };
     loop {
-        // The flag is checked on every pass so a continuously readable pipe
+        // The flag is checked on every pass so a continuously ready pipe
         // cannot starve cancellation.
         if watch.requested.load(Ordering::Acquire) {
             return PollOutcome::Cancelled;
@@ -842,7 +943,7 @@ fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
             return PollOutcome::Cancelled;
         }
         if fds[0].revents != 0 {
-            return PollOutcome::Readable;
+            return PollOutcome::Ready;
         }
     }
 }
