@@ -1101,6 +1101,18 @@ derived from the running build's `AdmissionRequest` and all its nested types. Th
 first probes with legacy-compatible fields, checks that fingerprint and `protocol_schema`,
 then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
 including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
+A protocol identity containing `[REDACTED_ENV]` is a corrupted transport reply,
+not evidence of schema skew. The follower treats it as typed `OwnerNegotiation`,
+records a transient pass error and retries on the next pass. The owner also
+checks redacted drain replies, including nested fingerprints, commit/tree IDs
+and evidence hashes: read-only calls fail negotiation; mutating calls report
+`OutcomeUnknown` so the follower reconciles or replays the same request.
+Credentials remain scrubbed even when they overlap an identity. Known
+`XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`, `SESSION_MANAGER` and
+`TERM_SESSION_ID` metadata is excluded from session-name matching; credential
+words still take precedence, and other session names retain conservative
+handling. Purely numeric environment values shorter than 12 digits are
+excluded from substring substitution.
 The integer revision remains for persisted requests and lifecycle semantics; request field
 changes no longer depend on a manual bump. Deploy matching builds on both hosts and restart
 long-lived processes.

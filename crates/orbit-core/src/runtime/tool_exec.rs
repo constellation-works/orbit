@@ -97,6 +97,29 @@ impl OrbitRuntime {
             ))
         })?;
 
+        if (name == "orbit.task.pull" || name.starts_with("orbit.drain."))
+            && let Some(field) = corrupted_drain_identity(&output)
+        {
+            // A mutating call may already have committed. Its caller must
+            // reconcile/replay the same request, never invent a replacement.
+            let message = format!(
+                "owner reply identity field `{field}` contains an environment redaction artefact; retry the same request"
+            );
+            return Err(match name {
+                "orbit.drain.probe" | "orbit.drain.receipt.lookup" | "orbit.drain.claims" => {
+                    OrbitError::OwnerNegotiation(message)
+                }
+                _ => OrbitError::OutcomeUnknown {
+                    mcp_call_id: tool_context
+                        .session_context
+                        .mcp_call_id
+                        .clone()
+                        .unwrap_or_else(|| format!("redacted-reply:{name}")),
+                    message,
+                },
+            });
+        }
+
         Ok(output)
     }
 
@@ -183,6 +206,46 @@ impl OrbitRuntime {
             )));
         }
         Ok(())
+    }
+}
+
+/// Reject scrubbed protocol identities without exempting arbitrary hash-shaped
+/// secrets from redaction. Nested receipt, candidate and review identities are
+/// included; prose may legitimately contain a redaction placeholder.
+pub(crate) fn corrupted_drain_identity(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(fields) => fields.iter().find_map(|(key, value)| {
+            let identity = matches!(
+                key.as_str(),
+                "commit" | "commits" | "tree" | "sha256" | "digest"
+            ) || [
+                "_fingerprint",
+                "_commit",
+                "_commits",
+                "_tree",
+                "_sha",
+                "_sha256",
+                "_hash",
+                "_digest",
+            ]
+            .iter()
+            .any(|suffix| key.ends_with(suffix));
+            if identity && contains_env_redaction(value) {
+                Some(key.as_str())
+            } else {
+                corrupted_drain_identity(value)
+            }
+        }),
+        Value::Array(items) => items.iter().find_map(corrupted_drain_identity),
+        _ => None,
+    }
+}
+
+fn contains_env_redaction(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains("[REDACTED_ENV]"),
+        Value::Array(items) => items.iter().any(contains_env_redaction),
+        _ => false,
     }
 }
 
