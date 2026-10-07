@@ -8,8 +8,8 @@ use crate::executor::automation::input::{canonicalize_existing_dir, input_string
 
 use super::super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
-    git_command_success, git_failure_error, git_output, git_output_raw, git_run, git_success,
-    git_timeout_error, normalize_base_branch, resolve_worktree_start_point,
+    git_command_success, git_failure_error, git_output, git_output_paths, git_output_raw, git_run,
+    git_success, git_timeout_error, normalize_base_branch, resolve_worktree_start_point,
 };
 use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
@@ -47,7 +47,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     )?;
     let base_sync_mode = base_sync_mode_from_input(input)?;
     let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
-    ensure_clean_checkout(&base_checkout, "base branch checkout")?;
+    ensure_base_checkout_ready(&base_checkout, None)?;
     merge_with_rebase_retry(
         &|before, after| {
             host.record_direct_landing_intent(
@@ -133,6 +133,9 @@ fn merge_with_rebase_retry(
         {
             record_intent(before.trim().into(), after.trim().into())?;
         }
+        // Recheck on every attempt, after base synchronization and intent
+        // recording: operator files can appear while the candidate is built.
+        ensure_base_checkout_ready(base_checkout, Some(workspace_branch))?;
         if git_command_success(base_checkout, &["merge", "--ff-only", workspace_branch])? {
             return Ok(());
         }
@@ -242,6 +245,7 @@ fn fast_forward_local_base_to_remote(
     }
 
     if remote_only > 0 {
+        ensure_base_checkout_ready(repo_root, Some(remote_base))?;
         git_success(repo_root, &["merge", "--ff-only", remote_base])?;
     }
 
@@ -274,6 +278,61 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
     label: &str,
 ) -> Result<(), OrbitError> {
     let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=all"])?;
+    ensure_clean_status(path, label, &status)
+}
+
+/// Setup has no candidate yet, so it checks tracked work only. Landing also
+/// checks untracked paths against the incoming tree's changes, without
+/// requiring the operator to remove unrelated notes from the base checkout.
+pub(super) fn ensure_base_checkout_ready(
+    path: &Path,
+    incoming: Option<&str>,
+) -> Result<(), OrbitError> {
+    let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=no"])?;
+    ensure_clean_status(path, "base branch checkout", &status)?;
+    let Some(incoming) = incoming else {
+        return Ok(());
+    };
+    let untracked = git_output_paths(path, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    if untracked.is_empty() {
+        return Ok(());
+    }
+    let changed = git_output_paths(
+        path,
+        &[
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "HEAD",
+            incoming,
+            "--",
+        ],
+    )?;
+    let conflicts: Vec<_> = untracked
+        .iter()
+        .filter(|untracked| {
+            let untracked = Path::new(untracked);
+            changed.iter().any(|changed| {
+                let changed = Path::new(changed);
+                untracked.starts_with(changed) || changed.starts_with(untracked)
+            })
+        })
+        // Debug quoting keeps embedded newlines and other unusual characters
+        // from masquerading as additional entries in the diagnostic.
+        .map(|path| format!("{path:?}"))
+        .collect();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(format!(
+        "base branch checkout '{}' has untracked paths conflicting with the incoming changes:\n{}\nMove or commit these conflicting paths, then retry shipping.",
+        path.display(),
+        conflicts.join("\n"),
+    )))
+}
+
+fn ensure_clean_status(path: &Path, label: &str, status: &str) -> Result<(), OrbitError> {
     if status.trim().is_empty() {
         return Ok(());
     }

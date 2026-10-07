@@ -859,7 +859,7 @@ fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "owner_host": report.owner_host,
         "onboarding": report.onboarding,
         "checkout_files": report.checkout_files,
-        "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; the base checkout must be clean for local delivery.") },
+        "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; local delivery refuses tracked changes, merge conflicts, and untracked paths overlapping the incoming changes.") },
         "allocator": allocator_json(&report.allocator),
         "mcp": mcp_json(&report.mcp),
         "rules": rules_json(&report.rules),
@@ -958,7 +958,7 @@ fn format_workspace_init(report: &WorkspaceInitReport) -> String {
         for file in &report.checkout_files {
             lines.push(format!("    {file}"));
         }
-        lines.push("  before ship: review and commit these files; the base checkout must be clean for local delivery".to_string());
+        lines.push("  before ship: review and commit these files; local delivery refuses tracked changes, merge conflicts, and untracked paths overlapping the incoming changes".to_string());
     }
     match &report.allocator {
         AllocatorOutcome::Skipped => {}
