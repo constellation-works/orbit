@@ -83,7 +83,13 @@ pub(super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(superseded) = superseded_task(runtime, &task.task_id, &snapshot, policy)? {
+            if let Some(superseded) = superseded_task(
+                runtime,
+                &task.task_id,
+                &snapshot,
+                policy,
+                matches!(&task.admission, Some(Admission::CiSweep(_))),
+            )? {
                 outcome = Some(ApplyTaskOutcome::Superseded(superseded));
                 return Ok(());
             }
@@ -224,7 +230,13 @@ pub(super) fn apply_task(
         if let Err(error) = with_task_locks(runtime, &lock_ids, 0, &mut operation) {
             // Claim admission fences ordinary writers before the closure can
             // run. Re-read durable ownership instead of matching error prose.
-            if let Some(outcome) = superseded_task(runtime, &task.task_id, &snapshot, policy)? {
+            if let Some(outcome) = superseded_task(
+                runtime,
+                &task.task_id,
+                &snapshot,
+                policy,
+                matches!(&task.admission, Some(Admission::CiSweep(_))),
+            )? {
                 return Ok(ApplyTaskOutcome::Superseded(outcome));
             }
             return Err(error);
@@ -552,6 +564,7 @@ pub(super) fn superseded_task(
     task_id: &str,
     snapshot: &PreparedTaskSnapshot,
     policy: &PreparationPolicy,
+    ci_sweep: bool,
 ) -> Result<Option<Value>, OrbitError> {
     if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Ok(None);
@@ -567,10 +580,24 @@ pub(super) fn superseded_task(
             "status": current.status, "detail": detail,
         })
     };
-    if matches!(
-        current.status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    ) {
+    if ci_sweep && matches!(current.status, TaskStatus::Rejected | TaskStatus::Archived) {
+        return Ok(Some(superseded(
+            "operator_rejected",
+            "the operator rejected or archived the CI-sweep task before admission",
+        )));
+    }
+    if ci_sweep && current.status != snapshot.status {
+        // CI-sweep authority only treats operator rejection or archival as a
+        // benign race. Other status changes continue through admission and
+        // fail its existing proposed-status check.
+        return Ok(None);
+    }
+    if !ci_sweep
+        && matches!(
+            current.status,
+            TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
+        )
+    {
         return Ok(Some(superseded(
             "task_terminal",
             "task became terminal after preparation",

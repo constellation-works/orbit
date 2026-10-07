@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod ci_sweep_races;
 mod creation;
 mod races;
 

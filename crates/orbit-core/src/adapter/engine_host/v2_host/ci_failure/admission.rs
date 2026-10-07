@@ -16,6 +16,11 @@ use crate::adapter::engine_host::v2_host::task_pilot::{
 const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 
+pub(in crate::adapter::engine_host::v2_host) enum AdmissionOutcome {
+    Decision(Value),
+    Superseded(Value),
+}
+
 pub(in crate::adapter::engine_host::v2_host) fn assess(
     action: &str,
     task_id: &str,
@@ -24,7 +29,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     selectors: &[String],
     filing: &Value,
     promotion_authorized: bool,
-) -> Result<Value, DispatchError> {
+) -> Result<AdmissionOutcome, DispatchError> {
     let filed_task_id = required_string(filing, "task_id", action)?;
     if filed_task_id != task_id {
         return Err(action_failed(
@@ -52,6 +57,15 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
             action,
             format!("task {task_id} does not match its CI-sweep filing identity"),
         ));
+    }
+    if matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived) {
+        return Ok(AdmissionOutcome::Superseded(json!({
+            "task_id": task_id,
+            "outcome": "superseded",
+            "reason": "operator_rejected",
+            "status": task.status,
+            "detail": "the operator rejected or archived the CI-sweep task before admission",
+        })));
     }
     if task.status != TaskStatus::Proposed {
         return Err(action_failed(
@@ -165,7 +179,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
         )
     };
 
-    Ok(json!({
+    Ok(AdmissionOutcome::Decision(json!({
         "task_id": task_id,
         "decision": decision,
         "classification": classification,
@@ -181,7 +195,59 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
             "head_branches": filing.get("head_branches").cloned().unwrap_or_else(|| json!([])),
         },
         "evidence": evidence,
-    }))
+    })))
+}
+
+/// A CI-sweep prepare can lose its one filed task to another active pilot.
+/// Settle only that exact, explicitly reported exclusion as superseded.
+pub(in crate::adapter::engine_host::v2_host) fn piloted_elsewhere(
+    action: &str,
+    task_id: &str,
+    prepared: &Value,
+) -> Result<Option<Value>, DispatchError> {
+    if prepared.get("task_count").and_then(Value::as_u64) != Some(0)
+        || prepared
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .is_none_or(|task_ids| !task_ids.is_empty())
+        || prepared
+            .get("tasks")
+            .and_then(Value::as_array)
+            .is_none_or(|tasks| !tasks.is_empty())
+        || prepared
+            .get("partitions")
+            .and_then(Value::as_array)
+            .is_none_or(|partitions| !partitions.is_empty())
+    {
+        return Ok(None);
+    }
+    let Some(excluded) = prepared.get("excluded").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    if excluded.len() != 1 || excluded[0].get("task_id").and_then(Value::as_str) != Some(task_id) {
+        return Ok(None);
+    }
+    if excluded[0].get("reason").and_then(Value::as_str) != Some("already_preparing") {
+        return Ok(None);
+    }
+    let run_ids = required_string_array(&excluded[0], "prepared_by_run_ids", action)?;
+    if run_ids.iter().any(|run_id| run_id.trim().is_empty()) {
+        return Err(action_failed(
+            action,
+            "prepared_by_run_ids must contain non-empty run IDs",
+        ));
+    }
+    let Some(run_id) = run_ids.first() else {
+        return Ok(None);
+    };
+    Ok(Some(json!({
+        "task_id": task_id,
+        "outcome": "superseded",
+        "reason": "piloted_elsewhere",
+        "run_id": run_id,
+        "run_ids": run_ids,
+        "detail": "another active task-pilot run already prepared this CI-sweep task",
+    })))
 }
 
 /// The pilot's explicit finding that a failure's only correct repair is an

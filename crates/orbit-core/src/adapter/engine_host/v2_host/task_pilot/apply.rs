@@ -81,6 +81,11 @@ enum PromotionAuthority<'a> {
     Drain(DrainAuthority),
 }
 
+enum CheckedAdmission {
+    Apply(Option<Admission>),
+    Superseded(Value),
+}
+
 fn material_components(
     entry: &Value,
     action: &str,
@@ -166,7 +171,7 @@ pub(in super::super) fn apply(
         .get("prior_applied_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let carried_task_outcomes = input
+    let mut carried_task_outcomes = input
         .get("carried_task_outcomes")
         .map(|value| {
             value
@@ -261,6 +266,17 @@ pub(in super::super) fn apply(
     let ci_sweep_filing = input
         .get("ci_sweep_filing")
         .filter(|value| !value.is_null());
+    let piloted_elsewhere = if let Some(filing) = ci_sweep_filing
+        && prepared_before.is_empty()
+    {
+        let task_id = required_string(filing, "task_id", action)?;
+        ci_failure_admission::piloted_elsewhere(action, task_id, prepared_value)?
+    } else {
+        None
+    };
+    if let Some(outcome) = &piloted_elsewhere {
+        carried_task_outcomes.push(outcome.clone());
+    }
     let promotion_authorized = input
         .get("promotion_authorized")
         .map(|value| {
@@ -270,7 +286,9 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or(false);
-    if ci_sweep_filing.is_some() && prepared_before.len() != 1 {
+    if ci_sweep_filing.is_some()
+        && prepared_before.len() + usize::from(piloted_elsewhere.is_some()) != 1
+    {
         return Err(action_failed(
             action,
             "CI-sweep admission requires exactly one prepared task",
@@ -301,6 +319,18 @@ pub(in super::super) fn apply(
         )?),
         (None, None) => PromotionAuthority::None,
     };
+    let has_ci_sweep_authority = matches!(&authority, PromotionAuthority::CiSweep(..));
+    if let (PromotionAuthority::CiSweep(filing, _), Some(prepared_task_id)) =
+        (&authority, prepared_before.keys().next())
+    {
+        let filed_task_id = required_string(filing, "task_id", action)?;
+        if filed_task_id != prepared_task_id {
+            return Err(action_failed(
+                action,
+                format!("CI-sweep filing names task {filed_task_id}, expected {prepared_task_id}"),
+            ));
+        }
+    }
 
     let mut seen_task_ids = BTreeSet::new();
     let mut partition_decisions = Vec::with_capacity(expected_partitions.len());
@@ -466,7 +496,7 @@ pub(in super::super) fn apply(
                 continue;
             };
             let snapshot = &prepared_before[task_id];
-            match superseded_task(runtime, task_id, snapshot, &policy) {
+            match superseded_task(runtime, task_id, snapshot, &policy, has_ci_sweep_authority) {
                 Ok(Some(outcome)) => {
                     outcomes.push(outcome);
                     continue;
@@ -650,7 +680,6 @@ pub(in super::super) fn apply(
             }
 
             let admission = match &authority {
-                PromotionAuthority::None => Ok(None),
                 PromotionAuthority::CiSweep(filing, authorized) => ci_failure_admission::assess(
                     action,
                     task_id,
@@ -660,7 +689,14 @@ pub(in super::super) fn apply(
                     filing,
                     *authorized,
                 )
-                .map(|decision| Some(Admission::CiSweep(decision))),
+                .map(|outcome| match outcome {
+                    ci_failure_admission::AdmissionOutcome::Decision(decision) => {
+                        CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                    }
+                    ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
+                        CheckedAdmission::Superseded(outcome)
+                    }
+                }),
                 PromotionAuthority::Drain(drain) => drain_promotion::assess(
                     action,
                     task_id,
@@ -671,10 +707,15 @@ pub(in super::super) fn apply(
                     complexity,
                     drain,
                 )
-                .map(|decision| Some(Admission::Drain(decision))),
+                .map(|decision| CheckedAdmission::Apply(Some(Admission::Drain(decision)))),
+                PromotionAuthority::None => Ok(CheckedAdmission::Apply(None)),
             };
             let admission = match admission {
-                Ok(admission) => admission,
+                Ok(CheckedAdmission::Apply(admission)) => admission,
+                Ok(CheckedAdmission::Superseded(outcome)) => {
+                    outcomes.push(outcome);
+                    continue;
+                }
                 Err(error) => {
                     outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
                     continue;
