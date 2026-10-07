@@ -82,8 +82,17 @@ impl OrbitRuntime {
                 continue;
             }
             if now.signed_duration_since(hold.held_since) > FORGE_HOLD_RETRY_WINDOW {
-                tick.expired
-                    .extend(self.expire_forge_hold(&run, &hold, now)?);
+                // One run's failed expiry stays unacknowledged for the next
+                // tick; it must not starve the other held runs of this pass.
+                match self.expire_forge_hold(&run, &hold, now) {
+                    Ok(blocked) => tick.expired.extend(blocked),
+                    Err(error) => tracing::warn!(
+                        target: "orbit.core.sweep",
+                        run_id = %run.run_id,
+                        error = %error,
+                        "could not expire a run's forge hold",
+                    ),
+                }
                 continue;
             }
             match self.submit_resume_run(&run.run_id, Some(CLOCK_ACTOR), None) {
