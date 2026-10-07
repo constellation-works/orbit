@@ -548,7 +548,8 @@ pub struct MemberEvidence {
 
 /// How one run settled every member of an attempt [ORB-12746]: the receipt
 /// evidence for a batch. Members absent from `applied` are recorded failed at
-/// their fingerprint with the reason in `failed`.
+/// their fingerprint with the reason in `failed`, except the members in
+/// `superseded`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberBatchEvidence {
     pub action_id: String,
@@ -556,6 +557,12 @@ pub struct MemberBatchEvidence {
     pub applied: Vec<MemberEvidence>,
     #[serde(default)]
     pub failed: BTreeMap<String, String>,
+    /// Members whose material the branch changed after the attempt froze its
+    /// source, with the reason [ORB-14476]. That says nothing about the task,
+    /// so such a member is neither failed nor retried against the old
+    /// source: it stays pending at the current head for a fresh claim.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub superseded: BTreeMap<String, String>,
 }
 
 /// One member of a pending or active batch and why it is there, for

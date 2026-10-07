@@ -423,3 +423,128 @@ fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writ
     }
     assert_eq!(jobs.read_run_state(run_id).unwrap(), Some(state));
 }
+
+/// A task-pilot member a branch move shelved before supersession existed: its
+/// exhausted failure record sits at the fingerprint it is still pending at,
+/// while it is pending at a newer source. The one-time repair releases it so
+/// the next pass admits it again; a record at the pending source stays.
+#[test]
+fn feature_repair_releases_members_shelved_at_a_source_the_branch_left() {
+    if isolated("feature_repair_releases_members_shelved_at_a_source_the_branch_left") {
+        return;
+    }
+    use orbit_types::workflow::automation::members::{
+        MemberAttempt, MemberState, StateMember, StateTriggerKind,
+    };
+    let revision = |commit: &str| SourceRevision {
+        commit: commit.into(),
+        tree: format!("{commit}-tree"),
+    };
+    let member = |key: &str, source: &str| StateMember {
+        key: key.into(),
+        task_ids: vec![key.into()],
+        fingerprint: format!("{key}-fingerprint"),
+        source: revision(source),
+        evidence: serde_json::json!({"task_id": key}),
+        first_seen: now(),
+        changed_at: now(),
+        crew: None,
+    };
+    let shelved = |member: StateMember| MemberAttempt {
+        consumer: "fixture/pilot".into(),
+        kind: StateTriggerKind::PreparationEligible,
+        id: format!("attempt-{}", member.key),
+        member,
+        members: vec![],
+        attempt: 2,
+        max_attempts: 2,
+        deadline: now(),
+        retry_after: now(),
+        action_key: "automation:attempt:2".into(),
+        action_id: Some("run".into()),
+        exhausted: true,
+    };
+    let mut state = baseline();
+    state.consumer = "fixture/pilot".into();
+    state.trigger = None;
+    state.generation = 7;
+    state.members = Some(MemberState {
+        pending: [
+            ("moved".into(), member("moved", "head")),
+            ("unmoved".into(), member("unmoved", "frozen")),
+        ]
+        .into(),
+        failed: [
+            ("moved".into(), shelved(member("moved", "frozen"))),
+            ("unmoved".into(), shelved(member("unmoved", "frozen"))),
+        ]
+        .into(),
+        withheld: [
+            ("moved".into(), "stopped_without_member_evidence".into()),
+            ("unmoved".into(), "stopped_without_member_evidence".into()),
+        ]
+        .into(),
+        ..Default::default()
+    });
+
+    // A store at automation schema v3, as the binary before the repair left
+    // it: the v1-v3 tables and their ledger rows, then the shelved state.
+    let base = Store::open_in_memory().unwrap();
+    {
+        let connection = base.connection();
+        let connection = connection.lock().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE automation_consumers (consumer TEXT PRIMARY KEY, generation INTEGER NOT NULL, state_json TEXT NOT NULL);
+                 CREATE TABLE automation_coverage (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, receipt_json TEXT NOT NULL, accepted_at TEXT NOT NULL);
+                 CREATE INDEX automation_coverage_consumer ON automation_coverage(consumer, accepted_at);
+                 CREATE TABLE automation_delivery_intents (record_id TEXT PRIMARY KEY, repository TEXT NOT NULL, branch TEXT NOT NULL, delivery_json TEXT NOT NULL);
+                 CREATE TABLE automation_delivery_members (repository TEXT NOT NULL, branch TEXT NOT NULL, commit_id TEXT NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(repository,branch,commit_id,record_id));
+                 CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
+                 CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));
+                 CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id);
+                 CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
+                 CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);
+                 INSERT INTO feature_schema_meta(feature, version, name, applied_at) VALUES
+                   ('automation', 1, 'consumer_checkpoints_and_coverage', '2026-01-01T00:00:00Z'),
+                   ('automation', 2, 'retry_lineage_index', '2026-01-01T00:00:00Z'),
+                   ('automation', 3, 'consumer_recovery_records', '2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO automation_consumers VALUES (?1,?2,?3)",
+                rusqlite::params![
+                    state.consumer,
+                    state.generation,
+                    serde_json::to_string(&state).unwrap()
+                ],
+            )
+            .unwrap();
+    }
+    let store = compose::automation_store(base.clone()).unwrap();
+
+    let repaired = store.automation_state(&state.consumer).unwrap().unwrap();
+    assert_eq!(repaired.generation, 8, "the repair fences older snapshots");
+    let members = repaired.members.unwrap();
+    assert!(!members.failed.contains_key("moved"));
+    assert!(!members.withheld.contains_key("moved"));
+    assert_eq!(members.pending["moved"].source, revision("head"));
+    assert_eq!(
+        members.failed.get("unmoved"),
+        state.members.as_ref().unwrap().failed.get("unmoved"),
+        "a member shelved at the source it is pending at stays retired"
+    );
+    assert!(members.withheld.contains_key("unmoved"));
+
+    // Applied once: reopening leaves the repaired state alone.
+    compose::automation_store(base.clone()).unwrap();
+    assert_eq!(
+        store
+            .automation_state(&state.consumer)
+            .unwrap()
+            .unwrap()
+            .generation,
+        8
+    );
+}

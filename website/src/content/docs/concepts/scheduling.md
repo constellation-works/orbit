@@ -72,7 +72,10 @@ policy:
 The target is always a catalog job, so a routine can do exactly what a
 reviewed job can. Instead of `cron`, a routine can watch the backlog: the
 seeded task-pilot routine uses a `state` trigger that prepares new or edited
-tasks once they settle, and fires nothing while the backlog is unchanged.
+tasks once they settle, and fires nothing while the backlog is unchanged. If
+the branch moves under a task's context files while its pilot runs, that task
+is prepared again at the new head without using a retry; the rest of the batch
+still applies.
 
 - **Runs on every owner machine.** A cron routine runs on each machine that
   has the checkout registered and its clock on. To keep it off one machine,

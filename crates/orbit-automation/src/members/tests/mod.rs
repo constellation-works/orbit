@@ -93,6 +93,7 @@ impl MemberHost for Host {
                 attempt_id: evidence.attempt_id.clone(),
                 applied: vec![evidence],
                 failed: BTreeMap::new(),
+                superseded: BTreeMap::new(),
             }))
         } else if *self.failed.borrow() {
             Ok(MemberOutcome::Failed("fixture_failure".into()))

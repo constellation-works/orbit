@@ -1,6 +1,6 @@
 //! Locked, retried, idempotent persistence of one validated task-pilot assessment.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
@@ -11,6 +11,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::automation::members::SUPERSEDED_BY_SOURCE;
 
 use super::apply::{Admission, PreparedTaskSnapshot, ValidatedTask};
 
@@ -51,7 +52,26 @@ pub(super) fn apply_task(
         let mut outcome = None;
         let mut retry_fingerprint = None;
         let mut operation = || {
-            crate::application::automation::members::claim(runtime, prepared, &task.after)?;
+            let claim = crate::application::automation::members::claim(runtime, prepared)?;
+            // Re-checked under the task locks: the branch may have moved
+            // under this task's material since apply's own check [ORB-14476].
+            if let Some(claim) = &claim
+                && let Some(detail) = crate::application::automation::members::stale_tasks(
+                    runtime,
+                    claim,
+                    policy,
+                    prepared,
+                    std::slice::from_ref(&task.task_id),
+                    &BTreeMap::from([(task.task_id.clone(), task.after.clone())]),
+                )?
+                .remove(&task.task_id)
+            {
+                outcome = Some(ApplyTaskOutcome::Superseded(source_superseded(
+                    &task.task_id,
+                    &detail,
+                )));
+                return Ok(());
+            }
             let receipt = format!("operation_id={}", task.operation_id);
             if runtime
                 .get_task_history(&task.task_id)?
@@ -703,18 +723,44 @@ pub(super) fn task_outcome(task_id: &str, outcome: &str, error: Option<String>) 
     json!({ "task_id": task_id, "outcome": outcome, "error": error })
 }
 
-pub(super) fn failed_partition(partition_index: u64, task_ids: &[String], error: String) -> Value {
+/// The branch changed this task's material after its claim froze the
+/// source: the assessment is not applied, and the member is claimed afresh
+/// at the head rather than retried or retired [ORB-14476].
+pub(super) fn source_superseded(task_id: &str, detail: &str) -> Value {
+    json!({
+        "task_id": task_id,
+        "outcome": "superseded",
+        "reason": SUPERSEDED_BY_SOURCE,
+        "detail": detail,
+    })
+}
+
+/// A partition whose result is unusable fails its tasks as invalid, except
+/// those `superseded` by a source move, which settle superseded instead.
+pub(super) fn failed_partition(
+    partition_index: u64,
+    task_ids: &[String],
+    error: String,
+    superseded: &BTreeMap<String, String>,
+) -> Value {
     let task_outcomes = task_ids
         .iter()
-        .map(|task_id| task_outcome(task_id, "invalid", Some(error.clone())))
+        .map(|task_id| match superseded.get(task_id) {
+            Some(detail) => source_superseded(task_id, detail),
+            None => task_outcome(task_id, "invalid", Some(error.clone())),
+        })
         .collect::<Vec<_>>();
+    let unresolved = task_ids
+        .iter()
+        .filter(|task_id| !superseded.contains_key(*task_id))
+        .count();
     json!({
         "partition_index": partition_index,
         "task_ids": task_ids,
-        "outcome": "failed",
-        "error": error,
+        "outcome": if unresolved == 0 { "superseded" } else { "failed" },
+        "error": (unresolved > 0).then_some(error),
         "task_outcomes": task_outcomes,
-        "unresolved_count": task_ids.len(),
+        "unresolved_count": unresolved,
         "applied_task_ids": [],
     })
 }

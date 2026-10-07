@@ -17,8 +17,8 @@ use super::attachment_budget::{
 };
 use super::drain_promotion::{self, Approval, DrainAuthority};
 use super::persist::{
-    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
-    superseded_task, task_operation_id, task_outcome,
+    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, source_superseded,
+    stale_task, superseded_task, task_operation_id, task_outcome,
 };
 use super::source::SourceSnapshot;
 use super::{
@@ -181,7 +181,7 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or_default();
-    let claim = crate::application::automation::members::claim(runtime, prepared_value, &[])
+    let claim = crate::application::automation::members::claim(runtime, prepared_value)
         .map_err(|error| action_failed(action, error.to_string()))?;
     // The same consumer policy prepare fingerprinted under; a run without a
     // claim evaluates the default eligibility and configured freshness
@@ -259,6 +259,31 @@ pub(in super::super) fn apply(
             "prepared.tasks contains duplicate task snapshots",
         ));
     }
+    // Tasks whose material the branch changed since preparation settle
+    // superseded, whatever their pilot returned, so their members are claimed
+    // afresh at the head; disjoint siblings still apply [ORB-14476]. Prepare
+    // already set aside the tasks it found stale; apply carries them.
+    let source_superseded_tasks = match &claim {
+        Some(claim) => crate::application::automation::members::stale_tasks(
+            runtime,
+            claim,
+            &policy,
+            prepared_value,
+            &prepared_before.keys().cloned().collect::<Vec<_>>(),
+            &BTreeMap::new(),
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?,
+        None => BTreeMap::new(),
+    };
+    if let Some(set_aside) = prepared
+        .get("superseded_by_source")
+        .and_then(Value::as_array)
+    {
+        carried_task_outcomes.extend(set_aside.iter().cloned());
+    }
+    let failed_partition = |partition_index: u64, task_ids: &[String], error: String| {
+        failed_partition(partition_index, task_ids, error, &source_superseded_tasks)
+    };
 
     // Each partition is its own validation boundary. A malformed or stale
     // partition mutates none of its tasks, but it cannot discard an unrelated
@@ -496,6 +521,10 @@ pub(in super::super) fn apply(
                 continue;
             };
             let snapshot = &prepared_before[task_id];
+            if let Some(detail) = source_superseded_tasks.get(task_id) {
+                outcomes.push(source_superseded(task_id, detail));
+                continue;
+            }
             match superseded_task(runtime, task_id, snapshot, &policy, has_ci_sweep_authority) {
                 Ok(Some(outcome)) => {
                     outcomes.push(outcome);
@@ -1046,6 +1075,7 @@ pub(in super::super) fn apply(
         "mode": mode,
         "workspace_path": workspace_root,
         "source": prepared.get("source").cloned().unwrap_or(Value::Null),
+        "source_age": prepared.get("source_age").cloned().unwrap_or(Value::Null),
         "discovery": {
             "task_ids": prepared.get("task_ids").cloned().unwrap_or_else(|| json!([])),
             "excluded": prepared.get("excluded").cloned().unwrap_or_else(|| json!([])),

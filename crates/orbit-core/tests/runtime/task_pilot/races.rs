@@ -20,7 +20,7 @@ fn assessment(task: &Value) -> Value {
     })
 }
 
-fn apply_input(workspace: &Workspace, prepared: &Value) -> Value {
+pub(super) fn apply_input(workspace: &Workspace, prepared: &Value) -> Value {
     json!({
         "workspace_path": workspace.repo,
         "prepared": prepared,

@@ -122,6 +122,10 @@ pub(super) fn reconcile(
                         || applied.result.is_null()
                         || !applied_keys.insert(applied.member_key.clone())
                 })
+                || evidence
+                    .superseded
+                    .keys()
+                    .any(|key| active.member_for(key).is_none() || applied_keys.contains(key))
             {
                 return Err(AutomationError::Evidence(
                     "member_provenance_mismatch".into(),
@@ -132,7 +136,8 @@ pub(super) fn reconcile(
                 .map_err(|e| AutomationError::Evidence(e.to_string()))?;
 
             // One receipt certifies every member the run applied; members it
-            // did not apply are failed at their fingerprint beside it.
+            // did not apply are failed at their fingerprint beside it, and
+            // superseded ones are released for a fresh claim.
             let input_digest = digest(
                 &active
                     .identity_bytes()
@@ -180,8 +185,17 @@ pub(super) fn reconcile(
             let Some(settled) = members.active.take() else {
                 return Ok(state);
             };
+            let head = if evidence.superseded.is_empty() {
+                None
+            } else {
+                Some(host.head(&state.branch)?.1)
+            };
             for member in settled.members() {
                 if applied_keys.contains(&member.key) {
+                    continue;
+                }
+                if evidence.superseded.contains_key(&member.key) {
+                    release_superseded(members, member, head.as_ref());
                     continue;
                 }
                 let reason = evidence
@@ -231,6 +245,31 @@ pub(super) fn reconcile(
             }
 
             commit_retiring(store, host, &state, next, None, retired)
+        }
+    }
+}
+
+/// Release a member the branch superseded under its attempt [ORB-14476]: no
+/// failure record, no retry against the frozen source. A pending entry still
+/// at that source moves to `head` and keeps its timestamps, so the next
+/// admission claims it there at once; admission still recomputes its
+/// fingerprint at the head before claiming. When the head is back at the
+/// frozen source the entry leaves pending and is observed afresh.
+fn release_superseded(
+    members: &mut MemberState,
+    member: &StateMember,
+    head: Option<&SourceRevision>,
+) {
+    let Some(pending) = members.pending.get_mut(&member.key) else {
+        return;
+    };
+    if pending.source != member.source {
+        return;
+    }
+    match head.filter(|head| **head != member.source) {
+        Some(head) => pending.source = head.clone(),
+        None => {
+            members.pending.remove(&member.key);
         }
     }
 }
