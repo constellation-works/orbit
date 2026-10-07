@@ -140,7 +140,7 @@ try {
   await page.waitForSelector('.claim-panel', { timeout: 5000 });
   const rendered = await page.textContent('.claim-panel');
   for (const required of [
-    'machine hm_9ca6004473492f06 · name runner-2',
+    'on runner-2',
     'inspect this run on machine hm_9ca6004473492f06',
     'expiry is not revocation',
     'not required · policy none',

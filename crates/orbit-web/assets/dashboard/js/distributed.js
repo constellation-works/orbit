@@ -100,17 +100,15 @@ export function claimsForTask(payload, taskId) {
 
 // --- shared renderers -------------------------------------------------------
 
-/// Machine-qualified execution provenance, or an explicit unknown.
-///
-/// `machine_id` is the stable identity; `machine_name` rides along for display
-/// and may be renamed, so it is never shown alone.
+/// A concise execution location, or an explicit unknown.
 export function formatExecutionLocation(location) {
   if (!location || location.known !== true || !location.machine_id) {
     return "unknown — recorded before execution provenance was tracked";
   }
-  return location.machine_name
-    ? `machine ${location.machine_id} · name ${location.machine_name}`
-    : `machine ${location.machine_id}`;
+  const machineId = String(location.machine_id);
+  const shortId = machineId.length > 7 ? `${machineId.slice(0, 7)}…` : machineId;
+  const label = location.machine_name || shortId;
+  return `on ${label}`;
 }
 
 /// The execution-provenance cell shared by the run meta grid and the task
@@ -121,7 +119,7 @@ export function buildExecutionProvenance(location) {
     class: known ? "exec-origin" : "exec-origin unknown",
     text: formatExecutionLocation(location),
     title: known
-      ? "Where this ran. Nothing is inferred from hostname, cwd or SSH target."
+      ? `Execution machine id: ${location.machine_id}`
       : "No execution machine was recorded for this row. Unknown is not the owner.",
   });
 }
