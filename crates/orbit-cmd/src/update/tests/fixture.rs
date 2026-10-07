@@ -287,7 +287,9 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
         r#"{"schema_version":1,"contract":"executable-generation-v1"}"#
     };
     let inspection = if behavior == FakeBinary::ReadOnlyStore {
-        r#"{"up_to_date":false,"schema":{"current":21,"supported":20},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
+        // Keep every other compatibility check satisfied so only read_only
+        // can prevent this candidate from authorizing a downgrade.
+        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
     } else {
         r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#
     };

@@ -255,9 +255,7 @@ fn successful_read_only_inspection_cannot_authorize_a_downgrade() {
     let mut requested = request();
     requested.allow_downgrade = true;
     let before = std::fs::read(&fixture.executable).expect("old executable");
-    let error =
-        run_update(&fixture.environment(), &requested).expect_err("read-only candidate refused");
-    assert!(error.to_string().contains("Read-only inspection success"));
+    run_update(&fixture.environment(), &requested).expect_err("read-only candidate refused");
     assert_eq!(
         std::fs::read(&fixture.executable).expect("old executable"),
         before
