@@ -5,7 +5,7 @@
 //! and a runtime rebuild naturally starts a fresh cache namespace. Dashboard
 //! memos use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
-//! `/api/diagnostics/errors` (keyed by its row limit), and
+//! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/scoreboard` (keyed by the canonical window).
 
