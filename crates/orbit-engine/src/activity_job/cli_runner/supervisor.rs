@@ -34,8 +34,8 @@
 //!    as cancellation.
 //! 3. **Capture finish.** Bytes collected before cancel/EOF are frozen by
 //!    [`RollingOutputCapture::finish`]: under the limit they are kept in full;
-//!    over the limit the prefix plus a complete-line tail are kept and
-//!    `truncated` is set. Writes that arrive after cancel are discarded and
+//!    over the limit a redacted complete-line prefix plus a raw complete-line
+//!    protocol tail are kept and `truncated` is set. Writes after cancel are discarded and
 //!    must not be logged for the completed invocation.
 //! 4. **Wait error.** Readers are finalized the same way; the function then
 //!    returns [`SpawnError`] and drops the finished capture because the error
@@ -74,6 +74,8 @@ use std::os::unix::net::UnixStream;
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::{SpawnError, SpawnedChild, spawn_child_with_optional_sandbox};
 use orbit_common::process::output_capture::capture_limit_from_env;
+use orbit_common::security::redaction::redact_all;
+use orbit_common::text::floor_char_boundary;
 use wait_timeout::ChildExt;
 
 /// Default wall-clock timeout when `AgentLoopSpec::wall_clock_timeout_seconds`
@@ -166,11 +168,23 @@ impl RollingOutputCapture {
         let prefix_limit = self.limit / 2;
         let tail_limit = self.limit.saturating_sub(prefix_limit);
         if !self.truncated {
-            let displaced = self.prefix.split_off(prefix_limit.min(self.prefix.len()));
-            self.tail.extend(displaced);
+            let mut window = std::mem::take(&mut self.prefix);
+            window.extend_from_slice(chunk);
+            // Keep the protocol tail raw. Redact the diagnostic window before
+            // its final cut, with the rest of the capture as lookahead: cutting
+            // first can turn a complete provider token into an unknown prefix.
+            self.tail.extend(window[prefix_limit..].iter().copied());
+            let redacted = redact_all(&String::from_utf8_lossy(&window));
+            let boundary = floor_char_boundary(&redacted, prefix_limit);
+            // A token or field longer than the lookahead must not leave a
+            // partial line in the prefix. This also avoids cutting UTF-8 or a
+            // redaction marker after substitutions expand or shrink text.
+            let prefix_end = redacted[..boundary].rfind('\n').map_or(0, |idx| idx + 1);
+            self.prefix = redacted.as_bytes()[..prefix_end].to_vec();
             self.truncated = true;
+        } else {
+            self.tail.extend(chunk);
         }
-        self.tail.extend(chunk);
         while self.tail.len() > tail_limit {
             self.tail.pop_front();
         }
