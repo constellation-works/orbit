@@ -21,8 +21,8 @@ change on that host: `machine_id` and `task_prefix`. Anything that can change, s
 reachability, Orbit version, pull protocol or workspaces, is read live from the host when
 asked and never persisted. Operators manage entries from the CLI or from the dashboard's
 Settings › Hosts view. Status: the host file, `orbit host`, the envelope fields, the doctor
-row and the migration are implemented ([ORB-14448]); the dashboard is specified and not yet
-implemented ([ORB-14451]).
+row and the migration are implemented ([ORB-14448]), and so is the dashboard view
+([ORB-14451]).
 
 ## Why This Exists
 
@@ -183,7 +183,7 @@ file does not store a prefix. Registered entries retain their existing JSON fiel
 ## Dashboard
 
 Orbit Web manages the serving host's host file with the same operations as the CLI.
-Status: specified; implementation is [ORB-14451], which depends on [ORB-14448].
+Status: implemented ([ORB-14451], on the [ORB-14448] operations).
 
 ### API
 
@@ -195,11 +195,29 @@ Status: specified; implementation is [ORB-14451], which depends on [ORB-14448].
 | `PATCH /api/hosts/:host` with `{name}` | `orbit host rename` |
 | `DELETE /api/hosts/:host[?force=true]` | `orbit host remove [--force]` |
 
-- Each route calls the orbit-registry operation the CLI calls. There is no second
-  implementation of validation, migration or writes, and the typed errors are the CLI's.
+- Each route calls the orbit-cmd host operation the CLI calls. There is no second
+  implementation of validation, migration or writes.
+- Answers are the CLI's `--json` output, and so are the errors: `{error, code}` with the CLI's
+  code. The HTTP status follows the code: `invalid_input` 400, `unknown_host` 404, a refusal
+  about the file or its entries (`host_exists`, `host_name_conflict`, `task_prefix_conflict`,
+  `host_is_local`, `host_in_use`, `host_identity_mismatch`, `host_too_old`,
+  `host_file_conflict`, `ambiguous_destination`) 409, and a host that did not answer
+  (`unreachable_destination`, `legacy_host_unreachable`, `outcome_unknown`,
+  `process_timeout`) 502. Add answers 201.
+- A body with a missing, mistyped or unknown field is `invalid_input`.
+- A `host_in_use` refusal also carries `dependents`, shaped as in `orbit host show`, so the
+  view can list them beside its force confirmation.
+- The list adds three fields to the CLI shape: `host_edit` (below); `generation`, the
+  host-file snapshot it was read from; and `load_error` (`{code, message}` or null), set when
+  a newer file failed to load (see Freshness).
 - Mutating routes pass the existing origin guard (`api/origin.rs`) like every other dashboard
   mutation. The guard mitigates CSRF and DNS rebinding. Access control remains the loopback
   bind plus the SSH tunnel.
+- Add, rename and remove are the governed dashboard operation `host.edit`, which needs the
+  operator capability, as a config write does: a dashboard served without `--operator` answers
+  them `authorization_denied` (403) before reading the body. The list reports the session's
+  verdict as `host_edit` (`{authorized, reason}`), and the view is read-only when it is
+  refused. `orbit host` from a terminal is not governed.
 - The `ssh` value is checked by the host-file `ssh` validator before any process starts: a
   leading `-`, whitespace and shell metacharacters are refused. The target is passed after
   `--`. No route accepts a command or extra ssh options.
@@ -218,13 +236,21 @@ The view is Settings › Hosts (`#config/hosts`).
 - A remove refused with `host_in_use` lists the dependents and offers an explicit force
   confirmation.
 - Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
+- Opening the view and its Reload button probe every host, and an add shows the new host
+  as its identity probe found it. The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
+  fields, so the view never probes in the background. A row marked not probed has not been
+  asked since the view opened.
 
 ### Freshness
 
 The dashboard rereads the host file when it changes, using the generation-swap rule of the
 registry snapshot ([2_design.md](../2_design.md) §6). A host added from the CLI appears on the
-next refresh without a restart. A host file that fails to load shows an error banner on the
-view, and the last valid snapshot stays in use, as the registry snapshot does.
+next refresh without a restart. Each request compares the modification time and size of the
+host file, the legacy destinations file and the global `config.toml` with those of the last
+successful load and reloads only when one changed. A host file that fails to load shows an
+error banner on the view, and the last valid snapshot stays in use, as the registry snapshot
+does. The failed file is retried on the next request. Mutations never use the snapshot: they
+load the file themselves and refuse a concurrent edit, as the CLI does.
 
 A dashboard reached through `orbit web connect <host>` edits that host's host file, not the
 caller's.

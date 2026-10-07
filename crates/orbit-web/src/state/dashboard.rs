@@ -20,6 +20,8 @@ pub(super) struct StateInner {
     host_disk_paths: Vec<PathBuf>,
     /// Atomically-swapped registered workspace set + default selection.
     snapshot: Mutex<Arc<Snapshot>>,
+    /// The serving host's host file, swapped by the same rule [ORB-14451].
+    hosts: HostFileState,
     /// Lazily-built, cached runtimes keyed by workspace id.
     runtimes: Mutex<HashMap<String, CachedRuntime>>,
     /// Registry to reload from on refresh; `None` disables refresh (single /
@@ -371,6 +373,7 @@ impl DashboardState {
         };
         Self {
             inner: Arc::new(StateInner {
+                hosts: HostFileState::new(global_root.clone()),
                 global_root,
                 host_resources: Mutex::new(None),
                 host_disk_paths,
@@ -436,6 +439,13 @@ impl DashboardState {
                 .ok_or_else(|| OrbitError::Execution("host resource monitor unavailable".into()))?
         };
         Ok(monitor.snapshot(&paths))
+    }
+
+    /// The serving host's host file: its last valid snapshot, reloaded when
+    /// the file changes, and the error of a newer file that failed to load.
+    /// May read files and must be called through `blocking`.
+    pub(crate) fn hosts(&self) -> PinnedHosts {
+        self.inner.hosts.pin()
     }
 
     /// Process-local `/api/audit/summary` memo for this server instance.

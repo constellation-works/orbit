@@ -1811,6 +1811,7 @@ dependencies = [
  "orbit-web",
  "predicates",
  "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

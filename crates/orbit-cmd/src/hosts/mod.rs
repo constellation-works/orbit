@@ -152,8 +152,14 @@ pub struct PullDrainDependent {
 /// List this host and every registered one. With `probe`, every remote is
 /// probed in parallel; an unreachable host keeps its row with the error.
 pub fn list_hosts(global_root: &Path, probe: bool) -> Result<HostList, OrbitError> {
-    let registry = load_host_registry(global_root)?;
-    let local = require_local(&registry)?;
+    list_registered_hosts(&load_host_registry(global_root)?, probe)
+}
+
+/// [`list_hosts`] over an already loaded host file. The dashboard keeps its
+/// last valid load and lists from it while a newer file fails to load.
+pub fn list_registered_hosts(registry: &HostRegistry, probe: bool) -> Result<HostList, OrbitError> {
+    let global_root = registry.global_root();
+    let local = require_local(registry)?;
     let mut hosts = vec![local_row(global_root, local)];
     let mut remotes = remote_targets(registry.hosts());
     remotes.sort_by_key(|target| target.name().to_ascii_lowercase());
@@ -170,8 +176,16 @@ pub fn list_hosts(global_root: &Path, probe: bool) -> Result<HostList, OrbitErro
 /// One host by name or `machine_id`, probed as in [`list_hosts`], with what
 /// on this machine depends on it.
 pub fn show_host(global_root: &Path, selector: &str) -> Result<HostDetail, OrbitError> {
-    let registry = load_host_registry(global_root)?;
-    let local = require_local(&registry)?;
+    show_registered_host(&load_host_registry(global_root)?, selector)
+}
+
+/// [`show_host`] over an already loaded host file.
+pub fn show_registered_host(
+    registry: &HostRegistry,
+    selector: &str,
+) -> Result<HostDetail, OrbitError> {
+    let global_root = registry.global_root();
+    let local = require_local(registry)?;
     Ok(match registry.resolve(selector)? {
         ResolvedHost::Local(identity) => HostDetail {
             host: local_row(global_root, identity),
@@ -186,6 +200,19 @@ pub fn show_host(global_root: &Path, selector: &str) -> Result<HostDetail, Orbit
             dependents: Some(host_dependents(global_root, &row.machine_id)?),
         },
     })
+}
+
+/// What on this machine routes to the host `selector` names: the dependents a
+/// `host_in_use` refusal lists. `None` for the local host.
+pub fn dependents_of(
+    global_root: &Path,
+    selector: &str,
+) -> Result<Option<HostDependents>, OrbitError> {
+    let registry = load_host_registry(global_root)?;
+    match registry.resolve(selector)? {
+        ResolvedHost::Local(_) => Ok(None),
+        resolved => host_dependents(global_root, resolved.machine_id()).map(Some),
+    }
 }
 
 /// A remote row's cached identity: a host-file entry or a legacy route.

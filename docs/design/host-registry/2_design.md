@@ -145,7 +145,7 @@ Before any runtime opens, the CLI routes a call that addresses one task by id (`
 
 ### Web
 
-The specified Settings › Hosts view and `/api/hosts` routes manage the serving host's host file through the same registry operations as `orbit host` ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]).
+The Settings › Hosts view and `/api/hosts` routes manage the serving host's host file through the same orbit-cmd operations as `orbit host`, and answer with its JSON and error codes ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]). The list reads a host-file snapshot under the rule below: it reloads when the host file, the legacy destinations file or `config.toml` changes, and a file that fails to load is reported beside the last valid snapshot. Mutations load the file themselves, as the CLI does, and need the operator capability (the governed dashboard operation `host.edit`).
 
 Orbit Web loads local workspaces from orbit-registry, derives checkout-path health, and opens active runtimes lazily through orbit-cmd. Each request pins one immutable registry generation. A successful refresh swaps the complete snapshot and evicts incompatible cached runtimes; a failed refresh retains the last valid snapshot. An invalid initial load fails startup.
 
@@ -180,12 +180,13 @@ Older databases may retain tables and migration records from the removed fleet-r
 | id-only task call to a v1 MCP server, prefix is a registered remote host's | `task_prefix_remote` |
 | `--host` unknown, unreachable, or not listing the workspace | `unknown_host`, `unreachable_destination`, `stale_route` |
 | Web refresh cannot load registry | Last valid in-memory snapshot retained |
+| Web cannot load hosts.toml | Last valid host snapshot retained; Settings › Hosts shows the error |
 | initial Web registry load fails | Server startup fails |
 
 ## Task References
 
 - [ORB-14448] host file and `orbit host` commands
 - [ORB-14449] task-prefix routing and `--host` selection
-- [ORB-14451] dashboard Settings › Hosts (specified)
+- [ORB-14451] dashboard Settings › Hosts
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
