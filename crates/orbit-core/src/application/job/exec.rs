@@ -212,17 +212,35 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
-        self.seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())?;
-
+        // [ORB-14524] The run row is committed, so a seed or Start-write
+        // failure must terminalize it: no worker exists to ever pick it up, and
+        // a stranded pending run would hold its concurrency slot and retry key.
         let started_at = chrono::Utc::now();
+        let start = self
+            .seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())
+            .and_then(|()| {
+                self.stores().jobs().mark_job_run_running(
+                    &run.run_id,
+                    started_at,
+                    std::process::id(),
+                )
+            })
+            .inspect_err(|error| {
+                log_best_effort(
+                    "finalize startup failure",
+                    &run.run_id,
+                    self.finalize_pipeline_worker_startup_failure(
+                        &run,
+                        &error.to_string(),
+                        None,
+                        None,
+                    ),
+                );
+            })?;
         // [ORB-10965] This run was inserted moments ago by this very process,
         // so it must win its own Start. Anything else means another owner
         // reached it first, and running it here would duplicate execution.
-        match self.stores().jobs().mark_job_run_running(
-            &run.run_id,
-            started_at,
-            std::process::id(),
-        )? {
+        match start {
             JobRunStartOutcome::Started => {}
             JobRunStartOutcome::NotFound => {
                 return Err(OrbitError::not_found(NotFoundKind::JobRun, run.run_id));
