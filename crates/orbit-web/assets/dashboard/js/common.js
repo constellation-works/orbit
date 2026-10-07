@@ -359,6 +359,11 @@ export function el(tag, opts = {}, children = []) {
   if (opts.text != null) node.textContent = opts.text;
   if (opts.title != null) node.title = opts.title;
   if (opts.style) Object.assign(node.style, opts.style);
+  for (const [name, value] of Object.entries(opts)) {
+    if (value != null && (name.startsWith("aria-") || name === "role" || name === "type")) {
+      node.setAttribute(name, String(value));
+    }
+  }
   // `append` inserts a string child as a text node, never as markup.
   for (const child of children) {
     if (child != null) node.append(child);

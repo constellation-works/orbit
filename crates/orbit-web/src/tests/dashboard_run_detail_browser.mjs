@@ -216,6 +216,8 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunSteps();
   });
   if (!(await page.locator('.step-logs-empty').textContent()).includes('unavailable')) throw new Error('A log fetch failure must replace stale no-logs feedback in an expanded step');
+  const logAlert = page.locator('#run-steps-body .action-error');
+  if (!(await logAlert.isVisible()) || await logAlert.getAttribute('role') !== 'alert') throw new Error('Run log fetch failures must render an accessible alert');
   await page.evaluate(async () => {
     const detail = await import('/js/run-detail.js');
     detail.setActiveRunLogs([{ step_index: 0, provider: 'claude' }]);
