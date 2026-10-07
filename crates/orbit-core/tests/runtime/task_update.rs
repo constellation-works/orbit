@@ -1,10 +1,85 @@
-//! Rejected artifacts cannot partially persist a task update [ORB-14345].
+//! Task writes scrub prose and reject invalid artifacts atomically [ORB-14345].
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};
+
+#[test]
+fn guarded_start_and_activity_notes_redact_before_persistence() {
+    if !super::dispatch_admission::isolated(
+        "task_update::guarded_start_and_activity_notes_redact_before_persistence",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Guarded start redaction".into(),
+            complexity: TaskComplexity::Low,
+            ..Default::default()
+        })
+        .unwrap();
+    let token = format!("glpat-{}", "c".repeat(20));
+    let text = format!("diagnostic {token}");
+    let safe = "diagnostic [REDACTED_SECRET]";
+    runtime
+        .start_task_with_identity_and_crew(
+            &task.id,
+            Some(text.clone()),
+            Some(text.clone()),
+            None,
+            Some("codex".into()),
+            None,
+            Some(text.clone()),
+            TaskUpdateParams {
+                title: Some(text.clone()),
+                description: Some(text.clone()),
+                acceptance_criteria: Some(vec![text.clone()]),
+                execution_summary: Some(text.clone()),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+    runtime
+        .update_task_from_activity(
+            &task.id,
+            orbit_engine::TaskActivityUpdate {
+                status: TaskStatus::Review,
+                expected_status: TaskStatus::InProgress,
+                execution_summary: Some(text.clone()),
+                comment: Some(text.clone()),
+                note: Some(text),
+                agent: None,
+                model: Some("codex".into()),
+                calling_run_id: None,
+            },
+        )
+        .unwrap();
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let updated = persisted.get_task(&task.id).unwrap();
+    assert_eq!(updated.status, TaskStatus::Review);
+    assert_eq!(updated.title, safe);
+    assert_eq!(updated.description, safe);
+    assert_eq!(updated.plan, safe);
+    assert_eq!(updated.execution_summary, safe);
+    assert_eq!(updated.acceptance_criteria, [safe]);
+    let comments = persisted.get_task_comments(&task.id).unwrap();
+    assert_eq!(comments.len(), 2);
+    assert!(comments.iter().all(|comment| comment.message == safe));
+    let history = persisted.get_task_history(&task.id).unwrap();
+    for target in [TaskStatus::Backlog, TaskStatus::Review] {
+        assert!(history.iter().any(|event| event.to_status == Some(target)
+            && event.note.as_deref() == Some(safe)), "transition note must be scrubbed");
+    }
+}
 
 #[test]
 fn rejected_artifacts_leave_status_document_and_history_unchanged() {

@@ -1,4 +1,5 @@
 use chrono::Utc;
+use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
@@ -116,6 +117,8 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let note = note.map(|value| redact_all(&value));
+        let comment = comment.map(|value| redact_all(&value));
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
@@ -356,6 +359,8 @@ impl OrbitRuntime {
             field_edits,
             artifact_owner,
         } = options;
+        let note = note.map(|value| redact_all(&value));
+        let comment = comment.map(|value| redact_all(&value));
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
@@ -749,7 +754,8 @@ impl OrbitRuntime {
                 "rejection note must not be empty".to_string(),
             ));
         }
-        let reason = reason.to_string();
+        let reason = redact_all(reason);
+        let comment = comment.map(|value| redact_all(&value));
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
         let mut result = None;

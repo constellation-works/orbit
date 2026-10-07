@@ -27,6 +27,15 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 
 For `orbit.task.update`, `note` is the optional note attached to a lifecycle status change; it is sanitized before the transition body persists it in task history. Task and friction tags are taxonomy fields and pass through verbatim.
 
+Task creation and mutation also apply the shared `redact_all` secret redactor
+at the application write boundary, covering direct CLI and dashboard calls.
+Updates and guarded starts scrub `title`, `description`, `plan`,
+`execution_summary`, `acceptance_criteria[]`, and `comment`; approval, start,
+rejection, and activity status writes scrub their notes and comments before
+bundle, history, or write-journal persistence. The tool policy above additionally
+normalizes home paths and reports redaction metadata for tool calls. Existing
+records and raw artifact bytes retain their existing contracts.
+
 The table establishes the artifact boundary: ADRs, tasks, frictions, and auto-task definitions are covered on their listed write operations. `DocsAdd` makes an explicit no-redaction decision because it only registers a checked path; registered docs remain ordinary repository files rather than a tool mutation primitive. Session-log writes are no longer a public tool mutation, so they are not in this inventory ([ORB-11097]).
 
 `policy_for_action` exhaustively matches `OrbitBuiltinAction`. Adding any builtin action therefore fails to compile until it receives either a field policy or an explicit no-redaction decision, instead of falling through to an unredacted default.

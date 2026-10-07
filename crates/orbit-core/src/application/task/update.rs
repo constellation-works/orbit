@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
+use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
@@ -338,7 +339,7 @@ impl OrbitRuntime {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+            .map(redact_all);
         if status_note.is_some() && requested_status.is_none() {
             return Err(OrbitError::InvalidInput(
                 "`note` requires a status change; use `comment` for free-form discussion"
@@ -561,6 +562,26 @@ impl OrbitRuntime {
         task: &Task,
         mut params: TaskUpdateParams,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
+        // Both ordinary updates and guarded starts reach this application
+        // boundary, including CLI/dashboard callers that bypass tool-host
+        // sanitization. Scrub prose before it enters a bundle or write journal.
+        for value in [
+            &mut params.title,
+            &mut params.description,
+            &mut params.plan,
+            &mut params.execution_summary,
+            &mut params.comment,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *value = redact_all(value);
+        }
+        if let Some(criteria) = &mut params.acceptance_criteria {
+            for criterion in criteria {
+                *criterion = redact_all(criterion);
+            }
+        }
         let context_root = context_workspace_root(&self.paths().repo_root, None);
         if let Some(candidates) = params.context_files.take() {
             let candidates = normalize_context_files_for_write(candidates, &context_root)?;

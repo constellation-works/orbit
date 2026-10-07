@@ -8,6 +8,115 @@ use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
 #[test]
+fn task_updates_and_approval_redact_prose_before_persistence() {
+    let fixture = Fixture::new();
+    let token = format!("ghp_{}", "a".repeat(36));
+    let text = format!("diagnostic GITHUB_TOKEN={token}");
+    let safe = "diagnostic GITHUB_TOKEN=[REDACTED_SECRET]";
+    let task = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Redaction fixture",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Persist scrubbed prose",
+        "--json",
+    ]);
+    let id = task["id"].as_str().unwrap();
+    let updated = fixture.json(&[
+        "task",
+        "update",
+        id,
+        "--title",
+        &text,
+        "--description",
+        &text,
+        "--plan",
+        &text,
+        "--execution-summary",
+        &text,
+        "--acceptance-criteria",
+        &text,
+        "--acceptance-criteria",
+        "ordinary criterion",
+        "--comment",
+        &text,
+        "--json",
+    ]);
+    for field in ["title", "description", "plan", "execution_summary"] {
+        assert_eq!(updated[field], safe, "updated {field}");
+    }
+    assert_eq!(
+        updated["acceptance_criteria"],
+        serde_json::json!([safe, "ordinary criterion"])
+    );
+    let approved = fixture.json(&[
+        "task",
+        "update",
+        id,
+        "--approve",
+        "--note",
+        &text,
+        "--comment",
+        &text,
+        "--json",
+    ]);
+    assert_eq!(approved["status"], "backlog");
+    assert!(
+        approved["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["event"] == "proposal_approved" && event["note"] == safe })
+    );
+    fixture.json(&[
+        "task",
+        "update",
+        id,
+        "--status",
+        "in-progress",
+        "--comment",
+        &text,
+        "--json",
+    ]);
+    let persisted = fixture.json(&["task", "show", id, "--json"]);
+    let comments = persisted["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 3);
+    assert!(comments.iter().all(|comment| comment["message"] == safe));
+
+    // Inspect bytes in the canonical bundle, rather than trusting a reader
+    // that might mask an already-persisted secret.
+    let bundle = fs::read_dir(fixture.root.join("tasks/workspaces"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join(id))
+        .find(|path| path.is_dir())
+        .expect("persisted task bundle");
+    for name in [
+        "task.yaml",
+        "description.md",
+        "plan.md",
+        "execution-summary.md",
+        "acceptance.md",
+        "comments.jsonl",
+        "events.jsonl",
+    ] {
+        let content = fs::read_to_string(bundle.join(name)).unwrap();
+        assert!(!content.contains(&token), "task secret leaked into {name}");
+        assert!(
+            content.contains("[REDACTED_SECRET]"),
+            "scrubbed prose missing from {name}"
+        );
+    }
+    let audit = fixture.json(&["audit", "list", "--json"]);
+    assert!(
+        !audit.to_string().contains(&token),
+        "task secret leaked into command audit"
+    );
+}
+
+#[test]
 fn reservation_cli_conflicts_and_confirmation_preserve_claims() {
     let fixture = Fixture::new();
     fs::write(fixture.repo.join("README.md"), "fixture\n").unwrap();
