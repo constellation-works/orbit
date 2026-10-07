@@ -2,7 +2,7 @@
 title: External Executor Protocol v1 (Retired)
 owner: claude
 last_updated: 2026-09-24
-last_validated: 2026-09-19
+last_validated: 2026-10-06
 status: Retired
 feature: executors
 type: design
