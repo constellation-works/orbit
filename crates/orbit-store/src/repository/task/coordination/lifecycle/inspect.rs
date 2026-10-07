@@ -34,7 +34,7 @@ impl TaskCommitBoundary {
 
     /// Caller holds the boundary and has already settled or excluded a
     /// pending commit.
-    fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+    pub(in super::super) fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
         self.store
             .task_coordination_rows(&self.workspace_id, CLAIM)?
             .iter()

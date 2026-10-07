@@ -121,6 +121,7 @@ mod commit;
 mod handoff;
 mod landing;
 mod lifecycle;
+mod repair;
 
 // Shared with sibling modules through `super::`.
 use boundary::BoundaryDepth;

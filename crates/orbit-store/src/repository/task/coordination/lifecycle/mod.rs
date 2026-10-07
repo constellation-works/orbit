@@ -12,7 +12,7 @@ mod inspect;
 mod mutate;
 mod releases;
 
-pub(super) use codec::{decode, encode, invalid, row};
+pub(super) use codec::{CLAIM, STATE, decode, encode, invalid, row};
 pub(super) use releases::CandidateOffer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

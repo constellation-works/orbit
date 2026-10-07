@@ -64,6 +64,7 @@ mod claimed_review;
 mod desktop_completion;
 mod failure_class;
 mod landing_attribution;
+mod landing_repair;
 mod no_diff;
 mod pilot;
 mod recovery;
@@ -74,6 +75,7 @@ mod worktree_gc;
 const OWNER: &str = "hm_owner";
 const FOLLOWER: &str = "hm_follower";
 const LEAF_JOB: &str = "task_claimed_pr_pipeline";
+const LOCAL_LEAF_JOB: &str = "task_claimed_local_pipeline";
 
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(180);
@@ -184,6 +186,10 @@ struct Wire {
     /// When set, the owner accepts a handoff into its claim journal, with
     /// the candidate the handoff names standing in for its provider read.
     accept_handoffs: Mutex<bool>,
+    /// When set, every call arrives as the owner's own local session, as an
+    /// owner-local drain's does, and a settlement reaches the owner's real
+    /// observation of its own checkout.
+    local: Mutex<bool>,
 }
 
 impl Wire {
@@ -297,7 +303,9 @@ impl DrainOwnerTransport for Wire {
         // The owner verifies a handoff against its published pull request,
         // which no test here has; the wire answers as an owner that did, and
         // records the acceptance when the test asks for it.
+        let local = *self.local.lock().unwrap();
         if name == "orbit.drain.claim.settle"
+            && !local
             && let Some(handoff) = input["settlement"].get("AcceptHandoff")
             && handoff["candidate"]["delivery"]["kind"] != "no_diff"
         {
@@ -309,7 +317,11 @@ impl DrainOwnerTransport for Wire {
         let session = ToolSessionContext {
             caller_machine_id: Some(self.caller.clone()),
             process_machine_id: Some(OWNER.to_string()),
-            transport: Some(McpTransport::SshMcp),
+            transport: Some(if local {
+                McpTransport::Local
+            } else {
+                McpTransport::SshMcp
+            }),
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
@@ -528,6 +540,7 @@ impl Pair {
             fingerprint: Mutex::default(),
             refuse_settle: Mutex::default(),
             accept_handoffs: Mutex::default(),
+            local: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower
@@ -799,11 +812,12 @@ impl Pair {
         self.owner_task(id)["status"].as_str().unwrap().to_string()
     }
 
+    /// Every claimed leaf run, a follower's PR leaves and an owner-local
+    /// drain's local ones alike.
     fn leaf_runs(&self) -> Vec<String> {
-        self.follower_jobs
-            .list_job_runs(LEAF_JOB)
-            .expect("leaf runs")
+        [LEAF_JOB, LOCAL_LEAF_JOB]
             .into_iter()
+            .flat_map(|job| self.follower_jobs.list_job_runs(job).expect("leaf runs"))
             .map(|run| run.run_id)
             .collect()
     }

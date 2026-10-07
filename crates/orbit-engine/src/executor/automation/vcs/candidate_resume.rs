@@ -39,6 +39,13 @@
 //! summary: a clean apply is `resumed_repaired` with trigger `continuation`
 //! (or `review` when the before-PR review refused it), and the leaf's own
 //! validation judges the result.
+//!
+//! A repair claim's leaf passes `claim_repair` instead [ORB-14261]: the
+//! candidate an owner's landing stopped on a base conflict or stale base.
+//! It is squash-merged the same way and the implementer always runs — on a
+//! `conflict` to resolve, or on a `landing` repair that applied cleanly onto
+//! the moved base. If that candidate cannot be restored, the leaf fails
+//! closed instead of implementing fresh and silently dropping its work.
 
 use std::path::Path;
 
@@ -168,6 +175,12 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         ));
     };
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {
+        if let Some(repair) = input
+            .get("claim_repair")
+            .filter(|repair| repair.is_object())
+        {
+            return claim_repair_resume(repair, &workspace_path, &base_sha);
+        }
         return claimed_resume(host, input, task_id, &workspace_path, &base_sha);
     }
     let task = host.get_task(task_id)?;
@@ -309,20 +322,101 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn resume<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task_id: &str,
+/// [ORB-14261] Resume the candidate a repair claim carries: the one whose
+/// owner landing stopped on its base. Unlike a kept candidate it must not be
+/// dropped, so a candidate that cannot be restored fails the leaf.
+fn claim_repair_resume(
+    repair: &Value,
+    workspace_path: &Path,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let (Some(branch), Some(head_sha)) = (
+        input_string_field(repair, "branch"),
+        input_string_field(repair, "head_sha"),
+    ) else {
+        return Err(OrbitError::InvalidInput(
+            "candidate_resume: claim_repair requires the candidate's branch and head_sha"
+                .to_string(),
+        ));
+    };
+    let stopped = input_string_field(repair, "stop_evidence")
+        .unwrap_or_else(|| "the owner's landing stopped on its base".to_string());
+    let candidate = Candidate {
+        run_id: input_string_field(repair, "repairs_claim_id").unwrap_or_default(),
+        branch,
+        head_sha,
+        durable_ref: None,
+        failed_step_id: "landing".to_string(),
+        needs_review_repair: false,
+    };
+    let outcome = match apply(&candidate, workspace_path, base_sha)? {
+        Applied::Refused(reason) => {
+            return Err(OrbitError::Execution(format!(
+                "candidate_resume: repair candidate {} could not be restored: {reason}",
+                candidate.head_sha
+            )));
+        }
+        Applied::Conflict { paths, output } => Outcome::Repair(json!({
+            "trigger": "conflict",
+            "conflicting_paths": paths,
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\n{output}"
+            )),
+        })),
+        Applied::Clean => Outcome::Repair(json!({
+            "trigger": "landing",
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\nIt applied cleanly \
+                 onto the current base {base_sha}; confirm it still meets the acceptance \
+                 criteria there."
+            )),
+        })),
+        Applied::AlreadyPresent => Outcome::Repair(json!({
+            "trigger": "landing",
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stopped}\n\nIts changes are \
+                 already present on the current base {base_sha}; confirm they still meet the \
+                 acceptance criteria there."
+            )),
+        })),
+    };
+    tracing::info!(
+        head_sha = %candidate.head_sha,
+        branch = %candidate.branch,
+        outcome = outcome_name(&outcome),
+        "candidate resume for a repair claim"
+    );
+    let mut resumed = output(&outcome, None, base_sha);
+    resumed["source_branch"] = json!(candidate.branch);
+    resumed["source_sha"] = json!(candidate.head_sha);
+    Ok(resumed)
+}
+
+/// What squash-merging a candidate onto a clean base checkout left behind.
+enum Applied {
+    /// Nothing usable was applied, and why; the checkout is the clean base.
+    Refused(String),
+    /// The candidate's changes are already present on the clean base.
+    AlreadyPresent,
+    /// Uncommitted changes with conflict markers in `paths`.
+    Conflict { paths: Vec<String>, output: String },
+    /// Uncommitted changes that applied without conflict.
+    Clean,
+}
+
+/// Squash-merge `candidate` onto the clean checkout of `base_sha`, leaving the
+/// result as plain uncommitted edits — conflict markers included.
+fn apply(
     candidate: &Candidate,
     workspace_path: &Path,
     base_sha: &str,
-    claimed: bool,
-) -> Result<Outcome, OrbitError> {
+) -> Result<Applied, OrbitError> {
     if !candidate_available(workspace_path, candidate)? {
         let source = match &candidate.durable_ref {
             Some(reference) => format!("durable ref '{reference}'"),
             None => format!("branch '{}'", candidate.branch),
         };
-        return Ok(Outcome::Fresh(format!(
+        return Ok(Applied::Refused(format!(
             "candidate {} ({source}) is not available in this repository",
             candidate.head_sha
         )));
@@ -367,24 +461,48 @@ fn resume<H: RuntimeHost + ?Sized>(
         // Refused before touching the checkout; put back exactly what was
         // verified clean above.
         git_success(workspace_path, &["reset", "--quiet", "--hard", base_sha])?;
-        return Ok(Outcome::Fresh(format!(
+        return Ok(Applied::Refused(format!(
             "candidate {} could not be merged onto base {base_sha}: {}",
             candidate.head_sha,
             merge.stderr.trim()
         )));
     }
     if !conflicting_paths.is_empty() {
-        return Ok(Outcome::Repair(json!({
-            "trigger": "conflict",
-            "conflicting_paths": conflicting_paths,
-            "output": tail(&format!("{}\n{}", merge.stdout.trim(), merge.stderr.trim())),
-        })));
+        return Ok(Applied::Conflict {
+            paths: conflicting_paths,
+            output: format!("{}\n{}", merge.stdout.trim(), merge.stderr.trim()),
+        });
     }
     if !applied {
-        return Ok(Outcome::Fresh(format!(
-            "candidate {}'s changes are already on base {base_sha}",
-            candidate.head_sha
-        )));
+        return Ok(Applied::AlreadyPresent);
+    }
+    Ok(Applied::Clean)
+}
+
+fn resume<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    candidate: &Candidate,
+    workspace_path: &Path,
+    base_sha: &str,
+    claimed: bool,
+) -> Result<Outcome, OrbitError> {
+    match apply(candidate, workspace_path, base_sha)? {
+        Applied::Refused(reason) => return Ok(Outcome::Fresh(reason)),
+        Applied::AlreadyPresent => {
+            return Ok(Outcome::Fresh(format!(
+                "candidate {}'s changes are already on base {base_sha}",
+                candidate.head_sha
+            )));
+        }
+        Applied::Conflict { paths, output } => {
+            return Ok(Outcome::Repair(json!({
+                "trigger": "conflict",
+                "conflicting_paths": paths,
+                "output": tail(&output),
+            })));
+        }
+        Applied::Clean => {}
     }
     // A clean apply of work that never reached `commit` is not an
     // implementation. Owner validation, including an empty command list,
