@@ -72,11 +72,13 @@ impl ActorIdentity {
     ///
     /// The environment is not an authentication boundary. Agent values are
     /// therefore reduced to the same canonical family used by tool dispatch.
+    /// An agent envelope without a canonical identity records `unknown` with
+    /// a warning, before considering any human identity signals.
     /// Absent an agent envelope, an explicit `ORBIT_ACTOR` or operator
     /// override is recorded as a named human actor rather than `unknown` —
     /// those overrides are themselves a deliberate, audited act. Bare CLI
-    /// otherwise records the OS user (`human:<username>`). Only a caller with
-    /// no remaining signal is recorded as `unknown`, and then only with a
+    /// otherwise records the OS user (`human:<username>`). A caller with
+    /// no remaining signal is also recorded as `unknown`, and then only with a
     /// warning: write paths must not construct that literal themselves.
     pub fn from_env() -> Self {
         let agent = std::env::var(ORBIT_AGENT_NAME)
@@ -86,12 +88,27 @@ impl ActorIdentity {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        if let Some(actor) = require_canonical_agent_family(agent.as_deref(), model.as_deref())
-            .ok()
-            .flatten()
-            .map(Self::agent)
-        {
-            return actor;
+        match require_canonical_agent_family(agent.as_deref(), model.as_deref()) {
+            Ok(Some(family)) => return Self::agent(family),
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.actor",
+                    actor = UNKNOWN_ACTOR_LABEL,
+                    %error,
+                    "agent identity did not canonicalize; recording unknown"
+                );
+                return Self::unknown();
+            }
+            Ok(None) => {}
+        }
+
+        if orbit_common::governance::authorization::agent_context_declared() {
+            tracing::warn!(
+                target: "orbit.core.actor",
+                actor = UNKNOWN_ACTOR_LABEL,
+                "agent envelope has no canonical identity; recording unknown"
+            );
+            return Self::unknown();
         }
 
         if let Some(label) = std::env::var(ORBIT_ACTOR)
