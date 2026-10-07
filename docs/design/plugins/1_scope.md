@@ -698,6 +698,11 @@ enforce the recorded install. `ORBIT_PLUGIN` is not the gate.
 
 **The session carries the caller's ceiling.** One plugin is reachable from callers with
 different allowlists, so a name-only gate would admit the whole manifest list [ORB-12801].
+Both workspace-scoped and global-scoped plugin calls enforce the managed caller's activity
+allowlist or deny policy inside the audit boundary. A global call needs no workspace runtime:
+it carries the trusted activity policy into its execution context and records policy refusals
+in the global audit store. The backend's callback ceiling intersects its manifest permissions
+with that same allowlist and removes tools the activity denies, including wildcard matches.
 Every callback is decided by **recorded allowlist ∩ session ceiling**, both consulted per
 call, neither read from the child's environment:
 

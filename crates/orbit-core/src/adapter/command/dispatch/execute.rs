@@ -20,7 +20,8 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::redact_sensitive_env_text;
 use crate::runtime::tool_exec::{
-    CapabilityEnforcement, check_tool_active, populate_filesystem_policy_context,
+    CapabilityEnforcement, check_activity_tool_policy, check_tool_active,
+    populate_filesystem_policy_context,
 };
 
 use super::audit::{
@@ -158,11 +159,29 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
     let global_root = global_root.to_path_buf();
+    let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
+    let activity_tool_policy = if trusted_env {
+        read_activity_tool_policy_from_env()
+    } else {
+        Default::default()
+    };
     let tool_context = ToolContext {
         cwd: std::env::current_dir()
             .ok()
             .map(|path| path.to_string_lossy().into_owned()),
         session_context: session_context.clone(),
+        allowed_tools: activity_tool_policy.allowed_tools,
+        tool_deny_policy: activity_tool_policy.deny_policy,
+        proc_allowed_programs: if trusted_env {
+            read_proc_allowed_programs_from_env()
+        } else {
+            Vec::new()
+        },
+        proc_disallowed_programs: if trusted_env {
+            read_proc_disallowed_programs_from_env()
+        } else {
+            None
+        },
         activity_binding: activity_binding_from_env(),
         ..Default::default()
     };
@@ -200,6 +219,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
                 &tool_context.session_context,
             )?;
             check_tool_active(&registry, name)?;
+            check_activity_tool_policy(name, &tool_context)?;
             registry.execute(name, &tool_context, input)
         },
     )
