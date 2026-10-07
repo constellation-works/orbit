@@ -134,13 +134,12 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
     // ORB-13985: the run a single task was last linked to, read before this
     // run stamps its own id; `candidate_resume` looks there for a candidate
-    // that run's failure handoff preserved.
-    let prior_job_run_id = match task_ids.as_slice() {
-        [task_id] => host
-            .get_task(task_id)?
-            .job_run_id
-            .filter(|prior| prior != &job_run_id),
-        _ => None,
+    // that run's failure handoff preserved. ORB-14603: a run another machine
+    // executed — a claim's leaf — is named with that machine and never as a
+    // local run id, which this store may hold for unrelated work.
+    let (prior_job_run_id, prior_foreign_run) = match task_ids.as_slice() {
+        [task_id] => prior_run(host, task_id, &job_run_id)?,
+        _ => (None, None),
     };
 
     for task_id in task_ids {
@@ -162,7 +161,32 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         base_sha,
     );
     output["prior_job_run_id"] = json!(prior_job_run_id);
+    output["prior_foreign_run"] = prior_foreign_run.unwrap_or(Value::Null);
     Ok(output)
+}
+
+/// The run `task_id` was last linked to, other than `job_run_id`: its id when
+/// this machine executed it, else the run and the machine that did.
+fn prior_run<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    job_run_id: &str,
+) -> Result<(Option<String>, Option<Value>), OrbitError> {
+    let task = host.get_task(task_id)?;
+    let Some(prior) = task.job_run_id else {
+        return Ok((None, None));
+    };
+    // An unrecorded location is a local binding, made before locations were
+    // recorded or by a host without a machine identity.
+    match task.job_run_machine {
+        Some(bound) if host.local_machine_id().as_deref() != Some(bound.machine_id.as_str()) => {
+            Ok((
+                None,
+                Some(json!({"run_id": prior, "machine_id": bound.machine_id})),
+            ))
+        }
+        _ => Ok(((prior != job_run_id).then_some(prior), None)),
+    }
 }
 
 // pub(crate) widened for tests/ layout migration (ORB-00240); test reaches via

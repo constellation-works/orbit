@@ -542,6 +542,7 @@ impl RuntimeHost for ScriptedHost {
                 "base_ref": "origin/main",
                 "base_sha": "base-sha",
                 "prior_job_run_id": null,
+                "prior_foreign_run": null,
             }),
             "candidate_resume" => self.resume.clone(),
             "agent_implement" => json!({ "summary": "implemented" }),

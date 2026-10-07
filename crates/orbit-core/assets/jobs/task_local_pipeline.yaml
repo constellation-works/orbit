@@ -75,7 +75,9 @@ spec:
     # candidate and that output to repair. A candidate preserved from
     # `implement_bundle` or any step before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
-    # a changed spec or a bundle implements fresh.
+    # a changed spec or a bundle implements fresh. ORB-14603: after a failed
+    # claim, the candidate the owner kept from it is continued, never a local
+    # run that shares the leaf's id.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -84,6 +86,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
         prior_job_run_id: "{{ steps.worktree.output.prior_job_run_id }}"
+        prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
       when: "{{ steps.resume_candidate.output.implement }} == true"

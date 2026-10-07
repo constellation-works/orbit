@@ -718,8 +718,8 @@ impl ClaimCandidateRef {
     }
 }
 
-/// Why the owner handed a claim no kept candidate, so its leaf implements the
-/// task afresh [ORB-14338]. The owner records it in the task's history as a
+/// Why the owner handed a run no kept candidate, so it implements the task
+/// afresh [ORB-14338]. The owner records it in the task's history as a
 /// `candidate_resume` event rather than falling back silently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -755,6 +755,21 @@ pub struct PreservedClaimCandidate {
     /// description or criteria retires the candidate.
     pub task_spec_digest: String,
     pub recorded_at: String,
+}
+
+/// The candidate a task's latest claim settlement kept, as the owner offers
+/// it to one machine's run of the task: a claim's leaf through admission
+/// [ORB-14338], or the owner's own run after a failed claim [ORB-14603].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptClaimCandidate {
+    /// The claim whose settlement kept it.
+    pub claim_id: String,
+    /// The machine that claim executed on, which committed the candidate.
+    pub machine_id: String,
+    pub candidate: ClaimCandidateRef,
+    /// Why the run implements afresh instead, with the operator-facing
+    /// detail; `None` when it resumes the candidate.
+    pub fresh: Option<(CandidateFreshReason, String)>,
 }
 
 /// A typed release the owner applied, kept on the claim's lifecycle state so

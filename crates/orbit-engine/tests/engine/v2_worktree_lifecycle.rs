@@ -35,6 +35,7 @@ use orbit_engine::{
     TaskAutomationUpdate, V2AuditWriter, V2DispatchInput, WorktreeGcTaskLookup,
     dispatch_v2_activity, execute_deterministic_action,
 };
+use orbit_store::contracts::{ClaimCandidateRef, KeptClaimCandidate};
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
@@ -1355,6 +1356,70 @@ fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
                 .is_empty(),
                 "nothing is applied without a candidate"
             );
+        },
+    );
+}
+
+/// [ORB-14603] A claim's leaf this machine executed itself leaves no failure
+/// handoff on its run; the owner's next run of the task continues the
+/// candidate kept from that leaf's claim, naming the claim and machine in the
+/// task's history. A candidate kept from some other run is not resurrected.
+#[test]
+fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
+    isolated(
+        "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved.host.run_states.lock().unwrap().remove(FAILED_RUN);
+            *preserved.host.machine.lock().unwrap() = Some("hm_local".to_string());
+            let kept = |source_run_id: &str| KeptClaimCandidate {
+                claim_id: "claim-1".to_string(),
+                machine_id: "hm_local".to_string(),
+                candidate: ClaimCandidateRef {
+                    branch: preserved.branch.clone(),
+                    head_sha: preserved.candidate.clone(),
+                    pull_request: None,
+                    source_run_id: Some(source_run_id.to_string()),
+                    failed_step_id: Some("sync_base".to_string()),
+                    published: false,
+                    durable_ref: None,
+                    carry_failure: None,
+                },
+                fresh: None,
+            };
+            *preserved.host.kept_claim.lock().unwrap() = Some(kept(FAILED_RUN));
+
+            let setup = preserved.next_setup();
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+            assert_eq!(resumed["source_machine_id"], "hm_local", "{resumed}");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt"
+            );
+            assert_resume_recorded(&preserved, "resumed_repaired");
+            let note = preserved
+                .host
+                .history(RESUME_TASK)
+                .into_iter()
+                .rev()
+                .find_map(|entry| entry.note)
+                .unwrap_or_default();
+            assert!(note.contains("claim=claim-1, machine=hm_local"), "{note}");
+
+            *preserved.host.kept_claim.lock().unwrap() = Some(kept("jrun-other-leaf"));
+            preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+            let stale = preserved.next_setup_for("jrun-after-stale-claim");
+            let fresh = preserved
+                .resume_for(&stale, "jrun-after-stale-claim")
+                .expect("candidate_resume");
+            assert_eq!(fresh["outcome"], "fresh", "{fresh}");
+            assert_eq!(fresh["reason_code"], "no_candidate", "{fresh}");
         },
     );
 }
@@ -3405,6 +3470,10 @@ struct LifecycleHost {
     required_commands: Mutex<Vec<String>>,
     /// Task artifacts by task id.
     artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
+    /// This host's machine identity.
+    machine: Mutex<Option<String>>,
+    /// The candidate the owner kept from the task's last claim.
+    kept_claim: Mutex<Option<KeptClaimCandidate>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -3662,6 +3731,17 @@ impl RuntimeHost for LifecycleHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    fn local_machine_id(&self) -> Option<String> {
+        self.machine.lock().unwrap().clone()
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        Ok(self.kept_claim.lock().unwrap().clone())
     }
 
     fn repo_root(&self) -> Result<String, OrbitError> {

@@ -60,6 +60,17 @@ pub trait TaskStoreBackend: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// [ORB-14603] The candidate the task's latest claim settlement kept, as
+    /// offered to a run of it on `machine_id`, or why that run implements
+    /// afresh. A store without a claim journal kept none.
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+        _machine_id: &str,
+    ) -> Result<Option<super::KeptClaimCandidate>, OrbitError> {
+        Ok(None)
+    }
+
     /// The owner's landing attempts, one per handoff. Read-only inspection.
     fn landing_attempts(
         &self,

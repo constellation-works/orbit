@@ -15,7 +15,7 @@ use orbit_types::task::{
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
-use super::lifecycle::CandidateOffer;
+use super::lifecycle::fresh_offer_history;
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
 
@@ -512,7 +512,10 @@ impl TaskCommitBoundary {
             let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
             let machine_id = &identity.location().machine_id;
             let offer = self.candidate_offer(task, machine_id)?;
-            let resume_candidate = offer.as_ref().and_then(CandidateOffer::resume_candidate);
+            let resume_candidate = offer
+                .as_ref()
+                .filter(|offer| offer.fresh.is_none())
+                .map(|offer| offer.candidate.clone());
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
@@ -538,7 +541,7 @@ impl TaskCommitBoundary {
                 // never dropped silently: the task's history says why.
                 append_history: offer
                     .as_ref()
-                    .and_then(|offer| offer.history(&claim_id, machine_id))
+                    .and_then(|offer| fresh_offer_history(offer, &claim_id, machine_id))
                     .into_iter()
                     .collect(),
                 rows: vec![

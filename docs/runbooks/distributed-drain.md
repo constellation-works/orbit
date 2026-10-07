@@ -550,10 +550,16 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   why and the candidate stays only on the follower that made it: a claim on
   that follower still continues it, and a claim on another host implements
   fresh. Claimed-local leaves run on the owner and continue its candidates
-  from its own repository. Every fresh start that sets a kept candidate aside
-  is in the owner's task history as a `candidate_resume` event whose note
-  begins `fresh:` and names the reason (`not_durable`, `spec_changed` or
-  `discarded`): `orbit task show <task>` shows it. Carried refs are not
+  from its own repository. Returning a blocked task to the backlog for an
+  owner-local run (tagging it `os:linux` after a follower's review failure,
+  say) keeps its candidate too: the owner's own `task_pr_pipeline` continues
+  the candidate the failed claim kept, and its `resume_candidate` output
+  names the follower's run with `source_machine_id`. Every fresh start that
+  sets a kept candidate aside is in the owner's task history as a
+  `candidate_resume` event whose note begins `fresh:` and names the reason
+  (`not_durable`, `spec_changed` or `discarded`; `reason_code` `not_durable`,
+  `spec_changed` or `candidate_discarded` on an owner-local run), with the
+  claim and the machine that committed it: `orbit task show <task>` shows it. Carried refs are not
   deleted automatically; once a task is done, prune them on `origin` with
   `git push origin --delete refs/orbit/candidates/<task>/<run>`, listing
   them with `git ls-remote origin 'refs/orbit/candidates/*'`. A task
