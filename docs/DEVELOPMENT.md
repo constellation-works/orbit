@@ -147,6 +147,10 @@ the header row; destinations and the active section's views share a scrolling
 navigation row, and all health chips remain in one scrolling row. The fixture
 checks panel position on Tasks, Runs, run detail and Incidents, keyboard and
 pointer access with visible focus, count spacing, and page width across routes.
+The Drain fixture distinguishes host throttling, stopped admissions, workspace
+leaf saturation and task conflicts. It checks window, workspace and pool count
+labels and verifies that both blocker task IDs remain visible at 1024px while
+the lock path truncates.
 Run it with an installed Playwright module and put evidence in `.orbit/tmp/`:
 
 ```bash

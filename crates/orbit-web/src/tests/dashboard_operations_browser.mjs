@@ -262,7 +262,7 @@ try {
     if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
     if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
     if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
-    if (result.durations !== 6 || !result.text.includes('Blocked by running')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    if (result.durations !== 6 || !result.text.includes('Pool: blocked')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
@@ -277,12 +277,14 @@ try {
       global: document.getElementById('global-drain-state').textContent,
       globalHidden: document.getElementById('global-drain-state').hidden,
       tab: document.getElementById('dock-drain-state').textContent,
+      tabLabel: document.getElementById('dock-tab-drain').getAttribute('aria-label'),
       status: document.getElementById('auto-drain-operation-feedback').textContent,
     }));
     if (rendered.card !== phase || !rendered.header.includes(label)) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
     if (phase === 'draining' && (!rendered.header.includes('left') || !rendered.header.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.header}`);
-    if (phase === 'winding_down' && !rendered.header.includes('1 workers still running')) throw new Error(`Missing wind-down count: ${rendered.header}`);
-    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tab.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (phase !== 'idle' && !rendered.header.includes('This window: 1 running of 3 admitted')) throw new Error(`Missing scoped window count: ${rendered.header}`);
+    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tabLabel.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (phase === 'draining' && rendered.tab) throw new Error(`ORB-14489: Drain tab repeats draining state: ${rendered.tab}`);
     if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
     await drainCheck(`state-${phase}`, 336);
   }
@@ -307,9 +309,49 @@ try {
   }
   await otherPage.close();
   await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+
+  // ORB-14489: render the live throttle case with spare workspace capacity.
+  // A text check alone would pass for clipped IDs, so also measure each link
+  // against its row and inspect the clipping styles at the reported width.
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.evaluate(() => globalThis.setDrainFixtureReadiness({ capacity: {
+    active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0,
+    occupancy: { runs: [{ task_ids: ['ORB-14488'], phase: 'post_implementation' }] },
+    resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] },
+  } }));
+  await drainCheck('1024-throttled-blockers', null);
+  const drainEvidence = await page.evaluate(() => {
+    const card = document.getElementById('auto-drain-panel');
+    const row = card.querySelector('.drain-blocked-row');
+    const who = row.querySelector('.drain-blocked-who');
+    const lock = row.querySelector('.drain-blocked-lock');
+    const bounds = row.getBoundingClientRect();
+    const links = [...who.querySelectorAll('a')].map(link => {
+      const box = link.getBoundingClientRect();
+      return { text: link.textContent, visible: box.width > 0 && box.left >= bounds.left && box.right <= bounds.right + 1 };
+    });
+    return {
+      summary: card.querySelector('.drain-slots').textContent,
+      workspace: card.querySelector('.drain-capacity-count').textContent,
+      window: card.querySelector('.drain-window-count').textContent,
+      pool: [...card.querySelectorAll('.drain-stat-label')].map(node => node.textContent),
+      tab: document.getElementById('dock-tab-drain').textContent.trim(),
+      blocker: who.textContent, links,
+      idsClipped: getComputedStyle(who).overflow === 'hidden' || who.scrollWidth > who.clientWidth + 1,
+      lockTruncated: lock.scrollWidth > lock.clientWidth && getComputedStyle(lock).textOverflow === 'ellipsis',
+      stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
+    };
+  });
+  if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary)) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
+  if (!drainEvidence.workspace.includes('Workspace: 6 of 12') || !drainEvidence.window.includes('This window: 1 running of 3') || !drainEvidence.pool.every(label => label.startsWith('Pool:'))) throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
+  if (drainEvidence.blocker !== 'ORB-14334 waits on ORB-14488' || drainEvidence.links.length !== 2 || drainEvidence.links.some(link => !link.visible) || drainEvidence.idsClipped || !drainEvidence.lockTruncated) throw new Error(`ORB-14489: blocker IDs must stay whole while the lock path truncates at 1024px: ${JSON.stringify(drainEvidence)}`);
+  if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
+  if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
+  fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
+  await page.evaluate(() => globalThis.setDrainFixtureReadiness());
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
-  const logBadge = await page.locator('#dock-drain-state').textContent();
-  if (logBadge !== 'Draining') throw new Error(`Drain tab has no live badge while Log is selected: ${logBadge}`);
+  const logDrainState = await page.locator('#dock-tab-drain').getAttribute('aria-label');
+  if (!logDrainState.includes('Draining')) throw new Error(`Drain tab loses its accessible live state while Log is selected: ${logDrainState}`);
   await page.click('.tab[data-tab="runs"]');
   await page.click('#global-drain-state');
   if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');

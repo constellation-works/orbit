@@ -1346,7 +1346,7 @@ function autoDrainCounts(payload) {
   return { eligible, waiting: tasks.length - eligible };
 }
 
-// Readiness reasons that mean "waiting on a running task": a context lock, a
+// Readiness reasons that mean "waiting on another task or run": a context lock, a
 // grouped member, a same-wave deferral, or a live child's claim.
 const AUTO_DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child"]);
 const AUTO_DRAIN_BLOCKED_ROWS = 3;
@@ -1418,8 +1418,12 @@ function updateDrainIndicators(phase, label) {
   const indicatorLabel = aggregate ? "Per-workspace drain status" : label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
-  if (tab) tab.dataset.drainState = indicatorPhase;
-  if (tabState) tabState.textContent = aggregate ? "per workspace" : phase === "idle" ? "" : label;
+  if (tab) {
+    tab.dataset.drainState = indicatorPhase;
+    tab.setAttribute("aria-label", `Drain: ${indicatorLabel}`);
+    tab.title = indicatorLabel;
+  }
+  if (tabState) tabState.textContent = aggregate ? "per workspace" : phase === "winding_down" ? label : "";
   const global = $("global-drain-state");
   if (global) {
     global.hidden = phase === "idle" && !aggregate;
@@ -1444,8 +1448,8 @@ function renderAutoDrainHead(payload) {
   const phase = capacity.drain_phase || (live.runId && !live.admissionsStopped ? "draining" : "idle");
   const running = Number(capacity.running_admitted_workers) || 0;
   const label = phase === "draining" ? "Draining"
-    : phase === "winding_down" ? `Winding down · ${running} workers still running` : "idle";
-  updateDrainIndicators(phase, phase === "winding_down" ? "Winding down" : label);
+    : phase === "winding_down" ? "Winding down" : "idle";
+  updateDrainIndicators(phase, label);
   const card = $("auto-drain-panel");
   if (card) card.dataset.drainState = phase;
   const dot = $("auto-drain-dot");
@@ -1468,13 +1472,16 @@ function renderAutoDrainHead(payload) {
     if (phase === "draining") {
       const left = autoDrainTimeLeft(capacity.ends_at);
       if (left) detail.appendChild(el("span", { class: "drain-left", text: ` · ${left}` }));
-      if (capacity.admitted_workers != null) detail.appendChild(el("span", { text: ` · ${running} running / ${capacity.admitted_workers} admitted` }));
     }
     head.appendChild(detail);
+    if (capacity.admitted_workers != null) head.appendChild(el("span", {
+      class: "drain-window-count",
+      text: `This window: ${running} running of ${capacity.admitted_workers} admitted`,
+    }));
   }
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
-    feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}.`);
+    feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}${phase === "winding_down" ? ` · this window: ${running} still running` : ""}.`);
   }
   announcedDrainState = stateKey;
 }
@@ -1704,8 +1711,8 @@ function autoDrainStopCopy(payload) {
       ? `${AUTO_DRAIN_STOP_CONFIRM} The pull drain ${live.pullRunId} on this replica is stopped too; its admitted leaves stay claimed by their owner.`
       : autoOpen ? AUTO_DRAIN_STOP_CONFIRM : PULL_DRAIN_STOP_CONFIRM;
     const description = autoOpen
-      ? "Stop new admissions for the live window and deliver recorded settlements."
-      : "Stop new admissions for this replica's pull drain and deliver recorded settlements.";
+      ? "Stop starting new tasks in this window. Tasks already started keep running; send any completed results to their owner."
+      : "Stop starting new tasks on this replica. Tasks already started keep running; send any completed results to their owner.";
     return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm, description };
   }
   const stoppedBy = (stop) => (stop?.actor ? ` (by ${stop.actor})` : "");
@@ -1800,7 +1807,7 @@ function autoDrainNumber(value) {
 // Capacity in words: how many leaf runs hold a slot against the limit, a bar
 // that shows any overflow past the limit, and one sentence on what a window
 // started now would do with that.
-function autoDrainCapacity(capacity, counts) {
+function autoDrainCapacity(capacity, counts, blocked) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
@@ -1808,18 +1815,32 @@ function autoDrainCapacity(capacity, counts) {
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   let summary;
-  if (Number.isFinite(free) && free <= 0 && known) {
-    const toFinish = Math.max(1, busy - limit + 1);
-    summary = `A window started now admits nothing until ${plural(toFinish, "running task")} ${toFinish === 1 ? "finishes" : "finish"}.`;
+  if (capacity.host_shutdown) {
+    summary = "New tasks cannot start while a host shutdown is scheduled.";
+  } else if (capacity.resource_throttle) {
+    const resources = Array.isArray(capacity.resource_throttle.resources)
+      ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";
+    summary = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
+  } else if (capacity.admissions_stopped === true) {
+    summary = "This window has stopped starting new tasks. Tasks already admitted keep running.";
+  } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
+    const toClear = busy - limit + 1;
+    summary = `The workspace leaf limit is reached; ${plural(toClear, "occupied slot")} must clear before another task can start.`;
+  } else if (Number.isFinite(free) && free <= 0) {
+    summary = "No admissions are available in this readiness snapshot.";
   } else if (counts.eligible === 0) {
-    summary = counts.waiting > 0
+    if (blocked > 0) {
+      summary = `No tasks are eligible yet; ${plural(blocked, "pool task")} ${blocked === 1 ? "waits" : "wait"} on task locks or live claims.`;
+    } else {
+      summary = counts.waiting > 0
       ? `Nothing is eligible yet; ${plural(counts.waiting, "task")} ${counts.waiting === 1 ? "waits" : "wait"} in the pool.`
       : "Nothing is waiting in the backlog.";
+    }
   } else {
     summary = `A window started now admits up to ${plural(admits, "task")}.`;
   }
   const head = el("div", { class: "drain-capacity-head" }, [
-    el("span", { class: "drain-capacity-count", text: known ? `${busy} running · limit ${limit}` : "Capacity unknown" }),
+    el("span", { class: "drain-capacity-count", text: known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown" }),
     el("span", {
       class: `drain-capacity-free${Number.isFinite(free) && free <= 0 ? " full" : ""}`,
       text: Number.isFinite(free) ? `${plural(Math.max(0, free), "free slot")}` : "",
@@ -1827,7 +1848,7 @@ function autoDrainCapacity(capacity, counts) {
   ]);
   const bar = el("div", { class: "drain-capacity-bar" });
   bar.setAttribute("role", "img");
-  bar.setAttribute("aria-label", known ? `${busy} of ${limit} slots in use` : "Capacity unknown");
+  bar.setAttribute("aria-label", known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown");
   if (known) {
     const within = Math.min(busy, limit);
     const over = Math.max(0, busy - limit);
@@ -1837,7 +1858,15 @@ function autoDrainCapacity(capacity, counts) {
       el("span", { class: "drain-capacity-over", style: { width: `${(over / scale) * 100}%` } }),
     );
   }
-  return el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
+  const result = el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
+  const pipelineCounts = Object.entries(capacity.leaf_occupancy_by_pipeline || {})
+    .filter(([, count]) => Number(count) > 0);
+  const pipelines = pipelineCounts.map(([pipeline, count]) => `${pipeline}: ${plural(count, "slot")}`);
+  // Legacy wrappers can occupy slots without appearing in the pipeline map.
+  const other = busy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
+  if (pipelines.length && other > 0) pipelines.push(`other: ${plural(other, "slot")}`);
+  if (pipelines.length) result.appendChild(el("p", { class: "drain-slots drain-pipeline-occupancy", text: `Workspace slots by pipeline: ${pipelines.join("; ")}.` }));
+  return result;
 }
 
 function autoDrainStat(tone, label, value) {
@@ -1847,7 +1876,7 @@ function autoDrainStat(tone, label, value) {
   ]);
 }
 
-// One line per task waiting on a running one: who waits on whom, the holder's
+// One line per pool task waiting on another task or run: who waits on whom, the holder's
 // slot phase, and the lock between them. Capped so the card stays a card;
 // Locked files below carries the full per-task lock picture.
 function autoDrainBlockedList(tasks, occupancy, workspace) {
@@ -1858,7 +1887,7 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
     }
   }
   const list = el("ul", { class: "drain-blocked" });
-  list.setAttribute("aria-label", "Tasks blocked by a running task");
+  list.setAttribute("aria-label", "Pool tasks waiting on locks or live claims");
   for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
     const taskId = autoDrainTaskId(task);
     const holder = autoDrainHolders(task)[0] || null;
@@ -1954,10 +1983,10 @@ function renderAutoDrain(payload) {
   // Read top to bottom: what the queue looks like now, then the window you
   // could start against it.
   body.append(
-    autoDrainCapacity(payload.capacity || {}, counts),
+    autoDrainCapacity(payload.capacity || {}, counts, blocked.length),
     el("div", { class: "drain-stats" }, [
-      autoDrainStat("eligible", "Eligible now", counts.eligible),
-      autoDrainStat("blocked", "Blocked by running", blocked.length),
+      autoDrainStat("eligible", "Pool: eligible", counts.eligible),
+      autoDrainStat("blocked", "Pool: blocked", blocked.length),
     ]),
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
