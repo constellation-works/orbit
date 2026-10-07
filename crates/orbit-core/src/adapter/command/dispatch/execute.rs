@@ -30,7 +30,8 @@ use super::audit::{
 use super::callback::{
     enforce_plugin_callback_allowlist, enforce_plugin_callback_allowlist_from_root,
     read_activity_tool_policy_from_env, read_proc_allowed_programs_from_env,
-    read_proc_disallowed_programs_from_env, take_callback_plugin_provenance,
+    read_proc_disallowed_programs_from_env, read_proc_spawn_budget_from_env,
+    take_callback_plugin_provenance,
 };
 
 /// Where a tool invocation arrived from. Captured in the audit row so a single
@@ -480,6 +481,13 @@ impl OrbitRuntime {
                     None
                 };
                 let proc_spawn_activity_scoped = managed_run_context();
+                // Only a managed run's envelope carries an activity deadline;
+                // an interactive call keeps the unscoped ceiling.
+                let proc_spawn_budget = if proc_spawn_activity_scoped {
+                    read_proc_spawn_budget_from_env(self.proc_spawn_max_timeout_ms())
+                } else {
+                    None
+                };
                 let proc_spawn_environment =
                     Some(self.execution_env_policy().agent_subprocess_env(&[]));
                 let cwd = std::env::current_dir()
@@ -497,6 +505,7 @@ impl OrbitRuntime {
                     proc_disallowed_programs,
                     proc_spawn_environment,
                     proc_spawn_activity_scoped,
+                    proc_spawn_budget,
                     reservation_owner: reservation_owner_from_env(),
                     activity_binding: activity_binding_from_env(),
                     ..Default::default()

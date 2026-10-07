@@ -6,10 +6,11 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::{
-    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
+use orbit_tools::ProcSpawnBudget;
 use orbit_tools::plugin::{
     CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
 };
@@ -368,6 +369,21 @@ pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
     std::env::var("ORBIT_PROC_DISALLOWED_PROGRAMS")
         .ok()
         .map(|raw| split_env_list(&raw))
+}
+
+/// The `proc.spawn` budget of the managed activity this process serves: the
+/// deadline its CLI runner stamped, under the operator's per-call ceiling.
+/// A missing or malformed deadline keeps the unscoped ceiling.
+pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<ProcSpawnBudget> {
+    let deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(ProcSpawnBudget {
+        deadline: std::time::UNIX_EPOCH + std::time::Duration::from_millis(deadline_ms),
+        max_timeout_ms,
+    })
 }
 
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {

@@ -105,6 +105,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "execution.proc_spawn_max_timeout_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.id": {
       "scope": "built-in",
       "state": "unset",

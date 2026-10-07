@@ -223,9 +223,10 @@ spec:
        evidence or checks run elsewhere.
        Run build, test, cargo and make validation that can take minutes in the
        provider's native shell session (for Codex, exec_command/write_stdin),
-       or another long-running transport the lane provides. proc.spawn is for
-       short bounded commands and has a 60-second (60000 ms) ceiling; larger
-       timeout_ms requests are clamped. A proc.spawn timeout on cargo/make is
+       or another long-running transport the lane provides. proc.spawn clamps
+       timeout_ms to the activity's remaining wall-clock budget, at most the
+       configured ceiling (default 45 min; 60000 ms outside an activity), and
+       its result reports timeout_ceiling_ms. A proc.spawn timeout on cargo/make is
        never a validation blocker: rerun through the long-running transport
        and await completion, including time waiting for shared build-budget
        admission. Preserve sandboxing and build-budget admission.

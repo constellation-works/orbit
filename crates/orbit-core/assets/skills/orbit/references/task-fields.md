@@ -78,9 +78,12 @@ owner pull claims until an operator handles it.
   is registered CLI-only, so a criterion that requires it over MCP can never
   pass — drive it through `orbit tool run proc.spawn` instead. Never ask for
   the MCP surface to be widened to match a criterion's wording.
-  Use `proc.spawn` for short bounded commands: its timeout ceiling is 60 seconds
-  (60000 ms), and larger requests are clamped. Its result reports the applied
-  `timeout_ms`, `timeout_clamped`, and the explicit `requested_timeout_ms` when
+  `proc.spawn` clamps a larger `timeout_ms` to its ceiling: 60 seconds (60000
+  ms) outside a managed activity; inside one, the activity's remaining
+  wall-clock budget, at most `execution.proc_spawn_max_timeout_minutes`
+  (default 45). Its result reports the applied `timeout_ms`,
+  `timeout_ceiling_ms`, `timeout_ceiling_source`, `timeout_clamped` with a
+  `timeout_notice` when clamped, and the explicit `requested_timeout_ms` when
   supplied. A timed-out result includes a `hint` with `transport: native_shell`
   and a message directing long validation to that transport. Run build, test,
   cargo and make validation that can take minutes in the provider's native

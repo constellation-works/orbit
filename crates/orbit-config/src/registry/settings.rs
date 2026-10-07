@@ -114,6 +114,12 @@ define_config_settings! {
         section: ConfigSection::Execution, order: 30,
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
     },
+    execution_proc_spawn_max_timeout_minutes: u32 => u32 {
+        key: "execution.proc_spawn_max_timeout_minutes", value_type: "integer",
+        description: "Longest timeout one proc.spawn call may run with inside a managed activity, which also caps it at the activity's remaining wall-clock budget (1..=1440, default 45). Outside an activity the ceiling stays 60 seconds.",
+        section: ConfigSection::Execution, order: 40,
+        resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, "execution.proc_spawn_max_timeout_minutes"),
+    },
     machine_id: Option<String> => String {
         key: "machine.id", value_type: "string",
         description: "Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.",
@@ -690,6 +696,10 @@ fn normalize_logins(raw: Vec<String>) -> Vec<String> {
     logins.dedup();
     logins
 }
+
+/// Default `execution.proc_spawn_max_timeout_minutes`: long enough for a
+/// cold workspace build and test gate, still bounded below a typical activity.
+const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
 
 /// Admit a positive minute budget, defaulting when unset. A day is the
 /// ceiling: anything longer is indistinguishable from never escalating.

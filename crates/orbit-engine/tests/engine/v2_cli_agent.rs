@@ -324,6 +324,53 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// The provider's environment carries its own wall-clock deadline, so a
+/// nested `proc.spawn` can run as long as the invocation has left rather than
+/// the 60 s unscoped ceiling.
+#[cfg(unix)]
+#[test]
+fn cli_dispatch_stamps_the_provider_deadline() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp_audit = tempfile::tempdir()?;
+    let (writer, _store) = build_writer(tmp_audit.path(), "smoke-cli-deadline")?;
+    let observed = tempfile::tempdir()?;
+    let observed_path = observed.path().join("deadline");
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_DEADLINE_UNIX_MS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            observed_path.display()
+        ),
+    )?;
+
+    let mut spec = cli_agent_loop_spec(None);
+    spec.wall_clock_timeout_seconds = 600;
+    let host = ScriptHost::new(fake.cli_path());
+    let epoch_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis())
+    };
+    let before = epoch_ms()?;
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "cli_smoke_deadline",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: serde_json::json!({ "prompt": "hello" }),
+        audit: writer,
+        run_id: "smoke-cli-deadline",
+        host: Some(&host),
+    })?;
+    let after = epoch_ms()?;
+    assert!(outcome.success, "fake claude should exit 0");
+
+    let deadline: u128 = fs::read_to_string(&observed_path)?.trim().parse()?;
+    assert!(
+        (before + 600_000..=after + 600_000).contains(&deadline),
+        "deadline {deadline} is not dispatch time plus the 600 s wall clock ({before}..={after})"
+    );
+    Ok(())
+}
+
 /// B: argv carrying an `sk-...` token (via the `--model` flag set by
 /// `claude_cli.rs`) is redacted in the persisted envelope event.
 #[cfg(unix)]

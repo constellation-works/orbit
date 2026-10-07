@@ -14,4 +14,5 @@ mod mcp_definitions;
 mod plugin_environment;
 mod plugin_loader;
 mod proc_spawn_lockdown;
+mod proc_spawn_timeout;
 mod public_tool_surface;
