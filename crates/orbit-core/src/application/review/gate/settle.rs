@@ -368,6 +368,9 @@ fn settle(
             task_meaning_digest: certificate.task_meaning_digest.clone(),
             requirements: judgement.external_evidence,
         };
+        if context.claimed {
+            publish_held_candidate(context, &hold.candidate.commit);
+        }
         let bytes = serde_json::to_vec_pretty(&hold)
             .map_err(|error| OrbitError::Execution(format!("serialize evidence hold: {error}")))?;
         for task in &context.tasks {
@@ -383,6 +386,28 @@ fn settle(
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publish_certificate(runtime, context, &certificate)?;
     settled_outcome(runtime, context, certificate)
+}
+
+/// Publish a claimed leaf's held candidate on `origin`, where the owner
+/// fetches it to run a named check. Best-effort: a failed push leaves the
+/// hold intact, and the owner then reports the candidate unreachable instead
+/// of fulfilling it.
+fn publish_held_candidate(context: &GateContext, commit: &str) {
+    match orbit_engine::review_gate::publish_held_candidate(&context.workspace_path, commit) {
+        Ok(target) => tracing::info!(
+            target: "orbit.core.review",
+            run_id = %context.run_id,
+            target = %target,
+            commit,
+            "published the held candidate for owner evidence"
+        ),
+        Err(error) => tracing::warn!(
+            target: "orbit.core.review",
+            run_id = %context.run_id,
+            commit,
+            "could not publish the held candidate for owner evidence: {error}"
+        ),
+    }
 }
 
 /// What validation sources are judged against: every bundle task's

@@ -39,7 +39,11 @@
 # as typed evidence the owner checks against its own copies at acceptance.
 # A `reject` or `incomplete` verdict refuses `review_gate_settle`: the leaf
 # fails, and its failure settlement blocks the task on the owner with the
-# findings already there. Required validation (`validate`) runs on the final,
+# findings already there. An evidence-only `incomplete` holds instead: the
+# leaf pushes the held candidate to `orbit-evidence/<branch>` on `origin` and
+# ends `held`, and its settlement releases the claim with the hold, so the
+# owner keeps the task in progress until the named evidence arrives (a Linux
+# owner runs `codeql`-only holds itself). Required validation (`validate`) runs on the final,
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #

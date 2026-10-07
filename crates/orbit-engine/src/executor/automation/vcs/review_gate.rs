@@ -293,6 +293,33 @@ pub fn contains_commit(
     )
 }
 
+/// Publish a held candidate `commit` on `origin` as
+/// `orbit-evidence/<branch>`, where `<branch>` is the worktree's current
+/// branch, and return that ref. The candidate otherwise exists only in this
+/// worktree, and another machine fetches it from `origin` to run a named check
+/// at it. The ref is apart from the delivery branch, so a later delivery of
+/// the task pushes its own history unhindered, and the task's next hold
+/// replaces it.
+pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<String, OrbitError> {
+    let branch = git_output(
+        workspace_path,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?
+    .trim()
+    .to_string();
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err(OrbitError::Execution(
+            "the worktree is not on a named branch".to_string(),
+        ));
+    }
+    let target = format!("refs/heads/orbit-evidence/{branch}");
+    git_success(
+        workspace_path,
+        &["push", "--quiet", "origin", &format!("+{commit}:{target}")],
+    )?;
+    Ok(target)
+}
+
 /// Fetch the landed commit from `origin` so it can be read locally. A
 /// failure is reported, never masked: an unreadable landing is uncovered.
 pub fn fetch_landed_commit(workspace_path: &Path, landed_commit: &str) -> Result<(), OrbitError> {

@@ -446,10 +446,22 @@ impl TaskCommitBoundary {
                     };
                     state.claim.phase = ExecutionClaimPhase::Revoked;
                     params.status = Some(TaskStatus::Backlog);
+                    // A release for a review evidence hold keeps the task in
+                    // progress under the hold, the latest decision, so
+                    // receipt of the named evidence queues a fresh review.
+                    // The note names the held run as a local hold's does.
+                    if let Some(hold) = &value.evidence_hold {
+                        params.status = None;
+                        params.status_note = Some(format!(
+                            "run={}; candidate={}; awaiting named external checks; receipt \
+                             queues a fresh review. {reason}",
+                            hold.run_id, hold.candidate.commit
+                        ));
+                        state.last_event = "review_awaiting_evidence".into();
                     // [ORB-14258] A release for a red base is recorded as the
                     // hold itself, so owner admission withholds the task until
                     // the command passes on a new base tip.
-                    if let Some(hold) = &value.baseline_red {
+                    } else if let Some(hold) = &value.baseline_red {
                         params.status_note = Some(hold.text(reason));
                         state.last_event = orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
                     } else {

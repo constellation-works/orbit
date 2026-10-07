@@ -642,6 +642,13 @@ pub struct ClaimEvidence {
     /// releases any other within its per-task release budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<ClaimFailure>,
+    /// Set on a release whose leaf's before-PR review settled into an
+    /// evidence hold. The owner keeps the task in progress with
+    /// `review_awaiting_evidence` as its latest decision, so receipt of the
+    /// named evidence queues a fresh review. An owner that predates the field
+    /// releases the task unheld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
 }
 
 /// Why a launched claimed leaf ended without its typed handoff [ORB-14257].

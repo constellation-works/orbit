@@ -78,7 +78,7 @@ fn manifest(fixture: &Fixture) -> ReviewManifest {
 
 /// Run admission and settlement in the persisted worker, with every recovery
 /// hook configured. Reports still arrive through the reviewer's artifact tool.
-fn run_review_pipeline(fixture: &Fixture) {
+pub(super) fn run_review_pipeline(fixture: &Fixture) {
     // Shipped job names resolve from the fixture's global catalog.
     let resources = fixture.runtime.paths().global_dir.join("resources");
     std::fs::create_dir_all(resources.join("jobs")).unwrap();
