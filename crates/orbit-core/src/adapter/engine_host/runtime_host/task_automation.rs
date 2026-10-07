@@ -60,9 +60,7 @@ pub(super) fn apply_locked_task_automation_update(
             "task automation update body did not run under the task lock".to_string(),
         )
     })?;
-    if task.status == TaskStatus::Done {
-        runtime.record_resolves_side_effects(&task)?;
-    }
+    runtime.record_resolves_side_effects(previous_status, &task);
     runtime.close_task_prs_after_transition(previous_status, &task, landing_note.as_deref());
     Ok(())
 }

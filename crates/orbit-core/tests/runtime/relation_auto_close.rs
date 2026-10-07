@@ -6,8 +6,10 @@ use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::friction_store::{FrictionAddParams, FrictionStore};
+use orbit_types::desktop::{DesktopTaskOperation, DesktopTaskRequest};
 use orbit_types::record::FrictionStatus;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
+use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -426,4 +428,142 @@ fn same_workspace_resolves_still_wins_when_another_workspace_shares_the_id() {
 
     assert_friction_resolved_by(&runtime_b, &local_id, &task_id);
     assert_friction_still_open(&runtime_a, &foreign_id);
+}
+
+fn complete_task_with_resolves(
+    runtime: &OrbitRuntime,
+    repo_root: &std::path::Path,
+) -> (String, String) {
+    let friction_id = add_test_friction(runtime);
+    let task_id = add_task_with_resolves(runtime, repo_root, &friction_id, "backlog");
+    move_backlog_task_to_review(runtime, &task_id);
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
+        )
+        .expect("complete task");
+    (friction_id, task_id)
+}
+
+fn reopen_friction(runtime: &OrbitRuntime, friction_id: &str) {
+    runtime
+        .run_tool(
+            "orbit.friction.update",
+            json!({ "id": friction_id, "status": "open" }),
+        )
+        .expect("reopen friction");
+    assert_friction_still_open(runtime, friction_id);
+}
+
+fn comment_on_task(runtime: &OrbitRuntime, task_id: &str, comment: &str) {
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({ "id": task_id, "comment": comment, "model": "codex" }),
+        )
+        .expect("comment on done task");
+}
+
+fn auto_resolved_events(runtime: &OrbitRuntime, friction_id: &str) -> usize {
+    runtime
+        .list_session_events(200)
+        .expect("session events")
+        .iter()
+        .filter(|event| {
+            event.payload.get("type") == Some(&json!("FrictionAutoResolved"))
+                && event.payload["data"]["friction_id"] == json!(friction_id)
+        })
+        .count()
+}
+
+#[test]
+fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let (friction_id, task_id) = complete_task_with_resolves(&runtime, &repo_root);
+    assert_friction_resolved_by(&runtime, &friction_id, &task_id);
+    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
+    reopen_friction(&runtime, &friction_id);
+
+    comment_on_task(&runtime, &task_id, "The fix shipped in the last release.");
+    assert_friction_still_open(&runtime, &friction_id);
+
+    // Delivery automation syncing the merged PR onto the done task.
+    runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                external_refs: vec![
+                    ExternalRef::try_new(
+                        GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                        "42".to_string(),
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("automation PR sync on done task");
+    assert_friction_still_open(&runtime, &friction_id);
+
+    let session = ToolSessionContext::default();
+    let revision = runtime
+        .desktop_task_snapshot(&task_id, &session)
+        .expect("desktop snapshot")
+        .revision;
+    runtime
+        .desktop_task_write(
+            DesktopTaskRequest {
+                request_id: "comment-on-done-task".to_string(),
+                operation: DesktopTaskOperation::Comment {
+                    id: task_id.clone(),
+                    expected_revision: revision,
+                    comment: "Looks good from the desktop.".to_string(),
+                },
+            },
+            None,
+            Some("codex".to_string()),
+            &session,
+        )
+        .expect("desktop comment on done task");
+    assert_friction_still_open(&runtime, &friction_id);
+    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
+}
+
+#[test]
+fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let friction_id = add_test_friction(&runtime);
+    let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
+    move_backlog_task_to_review(&runtime, &task_id);
+    let database = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER fail_friction_resolution BEFORE UPDATE ON friction_records \
+             WHEN NEW.status = 'resolved' BEGIN SELECT RAISE(ABORT, 'injected friction write failure'); END;",
+        )
+        .unwrap();
+
+    // The task write commits even though resolving its friction fails.
+    let updated = runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
+        )
+        .expect("completing the task survives a failed side effect");
+    assert_eq!(updated["status"], json!("done"));
+    assert_friction_still_open(&runtime, &friction_id);
+
+    database
+        .execute_batch("DROP TRIGGER fail_friction_resolution;")
+        .unwrap();
+    comment_on_task(&runtime, &task_id, "Store recovered.");
+    assert_friction_resolved_by(&runtime, &friction_id, &task_id);
+
+    // The retry settled the failure, so the next write leaves a reopened
+    // friction alone.
+    reopen_friction(&runtime, &friction_id);
+    comment_on_task(&runtime, &task_id, "Follow-up note.");
+    assert_friction_still_open(&runtime, &friction_id);
 }

@@ -20,6 +20,7 @@ mod pilot_admission;
 mod pr_closure;
 mod query;
 mod records;
+mod resolves;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
