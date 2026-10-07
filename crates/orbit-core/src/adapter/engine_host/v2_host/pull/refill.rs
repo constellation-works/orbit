@@ -75,7 +75,7 @@ use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, RefusedDelivery};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    PullCrewWindow, RefusedPullSettlement, owner_binary_version,
+    OwnerAnswer, PullCrewWindow, RefusedPullSettlement, owner_binary_version,
 };
 
 /// The job that runs this action. Recorded in each request's run context, so
@@ -197,6 +197,8 @@ pub(crate) fn pull_refill(
     let mut admitted = 0;
     let mut refusal = None;
     let mut error: Option<String> = None;
+    // What the owner said to the requests this pass sent [ORB-14475].
+    let mut idle_receipt = None;
     // What this window can run: its preflight, minus every crew a leaf has
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
@@ -277,6 +279,7 @@ pub(crate) fn pull_refill(
                 let pass = drain.refill_pass(&destination, &template, &still_admitting, ceiling);
                 refilled = true;
                 admitted = pass.admitted;
+                idle_receipt = pass.answer;
                 if let Some(failure) = pass.error {
                     if let OrbitError::ProtocolSkew(message) = failure {
                         return Err(protocol_skew_failure(
@@ -420,8 +423,19 @@ pub(crate) fn pull_refill(
             })
         })
         .or_else(|| runs_nothing.then_some(no_runnable_crew));
+    let owner_answer = match idle_receipt.as_deref() {
+        Some(receipt) => OwnerAnswer::Idle(receipt),
+        None if admitted > 0 => OwnerAnswer::Claimed,
+        None => OwnerAnswer::None,
+    };
     let health = runtime
-        .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref(), None)
+        .record_pull_pass(
+            &run_id,
+            resource.throttle.clone(),
+            error.as_deref(),
+            None,
+            owner_answer,
+        )
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
     admitting &= !health.degraded;
     let refusal =
@@ -469,6 +483,7 @@ fn protocol_skew_failure(
         throttle,
         Some(&format!("protocol_skew: {message}")),
         Some("protocol_skew"),
+        OwnerAnswer::None,
     ) {
         Ok(_) => DispatchError::ProtocolSkew(message),
         Err(error) => DispatchError::DeterministicActionFailed {
@@ -559,7 +574,8 @@ fn cancelling_pass(
             "cancelling pull drain pass did not complete; retrying next iteration",
         );
     }
-    let health = runtime.record_pull_pass(run_id, None, error.as_deref(), None)?;
+    let health =
+        runtime.record_pull_pass(run_id, None, error.as_deref(), None, OwnerAnswer::None)?;
     Ok(json!({
         "admitted": 0,
         "unsettled": unsettled,

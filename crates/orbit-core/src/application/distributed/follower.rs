@@ -30,11 +30,14 @@
 //! exactly one admission pass, which its run state records as consumed before
 //! that pass sends a request ([`PullSinglePass`]).
 
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
 use orbit_store::contracts::PullDestination;
 use orbit_types::workflow::{DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle};
 use serde_json::{Value, json};
 
+use super::pull_waiting::{OwnerAnswer, PullWaiting};
 use super::{ensure_distributed_mutation_available, probe_pull_contract};
 use crate::application::job::PipelineInvokeResult;
 
@@ -61,18 +64,31 @@ impl crate::OrbitRuntime {
     /// Persist pass health atomically with the existing admission observation.
     /// Degradation latches for the window, so a successful settlement-only pass
     /// cannot hide the failure that stopped admissions.
+    ///
+    /// `owner_answer` is what the owner said to the requests this pass sent
+    /// [ORB-14475]. An idle receipt's diagnostics replace the recorded
+    /// backlog. Any other pass — throttled, held, breaker open, owner
+    /// unreachable, or every request claimed — keeps the diagnostics it already
+    /// has, with the time the owner gave them, rather than reading as an empty
+    /// backlog.
     pub(crate) fn record_pull_pass(
         &self,
         run_id: &str,
         resource_throttle: Option<ResourceThrottle>,
         error: Option<&str>,
         error_code: Option<&str>,
+        owner_answer: OwnerAnswer<'_>,
     ) -> Result<DrainAdmissionPass, OrbitError> {
         let mut recorded = None;
+        let answer = match owner_answer {
+            OwnerAnswer::Idle(receipt) => Some(PullWaiting::of(receipt)),
+            OwnerAnswer::None | OwnerAnswer::Claimed => None,
+        };
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 let previous = state.drain_last_pass.as_ref();
+                let now = chrono::Utc::now();
                 let was_degraded = previous.is_some_and(|pass| pass.degraded);
                 let previous_count = previous.map_or(0, |pass| pass.consecutive_pass_failures);
                 let consecutive_pass_failures = if error.is_some() {
@@ -82,6 +98,22 @@ impl crate::OrbitRuntime {
                 } else {
                     0
                 };
+                let carried = previous.filter(|_| answer.is_none());
+                let waiting = answer.clone().unwrap_or_else(|| PullWaiting {
+                    queued: carried.map_or(0, |pass| pass.queued),
+                    deferred: carried.map_or_else(Vec::new, |pass| pass.deferred.clone()),
+                    excluded: carried.map_or_else(Vec::new, |pass| pass.excluded.clone()),
+                    excluded_total: carried.map_or(0, |pass| pass.excluded_total),
+                    by_reason: carried
+                        .map_or_else(BTreeMap::new, |pass| pass.waiting_by_reason.clone()),
+                });
+                let consecutive_idle_passes = match (&answer, owner_answer) {
+                    (Some(answer), _) if answer.kept_off() > 0 => previous
+                        .map_or(0, |pass| pass.consecutive_idle_passes)
+                        .saturating_add(1),
+                    (Some(_), _) | (None, OwnerAnswer::Claimed) => 0,
+                    (None, _) => carried.map_or(0, |pass| pass.consecutive_idle_passes),
+                };
                 let pass = DrainAdmissionPass {
                     capacity: None,
                     last_pass_error_code: error_code.map(ToOwned::to_owned).or_else(|| {
@@ -89,11 +121,18 @@ impl crate::OrbitRuntime {
                             .then(|| previous.and_then(|pass| pass.last_pass_error_code.clone()))
                             .flatten()
                     }),
-                    recorded_at: chrono::Utc::now(),
-                    queued: 0,
-                    deferred: Vec::new(),
-                    excluded: Vec::new(),
-                    excluded_total: 0,
+                    recorded_at: now,
+                    queued: waiting.queued,
+                    deferred: waiting.deferred,
+                    excluded: waiting.excluded,
+                    excluded_total: waiting.excluded_total,
+                    waiting_recorded_at: if answer.is_some() {
+                        Some(now)
+                    } else {
+                        carried.and_then(|pass| pass.waiting_recorded_at)
+                    },
+                    waiting_by_reason: waiting.by_reason,
+                    consecutive_idle_passes,
                     resource_throttle: resource_throttle.clone(),
                     last_pass_error: error.map(ToOwned::to_owned).or_else(|| {
                         was_degraded

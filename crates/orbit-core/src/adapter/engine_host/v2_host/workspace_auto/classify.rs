@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_engine::DispatchError;
@@ -235,6 +235,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                 .collect(),
             excluded: waiting_excluded(&snapshot.excluded),
             excluded_total: snapshot.excluded.len() as u64,
+            waiting_recorded_at: None,
+            waiting_by_reason: BTreeMap::new(),
+            consecutive_idle_passes: 0,
             resource_throttle: resource.throttle.clone(),
             last_pass_error_code: None,
             last_pass_error: None,

@@ -213,6 +213,51 @@ async function assertCrewWindow(page) {
   }
 }
 
+// A pull drain's run detail lists the backlog its owner kept off this host:
+// each task with its reason and blockers, the age of the owner's answer, and
+// the idle summary once several passes in a row claimed nothing.
+async function assertStillWaiting(page) {
+  await page.evaluate(async () => {
+    const detail = await import('/js/run-detail.js');
+    detail.setActiveRunDetail({
+      run: {
+        run_id: 'jrun-pull-waiting', job_id: 'workspace_pull_pipeline', state: 'running',
+        drain_last_pass: {
+          recorded_at: '2026-10-07T06:50:00Z', waiting_recorded_at: '2026-10-07T06:44:53Z',
+          queued: 9, excluded_total: 2, consecutive_idle_passes: 4,
+          deferred: [{ task_id: 'ORB-101', reason: 'context_lock_conflict', blocked_by: ['ORB-900'] }],
+          excluded: [
+            { task_id: 'ORB-103', reason: 'dependency_not_done', blocked_by: ['ORB-901'] },
+            { task_id: 'ORB-104', reason: 'host_os_mismatch', detail: 'waits for a linux host (os:linux); the executor runs macos' },
+          ],
+          waiting_by_reason: { context_lock_conflict: 4, owner_hold: 11, dependency_not_done: 1, host_os_mismatch: 1 },
+        },
+      },
+      steps: [],
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    detail.renderRunDetailMeta();
+  });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const panel = page.locator('#run-detail-meta .still-waiting');
+    await panel.scrollIntoViewIfNeeded();
+    if (!(await panel.isVisible())) throw new Error(`Still-waiting panel invisible at ${width}px`);
+    const text = await panel.textContent();
+    for (const expected of [
+      'still waiting: 9 admissible and 2 excluded backlog task(s)',
+      'Task ORB-101: context_lock_conflict blocked-by=ORB-900',
+      'Task ORB-103: dependency_not_done blocked-by=ORB-901',
+      'Task ORB-104: host_os_mismatch (waits for a linux host',
+      'idle: 17 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds',
+    ]) {
+      if (!text.includes(expected)) throw new Error(`Still-waiting panel missing "${expected}" at ${width}px: ${text}`);
+    }
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Still-waiting panel overflows the page at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-still-waiting-${width}.png`) });
+  }
+}
+
 // A terminal skew failure must lead with the typed code and its repair, with
 // both full run diagnostics and the persisted pass fallback.
 async function assertProtocolSkewFailure(page) {
@@ -660,6 +705,7 @@ try {
   await assertScoreboardLayout(page);
   await assertRunStepLayout(page);
   await assertCrewWindow(page);
+  await assertStillWaiting(page);
   await assertTopbarSingleRow(page);
   await assertProtocolSkewFailure(page);
   await new Promise(resolve => server.close(resolve));

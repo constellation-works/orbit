@@ -8,6 +8,8 @@
 //! place. It is additive: the drain's state and every existing field are
 //! unchanged.
 
+use std::collections::BTreeMap;
+
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
 use orbit_types::workflow::{
@@ -68,7 +70,19 @@ pub(super) struct WaitingBacklog {
     /// Host resource pressure that held the last pass [ORB-13901].
     pub(super) resource_throttle: Option<ResourceThrottle>,
     pub(super) recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the owner gave the answer the lists above report, for a pull
+    /// drain; unset for a local one, which classifies afresh each pass.
+    pub(super) waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Tasks kept off this host by reason code, whole (pull drains).
+    pub(super) by_reason: BTreeMap<String, u64>,
+    /// Consecutive owner answers that kept tasks off this host and claimed
+    /// none (pull drains).
+    pub(super) idle_passes: u32,
 }
+
+/// Consecutive idle owner answers after which a pull drain says why it
+/// claims nothing, rather than leaving the per-task lines to be added up.
+const IDLE_SUMMARY_PASSES: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WaitingTask {
@@ -85,9 +99,7 @@ impl DrainLeafSummary {
 
     /// Whether the drain left admissible or excluded work unstarted.
     fn has_starved_tasks(&self) -> bool {
-        self.waiting.queued.is_some_and(|queued| queued > 0)
-            || !self.waiting.deferred.is_empty()
-            || self.waiting.excluded_total > 0
+        self.waiting.has_starved_tasks()
     }
 
     pub(super) fn to_json(&self) -> Value {
@@ -200,29 +212,88 @@ impl DrainLeafSummary {
         if let Some(approvals) = &self.approvals {
             lines.extend(approval_lines(approvals));
         }
-        if self.has_starved_tasks() {
-            let queued = self.waiting.queued.unwrap_or(0);
+        lines.extend(self.waiting.lines());
+        lines
+    }
+}
+
+impl WaitingBacklog {
+    fn has_starved_tasks(&self) -> bool {
+        self.queued.is_some_and(|queued| queued > 0)
+            || !self.deferred.is_empty()
+            || self.excluded_total > 0
+    }
+
+    /// The `Still waiting:` block, and for a pull drain that has found nothing
+    /// claimable here several passes running, the `idle:` line that says why.
+    fn lines(&self) -> Vec<String> {
+        use crate::output::color::bold;
+        if !self.has_starved_tasks() {
+            return Vec::new();
+        }
+        let answered = self
+            .waiting_recorded_at
+            .map(|answered| {
+                format!(
+                    " (the owner answered {})",
+                    answered.format("%Y-%m-%d %H:%M:%SZ")
+                )
+            })
+            .unwrap_or_default();
+        let mut lines = vec![format!(
+            "{} {} admissible and {} excluded backlog task(s) were never started at the last pass{answered}",
+            bold("Still waiting:"),
+            self.queued.unwrap_or(0),
+            self.excluded_total,
+        )];
+        for task in &self.deferred {
+            lines.push(format!("  {}", waiting_line(task, "lock conflict")));
+        }
+        for task in &self.excluded {
+            lines.push(format!("  {}", waiting_line(task, "excluded")));
+        }
+        let listed = self.excluded.len() as u64;
+        if self.excluded_total > listed {
             lines.push(format!(
-                "{} {} admissible and {} excluded backlog task(s) were never started at the last pass",
-                bold("Still waiting:"),
-                queued,
-                self.waiting.excluded_total,
+                "  ... and {} more excluded",
+                self.excluded_total - listed
             ));
-            for task in &self.waiting.deferred {
-                lines.push(format!("  {}", waiting_line(task, "lock conflict")));
-            }
-            for task in &self.waiting.excluded {
-                lines.push(format!("  {}", waiting_line(task, "excluded")));
-            }
-            let listed = self.waiting.excluded.len() as u64;
-            if self.waiting.excluded_total > listed {
-                lines.push(format!(
-                    "  ... and {} more excluded",
-                    self.waiting.excluded_total - listed
-                ));
-            }
+        }
+        if let Some(line) = self.idle_line() {
+            lines.push(line);
         }
         lines
+    }
+
+    fn idle_line(&self) -> Option<String> {
+        let kept_off: u64 = self.by_reason.values().sum();
+        if self.idle_passes < IDLE_SUMMARY_PASSES || kept_off == 0 {
+            return None;
+        }
+        let mut by_count = self.by_reason.iter().collect::<Vec<_>>();
+        by_count.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let causes = by_count
+            .into_iter()
+            .map(|(reason, count)| format!("{count} {}", kept_off_cause(reason)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "  idle: {kept_off} backlog task(s) kept off this host for {} consecutive passes ({causes})",
+            self.idle_passes,
+        ))
+    }
+}
+
+/// What a pull drain's reason code says about the tasks it counts.
+fn kept_off_cause(reason: &str) -> &str {
+    match reason {
+        "context_lock_conflict" => "footprint holds",
+        "dependency_not_done" => "unmet dependencies",
+        "host_os_mismatch" => "for another OS",
+        "crew_unavailable" => "needing a crew this host cannot run",
+        "owner_hold" => "held on the owner",
+        "invalid_candidate" => "invalid",
+        other => other,
     }
 }
 
@@ -290,6 +361,13 @@ pub(super) fn pass_throttle_line(pass: &DrainAdmissionPass) -> Option<String> {
         .map(|throttle| throttle_line(throttle, Some(pass.recorded_at)))
 }
 
+/// The `Still waiting:` lines for a pull drain, which has no leaf summary of
+/// its own: they come from the owner's last answer, as the drain recorded it
+/// [ORB-14475].
+pub(super) fn pass_waiting_lines(pass: &DrainAdmissionPass) -> Vec<String> {
+    waiting_backlog(pass).lines()
+}
+
 fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     let mut line = format!(
         "Task {}: {}",
@@ -304,7 +382,13 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     // in `--json`.
     if matches!(
         task.reason.as_deref(),
-        Some("host_os_mismatch" | "local_route_before_pr")
+        Some(
+            "host_os_mismatch"
+                | "local_route_before_pr"
+                | "crew_unavailable"
+                | "owner_hold"
+                | "invalid_candidate"
+        )
     ) && let Some(detail) = &task.detail
     {
         line.push_str(&format!(" ({detail})"));
@@ -382,9 +466,14 @@ pub(super) fn summarize_drain_leaves(
 /// What the drain's last admission pass left waiting, from the record it keeps
 /// on its own run state.
 fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
-    let Some(pass) = state.drain_last_pass.as_ref() else {
-        return WaitingBacklog::default();
-    };
+    state
+        .drain_last_pass
+        .as_ref()
+        .map(waiting_backlog)
+        .unwrap_or_default()
+}
+
+fn waiting_backlog(pass: &DrainAdmissionPass) -> WaitingBacklog {
     let tasks = |tasks: &[DrainWaitingTask]| -> Vec<WaitingTask> {
         tasks
             .iter()
@@ -403,5 +492,8 @@ fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
         excluded_total: pass.excluded_total,
         resource_throttle: pass.resource_throttle.clone(),
         recorded_at: Some(pass.recorded_at),
+        waiting_recorded_at: pass.waiting_recorded_at,
+        by_reason: pass.waiting_by_reason.clone(),
+        idle_passes: pass.consecutive_idle_passes,
     }
 }

@@ -370,17 +370,20 @@ impl TaskCommitBoundary {
                         "no-diff-expected work waits for an executor with the NoDiff handoff (protocol revision {NO_DIFF_HANDOFF_PROTOCOL_SCHEMA}); the executor runs revision {}",
                         request.caller_schema
                     ),
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
-            if task
+            let unmet = task
                 .dependencies()
-                .iter()
-                .any(|id| statuses.get(id) != Some(&TaskStatus::Done))
-            {
+                .into_iter()
+                .filter(|id| statuses.get(id) != Some(&TaskStatus::Done))
+                .collect::<Vec<_>>();
+            if !unmet.is_empty() {
                 receipt.invalid_candidates.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: "dependency is missing or not done".into(),
+                    blocked_by: unmet,
                 });
                 continue;
             }
@@ -388,6 +391,7 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: reason.clone(),
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
@@ -395,6 +399,7 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("held for a red base: {why}"),
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
@@ -405,6 +410,7 @@ impl TaskCommitBoundary {
                 receipt.os_unavailable.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason,
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
@@ -418,6 +424,7 @@ impl TaskCommitBoundary {
                 receipt.crew_unavailable.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason,
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
@@ -438,6 +445,7 @@ impl TaskCommitBoundary {
                 receipt.crew_unavailable.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("{why} ({}): {}", release.class.as_str(), release.reason),
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
@@ -447,6 +455,7 @@ impl TaskCommitBoundary {
                     receipt.invalid_candidates.push(AdmissionDiagnostic {
                         task_id: task.id.clone(),
                         reason: error.to_string(),
+                        blocked_by: Vec::new(),
                     });
                     continue;
                 }
@@ -473,6 +482,7 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("protected footprint held by {blocker}"),
+                    blocked_by: vec![blocker.to_string()],
                 });
                 continue;
             }

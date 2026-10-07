@@ -367,6 +367,20 @@ degraded drains keep retrying settlements and outlive their window until nothing
 is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
 `orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
+A pull drain also records what its owner kept off this host. When a request is answered idle,
+the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
+the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
+in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
+(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`) and
+unrunnable crews (`crew_unavailable`), bounded to 20 with `excluded_total` the full count; and
+`waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
+answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
+owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date
+rather than recording an empty backlog. `consecutive_idle_passes` counts the idle answers in a row
+that found tasks waiting; from three, `orbit run show` and the dashboard add an `idle:` line
+saying how many tasks were kept off this host and why. Both print the same `Still waiting` lines
+for a pull drain as for a local one.
+
 ### Pull-mode contract
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified

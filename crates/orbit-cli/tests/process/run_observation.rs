@@ -1541,6 +1541,9 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         deferred: Vec::new(),
         excluded: Vec::new(),
         excluded_total: 0,
+        waiting_recorded_at: None,
+        waiting_by_reason: Default::default(),
+        consecutive_idle_passes: 0,
         last_pass_error_code: None,
         last_pass_error: None,
         consecutive_pass_failures: 0,
@@ -1602,6 +1605,163 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     );
 }
 
+/// [ORB-14475] A pull drain's recorded owner answer reaches `run show` as
+/// the same `Still waiting` lines a local drain prints: each kept-off task
+/// with its reason and the tasks it waits on, the age of the owner's answer,
+/// and, once several passes in a row claimed nothing, one line saying why.
+#[test]
+fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
+    const CHILD: &str = "ORBIT_TEST_PULL_WAITING_CHILD";
+    const TEST: &str =
+        "run_observation::run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host";
+    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-pull-waiting";
+    let now = chrono::Utc::now();
+    let answered = chrono::DateTime::parse_from_rfc3339("2026-10-07T06:44:53Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let waiting =
+        |task: &str, reason: &str, blocked_by: &[&str], detail: Option<&str>| DrainWaitingTask {
+            task_id: task.into(),
+            reason: Some(reason.into()),
+            blocked_by: blocked_by.iter().map(ToString::to_string).collect(),
+            detail: detail.map(ToString::to_string),
+        };
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_pull_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.drain_last_pass = Some(DrainAdmissionPass {
+        capacity: None,
+        recorded_at: now,
+        queued: 9,
+        deferred: vec![
+            waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None),
+            waiting(
+                "ORB-102",
+                "owner_hold",
+                &[],
+                Some("held for a red base: make ci-lint"),
+            ),
+        ],
+        excluded: vec![
+            waiting("ORB-103", "dependency_not_done", &["ORB-901"], None),
+            waiting(
+                "ORB-104",
+                "host_os_mismatch",
+                &[],
+                Some("waits for a linux host (os:linux); the executor runs macos"),
+            ),
+            waiting(
+                "ORB-105",
+                "crew_unavailable",
+                &[],
+                Some("crew antigravity cannot run on this host"),
+            ),
+        ],
+        excluded_total: 3,
+        waiting_recorded_at: Some(answered),
+        waiting_by_reason: [
+            ("context_lock_conflict", 4),
+            ("owner_hold", 11),
+            ("dependency_not_done", 1),
+            ("host_os_mismatch", 1),
+            ("crew_unavailable", 1),
+        ]
+        .into_iter()
+        .map(|(reason, count)| (reason.to_string(), count))
+        .collect(),
+        consecutive_idle_passes: 4,
+        resource_throttle: None,
+        last_pass_error_code: None,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
+    });
+    runtime.write_run_state(id, &state).unwrap();
+
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let pass = &shown["pipeline_state"]["drain_last_pass"];
+    assert_eq!(pass["queued"], 9, "{pass}");
+    assert_eq!(pass["excluded_total"], 3, "{pass}");
+    assert_eq!(pass["deferred"][0]["blocked_by"][0], "ORB-900", "{pass}");
+    assert_eq!(
+        pass["excluded"][0]["reason"], "dependency_not_done",
+        "{pass}"
+    );
+    assert_eq!(
+        pass["waiting_recorded_at"], "2026-10-07T06:44:53Z",
+        "{pass}"
+    );
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "Still waiting: 9 admissible and 3 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
+        "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
+        "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
+        "Task ORB-103: dependency_not_done blocked-by=ORB-901",
+        "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
+        "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
+        "idle: 18 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+
+    // Fewer than several idle passes: the per-task lines stand alone.
+    state
+        .drain_last_pass
+        .as_mut()
+        .unwrap()
+        .consecutive_idle_passes = 1;
+    runtime.write_run_state(id, &state).unwrap();
+    let output = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Task ORB-101:"), "{text}");
+    assert!(!text.contains("idle:"), "{text}");
+}
+
 /// A durable failed-pass record is visible through the actual CLI in text
 /// and JSON, independently of successful coordinator step outputs.
 #[test]
@@ -1653,6 +1813,9 @@ fn run_show_exposes_degraded_pull_pass_health() {
         deferred: Vec::new(),
         excluded: Vec::new(),
         excluded_total: 0,
+        waiting_recorded_at: None,
+        waiting_by_reason: Default::default(),
+        consecutive_idle_passes: 0,
         resource_throttle: None,
         last_pass_error_code: None,
         last_pass_error: Some("protocol_mismatch: caller revision 2; owner revision 1".into()),
