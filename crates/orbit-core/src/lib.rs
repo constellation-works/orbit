@@ -80,11 +80,7 @@ pub mod test_support {
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.
 pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;
-pub use orbit_store::{
-    ActivityInvocationMetrics, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    TaskInvocationMetrics, ToolInvocationMetrics,
-};
-pub use orbit_tools::prepare_remote_task_artifact_put;
+pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::distributed::{
@@ -99,9 +95,7 @@ pub use application::routines::seed::{
 };
 pub use application::search::{GlobalSearchHit, GlobalSearchKind, GlobalSearchParams};
 pub use application::task::LockContentionReport;
-pub use application::workflow::{
-    CompletionPolicy, ShipMode, build_ship_input, find_workflow, resolved_ship_mode,
-};
+pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
     reconcile_workspace_managed_artifacts,
@@ -139,6 +133,5 @@ pub use orbit_store::{
 };
 // Routine fire records surfaced by the dashboard's routine-health JSON API.
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};
-pub use runtime::engine::{OrchestratorInvocationMetrics, OrchestratorMetricsBucketKind};
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};
