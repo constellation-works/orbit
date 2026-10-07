@@ -87,6 +87,12 @@ pub trait DeliveryHost {
 
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
 
+    /// Repository identity for settings adoption. Source-backed hosts can
+    /// answer without fetching a branch that a parked consumer cannot observe.
+    fn repository(&self, branch: &str) -> Result<String, AutomationError> {
+        self.head(branch).map(|(repository, _)| repository)
+    }
+
     fn observe(&self, branch: &str, state: &AutomationState)
     -> Result<SourcePage, AutomationError>;
 

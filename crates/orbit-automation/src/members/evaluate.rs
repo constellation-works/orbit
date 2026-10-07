@@ -101,6 +101,7 @@ pub fn evaluate(
                 excluded: vec![],
                 unresolved: BTreeMap::new(),
                 associations: BTreeMap::new(),
+                lookup_retries: Default::default(),
                 active: None,
                 stall: None,
             };

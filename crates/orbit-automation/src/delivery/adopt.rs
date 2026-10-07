@@ -127,7 +127,7 @@ pub(super) fn adopt(
     // A changed branch is refused whatever the repository says, and its head
     // may not resolve at all.
     let repository = if state.branch == request.trigger.branch {
-        host.head(&request.trigger.branch)?.0
+        host.repository(&request.trigger.branch)?
     } else {
         state.repository.clone()
     };

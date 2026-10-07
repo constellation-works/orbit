@@ -84,6 +84,7 @@ impl Host {
                 deliveries: vec![],
                 unresolved: BTreeMap::new(),
                 associations: Default::default(),
+                lookup_retries: Default::default(),
                 exclusions: Default::default(),
                 complete: true,
             }),
@@ -111,6 +112,7 @@ impl Host {
             deliveries: (from + 1..=to).map(landing).collect(),
             unresolved: BTreeMap::new(),
             associations: Default::default(),
+            lookup_retries: Default::default(),
             exclusions: Default::default(),
             complete: true,
         };

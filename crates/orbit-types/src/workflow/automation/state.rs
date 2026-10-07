@@ -40,12 +40,25 @@ pub struct AutomationState {
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    /// Provider attempts for commits without a recorded association. Missing
+    /// on older checkpoints; retained only while the commit is unresolved.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lookup_retries: BTreeMap<String, AssociationLookupRetry>,
     pub active: Option<BatchAttempt>,
     /// Why this consumer stopped making progress. A recorded stall suspends
     /// evaluation until an audited recovery or reset clears it, so the reason
     /// is reported once as a durable fact instead of every tick as an error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall: Option<recovery::AutomationStall>,
+}
+
+/// Persisted retry progress for an unresolved provider lookup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssociationLookupRetry {
+    /// Time of the last provider attempt, including an unavailable response.
+    pub last_checked_at: chrono::DateTime<chrono::Utc>,
+    /// Consecutive attempts without recording a provider association.
+    pub attempts: u32,
 }
 
 /// Existing inspection surfaces render the same domain projection.

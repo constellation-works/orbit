@@ -21,4 +21,4 @@ pub use evidence::{
     EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission, ExaminationCheck, evidence_template,
 };
 pub use ownership::{DeliveryAssociation, DeliveryOwnership, DirectLandingRequest, OwnerAuthority};
-pub use state::{AutomationDiagnostic, AutomationState};
+pub use state::{AssociationLookupRetry, AutomationDiagnostic, AutomationState};

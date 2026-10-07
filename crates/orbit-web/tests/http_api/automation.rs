@@ -38,6 +38,7 @@ fn state(fixture: &Fixture, kind: &str, name: &str) -> AutomationState {
         excluded: vec![],
         unresolved: BTreeMap::new(),
         associations: BTreeMap::new(),
+        lookup_retries: Default::default(),
     }
 }
 

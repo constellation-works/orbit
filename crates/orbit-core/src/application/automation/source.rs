@@ -1,5 +1,7 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
+use super::source_cache::SourceCache;
+use chrono::{DateTime, Utc};
 use orbit_automation::{
     AutomationError,
     delivery::{digest, recovery::HISTORY_REPLAY_COMMIT_LIMIT},
@@ -43,13 +45,29 @@ struct ObservationLimits {
 pub(crate) struct Source<'a> {
     root: &'a Path,
     started: Instant,
+    cache: Option<&'a SourceCache>,
+    now: DateTime<Utc>,
 }
 
 impl<'a> Source<'a> {
     pub(crate) fn new(root: &'a Path) -> Self {
+        Self::at(root, Utc::now())
+    }
+
+    pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
         Self {
             root,
             started: Instant::now(),
+            cache: None,
+            now,
+        }
+    }
+
+    pub(crate) fn with_cache(root: &'a Path, cache: &'a SourceCache, now: DateTime<Utc>) -> Self {
+        Self {
+            cache: Some(cache),
+            now,
+            ..Self::new(root)
         }
     }
 
@@ -349,17 +367,27 @@ impl<'a> Source<'a> {
     /// With no remote, the head is `refs/heads/<branch>`.
     pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.git(&["check-ref-format", "--branch", branch])?;
-        let head = if self.origin_url()?.is_some() {
-            self.fetch_origin_branch(branch)?;
-            self.revision(&format!("refs/remotes/origin/{branch}"))
-                .map_err(fetch_failure_from)?
-        } else {
-            self.revision(&format!("refs/heads/{branch}"))?
-        };
         let repository = self.repository()?;
+        let resolve = || self.fetched_head(branch);
+        let head = if let Some(cache) = self.cache {
+            let git_dir = self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+            cache.head(git_dir.into(), &repository, branch, resolve)?
+        } else {
+            resolve()?
+        };
         #[cfg(test)]
         expire_source_after_head(self);
         Ok((repository, head))
+    }
+
+    fn fetched_head(&self, branch: &str) -> Result<SourceRevision, AutomationError> {
+        if self.origin_url()?.is_some() {
+            self.fetch_origin_branch(branch)?;
+            self.revision(&format!("refs/remotes/origin/{branch}"))
+                .map_err(fetch_failure_from)
+        } else {
+            self.revision(&format!("refs/heads/{branch}"))
+        }
     }
 
     /// `remote.origin.url` when the repository has one.
@@ -580,7 +608,7 @@ impl<'a> Source<'a> {
                 lookups: 10,
             },
             None,
-            false,
+            true,
         )
     }
 
@@ -591,7 +619,7 @@ impl<'a> Source<'a> {
         lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
         limits: ObservationLimits,
         head_override: Option<SourceRevision>,
-        preserve_known_associations: bool,
+        respect_backoff: bool,
     ) -> Result<SourcePage, AutomationError> {
         let (repository, configured_head) = self.head(branch)?;
         let head = head_override.unwrap_or(configured_head);
@@ -639,22 +667,27 @@ impl<'a> Source<'a> {
 
         let mut unresolved = BTreeMap::new();
         let mut associations = state.associations.clone();
+        let mut lookup_retries = state.lookup_retries.clone();
 
-        // Each pass resolves the newest commits plus a rotating slice of the
-        // previously unresolved ones, so no commit is starved of retries.
-        let old = state.unresolved.keys().collect::<Vec<_>>();
+        // Filter before budgeting so recorded identities and commits in
+        // backoff cannot starve eligible unresolved commits of retries.
+        let eligible = |sha: &&String| {
+            !associations.contains_key(*sha)
+                && (!respect_backoff || lookup_due(state.lookup_retries.get(*sha), self.now))
+        };
+        let old = state.unresolved.keys().filter(eligible).collect::<Vec<_>>();
         let offset = (state.generation as usize) % old.len().max(1);
         let candidates = commits
             .iter()
+            .filter(eligible)
             .take(limits.lookups)
             .chain(
                 old.iter()
                     .cycle()
                     .skip(offset)
-                    .take(old.len().min(10))
+                    .take(old.len().min(limits.lookups))
                     .copied(),
             )
-            .filter(|sha| !preserve_known_associations || !associations.contains_key(*sha))
             .cloned()
             .collect::<Vec<_>>();
 
@@ -669,7 +702,22 @@ impl<'a> Source<'a> {
                 continue;
             }
 
-            let raw = match lookup(&repository, sha) {
+            let attempts = lookup_retries
+                .get(sha)
+                .map_or(1, |retry| retry.attempts.saturating_add(1));
+            lookup_retries.insert(
+                sha.clone(),
+                AssociationLookupRetry {
+                    last_checked_at: self.now,
+                    attempts,
+                },
+            );
+            let response = if let Some(cache) = self.cache {
+                cache.lookup(&repository, branch, sha, || lookup(&repository, sha))
+            } else {
+                lookup(&repository, sha)
+            };
+            let raw = match response {
                 Ok(raw) => raw,
                 Err(_) => {
                     unresolved.insert(sha.clone(), "evidence_unavailable".into());
@@ -703,6 +751,7 @@ impl<'a> Source<'a> {
             };
 
             associations.insert(sha.clone(), association);
+            lookup_retries.remove(sha);
             unresolved.insert(sha.clone(), "landing_span_pending".into());
         }
 
@@ -726,6 +775,7 @@ impl<'a> Source<'a> {
             commits,
             deliveries,
             associations,
+            lookup_retries,
             unresolved,
             exclusions: Default::default(),
             complete: count <= limits.commits,
@@ -891,6 +941,7 @@ impl<'a> Source<'a> {
         probe.excluded.clear();
         probe.unresolved.clear();
         probe.associations.clear();
+        probe.lookup_retries.clear();
         for mapping in &mappings {
             if let Some(Some(association)) = state.associations.get(&mapping.orphan.commit) {
                 // A delivery can span several commits, all retaining the same
@@ -956,7 +1007,7 @@ impl<'a> Source<'a> {
                     lookups: HISTORY_REPLAY_COMMIT_LIMIT,
                 },
                 Some(replay_through.clone()),
-                true,
+                false,
             )
             .map_err(|_| AutomationError::Refused(refusal::PROVIDER_PROOF_UNAVAILABLE.into()))?;
 
@@ -1284,6 +1335,19 @@ impl<'a> Source<'a> {
 
         Ok(())
     }
+}
+
+/// Missing identities retry after one minute, then five, then thirty.
+fn lookup_due(retry: Option<&AssociationLookupRetry>, now: DateTime<Utc>) -> bool {
+    let Some(retry) = retry else {
+        return true;
+    };
+    let minutes = match retry.attempts {
+        0 | 1 => 1,
+        2 => 5,
+        _ => 30,
+    };
+    now.signed_duration_since(retry.last_checked_at) >= chrono::Duration::minutes(minutes)
 }
 
 /// Read-only comparison of a consumer's observed commit with the

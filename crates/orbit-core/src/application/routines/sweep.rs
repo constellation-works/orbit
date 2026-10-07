@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use super::RoutineMachineIdentity;
 use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use crate::application::auto_tasks::SchedulerOptions;
+use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
+use crate::application::automation::SourceCache;
 use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
 use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
@@ -34,6 +36,7 @@ use serde_json::json;
 pub(crate) struct RuntimeDispatch<'a> {
     runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
     shown_runs: RefCell<HashMap<(PathBuf, String), JobRun>>,
+    source_cache: SourceCache,
 }
 
 /// Refresh each discovered workspace's read-side token projection once per
@@ -94,7 +97,13 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
             .runtimes
             .get(&routine.source_orbit_dir)
             .ok_or_else(|| OrbitError::Execution("routine source missing".into()))?;
-        crate::application::automation::evaluate_routine(runtime, &routine.definition, dry_run, now)
+        crate::application::automation::evaluate_routine_with_cache(
+            runtime,
+            &routine.definition,
+            dry_run,
+            now,
+            Some(&self.source_cache),
+        )
     }
 
     fn submit(
@@ -303,6 +312,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             .map(|(_, runtime)| (runtime.shared_root(), runtime))
             .collect(),
         shown_runs: RefCell::new(HashMap::new()),
+        source_cache: SourceCache::default(),
     };
 
     let mut reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
@@ -335,12 +345,13 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // becomes one row and never prevents the remaining workspaces from running.
     let mut auto_task_reports = Vec::new();
     for (workspace, runtime) in &discovered.entries {
-        match run_auto_task_scheduler_at(
+        match run_auto_task_scheduler_with_cache(
             runtime,
             now_utc,
             SchedulerOptions {
                 dry_run: options.dry_run,
             },
+            &dispatch.source_cache,
         ) {
             Ok(outcome) => {
                 auto_task_reports.extend(outcome.reports.into_iter().map(|report| {
