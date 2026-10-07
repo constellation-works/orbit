@@ -38,6 +38,8 @@ let pullDrainStopped = false;
 let failReadiness = false;
 let nullCapacity = false;
 let resourceThrottle = null;
+let drainCapacityOverride = {};
+let drainTasksOverride = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const memberDiagnostic = {
@@ -54,7 +56,7 @@ const confirmations = [];
 const readinessTasks = [
   { task_id: 'ORB-1', status: 'backlog', eligible: true, reason: 'ready' },
   { task_id: 'ORB-2', status: 'backlog', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'ORB-20', status: 'in-progress' }] },
-  { task_id: 'ORB-3', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-30'], conflicts: [{ requested_file: 'file:crates/shared/src/lib.rs', locking_task_id: 'ORB-30' }] },
+  { task_id: 'ORB-14334', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-14488'], conflicts: [{ requested_file: 'file:crates/shared/src/a-long-lock-selector-for-the-drain-layout-fixture.rs', locking_task_id: 'ORB-14488' }] },
   { task_id: 'ORB-4', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-claimed-child'] },
   { task_id: 'ORB-5', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-active-leaf'] },
   { task_id: 'ORB-6', status: 'backlog', eligible: false, reason: 'crew_not_allowed', crew: 'luna', allowed_crews: ['sol', 'terra'] },
@@ -134,11 +136,12 @@ globalThis.fetch = async (path, options = {}) => {
       drain_phase: drainPhase,
       drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
-      admitted_workers: drainPhase === 'idle' ? 0 : 2,
+      admitted_workers: drainPhase === 'idle' ? 0 : 3,
       ...(nullCapacity ? { active_leaf_runs: null, max_active_leaf_runs: null, free_slots: null, occupancy: null } : {}),
       resource_throttle: resourceThrottle,
+      ...drainCapacityOverride,
     },
-    tasks: readinessTasks,
+    tasks: drainTasksOverride || readinessTasks,
   });
   return response({});
 };
@@ -155,17 +158,18 @@ const durations = descendants(drainBody).filter(node => node.type === 'button' &
 assert(durations.map(node => node.textContent).join(' ') === '15m 30m 1h 2h 4h 8h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
-assert(drainText().includes('Eligible now1') && drainText().includes('Blocked by running2'), `counts use strict server eligibility and lock reasons: ${drainText()}`);
-assert(drainText().includes('4 running · limit 4') && drainText().includes('0 free slots'), `capacity reads busy against the limit: ${drainText()}`);
-assert(drainText().includes('A window started now admits nothing until 1 running task finishes.'), 'a full pool says how many runs must finish before a window admits anything');
-assert(drainText().includes('ORB-3 waits on ORB-30') && drainText().includes('lock · …/src/lib.rs'), 'a lock-blocked task names its holder and the shortened lock');
+const poolCount = tone => drainBody.querySelector(`.drain-stat.${tone} .drain-stat-value`).textContent;
+assert(poolCount('eligible') === '1' && poolCount('blocked') === '2', `counts use strict server eligibility and lock reasons: ${drainText()}`);
+assert(drainBody.querySelector('.drain-capacity-count').textContent.includes('Workspace: 4 of 4') && drainText().includes('0 free slots'), `capacity labels workspace slot occupancy: ${drainText()}`);
+assert(drainBody.querySelector('.drain-slots').textContent.includes('1 occupied slot'), 'a saturated workspace says how many slots must clear');
+assert(drainText().includes('ORB-14334 waits on ORB-14488') && drainText().includes('lock · …/src/a-long-lock-selector'), 'a lock-blocked task names its holder and the shortened lock');
 assert(drainText().includes('ORB-4 waits on jrun-claimed-child'), 'a live-child claim names the claiming run');
 for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot only']) {
   assert(!drainText().includes(gone), `the card no longer renders ${JSON.stringify(gone)}`);
 }
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 const blockedLinks = descendants(drainBody).filter(node => String(node.href || '').includes('#tasks?'));
-assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-30')), 'blocked-by links stay workspace-qualified');
+assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-14488')), 'blocked-by links stay workspace-qualified');
 assert(get('auto-drain-live').textContent === 'idle', 'no live window reads idle');
 // With no live window Stop becomes "Settle pending": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
@@ -175,7 +179,7 @@ assert(drainText().includes('No auto-delivery window is live. Deliver settlement
 // More than three blocked tasks collapse to "+N more".
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
 await fetchAndRenderOperations();
-assert(drainText().includes('Blocked by running5') && drainText().includes('+2 more'), 'blocked list is capped at three lines');
+assert(poolCount('blocked') === '5' && drainText().includes('+2 more'), 'blocked list is capped at three lines');
 readinessTasks.splice(-3);
 
 // A task whose `os:` tags this host cannot run names the host it waits for,
@@ -183,7 +187,7 @@ readinessTasks.splice(-3);
 readinessTasks.push({ task_id: 'ORB-40', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' });
 await fetchAndRenderOperations();
 assert(drainText().includes('ORB-40 waits for a macos host (os:macos)'), `an OS wait is named on the card: ${drainText()}`);
-assert(drainText().includes('Blocked by running2'), 'an OS wait is not counted as blocked by a running task');
+assert(poolCount('blocked') === '2', 'an OS wait is not counted as blocked by a running task');
 readinessTasks.splice(-1);
 
 // Duration, stepper and completion drive the Start label and the submitted body.
@@ -244,7 +248,7 @@ typeConcurrency('2');
 // is 0, which printed "0 free slots" and a placeholder of "null".
 nullCapacity = true;
 await fetchAndRenderOperations();
-assert(drainText().includes('Capacity unknown') && !drainText().includes('0 free slots') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
+assert(/capacity unknown/i.test(drainText()) && !drainText().includes('0 free slots') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
 assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric placeholder: ${concurrencyInput().placeholder}`);
 nullCapacity = false;
 await fetchAndRenderOperations();
@@ -273,6 +277,36 @@ assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'stat
 resourceThrottle = null;
 await fetchAndRenderOperations();
 assert(!drainText().includes('Admissions throttled'), 'the note clears with the throttle');
+
+// ORB-14489: zero free slots alone does not imply that finishing a task can
+// unblock admission. Exercise the readiness-to-card boundary for each reason.
+for (const fixture of [
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } }, summary: /host resource throttle.*cpu/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 12, max_active_leaf_runs: 12, free_slots: 0 }, summary: /workspace leaf limit.*1 occupied slot/ },
+  { capacity: { active_leaf_runs: 14, max_active_leaf_runs: 12, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 10, task_pr_pipeline: 4 } }, summary: /workspace leaf limit.*3 occupied slots/, pipelines: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 6, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 4 } }, summary: /workspace leaf limit.*1 occupied slot/, otherSlots: true },
+  { capacity: { active_leaf_runs: null, max_active_leaf_runs: 12, free_slots: 0, occupancy: { active_leaf_runs: 12 } }, summary: /workspace leaf limit.*1 occupied slot/ },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, admissions_stopped: true }, summary: /window has stopped/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, host_shutdown: { kind: 'reboot' } }, summary: /host shutdown/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0 }, summary: /No admissions.*snapshot/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 6 }, tasks: [readinessTasks[2]], summary: /1 pool task.*locks or live claims/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 2 }, tasks: [readinessTasks[0]], summary: /admits up to 1 task/ },
+]) {
+  drainCapacityOverride = fixture.capacity;
+  drainTasksOverride = fixture.tasks || null;
+  await fetchAndRenderAutoDrainPane();
+  const summary = drainBody.querySelector('.drain-slots').textContent;
+  assert(fixture.summary.test(summary), `readiness constraint is explained: ${JSON.stringify(fixture.capacity)} => ${summary}`);
+  if (fixture.cannotClearSlot) assert(!/finish|must clear/.test(summary), `ORB-14489: task completion must not be presented as clearing another constraint: ${summary}`);
+  if (fixture.pipelines) {
+    const pipelines = drainBody.querySelector('.drain-pipeline-occupancy').textContent;
+    assert(pipelines.includes('task_gate_pipeline: 10 slots') && pipelines.includes('task_pr_pipeline: 4 slots'), `occupied slots retain the per-pipeline explanation: ${pipelines}`);
+  }
+  if (fixture.otherSlots) assert(drainBody.querySelector('.drain-pipeline-occupancy').textContent.includes('other: 2 slots'), 'legacy wrapper occupancy reconciles with the workspace total');
+}
+drainCapacityOverride = {};
+drainTasksOverride = null;
+await fetchAndRenderOperations();
 
 // The window Start opens changes the card's state, and that change must not be
 // announced over Start's own result (the run and its completion mode).
@@ -337,6 +371,7 @@ await fetchAndRenderOperations();
 const liveLink = descendants(get('auto-drain-live')).find(node => String(node.href || '').includes('#runs/'));
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
 assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
+assert(get('auto-drain-live').querySelector('.drain-window-count').textContent.includes('This window: 1 running of 3 admitted'), 'live counts label this window separately from workspace slots');
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
@@ -682,6 +717,11 @@ assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('ro
 globalThis.setDrainFixturePhase = async (phase) => {
   drainPhase = phase;
   drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainFixtureReadiness = async ({ capacity = {}, tasks = null } = {}) => {
+  drainCapacityOverride = capacity;
+  drainTasksOverride = tasks;
   await fetchAndRenderAutoDrainPane();
 };
 
