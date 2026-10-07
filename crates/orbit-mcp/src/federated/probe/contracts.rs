@@ -41,6 +41,10 @@ pub struct DestinationSnapshot {
     /// The `machine_id` the destination put on its own v1 envelope. The mux
     /// compares this against the operator's config pin.
     pub machine_id: String,
+    /// Everything else the destination said about itself on that envelope:
+    /// name, task prefix, binary version and pull-protocol fingerprint, each
+    /// unknown when the destination predates it.
+    pub host: crate::HostFacts,
     pub workspaces: Vec<Workspace>,
     /// Per workspace ID, the crew keys (`crews` or `crews_error`) the
     /// destination attached when asked to include crews. Empty otherwise.

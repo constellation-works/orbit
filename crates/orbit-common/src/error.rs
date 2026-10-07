@@ -131,6 +131,57 @@ pub struct SqliteContention {
     pub detail: String,
 }
 
+/// Stable refusal codes of the operator host registry (`orbit host`, the
+/// host file and its consumers). The serialized name is the code callers
+/// match on, so each variant is protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostRegistryCode {
+    /// Both the host file and the legacy destinations file exist.
+    HostFileConflict,
+    /// The probed `machine_id` is already registered.
+    HostExists,
+    /// A host name is already used by an entry or the local host.
+    HostNameConflict,
+    /// A task prefix is already used by an entry or the local host.
+    TaskPrefixConflict,
+    /// The request names, or the probe answered as, the local host.
+    HostIsLocal,
+    /// The remote predates host identity in its discovery envelope.
+    HostTooOld,
+    /// A live probe answered with a different identity than the entry.
+    HostIdentityMismatch,
+    /// No host matches the given name or machine id.
+    UnknownHost,
+    /// A local replica checkout or running pull drain depends on the host.
+    HostInUse,
+    /// A legacy destination row did not answer during migration.
+    LegacyHostUnreachable,
+}
+
+impl HostRegistryCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HostFileConflict => "host_file_conflict",
+            Self::HostExists => "host_exists",
+            Self::HostNameConflict => "host_name_conflict",
+            Self::TaskPrefixConflict => "task_prefix_conflict",
+            Self::HostIsLocal => "host_is_local",
+            Self::HostTooOld => "host_too_old",
+            Self::HostIdentityMismatch => "host_identity_mismatch",
+            Self::UnknownHost => "unknown_host",
+            Self::HostInUse => "host_in_use",
+            Self::LegacyHostUnreachable => "legacy_host_unreachable",
+        }
+    }
+}
+
+impl std::fmt::Display for HostRegistryCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Error, Serialize)]
 #[non_exhaustive]
 /// Keep this widely propagated error below its 128-byte size budget. Box the
@@ -174,6 +225,13 @@ pub enum OrbitError {
     ToolNotOnThisHost(String),
     #[error("destination capability refused: {0}")]
     CapabilityRefused(String),
+    /// A host-registry refusal [ORB-14448]. The message names what to run
+    /// next; `code` is the stable spec name every surface reports.
+    #[error("{code}: {message}")]
+    HostRegistry {
+        code: HostRegistryCode,
+        message: String,
+    },
     /// The owner's pull request contract differs from this executor's build.
     /// Retrying cannot repair wire skew; deploy matching builds and restart.
     #[error("protocol_skew: {0}")]
@@ -410,6 +468,21 @@ const _: () = assert!(
 );
 
 impl OrbitError {
+    pub fn host_registry(code: HostRegistryCode, message: impl Into<String>) -> Self {
+        Self::HostRegistry {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// The host-registry code of this error, if it is one.
+    pub fn host_registry_code(&self) -> Option<HostRegistryCode> {
+        match self {
+            Self::HostRegistry { code, .. } => Some(*code),
+            _ => None,
+        }
+    }
+
     pub fn not_found(kind: NotFoundKind, id: impl Into<String>) -> Self {
         Self::NotFound {
             kind,

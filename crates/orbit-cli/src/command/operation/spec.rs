@@ -305,6 +305,13 @@ pub(super) fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> C
     }
 }
 
+pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::Host(command) => command.execute_without_runtime(context.root_override),
+        _ => dispatch_mismatch("Host"),
+    }
+}
+
 pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Migrate(command) if !command.confirm => {

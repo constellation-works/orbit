@@ -56,7 +56,7 @@ Set these in the plugin's settings (`/plugin`, then Orbit, then configure).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the destinations Orbit's federated MCP uses (`~/.orbit/mcp-destinations.toml`); with several, the first that answers for the workspace. |
+| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the hosts Orbit's federated MCP uses (registered with `orbit host add` in `~/.orbit/hosts.toml`, or the legacy `~/.orbit/mcp-destinations.toml`); with several, the first that answers for the workspace. |
 | `refreshMinutes` | 3 | How often the band refreshes. It also refreshes after a turn that ends at least 30 s after the last read. |
 | `band` | `on` | `on`, `compact` (always one line), or `off` |
 | `commitTrailer` | true | Add the `Task:` trailer to commits made while working a task |

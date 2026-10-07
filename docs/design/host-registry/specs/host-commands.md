@@ -20,8 +20,9 @@ An entry stores the operator's name for the host, its SSH target, and two facts 
 change on that host: `machine_id` and `task_prefix`. Anything that can change, such as
 reachability, Orbit version, pull protocol or workspaces, is read live from the host when
 asked and never persisted. Operators manage entries from the CLI or from the dashboard's
-Settings › Hosts view. Status: specified; implementation is [ORB-14448] (CLI) and
-[ORB-14451] (dashboard).
+Settings › Hosts view. Status: the host file, `orbit host`, the envelope fields, the doctor
+row and the migration are implemented ([ORB-14448]); the dashboard is specified and not yet
+implemented ([ORB-14451]).
 
 ## Why This Exists
 

@@ -50,15 +50,23 @@ If the workspace's Orbit data lives outside the repository, pass
 ## Register the federated mux
 
 A federated server puts this machine's workspaces and those on SSH remotes
-under one namespace. List the remotes in `~/.orbit/mcp-destinations.toml`:
+under one namespace. Register each remote host once, by its SSH alias or
+`user@host`:
 
-```toml
-[[destinations]]
-ssh = "orbit-owner"
-machine_id = "hm_alpha"
+```bash
+orbit host add orbit-owner
+orbit host list
 ```
 
-Then register it with a client:
+`orbit host add` reads the host's machine ID, name and task prefix from the
+host itself and records them in `~/.orbit/hosts.toml`. `orbit host list` shows
+every host with its live reachability, Orbit version, pull protocol and
+workspaces, and flags a version or protocol that differs from this machine's.
+`orbit host rename` and `orbit host remove` manage the entries. An older
+`~/.orbit/mcp-destinations.toml` is still read until the first of these
+commands migrates it.
+
+Then register the federated server with a client:
 
 ```bash
 orbit mcp init --federated --client codex --scope home

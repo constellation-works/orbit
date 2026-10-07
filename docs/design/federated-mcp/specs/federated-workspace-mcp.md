@@ -29,25 +29,29 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Destination membership file
 
-**Specified replacement ([ORB-14448]).** The host file `~/.orbit/hosts.toml`, written by `orbit host add` ([host-commands](../../host-registry/specs/host-commands.md)), becomes the membership source. Each of its entries supplies the same `ssh` and `machine_id` pair. The legacy file below is read for one release, and both files present is `host_file_conflict`. Until then, the rest of this section is current behavior.
+Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` and `task_prefix` are host-registry fields the mux does not read. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
 
-Remote federated membership is declared only in the machine-global operator file `~/.orbit/mcp-destinations.toml`. It is not part of workspace `config.toml`, `workspaces.json`, or host-registry. Local workspaces require no destination row: federated serve always includes the accepting machine. A missing file or an empty `destinations` list is a valid local-only configuration.
+```toml
+schema_version = 1
 
-The v1 file shape is an array of additional SSH remotes:
+[[hosts]]
+name = "orbit-linux"
+machine_id = "hm_alpha"
+ssh = "orbit-linux"
+task_prefix = "AL"
+```
+
+The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant (unique names and prefixes, valid SSH target, no entry for the local machine) fails closed with its host-registry code.
+
+**Legacy file, one release.** While `~/.orbit/mcp-destinations.toml` is the only file, its rows are the membership:
 
 ```toml
 [[destinations]]
 ssh = "orbit-linux"
 machine_id = "hm_alpha"
-
-[[destinations]]
-ssh = "operator@orbit-build"
-machine_id = "hm_beta"
 ```
 
-Each configured row has exactly two required keys: `ssh`, an SSH alias or `user@host` transport target, and `machine_id`, the destination's stable `hm_…` identity. A machine-id-only row is invalid and fails closed at config load with an actionable `invalid_input` (missing `ssh`). TCP/MCP destination rows are not a v1 file variant. A duplicate `machine_id` makes the entire file invalid with `ambiguous_destination` during config load, before the gateway advertises tools or accepts any `tools/call`.
-
-If a valid configured row already names the accepting machine's `machine_id`, the mux exposes exactly one route for that machine — the implicit local in-process destination — rather than duplicating selectors or opening loopback SSH.
+Each legacy row has exactly two required keys, `ssh` and `machine_id`. A machine-id-only row fails closed at config load with an actionable `invalid_input`, and a duplicate `machine_id` is `ambiguous_destination`. If a legacy row names the accepting machine's `machine_id`, the mux exposes exactly one route for that machine — the implicit local in-process destination — rather than duplicating selectors or opening loopback SSH. The first `orbit host` mutation migrates the legacy rows into the host file and deletes the legacy file. If both files exist, federated serve refuses with `host_file_conflict`, naming both paths.
 
 ## Selector identity
 
@@ -139,7 +143,7 @@ Federated list does **not** inherit that envelope or that filter:
    | `checkout_health` | Repo-root presence at that destination: `active`, `invalid`, or `unknown` if the host cannot be probed |
    | `capabilities` | Classes the destination currently **advertises** for that workspace (a hint; see Capabilities vs checkout roles) |
 
-   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no display name, so that alias is the only display identity the mux can honestly attribute to a remote. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
+   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target. Since [ORB-14448] the discovery envelope also carries the destination's own `machine_name`, but the mux still attributes the configured target, so a list row never changes with what a remote reports about itself. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
 
    The federated-only keys are exactly `selector`, `machine_name`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
 

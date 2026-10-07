@@ -25,6 +25,7 @@ fn owner_snapshot() -> DestinationSnapshot {
         crews: Default::default(),
         machine_id: OWNER_MACHINE.to_string(),
         workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+        host: Default::default(),
     }
 }
 
@@ -33,6 +34,7 @@ fn replica_snapshot() -> DestinationSnapshot {
         crews: Default::default(),
         machine_id: REPLICA_MACHINE.to_string(),
         workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+        host: Default::default(),
     }
 }
 

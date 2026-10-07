@@ -49,9 +49,14 @@ cd <repo>
 orbit workspace init --role replica --owner <owner-machine-id>
 ```
 
-`orbit config get machine.id` on the owner prints its machine ID. Then add the
-owner to this machine's `~/.orbit/mcp-destinations.toml`, as in
-[Connect Your Agent](../mcp-integration/#register-the-federated-mux).
+`orbit config get machine.id` on the owner prints its machine ID. Then register
+the owner on this machine, as in
+[Connect Your Agent](../mcp-integration/#register-the-federated-mux):
+
+```bash
+orbit host add <owner-ssh-target>
+orbit host list   # the owner is reachable, with this machine's version and protocol
+```
 
 Check that the two machines match. On each one:
 

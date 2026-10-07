@@ -32,8 +32,8 @@ pub mod test_fixtures;
 pub mod test_process;
 
 pub use error::{
-    ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, NotFoundKind, OrbitError,
-    RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
+    ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, HostRegistryCode, NotFoundKind,
+    OrbitError, RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
 };
 pub use fs::task_io::task_artifact_from_source_file;
 pub use model::pricing::derive_cost_usd;

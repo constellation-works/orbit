@@ -97,6 +97,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::CapabilityRefused(_) => "capability_refused",
         OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",

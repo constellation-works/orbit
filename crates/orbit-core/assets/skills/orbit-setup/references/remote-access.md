@@ -17,22 +17,35 @@ orbit mcp serve --mode federated
 
 Local stdio is what a client launches. Remote mode relays one non-interactive,
 non-PTY SSH connection to a destination Orbit. Federated mode combines the local
-host with configured SSH destinations into one tool surface. There is no
+host with every registered remote host into one tool surface. There is no
 `orbit mcp connect` command; use `serve --mode remote`.
 
-For federation, put remote membership in the calling machine's
-`~/.orbit/mcp-destinations.toml`:
+For federation, register each remote host on the calling machine:
 
-```toml
-[[destinations]]
-ssh = "<ssh-config-alias>"
-machine_id = "<destination-machine-id>"
+```bash
+orbit host add <ssh-config-alias>          # reads machine_id, name, task prefix from the host
+orbit host add user@10.0.0.7 --name build  # name defaults to the remote's machine.name
+orbit host list                            # live reachability, version, protocol, workspaces
+orbit host show <name|hm_id>               # one host and what here depends on it
+orbit host rename <name|hm_id> <new-name>
+orbit host remove <name|hm_id> [--force]   # refused while a replica or pull drain uses it
 ```
 
-Copy machine IDs from `orbit config get machine.id` on the corresponding machines. Local
-membership is automatic and needs no row. Missing/empty configuration gives a
-local-only mux; malformed or ambiguous configuration fails closed. A configured
-unreachable destination remains visible in discovery rather than disappearing.
+`orbit host add` probes the host over the same SSH session federation uses and
+writes `~/.orbit/hosts.toml`; never edit that file to register a host. It
+refuses a duplicate machine id, name or task prefix, this machine itself, an
+unreachable target and a remote too old to report its task prefix. Local
+membership is automatic and needs no entry. A missing host file gives a
+local-only mux; an invalid one fails closed. A registered unreachable host
+remains visible in discovery rather than disappearing. `orbit host list` flags a
+host whose `binary_version` or `protocol_fingerprint` differs from this
+machine's, and `orbit doctor` reports it in its `hosts` row.
+
+An older `~/.orbit/mcp-destinations.toml` is still read while it is the only
+file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
+row must answer) and deletes it. If both files exist every consumer refuses with
+`host_file_conflict`; once `orbit host list` shows every legacy row, delete the
+legacy file.
 
 ```bash
 orbit mcp init --federated --client codex

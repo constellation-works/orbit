@@ -310,7 +310,7 @@ the submission. Acceptance and landing resolve revisions through one shared rule
 **Follower execution** ([ORB-13625]). `RoutedPullPeer`
 (`adapter/engine_host/v2_host/pull/adapters.rs`) speaks the protocol to the owner's registered
 tools over a composition-supplied `orbit_tools::DrainOwnerTransport` — in production the
-federated mux over the host's destinations file, opened as `agent` (`orbit-cmd`
+federated mux over the host's registered hosts (`~/.orbit/hosts.toml`), opened as `agent` (`orbit-cmd`
 `worker_coordination.rs`). The owner serves the same code the owner-local adapter calls:
 `application::distributed::serve` resolves the caller machine from the trusted session, requires a
 new request to carry the ship contract the owner resolves now (`ship_contract_mismatch`

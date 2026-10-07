@@ -5,6 +5,7 @@ pub mod config;
 pub mod doctor;
 pub mod friction;
 pub mod gc;
+pub mod host;
 pub mod init;
 pub mod job;
 pub mod locks;
@@ -76,6 +77,7 @@ Environment:
   init        Initialize the global Orbit root (~/.orbit)
   workspace   Manage workspaces
   config      Show or update Orbit configuration
+  host        Register and inspect the remote Orbit hosts this machine reaches over SSH
   plugin      Install and manage Orbit plugins
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
@@ -138,6 +140,7 @@ pub enum Commands {
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
+    Host(host::HostCommand),
     Plugin(plugin::PluginCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
