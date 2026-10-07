@@ -437,6 +437,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         SweepOptions {
             dry_run: true,
             sweep_cadence_seconds: 60,
+            ..SweepOptions::default()
         },
         machine,
         &provider,

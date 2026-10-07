@@ -40,10 +40,23 @@ On Linux, inspect the user service and its recent journal:
 ```bash
 systemctl --user status orbit-sweep.timer orbit-sweep.service --no-pager
 systemctl --user cat orbit-sweep.service
+systemctl --user show orbit-sweep.service -p ActiveState -p Result \
+  -p ExecMainStartTimestampMonotonic -p TimeoutStartUSec -p KillMode
 journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o short-iso
 journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o short-iso \
   | rg -n -C 4 'WARN|ERROR|failed|panic|No such file'
 ```
+
+`orbit clock status` and the doctor's `clock-unit` row flag a tick still running
+after its five-minute budget, a failed service start, or missing recovery
+settings. An exhausted cooperative budget exits nonzero and names deferred
+workspaces in the tick report (`deadline_exceeded`, `skipped_workspaces` in
+JSON). A synchronous operation that never returns hits systemd's ten-minute
+startup timeout, which kills the service group and lets the timer recover.
+The service should report a finite `TimeoutStartUSec` and `KillMode=mixed`;
+`orbit clock repair` rewrites older units and preserves a paused clock.
+Fetch timeouts kill the command's process group, including `git-remote-http`,
+and lock waits consume the source pass's 30-second budget.
 
 On macOS, the clock installer redirects sweep stdout/stderr to a file:
 

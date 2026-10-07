@@ -144,7 +144,7 @@ fn clock_status_text(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -
 }
 
 fn clock_state(status: &ClockStatus) -> &'static str {
-    if status.running == Some(true) && !status.enabled {
+    if status.health_issue.is_some() || (status.running == Some(true) && !status.enabled) {
         "unhealthy"
     } else if !status.enabled {
         "paused"
@@ -165,6 +165,7 @@ fn clock_program_doc(unit: &ClockUnitInspection) -> Value {
         ClockUnitVerdict::PathMismatch => ("path_mismatch", None),
         ClockUnitVerdict::VersionMismatch => ("version_mismatch", None),
         ClockUnitVerdict::InvocationMismatch => ("invocation_mismatch", None),
+        ClockUnitVerdict::SafetyMismatch { reason } => ("safety_mismatch", Some(reason.as_str())),
         ClockUnitVerdict::Unrunnable { reason } => ("unrunnable", Some(reason.as_str())),
     };
     json!({

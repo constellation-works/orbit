@@ -207,7 +207,7 @@ impl Execute for DoctorCommand {
         // `orbit-cmd` does not know about MCP and must not learn, and this is
         // the one crate that already assembles both [ORB-11053].
         results.extend(caller_authorization_rows());
-        results.push(clock_unit_row());
+        results.push(clock_unit_row(&runtime.global_root()));
         results.push(orbit_cmd::hosts::doctor_hosts_row(&runtime.global_root()));
         let failures = results
             .iter()
@@ -723,9 +723,24 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
 }
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
-fn clock_unit_row() -> WorkspaceDoctorResult {
+fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
     match orbit_core::application::routines::inspect_clock_unit() {
-        Ok(inspection) => clock_unit_row_from_inspection(&inspection),
+        Ok(inspection) => {
+            let mut row = clock_unit_row_from_inspection(&inspection);
+            if !matches!(
+                inspection.verdict,
+                orbit_core::application::routines::ClockUnitVerdict::NoUnitInstalled
+            ) && let Ok(status) = orbit_core::application::routines::clock_status(global_root)
+                && let Some(issue) = status.health_issue
+            {
+                if row.status != WorkspaceDoctorStatus::Error {
+                    row.status = WorkspaceDoctorStatus::Warning;
+                }
+                row.message.push_str(&format!("; {issue}"));
+                row.remediation = Some("Inspect `orbit clock status` and the sweep service log, then run `orbit clock repair`.".into());
+            }
+            row
+        }
         Err(error) => WorkspaceDoctorResult {
             check_name: "clock-unit".to_string(),
             status: WorkspaceDoctorStatus::Warning,
@@ -738,7 +753,7 @@ fn clock_unit_row() -> WorkspaceDoctorResult {
     }
 }
 
-fn clock_unit_row_from_inspection(
+pub(super) fn clock_unit_row_from_inspection(
     inspection: &orbit_core::application::routines::ClockUnitInspection,
 ) -> WorkspaceDoctorResult {
     use orbit_core::application::routines::ClockUnitVerdict;
@@ -748,6 +763,7 @@ fn clock_unit_row_from_inspection(
         ClockUnitVerdict::NoUnitInstalled => WorkspaceDoctorStatus::Skipped,
         ClockUnitVerdict::PathMismatch
         | ClockUnitVerdict::InvocationMismatch
+        | ClockUnitVerdict::SafetyMismatch { .. }
         | ClockUnitVerdict::Unrunnable { .. } => WorkspaceDoctorStatus::Warning,
         ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
     };

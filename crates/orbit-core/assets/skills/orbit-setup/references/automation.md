@@ -49,6 +49,23 @@ orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
 `clock pause` stops scheduled invocation; a manual `orbit clock tick` still works.
 `orbit sweep` is a compatibility alias for the same tick and produces the same output.
 
+A tick has a five-minute cooperative deadline shared by discovery, routine
+evaluation, auto-tasks, and recovery. An operation already running finishes
+before the next boundary checks the budget; remaining workspaces are reported
+in `skipped_workspaces`, `deadline_exceeded` is true, and the tick exits nonzero.
+Skipped schedules keep their cursors unchanged, so the next tick retries
+according to each definition's missed-run policy. Source git and GitHub commands have a shared
+30-second pass budget including fetch-lock waits; timeout cleanup kills their
+process group, including fetch helpers.
+
+The Linux service adds a ten-minute `TimeoutStartSec` with `KillMode=mixed`
+as the hard backstop for an operation that never returns. Keep worker
+containment enabled so pipeline runs have their own scopes; workers opting
+out remain in the service cgroup and can be killed when that service stops.
+`orbit clock status` and `orbit doctor` flag overdue or failed ticks and unsafe
+recovery settings. Run `orbit clock repair` to update an older service, even
+when it already names the current binary. A paused clock stays paused.
+
 **2. Enable routines, one at a time.** Each is a YAML file in this checkout's
 `.orbit/routines/`. `.orbit/` is per-user state that git ignores, so flipping
 `enabled: true` is a local edit to that file, not a commit; `orbit routine

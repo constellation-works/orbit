@@ -699,3 +699,96 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
         }
     }
 }
+
+// Kernel process cleanup and lock contention fault injection.
+
+use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+#[test]
+fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &timed_out_source_reaps_its_leader_and_kills_the_grandchild,
+    )) {
+        return;
+    }
+    // SAFETY: this isolated child adopts orphaned grandchildren so the test
+    // can reap them and prove they are gone, even with a non-reaping PID 1.
+    assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
+    let root = tempfile::tempdir().unwrap();
+    let source = Source::new(root.path());
+    let started = Instant::now();
+    let result = source.git(&[
+        "-c",
+        "alias.timeout-fixture=!sleep 60 & echo \"$PPID $$ $!\" > pids; wait",
+        "timeout-fixture",
+    ]);
+    assert!(
+        matches!(result, Err(orbit_automation::AutomationError::Deferred(reason)) if reason == "source_budget")
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let pids = std::fs::read_to_string(root.path().join("pids")).unwrap();
+    let pids: Vec<i32> = pids
+        .split_whitespace()
+        .map(|pid| pid.parse().unwrap())
+        .collect();
+    assert_eq!(
+        pids.len(),
+        3,
+        "fake command recorded git, shell and grandchild"
+    );
+    let cleanup_end = Instant::now() + Duration::from_secs(2);
+    loop {
+        // SAFETY: waitpid probes only the adopted test grandchild, without
+        // blocking. kill(pid, 0) checks existence and sends no signal.
+        for pid in &pids[1..] {
+            unsafe {
+                libc::waitpid(*pid, std::ptr::null_mut(), libc::WNOHANG);
+            }
+        }
+        if pids.iter().all(|pid| unsafe { libc::kill(*pid, 0) } == -1) {
+            break;
+        }
+        assert!(
+            Instant::now() < cleanup_end,
+            "source timeout left a leader or helper alive: {pids:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
+    use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
+
+    let history = diverged(1, 1);
+    let repo = history.root.path();
+    git(
+        repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/held.git",
+        ],
+    );
+    let lock = acquire_exclusive_file_lock(
+        &repo.join(".git/.orbit-git-fetch.lock"),
+        "held fetch fixture",
+        FileLockOptions::default(),
+    )
+    .unwrap();
+    let source = Source::new(repo);
+    let started = Instant::now();
+    let result = source.head("main");
+    assert!(result.is_err(), "a held lock must defer the fetch");
+    assert!(
+        started.elapsed() < Duration::from_secs(32),
+        "lock wait renewed the full timeout"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(29),
+        "the fixture must exercise real lock contention rather than an earlier error"
+    );
+    drop(lock);
+}

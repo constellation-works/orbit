@@ -5,6 +5,7 @@
 //! `workspaces.json`.
 
 use std::path::Path;
+use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -55,6 +56,18 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
         discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
     }
+
+    fn discover_workspaces_until(
+        &self,
+        global_root: &Path,
+        deadline: Instant,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        discover_registered_workspaces_until(
+            global_root,
+            self.workspace_filter.as_deref(),
+            Some(deadline),
+        )
+    }
 }
 
 /// Discover the checkouts this machine evaluates schedules for, optionally
@@ -68,6 +81,14 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
+) -> Result<DiscoveredWorkspaces, OrbitError> {
+    discover_registered_workspaces_until(global_root, workspace_filter, None)
+}
+
+fn discover_registered_workspaces_until(
+    global_root: &Path,
+    workspace_filter: Option<&str>,
+    deadline: Option<Instant>,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
     let registry = workspace_registry::with_registry_lock(&registry_path, || {
@@ -84,6 +105,10 @@ pub(crate) fn discover_registered_workspaces(
             continue;
         }
         if workspace_filter.is_some_and(|selected| selected != workspace.id) {
+            continue;
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            discovered.skipped_workspaces.push(workspace.name.clone());
             continue;
         }
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {

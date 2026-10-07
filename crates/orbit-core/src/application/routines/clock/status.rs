@@ -7,6 +7,7 @@ use orbit_common::fs::path::home_dir;
 
 use super::inspect::{
     ClockUnitVerdict, RunningBinary, inspect_clock_unit_at, probe_program_version,
+    systemd_recovery_issue,
 };
 use super::manager::{
     ClockCommandRunner, ClockPlatform, ManagerCommand, ManagerCommandOutput,
@@ -98,6 +99,7 @@ pub fn clock_status(global_root: &Path) -> Result<ClockStatus, OrbitError> {
         platform,
         &NativeClockCommandRunner,
         launchd.as_ref(),
+        monotonic_usec(),
     )
 }
 
@@ -106,6 +108,7 @@ pub(super) fn clock_status_with(
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
     launchd: Option<&LaunchdHealthProbe>,
+    now_usec: Option<u64>,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
     let status_command = manager_status_command(platform);
@@ -129,7 +132,7 @@ pub(super) fn clock_status_with(
         _ => status_output.success,
     };
     let mut manager_details = None;
-    let (schedulable, health_issue) = if platform == ClockPlatform::Systemd {
+    let (mut schedulable, mut health_issue) = if platform == ClockPlatform::Systemd {
         match query_systemd_clock_details(runner) {
             Ok(details) => {
                 if !enabled
@@ -187,6 +190,24 @@ pub(super) fn clock_status_with(
     } else {
         (false, None)
     };
+    if platform == ClockPlatform::Systemd && (enabled || schedulable) {
+        match query_systemd_service_health(runner, now_usec) {
+            Ok(Some(issue)) => {
+                schedulable = false;
+                health_issue = Some(match health_issue {
+                    Some(previous) => format!("{previous}; {issue}"),
+                    None => issue,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                schedulable = false;
+                health_issue = Some(format!(
+                    "systemd tick health could not be verified: {error}"
+                ));
+            }
+        }
+    }
     Ok(clock_status_from(
         settings,
         enabled,
@@ -195,6 +216,87 @@ pub(super) fn clock_status_with(
         health_issue,
         manager_details,
     ))
+}
+
+fn query_systemd_service_health(
+    runner: &dyn ClockCommandRunner,
+    now_usec: Option<u64>,
+) -> Result<Option<String>, OrbitError> {
+    let command = ManagerCommand {
+        program: "systemctl",
+        args: vec![
+            "--user".into(),
+            "show".into(),
+            format!("{SYSTEMD_UNIT}.service"),
+            "--property=ActiveState".into(),
+            "--property=ExecMainStartTimestampMonotonic".into(),
+            "--property=Result".into(),
+            "--property=TimeoutStartUSec".into(),
+            "--property=KillMode".into(),
+        ],
+    };
+    let output = runner
+        .stdout(&command)?
+        .ok_or_else(|| manager_command_error(&command))?;
+    Ok(systemd_service_health(&output, now_usec))
+}
+
+/// Use the manager's monotonic start timestamp, so wall-clock adjustments
+/// cannot hide an overdue oneshot (which stays `activating` while running).
+fn systemd_service_health(output: &str, now_usec: Option<u64>) -> Option<String> {
+    let property = |name| {
+        output.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key == name).then_some(value.trim())
+        })
+    };
+    let mut issues = Vec::new();
+    if matches!(property("ActiveState"), Some("activating" | "active"))
+        && let Some(start) = property("ExecMainStartTimestampMonotonic")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+        && let Some(elapsed) = now_usec.and_then(|now| now.checked_sub(start))
+        && std::time::Duration::from_micros(elapsed)
+            >= orbit_automation::routines::sweep::TICK_DEADLINE
+    {
+        issues.push(format!(
+            "tick has been running for {}s, exceeding its {}s deadline",
+            elapsed / 1_000_000,
+            orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+        ));
+    }
+    if let Some(result) =
+        property("Result").filter(|result| !result.is_empty() && *result != "success")
+    {
+        issues.push(format!("most recent tick failed ({result})"));
+    }
+    if let Some(issue) = systemd_recovery_issue(property("TimeoutStartUSec"), property("KillMode"))
+    {
+        issues.push(issue);
+    }
+    (!issues.is_empty()).then(|| format!("systemd sweep service: {}; recovery: inspect `systemctl --user status {SYSTEMD_UNIT}.service` and run `orbit clock repair`", issues.join("; ")))
+}
+
+#[cfg(unix)]
+fn monotonic_usec() -> Option<u64> {
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: value points to a valid writable timespec; clock_gettime only
+    // fills it. CLOCK_MONOTONIC is the clock systemd uses for its timestamps.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) } != 0 {
+        return None;
+    }
+    u64::try_from(value.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(u64::try_from(value.tv_nsec).ok()? / 1_000)
+}
+
+#[cfg(not(unix))]
+fn monotonic_usec() -> Option<u64> {
+    None
 }
 
 /// A failed `is-enabled` probe is a recognized disabled or missing unit only

@@ -168,3 +168,43 @@ impl DriftFixture {
 fn path_text(path: &Path) -> &str {
     path.to_str().expect("utf-8 temp path")
 }
+
+#[test]
+fn same_binary_with_unsafe_recovery_settings_is_rewritten_and_stays_paused() {
+    use super::super::inspect::{ClockUnitVerdict, RunningBinary, inspect_clock_unit_at};
+    let fixture = DriftFixture::new(ClockPlatform::Systemd);
+    let dir = fixture.home.path().join(".config/systemd/user");
+    fs::write(
+        dir.join("orbit-sweep.service"),
+        format!(
+            "[Service]\nType=oneshot\nKillMode=process\nExecStart={} clock tick\n",
+            fixture.current.display()
+        ),
+    )
+    .unwrap();
+    let runner = MockRunner::with_probes(vec![failed("disabled", "")], vec![]);
+    let outcome = converge_clock_unit_with(
+        fixture.root.path(),
+        &fixture.current,
+        ClockPlatform::Systemd,
+        &runner,
+        fixture.home.path(),
+    )
+    .unwrap();
+    let ClockUnitConvergence::Rewritten(rewrite) = outcome else {
+        panic!("unsafe same-binary unit must be repaired");
+    };
+    assert_eq!(rewrite.drift, ClockUnitDrift::SafetyStale);
+    assert!(!rewrite.reactivated);
+    assert!(rewrite.manual_steps.is_empty());
+    let inspected = inspect_clock_unit_at(
+        fixture.home.path(),
+        ClockPlatform::Systemd,
+        &RunningBinary {
+            path: fixture.current.clone(),
+            version: "1.0.0".into(),
+        },
+        |_| Ok("1.0.0".into()),
+    );
+    assert_eq!(inspected.verdict, ClockUnitVerdict::Matching);
+}
