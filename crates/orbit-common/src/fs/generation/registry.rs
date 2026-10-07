@@ -47,6 +47,8 @@ pub enum ParticipantRole {
     Command,
     /// A persistent `orbit mcp serve` process.
     McpServe,
+    /// The `orbit mcp listen` TCP listener.
+    McpListen,
     /// The `orbit web serve` dashboard.
     Dashboard,
     /// A drain coordinator or pipeline worker.
@@ -61,6 +63,12 @@ impl ParticipantRole {
     pub fn is_long_lived(self) -> bool {
         matches!(self, Self::McpServe | Self::Dashboard | Self::Drain)
     }
+
+    /// Whether this process finishes on its own within one operation, so an
+    /// updater waits for it instead of refusing.
+    pub fn is_short_lived(self) -> bool {
+        matches!(self, Self::Command | Self::Clock)
+    }
 }
 
 impl fmt::Display for ParticipantRole {
@@ -68,6 +76,7 @@ impl fmt::Display for ParticipantRole {
         f.write_str(match self {
             Self::Command => "command",
             Self::McpServe => "mcp serve",
+            Self::McpListen => "mcp listen",
             Self::Dashboard => "dashboard",
             Self::Drain => "drain",
             Self::Clock => "clock tick",
@@ -87,6 +96,11 @@ pub struct ParticipantRecord {
     /// SHA-256 of the executable image.
     pub digest: String,
     pub identity: CompatibilityIdentity,
+    /// The resume capability this process hands over with once a candidate
+    /// is renamed over its executable; `None` when it cannot hand over.
+    /// Builds that predate it read and write records without the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<String>,
 }
 
 impl fmt::Display for ParticipantRecord {

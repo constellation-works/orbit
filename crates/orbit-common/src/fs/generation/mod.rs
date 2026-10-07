@@ -66,7 +66,20 @@
 //! replacement speaks this contract and their [`RESUME_CAPABILITIES`] entry,
 //! and [`reexec`] it at an idle boundary. The exec keeps the PID and releases
 //! every lock (Orbit descriptors are close-on-exec), so the new image joins
-//! like any newcomer.
+//! like any newcomer. A participant that will do so registers the resume
+//! capability it hands over with ([`ParticipantRecord::handover`]).
+//!
+//! # Updating
+//!
+//! [`GenerationUpdate`] holds admission exclusively, so nothing joins behind
+//! it, and then waits up to [`quiesce_bound`] for short-lived participants
+//! ([`ParticipantRole::is_short_lived`]) to exit before it takes the
+//! generation exclusively. Any other live participant refuses it at once,
+//! named with its role and what would end its hold.
+//! [`GenerationUpdate::acquire_for_candidate`] is the same admission for an
+//! installer that renames a candidate over the executable: a participant
+//! whose registered capability the candidate reports will hand over after
+//! the rename, so it is admitted beside and named instead.
 //!
 //! # Coexistence with `executable-generation-v1`
 //!
@@ -97,21 +110,21 @@ mod registry;
 mod update;
 
 pub use admission::{
-    GenerationGuard, Participant, pending_switch_for_this_process, process_participation,
-    quiesce_bound,
+    GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
+    process_participation, quiesce_bound,
 };
 pub use clock_hold::{
     finish_clock_generation_hold, is_clock_generation_hold, record_clock_generation_hold,
 };
 pub use handoff::{
-    RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO, candidate_supports, handover_target,
-    reexec, replaced_installation,
+    HandoverCandidate, RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO,
+    candidate_supports, handover_target, reexec, replaced_installation,
 };
 pub use identity::{Access, CompatibilityIdentity, LedgerCompatibility};
 pub use image::{executable_generation, process_generation};
 pub use paths::authority_root;
 pub use registry::{ParticipantRecord, ParticipantRole, PendingSwitch, pending_switch};
-pub use update::GenerationUpdate;
+pub use update::{CandidateAdmission, GenerationUpdate};
 
 /// Admission protocol this binary implements.
 pub const GENERATION_CONTRACT: &str = "compatibility-generation-v2";
@@ -126,3 +139,7 @@ pub const QUIESCE_TIMEOUT_ENV: &str = "ORBIT_UPGRADE_QUIESCE_SECS";
 
 /// Default [`QUIESCE_TIMEOUT_ENV`].
 pub const DEFAULT_QUIESCE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The longest [`QUIESCE_TIMEOUT_ENV`] honoured, so a deadline computed from
+/// it can never overflow.
+pub const MAX_QUIESCE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);

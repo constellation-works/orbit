@@ -215,9 +215,11 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
 fn participant_role(command: &command::Commands) -> ParticipantRole {
     use command::Commands;
     match command {
-        Commands::Mcp(mcp) if matches!(mcp.command, command::mcp::McpSubcommand::Serve(_)) => {
-            ParticipantRole::McpServe
-        }
+        Commands::Mcp(mcp) => match mcp.command {
+            command::mcp::McpSubcommand::Serve(_) => ParticipantRole::McpServe,
+            command::mcp::McpSubcommand::Listen(_) => ParticipantRole::McpListen,
+            _ => ParticipantRole::Command,
+        },
         Commands::Web(web) if matches!(web.command, command::web::WebSubcommand::Serve(_)) => {
             ParticipantRole::Dashboard
         }
@@ -231,6 +233,25 @@ fn participant_role(command: &command::Commands) -> ParticipantRole {
         }
         command if is_clock_tick(command) => ParticipantRole::Clock,
         _ => ParticipantRole::Command,
+    }
+}
+
+/// The resume capability this process hands over with when a candidate is
+/// renamed over its executable: a stdio `mcp serve` whose stdin can be
+/// polled, which is what the session needs to hand over without losing
+/// input. A remote proxy relays another host's session and never does.
+fn handover_capability(command: &command::Commands) -> Option<&'static str> {
+    match command {
+        command::Commands::Mcp(mcp) => match &mcp.command {
+            command::mcp::McpSubcommand::Serve(serve)
+                if !matches!(serve.mode, Some(command::mcp::ServeMode::Remote))
+                    && orbit_mcp::stdin_supports_handover() =>
+            {
+                Some(orbit_common::fs::generation::RESUME_MCP_STDIO)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -468,6 +489,7 @@ fn run() {
                 RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
             ),
             participant_role(&cli.command),
+            handover_capability(&cli.command),
         ) {
             Ok(guard) => {
                 if clock_tick

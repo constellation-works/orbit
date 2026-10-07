@@ -4,6 +4,9 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::{
+    GENERATION_CONTRACT, GenerationUpdate, HandoverCandidate, ParticipantRecord,
+};
 
 /// Every generation authority that can hold a live pin on the host binary.
 ///
@@ -46,7 +49,9 @@ fn push_unique_authority(roots: &mut Vec<PathBuf>, root: PathBuf) -> Result<(), 
     Ok(())
 }
 
-/// Take exclusive admission on every authority, refusing if any is live.
+/// Take exclusive admission on every authority, refusing if any long-lived
+/// participant is live. Short-lived ones are waited for, up to the quiesce
+/// bound.
 ///
 /// Returns one admission per root, in the same order: with an override in play
 /// the operator otherwise cannot tell which set of clients to quiesce, so both
@@ -59,9 +64,51 @@ fn push_unique_authority(roots: &mut Vec<PathBuf>, root: PathBuf) -> Result<(), 
 /// invocation swap the binary and then strand every host-global client behind
 /// a record naming the generation that is gone. Refusing here also makes
 /// `--preflight`, which takes the same admissions, answer for the pin.
-pub fn acquire_admissions(
+pub fn acquire_admissions(roots: &[PathBuf]) -> Result<Vec<GenerationUpdate>, OrbitError> {
+    admit_each(roots, |root| {
+        let admission = GenerationUpdate::acquire(root)?;
+        admission.ensure_can_record()?;
+        Ok(admission)
+    })
+}
+
+/// Observe admission for an installer that renames the executable at
+/// `candidate` over this one: as [`acquire_admissions`], except that a live
+/// process that will hand over to the candidate after the rename is admitted
+/// beside. Returns each such process once; the admissions are released on
+/// return, so this reserves nothing.
+pub fn candidate_preflight(
     roots: &[PathBuf],
-) -> Result<Vec<orbit_common::fs::generation::GenerationUpdate>, OrbitError> {
+    candidate: &Path,
+) -> Result<Vec<ParticipantRecord>, OrbitError> {
+    let probed = HandoverCandidate::probe(candidate).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "the candidate '{}' did not report the {GENERATION_CONTRACT} admission contract \
+             through `update --contract`, so no live Orbit process could hand over to it",
+            candidate.display()
+        ))
+    })?;
+    let admissions = admit_each(roots, |root| {
+        let admission = GenerationUpdate::acquire_for_candidate(root, &probed)?;
+        admission.ensure_can_record()?;
+        Ok(admission)
+    })?;
+    let mut handover = admissions
+        .iter()
+        .flat_map(|admission| admission.handover().iter().cloned())
+        .collect::<Vec<_>>();
+    // A process registers once per authority it joined, and may join one
+    // authority more than once.
+    handover.sort_by_key(|holder| (holder.pid, holder.started_at));
+    handover.dedup_by_key(|holder| holder.pid);
+    handover.sort_by_key(|holder| (holder.started_at, holder.pid));
+    Ok(handover)
+}
+
+fn admit_each<T>(
+    roots: &[PathBuf],
+    admit: impl Fn(&Path) -> Result<T, OrbitError>,
+) -> Result<Vec<T>, OrbitError> {
     if roots.is_empty() {
         return Err(OrbitError::InvalidInput(
             "no generation authority to admit against; refusing to replace an executable \
@@ -71,14 +118,7 @@ pub fn acquire_admissions(
     }
     roots
         .iter()
-        .map(|root| {
-            let admission = orbit_common::fs::generation::GenerationUpdate::acquire(root)
-                .map_err(|error| naming_authority(root, &error))?;
-            admission
-                .ensure_can_record()
-                .map_err(|error| naming_authority(root, &error))?;
-            Ok(admission)
-        })
+        .map(|root| admit(root).map_err(|error| naming_authority(root, &error)))
         .collect()
 }
 
@@ -88,7 +128,7 @@ pub fn acquire_admissions(
 /// two are index-aligned.
 pub(super) fn pin_candidate(
     roots: &[PathBuf],
-    admissions: Vec<orbit_common::fs::generation::GenerationUpdate>,
+    admissions: Vec<GenerationUpdate>,
     digest: &str,
     identity: Option<&orbit_common::fs::generation::CompatibilityIdentity>,
 ) -> Result<Vec<orbit_common::fs::generation::GenerationGuard>, OrbitError> {

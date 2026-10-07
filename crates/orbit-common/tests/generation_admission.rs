@@ -10,6 +10,10 @@
 //! startups are admitted side by side; a breaking upgrade or an update still
 //! excludes them. A join that cannot get admission within its bound says
 //! whether an upgrade held it or other startups did.
+//!
+//! An updater waits for short-lived participants and refuses long-lived ones,
+//! except those a candidate-aware admission knows will hand over after the
+//! rename.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
@@ -22,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use orbit_common::fs::generation::{
-    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, LedgerCompatibility,
-    Participant, ParticipantRole, pending_switch,
+    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, HandoverCandidate,
+    LedgerCompatibility, Participant, ParticipantRole, RESUME_MCP_STDIO, pending_switch,
 };
 use serde_json::{Value, json};
 
@@ -59,6 +63,7 @@ fn join(
         identity,
         role,
         access,
+        handover: None,
     };
     // A zero bound fails immediately if join decides to quiesce. Success
     // therefore means no live participant was asked to yield.
@@ -233,6 +238,7 @@ fn join_within(
         identity,
         role: ParticipantRole::Command,
         access,
+        handover: None,
     };
     GenerationGuard::join(root, &participant, bound, store_schema)
 }
@@ -619,4 +625,148 @@ fn a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield() {
     assert!(pending_switch(&root).is_none());
     assert_envelope(&root, store(12, 12, 12, Some(12)), Some(1));
     drop(upgraded);
+}
+
+/// A live participant registered in `role`, handing over with `handover`.
+fn holding_as(root: &Path, role: ParticipantRole, handover: Option<&str>) -> GenerationGuard {
+    let identity = identity(10, 0);
+    let digest = digest(10);
+    let participant = Participant {
+        digest: &digest,
+        identity: &identity,
+        role,
+        access: Access::Write,
+        handover,
+    };
+    GenerationGuard::join(root, &participant, Duration::ZERO, || Ok(10)).expect("joins")
+}
+
+fn refusal<T>(result: Result<T, orbit_common::OrbitError>) -> String {
+    match result {
+        Ok(_) => panic!("admission must refuse"),
+        Err(error) => error.to_string(),
+    }
+}
+
+#[test]
+fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let server = holding_as(root, ParticipantRole::McpServe, Some(RESUME_MCP_STDIO));
+    let pid = std::process::id();
+
+    let candidate = HandoverCandidate::reporting([RESUME_MCP_STDIO]);
+    let admitted = GenerationUpdate::acquire_for_candidate(root, &candidate)
+        .expect("the server hands over to this candidate after the rename");
+    let handover = admitted.handover();
+    assert_eq!(handover.len(), 1, "{handover:?}");
+    assert_eq!(handover[0].pid, pid);
+    assert_eq!(handover[0].role, ParticipantRole::McpServe);
+    assert_eq!(handover[0].handover.as_deref(), Some(RESUME_MCP_STDIO));
+    drop(admitted);
+
+    // Without a candidate nothing will hand the session over.
+    let plain = refusal(GenerationUpdate::acquire(root));
+    assert!(plain.contains(&format!("pid {pid} (mcp serve")), "{plain}");
+    assert!(plain.contains("--candidate"), "{plain}");
+
+    // A candidate that cannot resume the session cannot take it over either.
+    let unable = refusal(GenerationUpdate::acquire_for_candidate(
+        root,
+        &HandoverCandidate::reporting(Vec::<String>::new()),
+    ));
+    assert!(
+        unable.contains(&format!("pid {pid} (mcp serve")),
+        "{unable}"
+    );
+    assert!(
+        unable.contains(&format!("does not report the {RESUME_MCP_STDIO}")),
+        "{unable}"
+    );
+    drop(server);
+    drop(GenerationUpdate::acquire(root).expect("nothing is live"));
+}
+
+#[test]
+fn a_candidate_admission_refuses_holders_that_cannot_hand_over() {
+    let candidate = HandoverCandidate::reporting([RESUME_MCP_STDIO]);
+    let pid = std::process::id();
+    for (role, handover, named, remedy) in [
+        (
+            ParticipantRole::McpServe,
+            None,
+            "mcp serve",
+            "cannot hand over",
+        ),
+        (
+            ParticipantRole::McpListen,
+            None,
+            "mcp listen",
+            "TCP listener is never handed over",
+        ),
+        (
+            ParticipantRole::McpListen,
+            Some(RESUME_MCP_STDIO),
+            "mcp listen",
+            "TCP listener is never handed over",
+        ),
+        (
+            ParticipantRole::Dashboard,
+            None,
+            "dashboard",
+            "stop the dashboard",
+        ),
+    ] {
+        let root = tempfile::tempdir().expect("authority");
+        let root = root.path();
+        let holder = holding_as(root, role, handover);
+        // The server that does hand over is named too, but does not block.
+        let server = holding_as(root, ParticipantRole::McpServe, Some(RESUME_MCP_STDIO));
+        let began = Instant::now();
+        let refused = refusal(GenerationUpdate::acquire_for_candidate(root, &candidate));
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "a long-lived holder refuses at once"
+        );
+        assert!(
+            refused.contains(&format!("pid {pid} ({named}, started")),
+            "{refused}"
+        );
+        assert!(refused.contains(remedy), "{refused}");
+        assert!(refused.contains("hands over to the candidate"), "{refused}");
+        drop((server, holder));
+    }
+
+    // A holder that never registered (an executable-generation-v1 binary)
+    // cannot be asked to hand over, whatever the candidate supports.
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let v1 = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".generation.lock"))
+        .expect("generation lock");
+    v1.lock_shared().expect("hold the generation as v1 does");
+    let refused = refusal(GenerationUpdate::acquire_for_candidate(root, &candidate));
+    assert!(refused.contains("did not register"), "{refused}");
+    assert!(refused.contains("executable-generation-v1"), "{refused}");
+}
+
+#[test]
+fn an_update_waits_for_a_short_lived_participant_instead_of_refusing() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let tick = holding_as(&root, ParticipantRole::Clock, None);
+    let hold = Duration::from_millis(1500);
+    let began = Instant::now();
+    let finishing = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        drop(tick);
+    });
+    let update = GenerationUpdate::acquire(&root).expect("the tick finishes within the bound");
+    assert!(began.elapsed() >= hold, "the update waited for the tick");
+    finishing.join().expect("tick thread");
+    drop(update);
 }

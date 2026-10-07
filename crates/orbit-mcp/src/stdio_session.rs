@@ -214,6 +214,20 @@ pub(crate) async fn serve(
     serve_plain(server, resumed).await
 }
 
+/// Whether a stdio session in this process could hand over: [`serve`] does
+/// only when stdin can be polled. A process registers this before it serves,
+/// so an updater knows which sessions follow a renamed candidate.
+pub fn stdin_supports_handover() -> bool {
+    #[cfg(unix)]
+    {
+        unix::stdin_is_pollable()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Without a pollable stdin (a regular file, `/dev/null`) the session is
 /// served as-is and never handed over.
 async fn serve_plain(
@@ -521,6 +535,19 @@ mod unix {
                 }
             }
         }
+    }
+
+    /// Whether [`NonBlockingStdin::new`] would succeed, asked before any
+    /// runtime exists: register stdin with a throwaway reactor the same way.
+    pub(super) fn stdin_is_pollable() -> bool {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+        else {
+            return false;
+        };
+        let _entered = runtime.enter();
+        AsyncFd::new(StdinFd).is_ok()
     }
 
     fn set_nonblocking(enabled: bool) -> Option<()> {

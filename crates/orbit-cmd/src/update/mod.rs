@@ -39,7 +39,7 @@ pub mod stage;
 mod trust;
 pub mod version;
 
-pub use admission::{acquire_admissions, admission_authorities};
+pub use admission::{acquire_admissions, admission_authorities, candidate_preflight};
 pub use environment::{UpdateEnvironment, UpdateWorkspace};
 pub use flow::{UpdateRequest, run_update};
 pub use local_candidate::{
