@@ -1373,6 +1373,7 @@ impl Delivery {
                 reviewer_run_id: "leaf".into(),
                 certificate: reference,
                 artifacts: vec![],
+                host_evidence: vec![],
             })),
         };
     }
@@ -1962,6 +1963,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         selectors_widened: vec![],
         evidence_carried: None,
         baseline_red: Vec::new(),
+        host_evidence: Vec::new(),
         issued_at: Utc::now(),
     }
 }

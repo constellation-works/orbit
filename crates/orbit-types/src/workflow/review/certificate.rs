@@ -142,6 +142,11 @@ pub struct ReviewCertificate {
     /// the backlog until the base passes, instead of blocking it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub baseline_red: Vec<super::super::BaselineRedHold>,
+    /// [ORB-14478] `host_sandbox_test` requirements the executing host ran,
+    /// or refused, outside the agent sandbox. A passed record names the
+    /// result and log a claimed leaf's handoff pins for the owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_evidence: Vec<super::super::HostEvidenceRecord>,
     pub issued_at: DateTime<Utc>,
 }
 

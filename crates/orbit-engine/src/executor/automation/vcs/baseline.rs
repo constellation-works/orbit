@@ -316,6 +316,19 @@ fn run_on_base<H: RuntimeHost + ?Sized>(
     base_sha: &str,
     command: &str,
 ) -> Result<RequiredCommandRun, OrbitError> {
+    in_detached_worktree(workspace_path, worktree, base_sha, |checkout| {
+        run_validation_command(host, checkout, command)
+    })?
+}
+
+/// Check `commit` out into a fresh detached worktree at `worktree`, run `f`
+/// there, then remove the worktree whatever `f` returned.
+pub(super) fn in_detached_worktree<T>(
+    workspace_path: &Path,
+    worktree: &Path,
+    commit: &str,
+    f: impl FnOnce(&Path) -> T,
+) -> Result<T, OrbitError> {
     remove_worktree(workspace_path, worktree);
     if let Some(parent) = worktree.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -332,19 +345,19 @@ fn run_on_base<H: RuntimeHost + ?Sized>(
             "--detach",
             "--end-of-options",
             &path,
-            base_sha,
+            commit,
         ],
     )?;
     if !added.success {
         remove_worktree(workspace_path, worktree);
         return Err(OrbitError::Execution(format!(
-            "git worktree add {base_sha}: {}",
+            "git worktree add {commit}: {}",
             added.stderr.trim()
         )));
     }
-    let run = run_validation_command(host, worktree, command);
+    let result = f(worktree);
     remove_worktree(workspace_path, worktree);
-    run
+    Ok(result)
 }
 
 /// Best-effort removal of a base worktree and its registration.

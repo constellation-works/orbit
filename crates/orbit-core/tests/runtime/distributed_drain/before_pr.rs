@@ -250,6 +250,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         selectors_widened: vec![],
         evidence_carried: None,
         baseline_red: Vec::new(),
+        host_evidence: Vec::new(),
         issued_at: Utc::now(),
     };
     let content = serde_json::to_vec(&certificate).unwrap();
@@ -301,6 +302,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
                 reviewer_run_id: "leaf".into(),
                 certificate: reference,
                 artifacts: vec![],
+                host_evidence: vec![],
             })),
         },
         execution_summary: "Outcome: success".into(),

@@ -40,7 +40,7 @@ use crate::context::RuntimeHost;
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
-const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
+pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
 /// Captured output kept per command, split across stdout and stderr. The log
 /// is reader evidence, not a build log archive, so a runaway command cannot
 /// balloon the task bundle. See [`capture`].
@@ -309,7 +309,7 @@ pub(crate) fn missing_tool(
 /// head and a tail, and the text says what was omitted. Stderr stays after
 /// stdout: `missing_tool` reads this string, and the repair excerpt reads its
 /// end, so the failure has to be in the kept tail [ORB-14086].
-fn capture(stdout: &str, stderr: &str) -> String {
+pub(super) fn capture(stdout: &str, stderr: &str) -> String {
     let stdout = trimmed_stream(stdout);
     let stderr = trimmed_stream(stderr);
     let separator = usize::from(!stdout.is_empty() && !stderr.is_empty());

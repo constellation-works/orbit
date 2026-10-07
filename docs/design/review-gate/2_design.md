@@ -476,7 +476,9 @@ Finalization preserves the timeout requeue rather than adding a generic block.
 For a single-task delivery, an otherwise complete nonpassing report may name
 `external_evidence`: a list
 of `{kind, name, command, artifact}` requirements, where `kind` is `hosted_ci`,
-`native_os`, or `codeql`. Each exact command must have an unavailable required
+`native_os`, `codeql`, or `host_sandbox_test`. A `host_sandbox_test` also
+names the `os` it needs (`linux` or `macos`); its result counts only with that
+`os`, and settlement refuses one without it. Each exact command must have an unavailable required
 record (`not_run` or `denied`). All missing checks must be named, all other
 validation must be consistent, and no substantive finding may remain open.
 The typed requirements classify the hold even when an older reviewer spelled
@@ -512,6 +514,7 @@ the requirement's kind:
 | `hosted_ci` | `operator` |
 | `native_os` | `operator` |
 | `codeql` | `operator`, or `system` (owner fulfilment, below) |
+| `host_sandbox_test` | `operator`, or the claimed host's own settlement (below) |
 
 An `operator` write is a human actor on the bare CLI or the dashboard with no
 agent identity, whose process declares no agent envelope or managed run. A
@@ -566,6 +569,45 @@ The owner already runs its required validation on foreign heads under the
 same host trust, so the fulfilment is no new trust in the candidate's own
 script. Details are in the
 [CodeQL runbook](../../runbooks/codeql-local.md#owner-fulfilment).
+
+A claimed leaf fulfils its own `host_sandbox_test` requirements before it
+holds. Every agent lane runs inside Orbit's sandbox, where a nested one cannot
+apply: macOS `sandbox_apply` fails with `EPERM`, and Bubblewrap cannot create
+its namespaces. So the reviewer cannot run Orbit's sandbox tests, nor an
+owner-required command that runs them. Settlement on the leaf's host is
+Orbit's deterministic worker, outside the agent sandbox. When the report would
+otherwise be an evidence-only hold, it runs each requirement whose `os` is this
+host's and that no accepted result already satisfies. The command must be
+either an exact owner-required validation command or
+`cargo test -p <crate> --test <target> [<filter>]`. That form takes no other
+option, and the command may use only `[A-Za-z0-9._/:@+=-]` and spaces. A
+command that fails these checks, or names another OS, is refused with a typed
+reason (`shell_metacharacter`, `command_not_allowed`, `argument_not_allowed`,
+`os_mismatch`) and never runs. An admitted command first has its candidate
+checked against the held tree (`candidate_changed`). It then runs in a fresh
+detached worktree of the final candidate with the validation environment,
+sharing the checkout's target directory, and with `ORBIT_REQUIRE_SANDBOX_EXEC=1`
+on macOS.
+
+Its log is always attached. A run counts only if it exits successfully, prints
+no sandbox-unavailable diagnostic, prints no skip notice (`SKIP:`, `DEFERRED:`,
+`skipping`), and, for the `cargo test` form, passes at least one test. Failing
+those checks leaves the evidence missing with `sandbox_unavailable`,
+`self_skipped`, `no_tests_ran`, `tool_missing`, `timed_out` or `run_failed`, so
+the review holds as above. A failing test (`test_failed`) fails the reviewer's
+required record, and the review blocks. A passing run attaches a result like
+the operator's, with `os`, and settlement counts it on this tree, so the review
+passes with no hold. The certificate's `host_evidence` lists every attempt.
+
+These results carry no writer class the owner accepts, so they count only in
+the settlement that ran them. A passed verdict's handoff pins each passing
+result and its log under `host_evidence`. The owner reads both by digest and
+accepts the handoff only if all of the following hold: each passing record is
+pinned and no other ref is; the log is nonempty; the result is a passed
+`host_sandbox_test` for the record's command and OS on the head tree; and the
+certificate holds a passed required record for that command. A held
+`host_sandbox_test` that the leaf's host could not fulfil waits for an
+operator's result.
 
 ## 5. Budgets
 

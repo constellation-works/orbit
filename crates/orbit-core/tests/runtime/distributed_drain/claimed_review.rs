@@ -57,17 +57,23 @@ impl OwnerCoordinator for ToOwner {
 pub(super) struct ReviewedLeaf {
     pub(super) pair: Pair,
     drain: String,
-    leaf: String,
+    pub(super) leaf: String,
     pub(super) task: String,
     /// The follower runtime bound to the leaf's claim, as its worker runs.
     pub(super) bound: OrbitRuntime,
-    base: SourceRevision,
+    pub(super) base: SourceRevision,
     gate_input: Value,
 }
 
 impl ReviewedLeaf {
     pub(super) fn admit() -> Self {
-        let pair = Pair::with_owner_config(&before_pr_owner(REVIEW_CREW), &[None]);
+        Self::admit_with_follower_config("")
+    }
+
+    /// [`Self::admit`] with `follower_config` as the follower's workspace
+    /// `config.toml`.
+    pub(super) fn admit_with_follower_config(follower_config: &str) -> Self {
+        let pair = Pair::with_configs(&before_pr_owner(REVIEW_CREW), follower_config, &[None]);
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         let task = pair.claimed_task(&leaf);
@@ -134,7 +140,7 @@ impl ReviewedLeaf {
         }
     }
 
-    fn admit_review(&mut self) -> Value {
+    pub(super) fn admit_review(&mut self) -> Value {
         let admission = self
             .bound
             .run_deterministic(
@@ -192,13 +198,19 @@ impl ReviewedLeaf {
             escalation: (verdict == ReviewVerdict::Reject)
                 .then(|| "decide whether the stub may ship".into()),
         };
+        self.put_report(&report);
+    }
+
+    /// The reviewer's report, persisted through the leaf's binding as the
+    /// reviewer's tool call is.
+    pub(super) fn put_report(&self, report: &ReviewReport) {
         let source = self
             .pair
             .follower_repo
             .join(".orbit/tmp")
             .join(REVIEW_REPORT_ARTIFACT);
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, serde_json::to_vec(&report).unwrap()).unwrap();
+        std::fs::write(&source, serde_json::to_vec(report).unwrap()).unwrap();
         self.bound
             .run_tool(
                 "orbit.task.artifact.put",
@@ -212,6 +224,41 @@ impl ReviewedLeaf {
             .expect("the reviewer's report reaches the owner");
     }
 
+    /// The handoff `claim_handoff` builds from the settled `evidence` for
+    /// the candidate `head`, judged by the owner with its own observation.
+    pub(super) fn owner_accepts(
+        &self,
+        evidence: HandoffReviewEvidence,
+        head: &SourceRevision,
+    ) -> Result<(), OrbitError> {
+        let record = self.pair.admission(&self.leaf);
+        let mut handoff = handoff(&record);
+        handoff.candidate.repository = REPOSITORY.into();
+        handoff.candidate.candidate = head.clone();
+        handoff.candidate.base = self.base.clone();
+        handoff.review = HandoffReview {
+            policy: ReviewTiming::BeforePr,
+            disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+        };
+        let (_, worker) = self.claim();
+        let observation = HandoffObservation {
+            footprint_widening: vec![],
+            candidate: handoff.candidate.clone(),
+            required_commands: vec![],
+            owner_completion_authority: None,
+            review: Some(HandoffReviewObservation {
+                reviewed_base_sha: self.base.commit.clone(),
+                reviewed_base_is_ancestor: true,
+                repository: REPOSITORY.into(),
+            }),
+        };
+        self.pair
+            .wire
+            .owner
+            .accept_task_handoff(&worker, "handoff", handoff, observation)
+            .map(|_| ())
+    }
+
     /// A reviewer on a host that cannot run `command` reports everything
     /// else checked and names a Linux CodeQL run of it as the evidence owed.
     fn reviewer_holds_for(&self, attempt_id: &str, command: &str) {
@@ -221,6 +268,7 @@ impl ReviewedLeaf {
                 name: "Rust CodeQL (Linux)".into(),
                 command: command.into(),
                 artifact: "evidence/codeql-rust-linux.json".into(),
+                os: None,
             }],
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.into(),
@@ -247,24 +295,7 @@ impl ReviewedLeaf {
             retired_validation: Vec::new(),
             escalation: Some("a Linux CodeQL run is owed".into()),
         };
-        let source = self
-            .pair
-            .follower_repo
-            .join(".orbit/tmp")
-            .join(REVIEW_REPORT_ARTIFACT);
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, serde_json::to_vec(&report).unwrap()).unwrap();
-        self.bound
-            .run_tool(
-                "orbit.task.artifact.put",
-                json!({
-                    "id": self.task,
-                    "model": "codex",
-                    "path": REVIEW_REPORT_ARTIFACT,
-                    "source_path": source,
-                }),
-            )
-            .expect("the reviewer's report reaches the owner");
+        self.put_report(&report);
     }
 
     /// The leaf's worker ends held, as the executor ends a run whose gate
@@ -307,7 +338,7 @@ impl ReviewedLeaf {
             .unwrap();
     }
 
-    fn settle(&self) -> Result<Value, String> {
+    pub(super) fn settle(&self) -> Result<Value, String> {
         self.bound
             .run_deterministic(
                 "review_gate_settle",
@@ -447,7 +478,7 @@ impl ReviewedLeaf {
         (artifacts, certificate)
     }
 
-    fn owner_artifact(&self, path: &str) -> Option<Vec<u8>> {
+    pub(super) fn owner_artifact(&self, path: &str) -> Option<Vec<u8>> {
         self.pair
             .wire
             .owner
@@ -572,40 +603,7 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
         orbit_common::security::release::sha256_hex(&certificate)
     );
 
-    // The handoff `claim_handoff` builds from the settled evidence, and the
-    // owner's own observation of it.
-    let record = leaf.pair.admission(&leaf.leaf);
-    let mut handoff = handoff(&record);
-    handoff.candidate.repository = REPOSITORY.into();
-    handoff.candidate.candidate = head.clone();
-    handoff.candidate.base = leaf.base.clone();
-    handoff.review = HandoffReview {
-        policy: ReviewTiming::BeforePr,
-        disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
-    };
-    let claim = record.receipt.unwrap().claim.unwrap();
-    let worker = ClaimInvocation::trusted_worker(
-        claim.task_id.clone(),
-        claim.claim_id.clone(),
-        FOLLOWER.into(),
-        Some(ClaimRun {
-            machine_id: FOLLOWER.into(),
-            run_id: leaf.leaf.clone(),
-        }),
-    );
-    let observation = HandoffObservation {
-        footprint_widening: vec![],
-        candidate: handoff.candidate.clone(),
-        required_commands: vec![],
-        owner_completion_authority: None,
-        review: Some(HandoffReviewObservation {
-            reviewed_base_sha: leaf.base.commit.clone(),
-            reviewed_base_is_ancestor: true,
-            repository: REPOSITORY.into(),
-        }),
-    };
-    owner
-        .accept_task_handoff(&worker, "handoff", handoff, observation)
+    leaf.owner_accepts(evidence, &head)
         .expect("the owner accepts the reviewed handoff");
     assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
     assert!(

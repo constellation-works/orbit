@@ -1,11 +1,14 @@
 //! Typed handoff acceptance and completion authority on the claim journal.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
-use orbit_types::workflow::{ReviewCertificate, ReviewTiming, handoff::*};
+use orbit_types::workflow::{
+    ReviewCertificate, ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome,
+    ValidationRole, handoff::*,
+};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, encode, invalid, row};
@@ -251,6 +254,67 @@ impl TaskCommitBoundary {
             return Err(certificate_refused(
                 "certificate does not bind this attempt, verdict, reviewer, task, repository, \
                  base and final candidate",
+            ));
+        }
+        // [ORB-14478] Every host run the certificate counted is pinned, and
+        // each pinned result binds this candidate's tree, its OS and a
+        // passed required check of the certificate, with its pinned log.
+        let pinned: BTreeMap<&str, &HandoffArtifactRef> = evidence
+            .host_evidence
+            .iter()
+            .map(|reference| (reference.path.as_str(), reference))
+            .collect();
+        let mut counted = BTreeSet::new();
+        for record in certificate
+            .host_evidence
+            .iter()
+            .filter(|record| record.passed)
+        {
+            let host_refused = |detail: &str| {
+                certificate_refused(&format!(
+                    "host run `{}` ({}): {detail}",
+                    record.command,
+                    record.os.as_str()
+                ))
+            };
+            let (Some(artifact), Some(log)) = (&record.artifact, &record.log_artifact) else {
+                return Err(host_refused("names no result or log"));
+            };
+            let (Some(result_ref), Some(log_ref)) =
+                (pinned.get(artifact.as_str()), pinned.get(log.as_str()))
+            else {
+                return Err(host_refused("the handoff does not pin its result and log"));
+            };
+            counted.extend([artifact.as_str(), log.as_str()]);
+            let result: ReviewExternalEvidence = serde_json::from_slice(&bytes(result_ref)?)
+                .map_err(|e| host_refused(&format!("unreadable result: {e}")))?;
+            if bytes(log_ref)?.is_empty() {
+                return Err(host_refused("empty log"));
+            }
+            let required_passed = certificate.validation.iter().any(|validation| {
+                validation.command == record.command
+                    && validation.role == ValidationRole::Required
+                    && validation.outcome == ValidationOutcome::Passed
+            });
+            if result.schema_version != 1
+                || result.kind != ReviewEvidenceKind::HostSandboxTest
+                || result.outcome != ValidationOutcome::Passed
+                || result.command != record.command
+                || result.os != Some(record.os)
+                || result.log_artifact != *log
+                || result.candidate.tree != head.tree
+                || record.tree != head.tree
+                || !required_passed
+            {
+                return Err(host_refused(
+                    "the result does not bind this command, OS, log, candidate tree and a \
+                     passed required check",
+                ));
+            }
+        }
+        if pinned.len() != counted.len() {
+            return Err(certificate_refused(
+                "the handoff pins host evidence the certificate did not count",
             ));
         }
         Ok(())

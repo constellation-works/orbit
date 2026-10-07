@@ -52,6 +52,8 @@ pub(super) struct Judgement {
     /// [ORB-14434] Set once the host downgraded the review: a review the
     /// host found incomplete is never held for a red base.
     pub(super) host_refused: bool,
+    /// [ORB-14478] `host_sandbox_test` requirements this host ran or refused.
+    pub(super) host_evidence: Vec<orbit_types::workflow::HostEvidenceRecord>,
 }
 
 impl Judgement {
@@ -84,6 +86,7 @@ impl Judgement {
             selectors_widened: Vec::new(),
             evidence_carried: None,
             host_refused: true,
+            host_evidence: Vec::new(),
         };
         let mut reports = Vec::new();
         let mut revisions = Vec::new();
@@ -156,6 +159,7 @@ impl Judgement {
             selectors_widened: Vec::new(),
             evidence_carried: None,
             host_refused: false,
+            host_evidence: Vec::new(),
         })
     }
 
@@ -326,6 +330,9 @@ impl Judgement {
     /// Resolve a repeated evidence-only report from durable result/log pairs
     /// on the final tree, never from the admission's advisory snapshot. Pairs
     /// on an earlier tree count through `carry` only: its patch is unchanged.
+    /// `host` holds the results this settlement's own host just produced
+    /// ([`Self::fulfil_host_evidence`]), which count like durable ones.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reconcile_external_evidence(
         &mut self,
         runtime: &OrbitRuntime,
@@ -334,6 +341,7 @@ impl Judgement {
         repair: Option<&CommitIdentity>,
         scope: &[String],
         carry: Option<&orbit_types::workflow::ReviewEvidenceCarried>,
+        host: BTreeMap<String, ReviewExternalEvidence>,
     ) -> Result<(), OrbitError> {
         if context.task_ids.len() != 1
             || self.external_evidence.is_empty()
@@ -366,11 +374,12 @@ impl Judgement {
         {
             return Ok(());
         }
-        let satisfied = super::super::evidence::satisfied_external_evidence(
+        let mut satisfied = super::super::evidence::satisfied_external_evidence(
             runtime,
             &context.task_ids[0],
             candidate,
         )?;
+        satisfied.extend(host);
         let carried = super::super::evidence::carried_external_evidence(
             runtime,
             &context.task_ids[0],

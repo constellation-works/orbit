@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ValidationOutcome;
 use super::automation::SourceRevision;
+use super::host_evidence::EvidenceHostOs;
 
 /// Durable hold attached by review settlement, never an acceptance certificate.
 pub const REVIEW_EVIDENCE_HOLD_ARTIFACT: &str = "review-evidence-hold.json";
@@ -20,6 +21,10 @@ pub enum ReviewEvidenceKind {
     NativeOs,
     #[serde(rename = "codeql")]
     CodeQl,
+    /// [ORB-14478] A sandbox-gated test the agent lane cannot run because
+    /// its own sandbox refuses a nested one. Names the host OS it needs; a
+    /// host of that OS runs it outside the agent sandbox.
+    HostSandboxTest,
 }
 
 /// One named external check and the task artifact where its result must arrive.
@@ -29,6 +34,10 @@ pub struct ReviewEvidenceRequirement {
     pub name: String,
     pub command: String,
     pub artifact: String,
+    /// The host OS the check must run on. Required for `host_sandbox_test`;
+    /// when set, only evidence from that OS satisfies the requirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<EvidenceHostOs>,
 }
 
 /// A hold pins the reviewed tree and task meaning; evidence never grants a pass.
@@ -85,10 +94,15 @@ pub struct ReviewExternalEvidence {
     pub command: String,
     pub outcome: ValidationOutcome,
     pub log_artifact: String,
+    /// The host OS the check ran on. A requirement that names an OS counts
+    /// only a result from that OS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<EvidenceHostOs>,
 }
 
 impl ReviewExternalEvidence {
-    /// Whether this result names the check on the candidate tree.
+    /// Whether this result names the check on the candidate tree, and on the
+    /// host OS the requirement names, if any.
     /// The host must also validate the schema, outcome and attached log.
     pub fn matches_requirement(
         &self,
@@ -99,5 +113,6 @@ impl ReviewExternalEvidence {
             && self.candidate.tree == candidate.tree
             && self.kind == requirement.kind
             && self.command == requirement.command
+            && requirement.os.is_none_or(|os| self.os == Some(os))
     }
 }
