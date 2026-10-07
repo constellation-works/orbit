@@ -128,6 +128,8 @@ origin/Host protection on every mutation and operator admission on governed
 actions. Existing ordinary writes have explicit method/path exceptions;
 new mutating routes default to operator-only. The auto launch probe requests
 completion authority, which is governed separately from a normal launch.
+Resume probes use saved source runs with review and done completion policies,
+so both ordinary admission and inherited completion authority are exercised.
 This is source-assisted discovery followed by behavioral HTTP assertions,
 not a source-text snapshot. No private router API is exposed for testing.
 

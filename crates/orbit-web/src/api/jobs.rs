@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
+use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
@@ -260,12 +260,14 @@ pub(super) struct ResumeBody {
 ///
 /// Resume re-runs the first non-successful step and every subsequent step; it
 /// succeeds only when the underlying cause of the source failure is resolved.
+/// Inherited automatic completion requires the current session's authority.
 ///
 /// [ORB-10470] One-shot, like `POST /workflows/ship`: it returns as soon as the
 /// resumed run is persisted and its detached worker is spawned, so the resumed
 /// pipeline never runs on a request thread. Callers poll `/job-runs/:id` for
 /// progress and can cancel the returned run id while it executes.
 pub(super) async fn resume_job_run_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<ResumeBody>,
@@ -276,8 +278,28 @@ pub(super) async fn resume_job_run_action(
     };
     let id = id.to_string();
     let retry_source_run_id = id.clone();
+    let completion_authority =
+        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
     match blocking("resume run", move || {
-        Ok(runtime.submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref()))
+        let source = runtime.show_job_run(&id)?;
+        if source
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done")
+            && let Err(denial) = completion_authority
+        {
+            return Ok(Err(authorization_denied(denial)));
+        }
+        Ok(runtime
+            .submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref())
+            .map_err(|error| match error {
+                orbit_core::OrbitError::JobValidation(message) => {
+                    (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
+                }
+                other => map_runtime_error(other),
+            }))
     })
     .await
     {
@@ -290,10 +312,7 @@ pub(super) async fn resume_job_run_action(
             "submitted_at": invoke.submitted_at,
         }))
         .into_response(),
-        Ok(Err(orbit_core::OrbitError::JobValidation(message))) => {
-            (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
-        }
-        Ok(Err(e)) => map_runtime_error(e),
+        Ok(Err(response)) => response,
         Err(response) => *response,
     }
 }
