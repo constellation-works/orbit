@@ -2,6 +2,57 @@
 
 use super::*;
 
+/// A host that cannot spawn a claimed leaf returns its task and stops pulling
+/// immediately, rather than blocking several tasks to trip the breaker.
+#[test]
+fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host() {
+    if !isolated(
+        module_path!(),
+        "a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host",
+    ) {
+        return;
+    }
+    let pair = Pair::new(3);
+    let drain = pair.start_drain();
+    let failed = pair.pass(&drain);
+    assert!(launch_refused(&failed), "{failed}");
+    assert_eq!(
+        failed["consecutive_failures"], 0,
+        "a launch failure releases: {failed}"
+    );
+    let leaf = pair.leaf_runs().pop().unwrap();
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
+    assert!(
+        pair.follower_jobs
+            .mark_job_run_running(&leaf, Utc::now(), std::process::id())
+            .is_err(),
+        "a cancelled queued leaf cannot start later"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    assert_eq!(
+        settles[0]["settlement"]["Release"]["failure"]["class"],
+        "environment"
+    );
+    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "revoked");
+    assert!(
+        pair.tasks
+            .iter()
+            .all(|task| pair.owner_status(task) == "backlog")
+    );
+    let suppressed = pair.pass(&drain);
+    assert_eq!(suppressed["admitting"], false, "{suppressed}");
+    assert!(
+        suppressed["crews"]["host_suppressed"].is_string(),
+        "{suppressed}"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "the systemic spawn fault is not tried on another task"
+    );
+}
+
 /// An operator cancellation of a launched claimed leaf reaches its owner as a
 /// release, so the task keeps its candidate in backlog with the cancel reason.
 #[test]
@@ -93,16 +144,22 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
     let leaves = pair.leaf_runs();
     assert_eq!(leaves.len(), 1, "one leaf for the one claim: {leaves:?}");
     assert_eq!(claims[0]["bound_run"]["run_id"], leaves[0].as_str());
-    assert_eq!(claims[0]["claim"]["phase"], "failed");
+    assert_eq!(claims[0]["claim"]["phase"], "revoked");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert_eq!(settles.len(), 1, "{settles:?}");
     assert!(
-        settles[0]["settlement"]["Fail"]["summary"]
+        settles[0]["settlement"]["Release"]["failure"]["reason"]
             .as_str()
             .is_some_and(|summary| summary.starts_with("leaf launch failed")),
         "the bound leaf reached its launch: {settles:?}"
     );
     let claimed = claims[0]["claim"]["task_id"].as_str().unwrap();
+    assert_eq!(pair.owner_status(claimed), "backlog");
+    assert_eq!(pair.run_state(&leaves[0]), JobRunState::Cancelled);
+    assert_eq!(
+        settles[0]["settlement"]["Release"]["failure"]["class"],
+        "environment"
+    );
     let untouched = pair.tasks.iter().find(|id| *id != claimed).unwrap();
     assert_eq!(pair.owner_status(untouched), "backlog");
 }
@@ -122,18 +179,28 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
     let drain = pair.start_drain();
     let task = pair.tasks[0].clone();
 
+    // Both cancellation's terminal hook and the launch pass can deliver.
+    // Lose both replies to leave the release pending for the next pass.
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let lost = pair.pass(&drain);
     assert!(error_of(&lost).contains("dropped"), "{lost}");
-    assert_eq!(pair.owner_status(&task), "blocked", "the owner applied it");
+    assert_eq!(
+        pair.owner_status(&task),
+        "backlog",
+        "the owner applied the release"
+    );
     assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
     let applied = pair.owner_task(&task);
 
     let redelivered = pair.pass(&drain);
     assert!(redelivered["error"].is_null(), "{redelivered}");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
-    assert_eq!(settles.len(), 2);
-    assert_eq!(settles[0], settles[1], "the recorded settlement, re-sent");
+    assert_eq!(settles.len(), 3);
+    assert!(
+        settles.iter().all(|settlement| *settlement == settles[0]),
+        "the recorded settlement, re-sent unchanged"
+    );
     assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
     let leaf = pair.leaf_runs().pop().expect("leaf");
     let claim = pair
@@ -148,7 +215,7 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .wire
         .call("", "orbit.drain.claim.settle", settles[0].clone())
         .expect("a replayed settlement answers with the recorded outcome");
-    assert_eq!(replay["phase"], "failed", "{replay}");
+    assert_eq!(replay["phase"], "revoked", "{replay}");
     let after = pair.owner_task(&task);
     for field in ["status", "execution_summary", "comments", "history"] {
         assert_eq!(after[field], applied[field], "{field} changed on replay");
@@ -159,7 +226,10 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .iter()
         .filter(|event| event["to_status"] == "blocked")
         .count();
-    assert_eq!(blocked, 1, "{after:#}");
+    assert_eq!(
+        blocked, 0,
+        "a launch failure never blocks the task: {after:#}"
+    );
 }
 
 /// The refusal an owner answers a handoff with when its footprint widens onto

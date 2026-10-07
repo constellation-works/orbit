@@ -160,11 +160,12 @@ impl OrbitRuntime {
     /// supervisor records it against the child's PID and sets
     /// `ORBIT_WORKER_CONTEXT_REQUIRED`, so the child refuses to run if it
     /// cannot resolve that binding back out of host authority.
-    pub(crate) fn spawn_claimed_leaf_worker(&self, run_id: &str) -> Result<(), OrbitError> {
+    pub(crate) fn spawn_claimed_leaf_worker(&self, run_id: &str) -> Result<(), WorkerLaunchError> {
         if self.worker_invocation().is_none() {
             return Err(OrbitError::PolicyDenied(
                 "a claimed leaf worker must be launched from a bound runtime".into(),
-            ));
+            )
+            .into());
         }
         self.pipeline_worker_supervisor(false).spawn(run_id, None)
     }
@@ -177,6 +178,7 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         self.pipeline_worker_supervisor(strict_override)
             .spawn(run_id, actor)
+            .map_err(WorkerLaunchError::into_error)
     }
 
     pub(in crate::application::job) fn finalize_pipeline_worker_startup_failure(

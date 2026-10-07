@@ -695,8 +695,10 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let drain = pair.start_drain();
 
     for failed in 1..=3 {
-        let pass = pair.pass(&drain);
-        assert!(launch_refused(&pass), "{pass}");
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, "candidate validation failed");
+        let pass = pair.pass_with(&drain, 0);
+        assert!(error_of(&pass).is_empty(), "{pass}");
         assert_eq!(pass["consecutive_failures"], failed, "{pass}");
     }
     let opened = pair.pass(&drain);
@@ -719,9 +721,12 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let restarted = pair.start_drain();
     let reset = pair.pass(&restarted);
     assert!(launch_refused(&reset), "{reset}");
-    assert_eq!(reset["consecutive_failures"], 1, "{reset}");
+    assert_eq!(
+        reset["consecutive_failures"], 0,
+        "launch failures release instead of counting toward the breaker: {reset}"
+    );
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
-    assert_eq!(backlog(&pair), 0);
+    assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
 }
 
@@ -753,8 +758,8 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
     let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
     let drain = pair.start_drain();
 
+    let leaf = pair.running_leaf(&drain, 1);
     let first = pair.pass(&drain);
-    assert!(launch_refused(&first), "{first}");
     let exclusion = excluded(&first, "antigravity");
     assert_eq!(exclusion["source"], "preflight", "{first}");
     assert!(
@@ -763,6 +768,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
             .is_some_and(|reason| reason.contains("orbit-test-no-such-provider-cli")),
         "{first}"
     );
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
     let idle = pair.pass(&drain);
     assert_eq!(idle["admitted"], 0, "{idle}");
 
@@ -844,9 +850,11 @@ fn a_follower_is_handed_only_tasks_its_os_satisfies() {
     pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Linux));
     let drain = pair.start_drain();
 
-    for _ in 0..3 {
-        pair.pass(&drain);
+    for _ in 0..2 {
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, "candidate validation failed");
     }
+    pair.pass(&drain);
     let claimed = |pair: &Pair| {
         pair.owner_claims()
             .iter()
@@ -1068,7 +1076,7 @@ model = \"gpt-sol\"
         "the alias crew is not admitted: {claims:#?}"
     );
     // This test binary cannot re-exec a worker, so the admitted sol leaf's
-    // launch fails and the owner blocks that task. The claim phase is the
+    // launch fails and the owner releases that task. The claim phase is the
     // launch failure, which is how an admitted crew shows up here.
     assert!(
         launch_refused(&pass),
@@ -1076,13 +1084,13 @@ model = \"gpt-sol\"
     );
     assert_eq!(
         phase(&sol),
-        Some("failed"),
+        Some("revoked"),
         "the other provider is admitted, then its launch fails: {claims:#?}"
     );
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert!(
         settles.iter().any(|call| {
-            call["settlement"]["Fail"]["summary"]
+            call["settlement"]["Release"]["failure"]["reason"]
                 .as_str()
                 .is_some_and(|summary| summary.starts_with("leaf launch failed"))
         }),
@@ -1092,8 +1100,8 @@ model = \"gpt-sol\"
     assert_eq!(pair.owner_status(&opus), "backlog");
     assert_eq!(
         pair.owner_status(&sol),
-        "blocked",
-        "the launch refusal blocks the admitted task"
+        "backlog",
+        "the launch refusal releases the admitted task"
     );
 
     let window = pair
@@ -1102,7 +1110,10 @@ model = \"gpt-sol\"
         .unwrap()
         .expect("a pull drain has a crew window");
     let runnable = window.runnable.as_ref().expect("preflight ran");
-    assert!(runnable.iter().any(|crew| crew == "sol"), "{window:#?}");
+    assert!(
+        window.host_suppressed.is_some(),
+        "launch failure suppresses the follower: {window:#?}"
+    );
     assert!(
         runnable
             .iter()
@@ -1246,8 +1257,10 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
         .with_host_resource_probe(probe.clone());
     let drain = pair.start_drain();
 
-    // The first claim fails at launch and its settlement reply is lost, so
+    // A launched candidate fails and its settlement reply is lost, so
     // the drain owes the owner that settlement.
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let owed = pair.pass(&drain);
     assert!(error_of(&owed).contains("dropped"), "{owed}");

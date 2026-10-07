@@ -490,6 +490,11 @@ owns delivery:
   `claimed` or `running`: the owner revokes the claim, releases its reservation, returns the task
   to `backlog` with the reason as its status note, and adds the comment to the task. Only a
   launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those.
+  A confirmed pre-spawn launch error records a typed `environment` release through the shared
+  settlement recorder, cancelling the queued leaf before delivery. A failed cancellation is
+  retried before the release is sent. This host failure suppresses the drain's remaining window.
+  A launch error after spawn retains `Launching` for reconciliation even when the supervisor
+  kills and reaps the child: it may already have executed, so it cannot be treated as unlaunched.
   The exception is a provider that could not be used [ORB-13941]: the CLI runner stamps a failure
   whose own stderr, terminal error, or structured provider failure reports an authentication failure with the typed
   `[provider_unavailable]` marker, and a launched leaf that ended on such a step settles as a

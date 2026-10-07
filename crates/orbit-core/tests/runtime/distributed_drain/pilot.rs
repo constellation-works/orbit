@@ -46,8 +46,7 @@ fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
         .unwrap();
 
     let drain = pair.start_drain();
-    let first = pair.pass(&drain);
-    assert!(launch_refused(&first), "{first}");
+    let first_leaf = pair.running_leaf(&drain, 1);
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
     assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[1]);
     let records = pair.follower_jobs.local_pull_admissions().unwrap();
@@ -74,6 +73,7 @@ fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
 
     jobs.finalize_job_run(&run.run_id, JobRunState::Success, Utc::now(), None)
         .unwrap();
+    pair.leaf_fails_with(&first_leaf, "candidate validation failed");
     let second = pair.pass(&drain);
     assert!(launch_refused(&second), "{second}");
     assert!(

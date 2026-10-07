@@ -8,6 +8,7 @@ use orbit_types::workflow::PipelineState;
 
 use super::super::drain::{PullDrain, PullLauncher, PullPeer, RefusedDelivery};
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
+use crate::application::job::pipeline::WorkerLaunchError;
 
 #[derive(Default)]
 struct Peer {
@@ -197,15 +198,11 @@ impl PullPeer for Peer {
 #[derive(Default)]
 struct Launcher {
     launches: Cell<usize>,
-    fail: Cell<bool>,
 }
 impl PullLauncher for Launcher {
-    fn launch(&self, record: &LocalPullAdmission) -> Result<(), OrbitError> {
+    fn launch(&self, record: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
         assert_eq!(record.phase, LocalPullPhase::Launching);
         self.launches.set(self.launches.get() + 1);
-        if self.fail.get() {
-            return Err(OrbitError::Execution("launch failed".into()));
-        }
         Ok(())
     }
     fn cancel_queued(&self, _record: &LocalPullAdmission) -> Result<(), OrbitError> {
@@ -213,6 +210,135 @@ impl PullLauncher for Launcher {
             "a live drain never cancels its queued leaves".into(),
         ))
     }
+}
+
+/// Fault injection: a spawned child can lose its observer before acknowledging
+/// launch. A pending run alone does not prove that no worker executed.
+#[test]
+fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
+    ) {
+        return;
+    }
+    struct UncertainLauncher;
+    impl PullLauncher for UncertainLauncher {
+        fn launch(&self, _: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
+            Err(WorkerLaunchError::Uncertain(OrbitError::Execution(
+                "observer closed after spawn".into(),
+            )))
+        }
+        fn cancel_queued(&self, _: &LocalPullAdmission) -> Result<(), OrbitError> {
+            panic!("post-spawn uncertainty must not cancel as never launched");
+        }
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &UncertainLauncher,
+        refused_delivery: RefusedDelivery::WhenDue,
+    };
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let [record] = jobs.local_pull_admissions().unwrap().try_into().unwrap();
+    let record: LocalPullAdmission = record;
+    assert_eq!(record.phase, LocalPullPhase::Launching);
+    assert!(record.settlement.is_none());
+    assert!(drain.reconcile_pending(&destination).is_err());
+    assert!(
+        peer.settled.borrow().is_empty(),
+        "an uncertain launch keeps the owner's claim"
+    );
+    assert_eq!(peer.requests.get(), 1, "uncertainty admits no replacement");
+}
+
+/// Fault injection: another process records the settlement during launch, and
+/// the first attempt to cancel the queued leaf fails. Reconciliation adopts
+/// the first settlement and retries cancellation before giving back the task.
+#[test]
+fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
+    ) {
+        return;
+    }
+    struct InterleavedLauncher<'a> {
+        jobs: &'a dyn JobRunStoreBackend,
+        cancellations: Cell<usize>,
+        settlement: RefCell<Option<ClaimMutation>>,
+    }
+    impl PullLauncher for InterleavedLauncher<'_> {
+        fn launch(&self, record: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
+            let settlement = super::super::drain::release_settlement(record, "concurrent release");
+            self.jobs.mutate_local_pull(
+                &record.destination,
+                &record.request.request_id,
+                &LocalPullMutation::Settle(Box::new(settlement.clone())),
+            )?;
+            *self.settlement.borrow_mut() = Some(settlement);
+            Err(OrbitError::Execution("injected pre-spawn failure".into()).into())
+        }
+        fn cancel_queued(&self, record: &LocalPullAdmission) -> Result<(), OrbitError> {
+            let attempt = self.cancellations.get() + 1;
+            self.cancellations.set(attempt);
+            if attempt == 1 {
+                return Err(OrbitError::Execution(
+                    "injected cancellation failure".into(),
+                ));
+            }
+            self.jobs.finalize_job_run(
+                record.leaf_run_id.as_deref().unwrap(),
+                orbit_types::workflow::JobRunState::Cancelled,
+                Utc::now(),
+                None,
+            )?;
+            Ok(())
+        }
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = InterleavedLauncher {
+        jobs,
+        cancellations: Cell::new(0),
+        settlement: RefCell::new(None),
+    };
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+        refused_delivery: RefusedDelivery::WhenDue,
+    };
+    let error = drain.refill(&destination, &template, 1).unwrap_err();
+    assert!(
+        error.to_string().contains("injected cancellation failure"),
+        "the concurrent settlement is adopted instead of an immutable-settlement error: {error}"
+    );
+    assert!(
+        peer.settled.borrow().is_empty(),
+        "cancellation must succeed before delivery"
+    );
+    drain.reconcile_pending(&destination).unwrap();
+    assert_eq!(launcher.cancellations.get(), 2);
+    let settlements = peer.settled.borrow();
+    assert_eq!(
+        settlements.as_slice(),
+        &[launcher.settlement.borrow().clone().unwrap()],
+        "the first recorded settlement is delivered unchanged"
+    );
+    let records = jobs.local_pull_admissions().unwrap();
+    assert_eq!(records[0].phase, LocalPullPhase::Settled);
+    assert_eq!(
+        jobs.get_job_run(records[0].leaf_run_id.as_deref().unwrap())
+            .unwrap()
+            .unwrap()
+            .state,
+        orbit_types::workflow::JobRunState::Cancelled
+    );
 }
 fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest) {
     let parent = jobs

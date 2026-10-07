@@ -22,6 +22,7 @@ use super::candidate::{
 use crate::application::distributed::{
     is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
 };
+use crate::application::job::pipeline::WorkerLaunchError;
 
 /// Trusted owner transport, supplied by runtime composition. Implementations
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
@@ -47,11 +48,10 @@ pub(crate) trait PullPeer {
 /// A launcher takes the existing bound run, never submits a replacement.
 /// Success means that launch was acknowledged, not that execution completed.
 pub(crate) trait PullLauncher {
-    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError>;
+    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), WorkerLaunchError>;
     /// Cancel a bound leaf that was never launched, so it can never start.
-    /// Only a pass releasing an admission no drain will launch calls this
-    /// ([`SettleScope::Abandon`], [`SettleScope::Cancel`]); the leaf's
-    /// pending run has no process, and one that has started is refused.
+    /// Also used after a confirmed pre-spawn launch failure. A leaf that
+    /// has started is refused, so a release cannot permit concurrent work.
     fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError>;
 }
 
@@ -528,14 +528,35 @@ impl PullDrain<'_> {
                 LocalPullPhase::Bound => {
                     record = self.update(&record, LocalPullMutation::LaunchIntent)?;
                     if let Err(error) = self.launcher.launch(&record) {
-                        let settlement = ClaimMutation::Fail(ClaimEvidence {
-                            summary: Some(format!("leaf launch failed: {error}")),
-                            ..Default::default()
-                        });
-                        record =
-                            self.update(&record, LocalPullMutation::Settle(Box::new(settlement)))?;
-                        self.deliver(&record)?;
-                        return Err(error);
+                        match error {
+                            WorkerLaunchError::NotStarted(error) => {
+                                let why = format!("leaf launch failed before spawning: {error}");
+                                let mut evidence = release_evidence(&record, &why);
+                                evidence.failure = Some(ClaimFailure {
+                                    class: ClaimFailureClass::Environment,
+                                    reason: why,
+                                    crew: record
+                                        .receipt
+                                        .as_ref()
+                                        .and_then(|receipt| receipt.task.as_ref())
+                                        .and_then(|task| task.crew.clone()),
+                                    candidate: None,
+                                });
+                                record = self
+                                    .record_settlement(&record, ClaimMutation::Release(evidence))?;
+                                self.launcher.cancel_queued(&record)?;
+                                record = self.reread(&record)?.unwrap_or(record);
+                                if record.phase != LocalPullPhase::Settled
+                                    && !self.release_held(&record)?
+                                {
+                                    self.deliver(&record)?;
+                                }
+                                return Err(error);
+                            }
+                            // The child may have executed before its failed handoff.
+                            // Retain Launching, even if the supervisor stopped it.
+                            WorkerLaunchError::Uncertain(error) => return Err(error),
+                        }
                     }
                     self.update(&record, LocalPullMutation::Launched)?
                 }
@@ -833,8 +854,8 @@ impl PullDrain<'_> {
     /// cancel recorded it for a leaf it then could not confirm stopped, and
     /// the leaf still runs. Handing its task back to the backlog now could
     /// let a second executor start it beside the first, so the owner keeps
-    /// the claim until the leaf is seen to stop. A queued leaf has no
-    /// process, so its release is never held.
+    /// the claim until the leaf is seen to stop. A queued leaf is cancelled
+    /// before delivery, including when a prior cancellation attempt failed.
     pub(crate) fn release_held(&self, record: &LocalPullAdmission) -> Result<bool, OrbitError> {
         if !matches!(record.settlement, Some(ClaimMutation::Release(_))) {
             return Ok(false);
@@ -842,9 +863,17 @@ impl PullDrain<'_> {
         let Some(leaf) = record.leaf_run_id.as_deref() else {
             return Ok(false);
         };
-        Ok(self.jobs.get_job_run(leaf)?.is_some_and(|run| {
-            !run.state.is_terminal() && run.state != orbit_types::workflow::JobRunState::Pending
-        }))
+        if self
+            .jobs
+            .get_job_run(leaf)?
+            .is_some_and(|run| run.state == JobRunState::Pending)
+        {
+            self.launcher.cancel_queued(record)?;
+        }
+        Ok(self
+            .jobs
+            .get_job_run(leaf)?
+            .is_some_and(|run| !run.state.is_terminal()))
     }
 
     /// Deliver a persisted settlement to the owner.
