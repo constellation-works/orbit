@@ -89,6 +89,16 @@ pub trait JobRunStoreBackend: Send + Sync {
         Err(OrbitError::Store("drain leaf occupancy unavailable".into()))
     }
 
+    /// The shared capacity reading, with slots outside this coordinator's
+    /// lineage counted as inherited. Includes workers of stopped coordinators,
+    /// explicit deliveries, and unsettled pull admissions.
+    fn drain_leaf_occupancy_for_run(
+        &self,
+        _run_id: &str,
+    ) -> Result<super::DrainLeafOccupancy, OrbitError> {
+        Err(OrbitError::Store("drain leaf occupancy unavailable".into()))
+    }
+
     fn mutate_local_pull(
         &self,
         _destination: &PullDestination,

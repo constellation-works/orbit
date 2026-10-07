@@ -99,7 +99,7 @@ pub use run::{
     BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass,
     CommitObservation, CommitObservationStatus, CrewExclusion, CrewExclusionSource,
     DeliveryEvidenceGap, DeliveryEvidenceProvenance, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainApprovalReport, DrainCancelRequest, DrainWaitingTask, DrainWorkerLimit,
+    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWorkerLimit,
     FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
     FinalRecoveryObservedTask, FinalRecoveryRepairCommit, LandingMethod, LandingObservation,
     LandingObservationStatus, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,

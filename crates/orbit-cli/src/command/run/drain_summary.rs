@@ -11,8 +11,8 @@
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
 use orbit_types::workflow::{
-    DrainAdmissionPass, DrainApprovalReport, DrainWaitingTask, JobRunState, PipelineState,
-    ResourceThrottle,
+    DrainAdmissionPass, DrainApprovalReport, DrainCapacity, DrainWaitingTask, JobRunState,
+    PipelineState, ResourceThrottle,
 };
 use serde_json::{Value, json};
 
@@ -37,6 +37,8 @@ pub(super) struct DrainLeafSummary {
     pub(super) waiting: WaitingBacklog,
     /// What an `--approve-proposed` drain approved and held [ORB-14117].
     pub(super) approvals: Option<DrainApprovalReport>,
+    /// Shared occupancy at the last pass, separate from this drain's outcomes.
+    pub(super) capacity: Option<DrainCapacity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +127,7 @@ impl DrainLeafSummary {
                 "excluded_total": self.waiting.excluded_total,
             },
             "resource_throttle": self.waiting.resource_throttle,
+            "capacity": self.capacity,
             "approvals": self.approvals,
         })
     }
@@ -146,6 +149,19 @@ impl DrainLeafSummary {
                 String::new()
             },
         )];
+        if let Some(capacity) = &self.capacity {
+            lines.push(format!(
+                "{} occupied={} inherited={} limit={} (last admission pass {})",
+                bold("Capacity:"),
+                capacity.active_leaf_runs,
+                capacity.inherited_leaf_runs,
+                capacity.max_active_leaf_runs,
+                self.waiting
+                    .recorded_at
+                    .map(|at| at.to_rfc3339())
+                    .unwrap_or_default(),
+            ));
+        }
         if self.has_failed_leaves() {
             let note = if drain_state == JobRunState::Success {
                 " (the drain's own `success` only means it ran; it does not observe its leaves)"
@@ -312,6 +328,10 @@ pub(super) fn summarize_drain_leaves(
     let mut summary = DrainLeafSummary {
         waiting: last_pass_waiting(state),
         approvals: state.drain_approvals.clone(),
+        capacity: state
+            .drain_last_pass
+            .as_ref()
+            .and_then(|pass| pass.capacity.clone()),
         ..DrainLeafSummary::default()
     };
     for dispatch in state

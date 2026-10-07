@@ -530,6 +530,9 @@ pub struct DrainLeafOccupancy {
     /// operator can see which definitions hold the slots. Includes pending
     /// admissions no live run represents yet.
     pub per_pipeline: std::collections::BTreeMap<String, usize>,
+    /// Occupied slots outside the requested coordinator's dispatch lineage or
+    /// pull requests. Absent when no coordinator was requested.
+    pub inherited: Option<usize>,
 }
 
 /// Immutable request and binding with a monotone local execution checkpoint.

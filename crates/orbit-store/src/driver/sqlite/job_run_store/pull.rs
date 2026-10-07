@@ -313,19 +313,20 @@ pub(super) fn claims_admitted_by(
     })
 }
 
-/// How far the wrapper lineage walk follows dispatch records. A loop guard for
+/// How far the dispatch lineage walk follows records. A loop guard for
 /// a malformed or cyclic dispatch chain, not a tuning knob.
-const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;
+const MAX_DISPATCH_LINEAGE_DEPTH: usize = 64;
 
-/// Every run a live legacy wrapper dispatched, transitively.
-fn wrapper_lineage(
+/// Every run a wrapper or coordinator dispatched, transitively. Terminal
+/// dispatch records still identify live descendants.
+fn dispatch_lineage(
     conn: &Connection,
     workspace: &str,
     root_state: Option<&String>,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let mut frontier = vec![root_state.cloned()];
     let mut seen = BTreeSet::new();
-    for _ in 0..MAX_WRAPPER_LINEAGE_DEPTH {
+    for _ in 0..MAX_DISPATCH_LINEAGE_DEPTH {
         let mut next = Vec::new();
         for raw in frontier.into_iter().flatten() {
             let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
@@ -360,7 +361,11 @@ fn wrapper_lineage(
 /// not settled yet. An admission with no live run of its own — never created,
 /// or created and since terminal — holds its own slot instead, so a slot is
 /// released exactly when the claim settles and not before.
-fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, OrbitError> {
+fn occupancy(
+    conn: &Connection,
+    workspace: &str,
+    coordinator: Option<&str>,
+) -> Result<DrainLeafOccupancy, OrbitError> {
     let mut stmt = conn.prepare("SELECT run_id,job_id,pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND state IN ('pending','running','retrying')").map_err(db_error)?;
     let active = stmt
         .query_map([workspace], |r| {
@@ -397,13 +402,31 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
         if is_leaf_pipeline(job) {
             *pipelines.entry(job.clone()).or_insert(0) += 1;
         } else if job == LEGACY_WRAPPER_PIPELINE {
-            let seen = wrapper_lineage(conn, workspace, state.as_ref())?;
+            let seen = dispatch_lineage(conn, workspace, state.as_ref())?;
             if seen.is_disjoint(&leaves) && seen.is_disjoint(&admitted_runs) {
                 slots.insert(id.clone());
             }
         }
     }
 
+    // Dispatch history remains authoritative even after a wrapper or an old
+    // coordinator finishes. Walking it avoids counting a wrapper and its
+    // delivery twice, or attributing our detached delivery to another drain.
+    let mut owned = if let Some(run_id) = coordinator {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
+                params![workspace, run_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .flatten();
+        dispatch_lineage(conn, workspace, raw.as_ref())?
+    } else {
+        BTreeSet::new()
+    };
+    let mut owned_unrepresented = 0;
     let mut occupied = slots.len();
     for record in pending {
         if record
@@ -412,6 +435,14 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
             .is_none_or(|id| !slots.contains(id))
         {
             occupied += 1;
+            if coordinator == Some(record.request.run_context.run_id.as_str()) {
+                owned_unrepresented += 1;
+            }
+        }
+        if coordinator == Some(record.request.run_context.run_id.as_str())
+            && let Some(id) = record.leaf_run_id.as_ref()
+        {
+            owned.insert(id.clone());
         }
         if record
             .leaf_run_id
@@ -426,6 +457,9 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
     Ok(DrainLeafOccupancy {
         occupied,
         per_pipeline: pipelines,
+        inherited: coordinator.map(|_| {
+            occupied.saturating_sub(slots.intersection(&owned).count() + owned_unrepresented)
+        }),
     })
 }
 
@@ -436,8 +470,9 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
 pub(super) fn drain_occupancy(
     store: &Store,
     workspace: &str,
+    coordinator: Option<&str>,
 ) -> Result<DrainLeafOccupancy, OrbitError> {
-    store.with_read_connection(|conn| occupancy(conn, workspace))
+    store.with_read_connection(|conn| occupancy(conn, workspace, coordinator))
 }
 /// The leaf definitions a claim may select. They are the handoff-only claimed
 /// variants, never the merge-capable legacy pipelines: a pulled claim settles
@@ -573,7 +608,7 @@ pub(super) fn allocate(
             as usize;
         // The drain's worker limit is the only ceiling: the leaf definitions
         // declare no active-run limit of their own [ORB-13893].
-        if occupancy(conn, workspace)?.occupied >= ceiling {
+        if occupancy(conn, workspace, None)?.occupied >= ceiling {
             return Ok(None);
         }
         let record = LocalPullAdmission {

@@ -757,6 +757,21 @@ fn concurrent_pull_admission_obeys_the_shared_ceiling() {
     assert_eq!(admitted, CEILING);
     assert_eq!(jobs.local_pull_admissions().unwrap().len(), CEILING);
     assert_eq!(jobs.drain_leaf_occupancy().unwrap().occupied, CEILING);
+    assert_eq!(
+        jobs.drain_leaf_occupancy_for_run(&parent.run_id)
+            .unwrap()
+            .inherited,
+        Some(0)
+    );
+    let replacement = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    assert_eq!(
+        jobs.drain_leaf_occupancy_for_run(&replacement.run_id)
+            .unwrap()
+            .inherited,
+        Some(CEILING)
+    );
     let late = pull_request(&parent.run_id, "late");
     assert!(
         jobs.allocate_pull_request(&destination, &late, CEILING)
