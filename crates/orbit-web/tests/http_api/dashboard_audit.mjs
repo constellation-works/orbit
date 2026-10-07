@@ -43,6 +43,11 @@ await audit.link(name => { assert.equal(name, './common.js'); return common; });
 await audit.evaluate();
 const payload = {
   window: '24h',
+  duration_by_tool: [
+    { tool: 'unknown', count: 2000, avg: 90000, p95: 100000 },
+    { tool: '', count: 2, avg: 80000, p95: 90000 },
+    { tool: 'orbit.search', count: 5, avg: 120, p95: 200 },
+  ],
   tool_call_failure_rate: { failed: 2, total: 9, rate: 2 / 9, unexpected: 1, denied: 4 },
   tool_call_failures_by_tool: [
     { tool: 'orbit.workflow.run.list', failed: 2, total: 9, rate: 2 / 9, unexpected: 1, denied: 3 },
@@ -55,11 +60,15 @@ const card = container.children.find(node => node.dataset.key === 'tool-call-fai
 const table = card.children[1].children[0];
 const headers = table.children[0].children[0].children;
 const rows = table.children[1].children;
-const cell = (row, field) => row.children[headers.findIndex(header => header.textContent === field)].textContent;
+const cell = (row, field) => row.children[headers.findIndex(header => header.dataset.column === field)].textContent;
 for (const [field, expected] of Object.entries({ tool: 'orbit.workflow.run.list', failed: '2', total: '9', rate: '22.2%', unexpected: '1', denied: '3' })) {
   assert.equal(cell(rows[0], field), expected, `mixed-call rendered ${field}`);
 }
 assert.equal(rows.length, 2, 'synthetic unnamed tools stay out of the table');
+const durationTable = container.children.find(node => node.dataset.key === 'duration-by-tool').children[1].children[0];
+assert.equal(durationTable.children[1].children.length, 1, 'duration table excludes unnamed buckets');
+assert.equal(durationTable.children[1].children[0].children[0].textContent, 'orbit.search');
+assert.match(rows[0].children[0].title, /9.*22\.2%.*1.*3/, 'row title retains the secondary counts on compact cards');
 for (const [field, expected] of Object.entries({ tool: 'orbit.friction.list', failed: '0', total: '0', rate: '0.0%', unexpected: '0', denied: '1' })) {
   assert.equal(cell(rows[1], field), expected, `denial-only rendered ${field}`);
 }

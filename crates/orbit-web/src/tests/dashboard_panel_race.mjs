@@ -138,7 +138,7 @@ const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(re
 const placeheld = id => [...document.getElementById(id).children].some(child => child.dataset.key === 'aggregate-placeholder');
 
 function event(marker) {
-  return [{ id: marker, command: marker, status: 'success', timestamp: '2026-10-04T00:00:00Z', role: 'grok', tool_name: 'orbit.task.show', duration_ms: 1, exit_code: 0 }];
+  return [{ id: marker, command: 'tool', subcommand: 'run-mcp', target_id: marker, status: 'success', timestamp: '2026-10-04T00:00:00Z', role: 'grok', tool_name: 'orbit.task.show', duration_ms: 1, exit_code: 0 }];
 }
 function policy(marker) {
   return { total: 1, by_profile: [{ name: marker, count: 2 }], by_target: [], by_run: [], by_execution: [], by_agent: [], recent_denials: [], top_causes: [] };

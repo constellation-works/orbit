@@ -551,13 +551,17 @@ pub(super) async fn list_denials(Ws(runtime): Ws, Query(q): Query<DenialsQuery>)
 
     // One SQLite scan per denial event type plus a v2 loop scan: blocking
     // pool, not the worker serving the request (see `blocking`).
-    let rows = match super::blocking("denials listing", move || {
-        collect_denial_rows(
+    let (rows, decisions) = match super::blocking("denials listing", move || {
+        let rows = collect_denial_rows(
             &runtime,
             since,
             profile_filter.as_deref(),
             agent_filter.as_deref(),
-        )
+        )?;
+        // Match the KPI population and cutoff, independently of evidence filters
+        // and scan limits. Raw rows also retain duplicate and protocol evidence.
+        let decisions = runtime.audit_policy_denial_stats(since.as_ref())?;
+        Ok((rows, decisions))
     })
     .await
     {
@@ -565,7 +569,13 @@ pub(super) async fn list_denials(Ws(runtime): Ws, Query(q): Query<DenialsQuery>)
         Err(response) => return *response,
     };
 
-    Json(denials_payload(&rows, kind.as_deref(), since)).into_response()
+    let mut payload = denials_payload(&rows, kind.as_deref(), since);
+    payload["policy_decisions"] = json!({
+        "total": decisions.sql_denied + decisions.v2_denied,
+        "sql": decisions.sql_denied,
+        "v2": decisions.v2_denied,
+    });
+    Json(payload).into_response()
 }
 
 // Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
@@ -599,6 +609,7 @@ pub(super) fn denials_payload(
         "top_causes": top_causes,
         "recent_denials": recent_denials,
         "total": filtered.len(),
+        "evidence_scan_limit": SQLITE_DENIAL_SCAN_LIMIT,
         "kind": kind,
         "since": since.map(|s| s.to_rfc3339()),
     })

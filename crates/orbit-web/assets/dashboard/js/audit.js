@@ -80,13 +80,12 @@ const POLICY_TABLES = [
 
 const AUDIT_COLUMNS = [
   { key: "time", label: "time" },
-  { key: "role", label: "role" },
-  { key: "tool", label: "tool" },
-  { key: "command", label: "command" },
-  { key: "target", label: "target" },
   { key: "status", label: "status" },
-  { key: "exit", label: "exit", num: true },
+  { key: "role", label: "actor", title: "Recorded role: unverified = MCP caller without a trusted managed identity; unknown = unattributed CLI caller; agent names identify the recorded process; admin = operator; hook = hook process." },
+  { key: "command", label: "tool / command" },
+  { key: "target", label: "target" },
   { key: "duration", label: "duration", num: true },
+  { key: "exit", label: "exit", num: true },
 ];
 
 // Context injection helpers (mirror tasks.js pattern; ctx as last arg on public entry points)
@@ -421,7 +420,11 @@ function renderAuditSummary(data, ctx) {
       const table = el("table", { class: "summary-table" });
       const thead = el("thead");
       const tr = el("tr");
-      for (const c of cols) tr.appendChild(el("th", { class: c.num ? "num" : "", text: c.label, title: c.title }));
+      for (const c of cols) {
+        const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
+        th.dataset.column = c.key;
+        tr.appendChild(th);
+      }
       thead.appendChild(tr);
       table.appendChild(thead);
 
@@ -434,7 +437,13 @@ function renderAuditSummary(data, ctx) {
         }
         for (const c of cols) {
           const val = c.format ? c.format(item[c.key]) : item[c.key];
-          row.appendChild(el("td", { class: c.num ? "num" : "", text: val }));
+          const title = c.num ? String(val ?? "") : cols.map(col => {
+            const value = col.format ? col.format(item[col.key]) : item[col.key];
+            return `${col.title || col.label}: ${value ?? "-"}`;
+          }).join("; ");
+          const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
+          td.dataset.column = c.key;
+          row.appendChild(td);
         }
         tbody.appendChild(row);
       }
@@ -468,9 +477,9 @@ function renderAuditSummary(data, ctx) {
       renderTable(namedToolFailures, [
         { key: "tool", label: "tool" },
         { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true, title: "Successful + failed calls; denied calls excluded" },
+        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
         { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
-        { key: "unexpected", label: "unexpected", num: true, title: "Failed calls classified as unexpected" },
+        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
         { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
       ], filterByTool),
     ), [namedToolFailures, windowLabel]);
@@ -502,10 +511,10 @@ function renderAuditSummary(data, ctx) {
     const card = createCard(
       `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
-        { key: "label", label: "classification" },
-        { key: "incidents", label: "incidents", num: true },
-        { key: "raw_events", label: "raw events", num: true },
-        { key: "affected_runs", label: "affected runs", num: true },
+        { key: "label", label: "class", title: "Failure classification" },
+        { key: "incidents", label: "inc.", num: true, title: "Incidents" },
+        { key: "raw_events", label: "events", num: true, title: "Raw events" },
+        { key: "affected_runs", label: "runs", num: true, title: "Affected runs" },
       ]),
     );
     if (capped) {
@@ -544,8 +553,9 @@ function renderAuditSummary(data, ctx) {
   }
 
   if (data.duration_by_tool) {
+    const durations = data.duration_by_tool.filter(row => isNamedTool(row.tool));
     addCard("duration-by-tool", createCard("Top duration (avg)", renderTable(
-      data.duration_by_tool,
+      durations,
       [
         { key: "tool", label: "tool" },
         { key: "count", label: "count", num: true },
@@ -553,7 +563,7 @@ function renderAuditSummary(data, ctx) {
         { key: "p95", label: "p95", num: true, format: (v) => fmtDurationValue(ctx, v) }
       ],
       filterByTool
-    )), data.duration_by_tool);
+    )), durations);
   }
 
   if (data.denials_by_tool || data.denials_by_reason) {
@@ -591,8 +601,8 @@ function renderAuditSummary(data, ctx) {
         { key: "count", label: "events", num: true, title: "All audit events in the window" },
         { key: "mcp", label: "mcp", num: true, title: "Tool calls via MCP (subcommand = run-mcp)" },
         { key: "cli", label: "cli", num: true, title: "Tool calls via CLI (subcommand = run)" },
-        { key: "other", label: "other", num: true, title: "Other CLI subcommands (non-tool, e.g. show/list)" },
-        { key: "no_subcommand", label: "internal", num: true, title: "Internal/system events with no subcommand (e.g. lock reservations)" },
+        { key: "other", label: "other", num: true, secondary: true, title: "Other CLI subcommands (non-tool, e.g. show/list)" },
+        { key: "no_subcommand", label: "internal", num: true, secondary: true, title: "Internal/system events with no subcommand (e.g. lock reservations)" },
       ],
       (item) => {
         auditFilter.role = auditFilter.role === item.label ? null : item.label;
@@ -645,15 +655,40 @@ function renderPolicy(data, ctx) {
   if (!body) return;
   $("audit-count").textContent = `${data && data.total ? data.total : 0}`;
 
+  const sections = [];
+  if (data && data.policy_decisions) {
+    const decisions = data.policy_decisions;
+    const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
+    const window = effectiveAuditWindow() || "24h";
+    const scope = window === getWindow()
+      ? "counted by the top bar"
+      : `using the top bar's definition; the top bar uses ${getWindow()}`;
+    const note = el("div", { class: "policy-count-note" });
+    const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
+      ? ` (${data.total - decisions.total} additional evidence rows beyond the canonical decisions)`
+      : "";
+    note.appendChild(el("p", {
+      text: `${decisions.total} canonical policy decisions ${scope} in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions).`,
+    }));
+    note.appendChild(el("p", {
+      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the KPI; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
+    }));
+    note.appendChild(el("p", {
+      class: "muted",
+      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the KPI counts all decisions in its window.`,
+    }));
+    sections.push(note);
+  }
+
   if (!data || (data.total || 0) === 0) {
-    syncNodes(body, [el("div", { class: "empty-state" }, [
+    sections.push(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
       el("div", { class: "text", text: `No denials in the last ${effectiveAuditWindow() || "24h"}.` }),
-    ])]);
+    ]));
+    syncNodes(body, sections);
     return;
   }
 
-  const sections = [];
   const recent = buildRecentDenials(data.recent_denials || [], ctx);
   const causes = buildTopCauses(data.top_causes || [], ctx);
   if (recent) sections.push(recent);
@@ -967,7 +1002,7 @@ function renderAudit(events, ctx) {
     const thead = el("thead");
     const headRow = el("tr");
     for (const col of AUDIT_COLUMNS) {
-      headRow.appendChild(el("th", { class: col.num ? "num" : "", text: col.label }));
+      headRow.appendChild(el("th", { class: col.num ? "num" : "", text: col.label, title: col.title }));
     }
     thead.appendChild(headRow);
     table.appendChild(thead);
@@ -982,8 +1017,8 @@ function renderAudit(events, ctx) {
   for (const ev of events) {
     const exit = ev.exit_code;
     const exitClass = exit != null && exit !== 0 ? "num exit-fail" : "num";
-    const tool = ev.tool_name || "-";
-    const target = ev.target_id || ev.target_type || "-";
+    const targetValue = ev.target_id || ev.target_type || "";
+    const target = targetValue === ev.tool_name ? "" : targetValue;
     const cmd = ev.subcommand ? `${ev.command} ${ev.subcommand}` : ev.command;
     const tr = el("tr", { class: "audit-row", title: `event ${ev.id}` });
     tr.dataset.key = `audit-${ev.id}`;
@@ -992,15 +1027,14 @@ function renderAudit(events, ctx) {
     // the toggle just set.
     tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
     tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp) }));
-    tr.appendChild(el("td", { class: "c-role", text: ev.role || "-" }));
-    tr.appendChild(el("td", { class: "c-tool", text: tool }));
-    tr.appendChild(el("td", { class: "c-command", text: cmd }));
-    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
+    tr.appendChild(el("td", { class: "c-role", text: ev.role || "-" }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: cmd || "" }));
+    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
     makeToggleRow(tr, {
       expanded: expandedAuditIds.has(ev.id),

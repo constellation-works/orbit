@@ -458,7 +458,10 @@ fn compute_audit_summary_bundle(
     failures_vec.sort_by_key(|v| std::cmp::Reverse(v["count"].as_i64().unwrap_or(0)));
     failures_vec.truncate(8);
 
-    let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs.iter().collect();
+    let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs
+        .iter()
+        .filter(|tool| is_named_tool(&tool.tool_name))
+        .collect();
     by_avg.sort_by(|a, b| {
         b.avg_duration_ms
             .partial_cmp(&a.avg_duration_ms)
@@ -466,20 +469,10 @@ fn compute_audit_summary_bundle(
     });
     let mut duration_vec = Vec::with_capacity(8);
     for t in by_avg.iter().take(8) {
-        // `"unknown"` is the synthetic bucket for rows with NULL `tool_name`;
-        // a `tool_name = 'unknown'` query would miss them entirely, so we
-        // pull NULL-tool durations through a dedicated path.
-        let p95 = if t.tool_name == "unknown" {
-            runtime
-                .audit_event_durations_null_tool(&since)
-                .map(|d| orbit_core::application::audit_event::compute_p95(&d))
-                .unwrap_or(0)
-        } else {
-            runtime
-                .audit_event_stats(Some(since), Some(t.tool_name.clone()))
-                .map(|s| s.p95_duration_ms)
-                .unwrap_or(0)
-        };
+        let p95 = runtime
+            .audit_event_stats(Some(since), Some(t.tool_name.clone()))
+            .map(|s| s.p95_duration_ms)
+            .unwrap_or(0);
         duration_vec.push(json!({
             "tool": t.tool_name,
             "count": t.total,
