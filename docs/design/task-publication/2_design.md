@@ -207,14 +207,22 @@ projection is byte-identical to the branch tip creates no commit and pushes
 nothing; only `generation`, `published_at`, and `previous_publication` differ
 across such a re-run, and they are lineage bookkeeping rather than content.
 Before pushing, the owner writes a private pending record — publication id,
-workspace, branch, generation, and the commit id it is about to push — into the
-same Orbit-owned cache. That record is what phase 8's "reconcile by commit ID"
-reads on the next run: a branch tip equal to the pending commit that the owner
-never recorded is reconciled and reported without republishing, while any other
-unexpected tip is an authority conflict. Reconciliation keeps the pending record,
-because the owner records the reconciled commit only afterwards; the record is
-removed once a later run's last success names that commit, so a lost save can
-reconcile again instead of turning into an authority conflict.
+workspace, branch, generation, previous publication, and the commit id it is
+about to push — into `pending-publications/<commit>.yaml` in the same Orbit-owned
+cache. Commit-keyed records keep a losing concurrent attempt from overwriting
+the recovery evidence for a landed push. The legacy `pending-publication.yaml`
+is still read to recover pushes interrupted before this cache change.
+Phase 8's "reconcile by commit ID" reads these records on the next run: an exact
+branch-tip match, including generation and previous publication, is reconciled
+without republishing when the owner has not recorded it. Any other unexpected
+tip remains an authority conflict. Reconciliation keeps the records because
+the owner saves the reconciled outcome only afterwards. A later run whose
+last-success commit and generation match the remote tip removes records through
+that acknowledged generation, including losing attempts. Newer records survive.
+Observing a record's parent or an empty remote never deletes evidence: a push
+may still be in flight. Unacknowledged attempts accumulate until a subsequent
+success is durably recorded; deleting this cache during recovery loses that proof.
+Git transport runs without the workspace catalog lock throughout.
 
 Task bundles have per-bundle durability rather than one workspace-wide read
 transaction. A v1 publication is therefore a validated set of individually
