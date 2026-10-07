@@ -22,6 +22,7 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskUpdateParams;
 
 use super::admit::reviewer_identity;
+use super::baseline;
 use super::context::GateContext;
 use super::judgement::{
     Judgement, repair_author_label, review_fixes_section, verdict_comment, write_artifact,
@@ -104,6 +105,11 @@ pub(crate) fn review_gate_settle(
             }),
             None,
         ),
+        Ok(Settled::BaselineRed(certificate)) => (
+            AuditEventStatus::Success,
+            baseline::audit_outcome(&certificate.baseline_red),
+            None,
+        ),
         Err(error) => (
             AuditEventStatus::Failure,
             json!("refused"),
@@ -144,6 +150,13 @@ pub(crate) fn review_gate_settle(
                 certificate.findings.len()
             ),
         }),
+        // Typed `[baseline_red]`, so the failure handoff keeps the candidate
+        // and holds the task until the base passes [ORB-14434].
+        Ok(Settled::BaselineRed(certificate)) => Err(DispatchError::DeterministicActionRefused {
+            action: action.to_string(),
+            message: baseline::baseline_red_refusal(&certificate.baseline_red, &attempt_id)
+                .unwrap_or_default(),
+        }),
         Err(error) => Err(failed(error.to_string())),
     }
 }
@@ -152,6 +165,9 @@ enum Settled {
     Passed(Value),
     AwaitingEvidence(Box<orbit_types::workflow::ReviewEvidenceHold>),
     Blocked(Box<ReviewCertificate>),
+    /// Every failed required check fails the same way on the pinned base,
+    /// and nothing else keeps the review from passing.
+    BaselineRed(Box<ReviewCertificate>),
 }
 
 fn settle(
@@ -302,6 +318,16 @@ fn settle(
         &validation_scope,
         carry.carried(),
     )?;
+    // [ORB-14434] Check the reviewer's red-base claims on the final
+    // candidate before the verdict is reconciled: a refused claim settles
+    // the review incomplete.
+    let baseline_red = judgement.verify_baseline_claims(
+        runtime,
+        context,
+        &reviewed.base,
+        &context.base_ref(),
+        &validation_scope,
+    )?;
     judgement.reconcile_verdict(repair.as_ref(), &validation_scope);
     let now = Utc::now();
 
@@ -368,6 +394,7 @@ fn settle(
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),
         evidence_carried: judgement.evidence_carried.clone(),
+        baseline_red,
         issued_at: now,
     };
     if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
@@ -590,6 +617,9 @@ fn settled_outcome(
                 })?;
                 return Ok(Settled::AwaitingEvidence(Box::new(hold)));
             }
+        }
+        if !certificate.baseline_red.is_empty() {
+            return Ok(Settled::BaselineRed(Box::new(certificate)));
         }
         return Ok(Settled::Blocked(Box::new(certificate)));
     }

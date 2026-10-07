@@ -79,11 +79,11 @@ pub use review::{
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
     REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION, RecordGap, RetainedObligation,
     RetiredValidation, ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState,
-    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
-    ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReportHistory,
-    ReviewReportRevision, ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation,
-    ReviewVerdict, ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent,
-    ValidationOutcome, ValidationRole, record_gap, seconds_between,
+    ReviewBaselineClaim, ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding,
+    ReviewInvalidation, ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport,
+    ReviewReportHistory, ReviewReportRevision, ReviewReservation, ReviewResetDecision,
+    ReviewTiming, ReviewValidation, ReviewVerdict, ReviewerIdentity, ReviewerInvocation,
+    ReviewerInvocationEvent, ValidationOutcome, ValidationRole, record_gap, seconds_between,
 };
 pub use review_evidence::{
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceCarried,

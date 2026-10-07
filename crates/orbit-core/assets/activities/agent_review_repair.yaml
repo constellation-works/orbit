@@ -241,6 +241,26 @@ spec:
          the candidate changes; a failure inside them is the task's own and
          must be `required`. It cannot share its check with a required pass.
 
+       When a `required` check fails on the final candidate and the failures
+       lie outside the task's selectors and the paths the candidate changes,
+       rerun the same command on the manifest's `base.commit` (in a separate
+       detached worktree under `.orbit/tmp/`, never by rewriting this one) and
+       record what you saw as `baseline` on that failed `required` record:
+       `base_commit` (the manifest's `base.commit`), the `outcome` there, and
+       the `failures` both runs share (test names, or lint locations such as
+       `path:line:column`). List in `sources` the files those failures lie in.
+       Keep the record `required` and `failed`; never relabel it `diagnostic`
+       to clear it. Settlement reruns the check on the candidate and the base
+       itself, and only a check the host already runs (a manifest
+       `required_validation_commands` entry or a configured
+       `review.baseline_commands` entry, matched like `check`) can be
+       confirmed. When the base fails exactly as the candidate does and
+       nothing else is open, the candidate is kept and the task waits in the
+       backlog until the base passes, then is reviewed afresh. A candidate
+       that fails beyond the base still rejects; a claim the host cannot
+       reproduce settles `incomplete`. Record `baseline` with outcome
+       `passed` when the base passes: that failure is the candidate's.
+
        Give every `required` record a distinct, non-empty stable `id` (`V1`,
        `V2`, ...) the first time you file it. Reuse an id only for one
        `superseded` attempt and its required replacement. A record you once
@@ -270,8 +290,11 @@ spec:
        - `accept_with_fixes`: every finding is `repaired`, every required
          check passed on the fixed tree, and you changed files.
        - `reject`: findings remain open that you may not or could not fix
-         (including a non-release edit to `CHANGELOG.md`); set `escalation`
-         to the decision needed. The task blocks with both commits preserved.
+         (including a non-release edit to `CHANGELOG.md`), or a required
+         check failed; set `escalation` to the decision needed. The task
+         blocks with both commits preserved, unless every failed required
+         check carries a `baseline` claim settlement confirms and no finding
+         is open, when it is held for the red base instead.
        - `incomplete`: the review could not be completed (missing evidence,
          a denied required check, ambiguous intent, mismatch); set
          `escalation`. If the only remaining work is a named hosted CI job,
@@ -335,7 +358,14 @@ spec:
               "control":{"enum":["pre_fix","superseded_assertion","counterfactual"],
                          "description":"required for expected_failure"},
               "sources":{"type":"array","items":{"type":"string"},
-                         "description":"repository-relative paths the outcome is about; required for expected_failure and a failed diagnostic"},
+                         "description":"repository-relative paths the outcome is about; required for expected_failure, a failed diagnostic and a baseline claim"},
+              "baseline":{"type":"object","required":["base_commit","outcome"],
+                          "description":"on a failed required record only: the same command rerun on base.commit",
+                "properties":{
+                  "base_commit":{"type":"string","description":"the manifest's base.commit"},
+                  "outcome":{"enum":["passed","failed","denied","not_run"]},
+                  "failures":{"type":"array","items":{"type":"string"},
+                              "description":"failing tests or path:line:column locations seen on both the base and the candidate"}}},
               "note":{"type":"string","description":"required unless role is required"}}}},
           "retired_validation":{"type":"array","items":{"type":"object",
             "required":["id","reason"],

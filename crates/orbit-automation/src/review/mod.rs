@@ -24,8 +24,8 @@ mod validation;
 mod tests;
 
 pub use validation::{
-    ValidationContext, ValidationDefect, validation_evidence, validation_limitations,
-    validation_role_counts,
+    ValidationContext, ValidationDefect, in_scope, same_host_command, validation_evidence,
+    validation_limitations, validation_role_counts,
 };
 
 /// Contract label folded into every task-meaning digest.

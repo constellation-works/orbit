@@ -1919,6 +1919,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
                 check: None,
                 control: None,
                 sources: vec![],
+                baseline: None,
             })
             .collect(),
         required_validation_commands: Some(vec!["build".into(), "test".into()]),
@@ -1939,6 +1940,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         validation_scope: vec![],
         selectors_widened: vec![],
         evidence_carried: None,
+        baseline_red: Vec::new(),
         issued_at: Utc::now(),
     }
 }

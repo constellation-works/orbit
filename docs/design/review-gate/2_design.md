@@ -380,6 +380,28 @@ failed and are outside what it asserts. A denied required check keeps its own `v
 reason: the runner refused, which is neither a defect in the candidate nor
 evidence about it.
 
+A failed required check whose failures lie outside the candidate's scope may
+also be the pinned base's own: the integration branch has no merge gates
+[ORB-14434]. The reviewer then attaches a `baseline` claim to the failed
+`required` record (the `base_commit` it reran the check on, which must be the
+manifest's `base.commit`, the `outcome` there and the shared `failures`), with
+`sources` outside the scope. Settlement never runs the reviewer's command
+text on the host. It reruns a matching `workflow.required_validation_commands`
+or `review.baseline_commands` entry on the final candidate and, through the
+same per-base cache delivery validation uses, on the base. It believes the
+claim only when the exit status and timeout outcome match, every claimed
+failure appears in the base output, and the candidate's failed tests and
+located errors are a subset of the base's. When every failed required check
+is confirmed, no finding is open, no external evidence is pending, and the
+records are consistent once those checks count as passed, the certificate
+records the holds in `baseline_red`. The step then fails typed
+`[baseline_red]`, so the failure handoff keeps the candidate and holds the
+task under `baseline_red_hold` until the base passes. The certificate's
+verdict stays what the reviewer reported and is never coverage. A candidate
+that adds failures keeps its verdict (`baseline_exceeded`), and a claim the
+host contradicts or cannot check settles `incomplete`
+(`baseline_claim_refused`). Both block as before.
+
 The contract version stays 1: a record carrying no role decides exactly as it
 did before, so older role-less evidence is not reinterpreted. A superseded
 attempt requires a required pass that names the same check, in either report
@@ -746,5 +768,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
 - [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
+- [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

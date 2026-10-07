@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194"]
-last_validated: 2026-10-06
+last_validated: 2026-10-07
 ---
 
 # Operate the Before-PR Review Gate
@@ -39,6 +39,7 @@ merge request; waiting never extends the review certificate to another head.
 | `accept` | the implementation commit(s) only | the PR opens on that head |
 | `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` (or `incomplete`) | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
+| Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
 | Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished; a claimed leaf also pushes it to `orbit-evidence/<branch>` on `origin` | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
 
 The implementation commit is never amended. A failed revalidation of the
@@ -122,6 +123,25 @@ The full evidence is in the task artifacts `review-manifest.json`,
 ```bash
 orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}'
 ```
+
+A required check can fail on the candidate only because the base it was
+pinned to already fails it. The reviewer then records a `baseline` claim on
+that failed record: the base commit, the outcome there, and the failures both
+share, with `sources` outside the candidate's scope. Settlement reruns the
+check on the host, on the final candidate and on the base. It shares the base
+result cache with required validation, and the runs land in the
+`review-baseline.json` task artifact. Only a `workflow.required_validation_commands`
+or `review.baseline_commands` entry is rerun, as configured, never the
+reviewer's own command text. A claim holds the task only when the base fails
+with the same exit status, every claimed failure appears in the base output,
+and the candidate adds no failing test or lint location. A candidate that
+fails beyond the base keeps its verdict (`reject`, escalated
+`baseline_exceeded`). A claim the host contradicts or cannot check settles
+`incomplete` with a `baseline_claim_refused` escalation. The certificate's
+`baseline_red` names the holds. When the base ref moves to a commit where the
+command passes, admission lifts the hold. The next delivery resumes the
+preserved candidate (`resumed_validated`) without the implementer and admits
+a fresh review. A claimed leaf's resume runs the implementer again.
 
 ## 3. Decide a blocked review
 

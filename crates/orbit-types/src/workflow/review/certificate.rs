@@ -136,6 +136,12 @@ pub struct ReviewCertificate {
     /// unchanged onto a new base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_carried: Option<super::super::ReviewEvidenceCarried>,
+    /// [ORB-14434] Required checks the host confirmed fail on the pinned
+    /// base exactly as on the final candidate. Set only when they were all
+    /// that kept the verdict from passing: delivery then holds the task in
+    /// the backlog until the base passes, instead of blocking it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_red: Vec<super::super::BaselineRedHold>,
     pub issued_at: DateTime<Utc>,
 }
 

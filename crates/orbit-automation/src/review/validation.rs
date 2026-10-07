@@ -507,7 +507,7 @@ fn sources(record: &ReviewValidation) -> Vec<&str> {
 
 /// Whether `source` overlaps any scope selector. A bare path reads as the
 /// `file:` selector of that path.
-fn in_scope(source: &str, scope: &[String]) -> bool {
+pub fn in_scope(source: &str, scope: &[String]) -> bool {
     let source = if ["file:", "dir:", "symbol:"]
         .iter()
         .any(|kind| source.starts_with(kind))
@@ -586,7 +586,7 @@ fn check_identity(record: &ReviewValidation) -> Option<&str> {
 /// reviewer may also set `check` to the host command string when the run
 /// is wrapped in any other way (`env`, a shell prefix); that identity is
 /// the host command.
-fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool {
+pub fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool {
     let same_command = matches!(
         (
             normalized_command(record),

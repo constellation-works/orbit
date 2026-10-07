@@ -230,6 +230,27 @@ pub struct ReviewValidation {
     /// candidate's scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
+    /// [ORB-14434] On a failed `required` record: the reviewer's claim that
+    /// the pinned base fails the check the same way, so the candidate did not
+    /// cause it. `sources` then names where the failures lie, every one
+    /// outside the candidate's scope. Settlement reruns the check on the base
+    /// before it believes the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<ReviewBaselineClaim>,
+}
+
+/// What a reviewer observed when it reran a failed required check on the
+/// manifest's `base.commit` [ORB-14434].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewBaselineClaim {
+    /// The base commit the check was rerun on: the manifest's `base.commit`.
+    pub base_commit: String,
+    /// The check's outcome on that base.
+    pub outcome: ValidationOutcome,
+    /// The failing identities seen on both the base and the candidate: test
+    /// names, or lint locations such as `path:line:column`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
 }
 
 /// A required-check record an earlier revision of an attempt's report made,

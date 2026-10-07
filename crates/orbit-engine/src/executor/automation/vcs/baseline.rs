@@ -515,3 +515,227 @@ fn fetch_due(repo: &Path, branch: &str) -> bool {
     last.insert(key, now);
     true
 }
+
+/// What rerunning a reviewer's failed required check showed about its
+/// claim that the pinned base fails it the same way [ORB-14434].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseFailureVerdict {
+    /// The base fails exactly as the candidate: same exit status, same
+    /// timeout outcome, and no failure the base does not also name. Carries
+    /// the failures both name.
+    Reproduced { failures: Vec<String> },
+    /// The base fails too, but the candidate names failures it does not:
+    /// those still belong to the candidate.
+    CandidateAdds { failures: Vec<String> },
+    /// The host's runs contradict the claim, and how.
+    Contradicted(String),
+    /// The host could not judge the claim, and why.
+    Inconclusive(String),
+}
+
+/// A base-failure claim as the host checked it: the verdict and the logs of
+/// both runs, for the review's evidence.
+#[derive(Debug, Clone)]
+pub struct BaseFailureCheck {
+    pub command: String,
+    pub base_sha: String,
+    pub verdict: BaseFailureVerdict,
+    /// The candidate run: exit status, timeout and captured output.
+    pub candidate_log: Value,
+    /// The base run as [`BaselineCheck::log`] records it.
+    pub base_log: Value,
+}
+
+/// Check a reviewer's claim that `command` fails on `base_sha` exactly as on
+/// the candidate checked out in `workspace_path` [ORB-14434].
+///
+/// Settlement never takes the claim on trust. The command runs again on the
+/// candidate, then on the base through [`compare_with_base`], whose
+/// `(base, command)` result cache is the same one delivery validation fills,
+/// so a gate-step `baseline_red` run of the same command on the same base is
+/// reused rather than repeated. Beyond the exit status and timeout outcome
+/// [`BaselineCheck::reproduces`] compares, the failures each output names
+/// ([`failure_identities`]) must not grow on the candidate, and every failure
+/// the reviewer named must appear in the base's output.
+///
+/// Only call this with a command the host itself trusts: it runs on the host,
+/// outside any agent sandbox.
+pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    command: &str,
+    claimed_failures: &[String],
+    run_id: &str,
+) -> Result<BaseFailureCheck, OrbitError> {
+    let run = run_validation_command(host, workspace_path, command)?;
+    let candidate_log = json!({
+        "schema_version": 1,
+        "role": "candidate",
+        "run_id": run_id,
+        "command": run.command,
+        "exit_code": run.exit_code,
+        "timed_out": run.timed_out,
+        "passed": run.passed,
+        "network_retries": run.network_retries,
+        "output": run.output,
+        "validation_env": run.environment_record(),
+    });
+    let checked = |verdict: BaseFailureVerdict, base_log: Value| BaseFailureCheck {
+        command: run.command.clone(),
+        base_sha: base_sha.to_string(),
+        verdict,
+        candidate_log: candidate_log.clone(),
+        base_log,
+    };
+    if run.passed {
+        return Ok(checked(
+            BaseFailureVerdict::Contradicted(format!(
+                "`{}` passes on the final candidate when the host runs it",
+                run.command
+            )),
+            Value::Null,
+        ));
+    }
+    if run.missing_tool.is_some() || run.network_evidence.is_some() {
+        return Ok(checked(
+            BaseFailureVerdict::Inconclusive(format!(
+                "the host's run of `{}` on the candidate {}",
+                run.command,
+                if run.missing_tool.is_some() {
+                    "lacked a tool in the validation environment"
+                } else {
+                    "could not reach the network"
+                }
+            )),
+            Value::Null,
+        ));
+    }
+    let check = compare_with_base(host, workspace_path, base_sha, command);
+    let base_log = check.log(run_id);
+    let base = match &check.result {
+        Err(reason) => {
+            return Ok(checked(
+                BaseFailureVerdict::Inconclusive(format!(
+                    "base {base_sha} could not be judged: {reason}"
+                )),
+                base_log,
+            ));
+        }
+        Ok(base) if base.passed => {
+            return Ok(checked(
+                BaseFailureVerdict::Contradicted(format!(
+                    "base {base_sha} passes `{}`",
+                    run.command
+                )),
+                base_log,
+            ));
+        }
+        Ok(base) => base,
+    };
+    if !check.reproduces(&run) {
+        return Ok(checked(
+            BaseFailureVerdict::Contradicted(format!(
+                "base {base_sha} fails `{}` differently: exit {}{} there, exit {}{} on the \
+                 candidate",
+                run.command,
+                base.exit_code,
+                if base.timed_out { " (timed out)" } else { "" },
+                run.exit_code,
+                if run.timed_out { " (timed out)" } else { "" },
+            )),
+            base_log,
+        ));
+    }
+    let base_output = normalize_output(&base.output);
+    if let Some(missing) = claimed_failures
+        .iter()
+        .map(|failure| normalize_output(failure))
+        .find(|failure| !failure.is_empty() && !base_output.contains(failure.as_str()))
+    {
+        return Ok(checked(
+            BaseFailureVerdict::Contradicted(format!(
+                "the claimed failure `{missing}` is not in base {base_sha}'s output"
+            )),
+            base_log,
+        ));
+    }
+    let base_root = cache_paths(workspace_path, base_sha, command)
+        .map(|paths| paths.worktree)
+        .unwrap_or_default();
+    let on_base = failure_identities(&base.output, &base_root);
+    let on_candidate = failure_identities(&run.output, workspace_path);
+    let added = on_candidate
+        .difference(&on_base)
+        .cloned()
+        .collect::<Vec<_>>();
+    let verdict = if added.is_empty() {
+        BaseFailureVerdict::Reproduced {
+            failures: on_candidate.into_iter().collect(),
+        }
+    } else {
+        BaseFailureVerdict::CandidateAdds { failures: added }
+    };
+    Ok(checked(verdict, base_log))
+}
+
+/// Whitespace runs collapsed and color codes dropped, so two captures of one
+/// failure compare equal.
+fn normalize_output(text: &str) -> String {
+    static ANSI: OnceLock<Option<Regex>> = OnceLock::new();
+    let text = match ANSI
+        .get_or_init(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").ok())
+        .as_ref()
+    {
+        Some(ansi) => ansi.replace_all(text, ""),
+        None => std::borrow::Cow::Borrowed(text),
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The failures a check's output names [ORB-14434]: each failed test
+/// (`cargo test`'s `test <name> ... FAILED`, nextest's `FAIL [..] <name>`)
+/// and each compiler or lint error at its location (`<path>:<line>:<col>`
+/// with its header line). Paths under `root`, where the run happened, are
+/// made relative so a base worktree and the candidate compare equal.
+///
+/// Identities come from the captured text, which keeps a head and a tail of
+/// each stream; anything a long output drops is not compared.
+pub(super) fn failure_identities(output: &str, root: &Path) -> std::collections::BTreeSet<String> {
+    static PATTERNS: OnceLock<Option<[Regex; 4]>> = OnceLock::new();
+    let Some([libtest, nextest, header, location]) = PATTERNS
+        .get_or_init(|| {
+            Some([
+                Regex::new(r"^test (\S+) \.\.\. FAILED$").ok()?,
+                Regex::new(
+                    r"^(?:FAIL|TIMEOUT|SIGSEGV|SIGABRT|SIGKILL|SIGBUS|LEAK-FAIL)\s*\[[^\]]*\]\s*(?:\(\s*\d+/\d+\)\s*)?(.+)$",
+                )
+                .ok()?,
+                Regex::new(r"^(error(?:\[\w+\])?: .+)$").ok()?,
+                Regex::new(r"^--> (\S+:\d+:\d+)$").ok()?,
+            ])
+        })
+        .as_ref()
+    else {
+        return Default::default();
+    };
+    let root = format!("{}/", root.display());
+    let mut identities = std::collections::BTreeSet::new();
+    let mut last_header: Option<String> = None;
+    for line in output.lines() {
+        let line = normalize_output(line);
+        if let Some(found) = libtest.captures(&line) {
+            identities.insert(format!("test {}", &found[1]));
+        } else if let Some(found) = nextest.captures(&line) {
+            identities.insert(format!("test {}", found[1].trim()));
+        } else if let Some(found) = header.captures(&line) {
+            last_header = Some(found[1].to_string());
+        } else if let Some(found) = location.captures(&line)
+            && let Some(header) = last_header.take()
+        {
+            let at = found[1].strip_prefix(root.as_str()).unwrap_or(&found[1]);
+            identities.insert(format!("{at}: {header}"));
+        }
+    }
+    identities
+}

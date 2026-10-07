@@ -49,6 +49,9 @@ pub(super) struct Judgement {
     /// [ORB-14450] Set when a requirement was satisfied by evidence on an
     /// earlier tree whose patch the final candidate carries unchanged.
     pub(super) evidence_carried: Option<orbit_types::workflow::ReviewEvidenceCarried>,
+    /// [ORB-14434] Set once the host downgraded the review: a review the
+    /// host found incomplete is never held for a red base.
+    pub(super) host_refused: bool,
 }
 
 impl Judgement {
@@ -80,6 +83,7 @@ impl Judgement {
             task_meaning_digest: task_meaning_digest.clone(),
             selectors_widened: Vec::new(),
             evidence_carried: None,
+            host_refused: true,
         };
         let mut reports = Vec::new();
         let mut revisions = Vec::new();
@@ -151,6 +155,7 @@ impl Judgement {
             task_meaning_digest,
             selectors_widened: Vec::new(),
             evidence_carried: None,
+            host_refused: false,
         })
     }
 
@@ -459,14 +464,15 @@ impl Judgement {
         }
     }
 
-    fn downgrade(&mut self, reason: &str) {
+    pub(super) fn downgrade(&mut self, reason: &str) {
+        self.host_refused = true;
         self.verdict = ReviewVerdict::Incomplete;
         self.external_evidence.clear();
         self.validation_complete = false;
         self.escalate(reason);
     }
 
-    fn escalate(&mut self, reason: &str) {
+    pub(super) fn escalate(&mut self, reason: &str) {
         self.escalation = Some(match self.escalation.take() {
             Some(existing) if !existing.is_empty() => format!("{existing}; {reason}"),
             _ => reason.to_string(),
@@ -736,13 +742,19 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
-        verdict_consequence(certificate.verdict),
+        verdict_consequence(certificate),
     )
 }
 
 /// What the verdict means for delivery, in one paragraph.
-fn verdict_consequence(verdict: ReviewVerdict) -> &'static str {
-    match verdict {
+fn verdict_consequence(certificate: &ReviewCertificate) -> &'static str {
+    if !certificate.baseline_red.is_empty() {
+        return "Delivery waits: every failed required check fails the same way on the pinned \
+                base, so the candidate did not cause it. No PR is opened; the candidate is kept \
+                and the task is held in the backlog until the base passes, when a fresh review \
+                judges it.";
+    }
+    match certificate.verdict {
         ReviewVerdict::Accept => {
             "Accepted as implemented; the PR carries the implementation commit(s) only. This \
              verdict is review evidence, not task approval or merge permission."

@@ -18,6 +18,7 @@ fn record(
         check: None,
         control: None,
         sources: Vec::new(),
+        baseline: None,
     }
 }
 

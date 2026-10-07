@@ -263,8 +263,8 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
     ));
     let body = format!(
         "## Red base\n\nRequired validation `{}` fails on base `{}` exactly as it fails on this \
-         candidate, so the candidate did not cause it. No repair ran and no review or rework budget \
-         was spent; {publication}.\n\n- Run: `{run_id}`\n- Failed step: \
+         candidate, so the candidate did not cause it. No repair ran and no rework budget was \
+         spent; {publication}.\n\n- Run: `{run_id}`\n- Failed step: \
          `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
          The task is back in the backlog and admission skips it while {base_ref} fails \
          the command. Once it passes on a new base tip, the next delivery resumes this candidate and \

@@ -31,6 +31,11 @@ impl Fixture {
     }
 
     pub(super) fn new_with_required_commands(required: &[&str]) -> Self {
+        Self::new_with_config(required, "")
+    }
+
+    /// The fixture with `review` appended to its `[review]` table.
+    pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -45,7 +50,7 @@ impl Fixture {
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n{review}"
             ),
         )
         .unwrap();

@@ -12,6 +12,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
 
+pub use super::baseline::{BaseFailureCheck, BaseFailureVerdict, verify_base_failure};
 use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };

@@ -186,6 +186,7 @@ impl ReviewedLeaf {
                 check: None,
                 control: None,
                 sources: Vec::new(),
+                baseline: None,
             }],
             retired_validation: Vec::new(),
             escalation: (verdict == ReviewVerdict::Reject)
@@ -240,6 +241,7 @@ impl ReviewedLeaf {
                 check: None,
                 control: None,
                 sources: Vec::new(),
+                baseline: None,
             })
             .collect(),
             retired_validation: Vec::new(),

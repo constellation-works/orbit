@@ -18,8 +18,14 @@ spec:
     records, and any failed out-of-scope diagnostics the review does not cover.
     A verdict needing only named external evidence ends the run as `held`,
     preserves `review_awaiting_evidence` on the task, and bypasses recovery and
-    the failure handoff. Other `reject` and `incomplete` verdicts fail the step
-    so the failure handoff preserves the candidate without publishing a PR.
+    the failure handoff. A failed required check the reviewer claims the
+    pinned base shares is rerun on the candidate and the base; when every such
+    claim reproduces and nothing else is open, the step fails typed
+    `[baseline_red]` so the failure handoff keeps the candidate and holds the
+    task in the backlog until the base passes. A claim the host contradicts
+    settles `incomplete`. Other `reject` and `incomplete` verdicts fail the
+    step so the failure handoff preserves the candidate without publishing a
+    PR.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path, admission]
