@@ -84,6 +84,18 @@ const inlineCodePlugin = defineHastPlugin({
         if (firstTh && /^(options?|flags?)$/i.test(ctx.textContent(firstTh).trim())) {
           addClasses(node, ctx, 'sl-table-options', 'orbit-table-options');
         }
+
+        const headerRow = node.children
+          ?.find((child) => child.tagName === 'thead')
+          ?.children?.find((child) => child.tagName === 'tr');
+        const headers = headerRow?.children?.filter((child) => child.tagName === 'th') || [];
+        if (
+          headers.length === 2 &&
+          ctx.textContent(headers[0]).trim() === 'Key' &&
+          ctx.textContent(headers[1]).trim() === 'Type, default and purpose'
+        ) {
+          addClasses(node, ctx, 'orbit-config-keys');
+        }
       }
     },
   },

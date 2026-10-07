@@ -55,15 +55,18 @@ the owner on this machine, as in
 
 ```bash
 orbit host add <owner-ssh-target>
-orbit host list   # the owner is reachable, with this machine's version and protocol
+# Confirm that the owner is reachable and reports its version and protocol.
+orbit host list
 ```
 
 Check that the two machines match. On each one:
 
 ```bash
 orbit --version
-orbit config get review.before_pr   # the owner's value decides; with it on,
-orbit config get operation.review_crew   # the replica must be able to run this crew
+# The owner's value decides. With it on, the replica must
+# be able to run this crew.
+orbit config get review.before_pr
+orbit config get operation.review_crew
 orbit doctor
 ```
 
@@ -76,8 +79,11 @@ Replace `<replica-version>` with the replica's `orbit --version` value and
 set `caller_before_pr` to its `review.before_pr` value:
 
 ```bash
-DRAIN_SCHEMA=$(ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{}' |
-  node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).protocol_schema')
+DRAIN_SCHEMA=$(
+  ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{}' |
+    node -pe 'JSON.parse(require("fs").readFileSync(0))
+      .protocol_schema'
+)
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input "{
   \"caller_version\": \"<replica-version>\",
   \"caller_schema\": $DRAIN_SCHEMA,

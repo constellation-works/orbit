@@ -37,7 +37,8 @@ anything.
 - **CLI:**
 
   ```bash
-  orbit run task-pilot --wait                              # tasks that need it
+  # Tasks that need a pilot.
+  orbit run task-pilot --wait
   orbit run task-pilot "$TASK_ID" "$OTHER_TASK_ID" --wait  # exact tasks
   ```
 
@@ -137,9 +138,11 @@ Common reasons a backlog task waits:
   mistaken finding, append an explicit human decision from your CLI:
 
   ```bash
-  orbit task update "$TASK_ID" --comment 'task-pilot-admission: approve-anyway'
+  orbit task update "$TASK_ID" \
+    --comment 'task-pilot-admission: approve-anyway'
   # Or clear a mistaken finding:
-  orbit task update "$TASK_ID" --comment 'task-pilot-admission: clear'
+  orbit task update "$TASK_ID" \
+    --comment 'task-pilot-admission: clear'
   ```
 
   The first line must match exactly; put any explanation on later lines.
@@ -208,7 +211,8 @@ CLI; the dashboard's **Start** has no crew option.
 
 ```bash
 orbit run auto --for 4h --allow-crew opus,sonnet
-orbit run readiness --allow-crew opus,sonnet    # preview what it would skip
+# Preview what readiness would skip.
+orbit run readiness --allow-crew opus,sonnet
 ```
 
 - **For this run only.** Without it, the drain runs every crew. No
@@ -233,8 +237,10 @@ To change how many tasks a live drain keeps in flight, retune it rather than
 cancel it. Ask your agent or use the CLI; the dashboard has no retune control.
 
 ```bash
-orbit run show "$AUTO_RUN_ID"                  # current ceiling and who last set it
+# Show the current ceiling and who last set it.
+orbit run show "$AUTO_RUN_ID"
 orbit run concurrency "$AUTO_RUN_ID" --set 7
+# Reduce the ceiling after a provider rate limit.
 orbit run concurrency "$AUTO_RUN_ID" --set 3 --reason 'provider rate limited'
 ```
 
@@ -329,9 +335,12 @@ Then check the workspace and reclaim worktrees left by settled tasks:
 
 ```bash
 orbit doctor
-orbit gc worktrees                                     # report what it would reap
-orbit gc worktrees --confirm                           # remove them
-orbit gc worktrees --target-only --confirm             # free build output, keep checkouts
+# Report what it would reap.
+orbit gc worktrees
+# Remove the settled worktrees.
+orbit gc worktrees --confirm
+# Free build output while keeping checkouts.
+orbit gc worktrees --target-only --confirm
 ```
 
 `orbit gc worktrees` collects only worktrees whose task is `done`, `rejected`,
