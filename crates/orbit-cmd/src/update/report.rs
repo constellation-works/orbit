@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::fs::generation::{ParticipantRecord, ParticipantRole};
 use serde::Serialize;
 
 use super::converge::{ConvergenceStep, run_reporting_step, run_step};
@@ -77,9 +79,49 @@ pub struct UpdateReport {
     /// Provenance of an operator-built candidate; absent for a release.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_candidate: Option<LocalCandidateEvidence>,
+    /// Live processes admitted beside the update because they hand over to
+    /// the candidate once it is renamed over the executable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub handover: Vec<HandoverProcess>,
     /// What the operator must do to finish, when the run did not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
+}
+
+/// A live process that hands over to the installed candidate.
+#[derive(Debug, Clone, Serialize)]
+pub struct HandoverProcess {
+    /// Its process id, which the handover keeps.
+    pub pid: u32,
+    /// The role it registered.
+    pub role: ParticipantRole,
+    /// When it joined the authority.
+    pub started_at: DateTime<Utc>,
+    /// The resume capability it hands over with.
+    pub resume: Option<String>,
+}
+
+impl From<&ParticipantRecord> for HandoverProcess {
+    fn from(record: &ParticipantRecord) -> Self {
+        Self {
+            pid: record.pid,
+            role: record.role,
+            started_at: record.started_at,
+            resume: record.handover.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for HandoverProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "pid {} ({}, started {})",
+            self.pid,
+            self.role,
+            self.started_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+        )
+    }
 }
 
 impl UpdateReport {

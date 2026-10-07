@@ -665,10 +665,15 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
     assert_eq!(handover[0].handover.as_deref(), Some(RESUME_MCP_STDIO));
     drop(admitted);
 
-    // Without a candidate nothing will hand the session over.
+    // Without a candidate nothing will hand the session over; the remedy
+    // names the updates that rename one in, not an observation.
     let plain = refusal(GenerationUpdate::acquire(root));
     assert!(plain.contains(&format!("pid {pid} (mcp serve")), "{plain}");
-    assert!(plain.contains("--candidate"), "{plain}");
+    assert!(
+        plain.contains("`orbit update --local-candidate`"),
+        "{plain}"
+    );
+    assert!(!plain.contains("--preflight"), "{plain}");
 
     // A candidate that cannot resume the session cannot take it over either.
     let unable = refusal(GenerationUpdate::acquire_for_candidate(
@@ -685,6 +690,52 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
     );
     drop(server);
     drop(GenerationUpdate::acquire(root).expect("nothing is live"));
+}
+
+#[test]
+fn a_candidate_admission_pins_once_the_server_has_handed_over() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let server = holding_as(&root, ParticipantRole::McpServe, Some(RESUME_MCP_STDIO));
+    let candidate = HandoverCandidate::reporting([RESUME_MCP_STDIO]);
+    let admitted = GenerationUpdate::acquire_for_candidate(&root, &candidate)
+        .expect("the server hands over to this candidate after the rename");
+    assert_eq!(admitted.handover().len(), 1);
+
+    // The exec that hands over releases the server's generation lock.
+    let hold = Duration::from_millis(1500);
+    let began = Instant::now();
+    let handing_over = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        drop(server);
+    });
+    let pinned = admitted
+        .pin(&digest(11), Some(&identity(11, 0)))
+        .expect("pins once the server has handed over");
+    assert!(
+        began.elapsed() >= hold,
+        "the candidate was recorded while the server still held the replaced generation"
+    );
+    handing_over.join().expect("server thread");
+    assert_envelope(&root, store(11, 11, 0, Some(11)), Some(1));
+
+    // The resumed image joins the generation the update pinned.
+    let resumed_identity = identity(11, 0);
+    let resumed_digest = digest(11);
+    let resumed = GenerationGuard::join(
+        &root,
+        &Participant {
+            digest: &resumed_digest,
+            identity: &resumed_identity,
+            role: ParticipantRole::McpServe,
+            access: Access::Write,
+            handover: Some(RESUME_MCP_STDIO),
+        },
+        Duration::from_secs(10),
+        || Ok(11),
+    )
+    .expect("the resumed server joins the pinned candidate");
+    drop((resumed, pinned));
 }
 
 #[test]

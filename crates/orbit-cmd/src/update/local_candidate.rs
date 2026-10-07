@@ -16,12 +16,15 @@
 //! the operator expects on the command line. Nothing here proves how a binary
 //! was built, and a local candidate is never treated as a signed release.
 //!
-//! Ordering is the release pipeline's: admission on every authority and the
-//! install-directory lock are taken first and held while the candidate is
-//! read, verified, staged, probed and swapped in, then the candidate is pinned
-//! through convergence. The candidate's bytes are read once; everything after
-//! that runs and installs the staged copy, so replacing the candidate's
-//! pathname mid-update changes neither what runs nor what is installed.
+//! Ordering is the release pipeline's: the install-directory lock is taken
+//! first and held while the candidate is read, verified, staged and probed.
+//! Admission on every authority follows, once the staged copy has reported
+//! the resume capabilities it implements, so a live process that hands over
+//! to it is admitted beside rather than refused. Then the candidate is swapped
+//! in and, once those processes have handed over, pinned through
+//! convergence. The candidate's bytes are read once; everything after that
+//! runs and installs the staged copy, so replacing the candidate's pathname
+//! mid-update changes neither what runs nor what is installed.
 
 use std::fs::File;
 use std::io::Read;
@@ -32,7 +35,9 @@ use orbit_common::fs::generation::executable_generation;
 use orbit_common::security::release::normalize_sha256;
 use serde::{Deserialize, Serialize};
 
-use super::admission::{acquire_admissions, pin_candidate};
+use super::admission::{
+    acquire_admissions, acquire_candidate_admissions, handover_of, pin_candidate,
+};
 use super::channel::InstallChannel;
 use super::converge::{probe_version, require_admission_contract};
 use super::environment::UpdateEnvironment;
@@ -435,10 +440,9 @@ pub fn run_local_candidate_update(
 ) -> Result<UpdateReport, OrbitError> {
     let expected_commit = normalize_source_commit(&request.source_commit)?;
     let target = environment.executable.as_path();
-    // Refuse an unowned target before admission, which creates lock files.
+    // Refuse an unowned target before the update lock, which creates a file.
     inspect_install_target(environment)?;
 
-    let admissions = acquire_admissions(&environment.admission_roots)?;
     let install_dir = target.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!("'{}' has no parent directory", target.display()))
     })?;
@@ -478,14 +482,16 @@ pub fn run_local_candidate_update(
 
     if installed_before == candidate.sha256 {
         // The accepted bytes are already installed: the resume of a run whose
-        // convergence did not finish, or a replay. Converge, never re-swap.
+        // convergence did not finish, or a replay. Converge, never re-swap;
+        // nothing is renamed, so nothing live can hand over to it.
         drop(staged);
-        let compatibility = require_admission_contract(target)?;
+        let contract = require_admission_contract(target)?;
+        let admissions = acquire_admissions(&environment.admission_roots)?;
         let _generations = pin_candidate(
             &environment.admission_roots,
             admissions,
             &candidate.sha256,
-            compatibility.as_ref(),
+            contract.identity.as_ref(),
         )?;
         set_installed_after(&mut report, installed_before);
         return Ok(finish(
@@ -496,7 +502,7 @@ pub fn run_local_candidate_update(
         ));
     }
 
-    let compatibility = require_admission_contract(staged.path())?;
+    let contract = require_admission_contract(staged.path())?;
     let reported = probe_version(staged.path())
         .and_then(|reported| ReleaseVersion::parse(&reported))
         .map_err(|error| {
@@ -516,6 +522,12 @@ pub fn run_local_candidate_update(
         }
         assert_downgrade_is_compatible(environment, staged.path(), &current, &reported)?;
     }
+
+    // What the staged copy resumes decides which live processes may stay:
+    // those that hand over to it after the rename.
+    let admissions =
+        acquire_candidate_admissions(&environment.admission_roots, &contract.handover)?;
+    report.handover = handover_of(&admissions).iter().map(Into::into).collect();
 
     // The swap installs the staged file, so hold it — and the target it
     // replaces — to what was accepted, immediately before the rename.
@@ -567,7 +579,7 @@ pub fn run_local_candidate_update(
         &environment.admission_roots,
         admissions,
         &candidate.sha256,
-        compatibility.as_ref(),
+        contract.identity.as_ref(),
     ) {
         Ok(guards) => guards,
         Err(error) => {
@@ -643,6 +655,7 @@ fn local_report(
             installed_sha256_after: None,
             retry_command: retry_command(environment, request, expected_commit),
         }),
+        handover: Vec::new(),
         recovery: None,
     }
 }

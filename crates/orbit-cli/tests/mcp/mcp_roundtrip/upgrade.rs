@@ -228,19 +228,19 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
     assert_eq!(added["title"], "Written after the old client quiesced");
 }
 
-/// An idle stdio MCP server refuses a plain preflight and `orbit update`
-/// untouched, but admits an installer that renames a candidate it can hand
-/// over to: that preflight names it, and after the rename it re-execs into the
-/// candidate and keeps serving the same session.
+/// An idle stdio MCP server refuses a plain preflight, which renames nothing,
+/// but not an update that installs a candidate it can hand over to: `orbit
+/// update --local-candidate` admits it, names it as handing over, renames the
+/// candidate over the executable, and the server re-execs into it and keeps
+/// serving the same session.
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candidate() {
+fn persistent_client_hands_over_to_a_local_candidate_update() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
     std::fs::create_dir_all(&install).expect("installation");
     let old = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &old).expect("copy installed executable");
-    let old_digest = executable_generation(&old).expect("old digest");
     let mut command = McpWorkspace::orbit_program_command(&old, &workspace.work, &workspace.home);
     command
         .args([
@@ -267,7 +267,6 @@ fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candid
         )
         .expect("v21 ledger");
     assert_eq!(schema, 1);
-    let before = store_bytes(&workspace);
     let contract = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args(["update", "--contract", "--json"])
         .output()
@@ -276,7 +275,8 @@ fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candid
     let report: Value = serde_json::from_slice(&contract.stdout).expect("contract JSON");
     assert_eq!(report["contract"], "executable-generation-v1");
     assert_eq!(report["admission_contract"], "compatibility-generation-v2");
-    // Nothing would hand the session over without a candidate to rename in.
+    // A preflight without a candidate renames nothing, so nothing would hand
+    // the session over; its remedy names the updates that would.
     let plain = preflight(&workspace);
     assert_refused(&plain);
     let refusal = String::from_utf8_lossy(&plain.stderr);
@@ -284,7 +284,10 @@ fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candid
         refusal.contains(&format!("pid {pid} (mcp serve")),
         "{refusal}"
     );
-    assert!(refusal.contains("--candidate"), "{refusal}");
+    assert!(
+        refusal.contains("`orbit update --local-candidate`"),
+        "the remedy must name an update that admits the handover: {refusal}"
+    );
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
     let admitted = candidate_preflight(&workspace, &candidate);
@@ -295,73 +298,42 @@ fn persistent_client_refuses_plain_upgrades_and_hands_over_to_an_admitted_candid
     let handover = report["handover"].as_array().expect("handover list");
     assert_eq!(handover.len(), 1, "{report}");
     assert_eq!(handover[0]["pid"], pid, "{report}");
+
+    let task = client.call_tool_ok("orbit_task_add", json!({"title":"Before the update", "description":"Same live authority", "complexity":"low", "model":"codex"}));
+    assert_eq!(task["title"], "Before the update");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 1);
+
+    // The real update installs the candidate beside the idle session.
+    let manifest = write_candidate_manifest(&workspace, &candidate);
+    let output = local_candidate_update(&workspace, &candidate, &manifest, &old);
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], pid, "{report}");
     assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
     assert_eq!(handover[0]["resume"], "mcp-stdio-v1", "{report}");
-    // Exercise ordinary update admission, not just the observation helper. An
-    // explicit target avoids network access; refusal must precede staging.
-    let output = McpWorkspace::orbit_program_command(&old, &workspace.work, &workspace.home)
-        .env("ORBIT_INSTALL_DIR", &install)
-        .args(["update", "--version", "99.0.0", "--json"])
-        .output()
-        .expect("attempt update");
-    assert_refused(&output);
-    assert_eq!(
-        store_bytes(&workspace),
-        before,
-        "refusal touched store/layout bytes"
-    );
     assert_eq!(
         executable_generation(&old).expect("installed digest"),
-        old_digest
+        new_digest
     );
-    assert!(!install.join("orbit.previous").exists());
-    assert_eq!(client.child.id(), pid);
-    #[cfg(target_os = "linux")]
-    assert_eq!(
-        executable_generation(&PathBuf::from(format!("/proc/{pid}/exe"))).expect("running inode"),
-        old_digest
-    );
-    client.call_tool_ok("orbit_workspace_list", json!({}));
-    let task = client.call_tool_ok("orbit_task_add", json!({"title":"After refused upgrade", "description":"Same live authority", "complexity":"low", "model":"codex"}));
-    assert_eq!(task["title"], "After refused upgrade");
-    assert_eq!(audit_count(&workspace, "orbit.task.add"), 1);
-    assert_eq!(audit_count(&workspace, "orbit.workspace.list"), 2);
-    let snapshot = client.call_tool_ok(
-        "orbit_task_show",
-        json!({"workspace":"ws_mcp-roundtrip","id":task["id"],"snapshot":true}),
-    );
-    assert_eq!(snapshot["task"]["id"], task["id"]);
-    assert!(snapshot["revision"].is_string());
-    let comment = json!({"workspace":"ws_mcp-roundtrip","request_id":"upgrade-live-desktop-proof","id":task["id"],"expected_revision":snapshot["revision"],"comment":"Live desktop writes remain audited after refused upgrade"});
-    let written = client.call_tool_ok("orbit_task_update", comment.clone());
-    let replay = client.call_tool_ok("orbit_task_update", comment);
-    assert_eq!(replay["replayed"], true);
-    assert_eq!(
-        written["snapshot"]["comments_total"],
-        replay["snapshot"]["comments_total"]
-    );
-    assert_eq!(audit_count(&workspace, "orbit.task.show"), 1);
-    assert_eq!(audit_count(&workspace, "orbit.task.update"), 2);
-
-    // The installer renames the admitted candidate over the executable; the
-    // idle server re-execs into it and the client's session goes on.
-    install_over(&candidate, &old);
+    // The update pins only once the session has handed over; the resumed
+    // image then joins the generation it pinned.
     wait_until(
         || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
-        "the idle MCP server to hand over to the renamed candidate",
+        "the handed-over MCP server to join as the candidate",
     );
     assert_eq!(client.child.id(), pid);
     let after = client.call_tool_ok(
         "orbit_task_add",
-        json!({"title":"After the candidate rename", "description":"Same session, new image", "complexity":"low", "model":"codex"}),
+        json!({"title":"After the update", "description":"Same session, new image", "complexity":"low", "model":"codex"}),
     );
-    assert_eq!(after["title"], "After the candidate rename");
+    assert_eq!(after["title"], "After the update");
     assert_eq!(audit_count(&workspace, "orbit.task.add"), 2);
     drop(client);
     let ready = preflight(&workspace);
     assert!(ready.status.success(), "{ready:?}");
-    let report: Value = serde_json::from_slice(&ready.stdout).expect("preflight JSON");
-    assert_eq!(report["reservation"], false);
 }
 
 #[test]
@@ -978,6 +950,61 @@ fn install_over(source: &Path, installed: &Path) {
     std::fs::rename(&staged, installed).expect("replace installation");
 }
 
+/// The source commit every local candidate here is attested to.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const CANDIDATE_COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
+
+/// Describe `candidate` in a new manifest beside it, through the candidate.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn write_candidate_manifest(workspace: &McpWorkspace, candidate: &Path) -> PathBuf {
+    let manifest = candidate.with_extension("json");
+    let (candidate_arg, manifest_arg) = (
+        candidate.to_string_lossy().into_owned(),
+        manifest.to_string_lossy().into_owned(),
+    );
+    candidate_ok(
+        workspace,
+        candidate,
+        &[
+            "update",
+            "--local-candidate",
+            &candidate_arg,
+            "--source-commit",
+            CANDIDATE_COMMIT,
+            "--write-candidate-manifest",
+            &manifest_arg,
+        ],
+    );
+    manifest
+}
+
+/// Install `candidate` over `installed` with `orbit update --local-candidate`,
+/// run through the candidate itself as the runbook does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn local_candidate_update(
+    workspace: &McpWorkspace,
+    candidate: &Path,
+    manifest: &Path,
+    installed: &Path,
+) -> std::process::Output {
+    let mut command =
+        McpWorkspace::orbit_program_command(candidate, &workspace.work, &workspace.home);
+    command
+        .env(
+            "ORBIT_INSTALL_DIR",
+            installed.parent().expect("install dir"),
+        )
+        .args(["update", "--local-candidate"])
+        .arg(candidate)
+        .arg("--candidate-manifest")
+        .arg(manifest)
+        .args(["--source-commit", CANDIDATE_COMMIT, "--install-target"])
+        .arg(installed)
+        .arg("--json")
+        .stdin(Stdio::null());
+    output_copied_orbit(&mut command).expect("local candidate update")
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
     crate::generation_fixture::running_digest(&authority_root(workspace), pid)
@@ -1177,16 +1204,16 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
 }
 
 /// `orbit update --local-candidate` is the same guarded replacement as a
-/// release. While an initialized stdio MCP session (with a request whose
-/// reply is still unread), the dashboard and a drain coordinator run the
-/// installed build, it refuses before the executable, the generation record
-/// or any store changes, and every client carries on — the drain keeps its
-/// run and owner rather than being interrupted for resume. Once they exit it
-/// installs, and each client kind starts again from the installed candidate.
+/// release. While processes that cannot hand over run the installed build —
+/// a dashboard, then the dashboard and a drain coordinator beside an
+/// initialized stdio MCP session with a request whose reply is still unread —
+/// it refuses before the executable, the generation record or any store
+/// changes, and every client carries on: the drain keeps its run and owner
+/// rather than being interrupted for resume. Once they exit it installs, and
+/// each client kind starts again from the installed candidate.
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_reconnect() {
-    const COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
     std::fs::create_dir_all(&install).expect("installation");
@@ -1194,44 +1221,8 @@ fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_re
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
     let old_digest = executable_generation(&installed).expect("old digest");
     let candidate = distinct_candidate(&workspace);
-    let manifest = workspace.home.join("candidate.json");
-    let (candidate_arg, manifest_arg, installed_arg) = (
-        candidate.to_string_lossy().into_owned(),
-        manifest.to_string_lossy().into_owned(),
-        installed.to_string_lossy().into_owned(),
-    );
-    candidate_ok(
-        &workspace,
-        &candidate,
-        &[
-            "update",
-            "--local-candidate",
-            &candidate_arg,
-            "--source-commit",
-            COMMIT,
-            "--write-candidate-manifest",
-            &manifest_arg,
-        ],
-    );
-    let local_update = || {
-        McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
-            .env("ORBIT_INSTALL_DIR", &install)
-            .args([
-                "update",
-                "--local-candidate",
-                &candidate_arg,
-                "--candidate-manifest",
-                &manifest_arg,
-                "--source-commit",
-                COMMIT,
-                "--install-target",
-                &installed_arg,
-                "--json",
-            ])
-            .stdin(Stdio::null())
-            .output()
-            .expect("local candidate update")
-    };
+    let manifest = write_candidate_manifest(&workspace, &candidate);
+    let local_update = || local_candidate_update(&workspace, &candidate, &manifest, &installed);
     let serve = |program: &Path| {
         let mut command =
             McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home);
@@ -1255,7 +1246,31 @@ fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_re
     client.call_tool_ok("orbit_workspace_list", json!({}));
     let stores = store_bytes(&workspace);
     let record = generation_record(&workspace);
-    assert_refused(&local_update());
+    // The idle session alone would hand over to the candidate; a registered
+    // dashboard never does, so it refuses the update with its own remedy.
+    let identity = orbit_core::composition::compiled_compatibility();
+    let dashboard = GenerationGuard::join(
+        &authority_root(&workspace),
+        &Participant {
+            digest: &old_digest,
+            identity: &identity,
+            role: ParticipantRole::Dashboard,
+            access: Access::Write,
+            handover: None,
+        },
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the dashboard joins the installed generation");
+    let refused = local_update();
+    assert_refused(&refused);
+    let refusal = String::from_utf8_lossy(&refused.stderr);
+    assert!(refusal.contains("stop the dashboard"), "{refusal}");
+    assert!(
+        refusal.contains("hands over to the candidate"),
+        "the idle session is named as handing over, not as blocking: {refusal}"
+    );
+    drop(dashboard);
     assert_eq!(
         store_bytes(&workspace),
         stores,
@@ -1313,7 +1328,10 @@ fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_re
     assert!(output.status.success(), "{output:?}");
     let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
     assert_eq!(report["outcome"], "updated", "{report}");
-    assert_eq!(report["local_candidate"]["source_commit"]["value"], COMMIT);
+    assert_eq!(
+        report["local_candidate"]["source_commit"]["value"],
+        CANDIDATE_COMMIT
+    );
     assert_eq!(
         std::fs::read(&installed).expect("installed"),
         std::fs::read(&candidate).expect("candidate")

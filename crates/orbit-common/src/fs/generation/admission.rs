@@ -31,6 +31,11 @@ const ADMISSION_POLL: Duration = Duration::from_millis(10);
 const UPGRADE_PROBE: Duration = Duration::from_secs(1);
 /// How long an [`upgrade_holding`] probe can hold the generation lock.
 pub(super) const PROBE_SETTLE: Duration = Duration::from_millis(20);
+/// How long an exclusive generation hold must last before a waiting joiner
+/// reads it as an upgrade. A pin, reseed or takeover holds it exclusively
+/// only while it rewrites the record; a process resumed by a handover waits
+/// behind exactly such a pin and must not mistake it for an update.
+const EXCLUSIVE_SETTLE: Duration = Duration::from_millis(250);
 
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
@@ -151,9 +156,18 @@ fn upgrade_holding(root: &Path, joining: Option<&CompatibilityIdentity>) -> Opti
         return (joining != Some(&switch.target)).then(|| upgrade_holds_admission(Some(&switch)));
     }
     let generation = open(root, GENERATION_LOCK).ok()?;
-    FileExt::try_lock_shared(&generation.file)
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
-        .then(|| upgrade_holds_admission(None))
+    let settle = Instant::now() + EXCLUSIVE_SETTLE;
+    loop {
+        let held = FileExt::try_lock_shared(&generation.file)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock);
+        if !held {
+            return None;
+        }
+        if Instant::now() >= settle {
+            return Some(upgrade_holds_admission(None));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Take the generation lock exclusively under exclusive admission.

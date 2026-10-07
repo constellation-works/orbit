@@ -8,8 +8,10 @@
 //! will be renamed over the executable and the participant registered a
 //! resume capability that candidate reports: it hands over after the rename,
 //! so [`GenerationUpdate::acquire_for_candidate`] admits beside it and names
-//! it. A holder that never registered (an `executable-generation-v1` binary,
-//! or a sandboxed child that cannot write the root) always refuses.
+//! it, and [`CandidateAdmission::pin`] waits for it to hand over before
+//! recording the candidate. A holder that never registered (an
+//! `executable-generation-v1` binary, or a sandboxed child that cannot write
+//! the root) always refuses.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,7 +26,9 @@ use super::handoff::HandoverCandidate;
 use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_generation, write_compat};
-use super::refusal::{SWITCH_PENDING, holders_outlasted, holders_refused, refusal, unwritable};
+use super::refusal::{
+    SWITCH_PENDING, handover_outlasted, holders_outlasted, holders_refused, refusal, unwritable,
+};
 use super::registry::{self, ParticipantRecord, pending_switch};
 use crate::OrbitError;
 
@@ -40,9 +44,9 @@ pub struct GenerationUpdate {
 
 /// Exclusive admission for an installer that renames `candidate` over the
 /// executable: every live participant either exited or will hand over to
-/// the candidate once it is installed. It reserves nothing after it drops,
-/// and it cannot pin: the participants that hand over still hold the
-/// generation until they do.
+/// the candidate once it is installed. It reserves nothing after it drops.
+/// The participants that hand over still hold the generation until they do,
+/// so [`Self::pin`] waits for them after the rename.
 pub struct CandidateAdmission {
     update: GenerationUpdate,
     handover: Vec<ParticipantRecord>,
@@ -58,6 +62,26 @@ impl CandidateAdmission {
     /// See [`GenerationUpdate::ensure_can_record`].
     pub fn ensure_can_record(&self) -> Result<(), OrbitError> {
         self.update.ensure_can_record()
+    }
+
+    /// After the candidate is renamed over the executable, wait up to
+    /// [`quiesce_bound`] for every participant in [`Self::handover`] to
+    /// release the generation, by exec'ing into the candidate or exiting,
+    /// then pin as [`GenerationUpdate::pin`] does.
+    ///
+    /// Admission stays exclusive meanwhile, so a process that has handed over
+    /// queues behind it and joins the pinned generation once it is released.
+    /// When one has not handed over by the bound, nothing is pinned and the
+    /// admission is released.
+    pub fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        if !self.handover.is_empty() {
+            self.update.await_handover()?;
+        }
+        self.update.pin(digest, identity)
     }
 }
 
@@ -175,6 +199,24 @@ impl GenerationUpdate {
             },
             handover,
         ))
+    }
+
+    /// Take the generation exclusively once every participant admitted beside
+    /// this update has released it. Nobody joins meanwhile, so the live set
+    /// only shrinks.
+    fn await_handover(&self) -> Result<(), OrbitError> {
+        let bound = quiesce_bound();
+        let deadline = Instant::now() + bound;
+        loop {
+            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                let live = registry::live_participants(&self.root, None, false);
+                return Err(handover_outlasted(bound, &live));
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
     }
 
     /// Refuse an admission that could never record a candidate generation.

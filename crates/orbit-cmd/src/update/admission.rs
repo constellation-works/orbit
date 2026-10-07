@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    GENERATION_CONTRACT, GenerationUpdate, HandoverCandidate, ParticipantRecord,
+    CandidateAdmission, CompatibilityIdentity, GENERATION_CONTRACT, GenerationGuard,
+    GenerationUpdate, HandoverCandidate, ParticipantRecord,
 };
 
 /// Every generation authority that can hold a live pin on the host binary.
@@ -72,11 +73,40 @@ pub fn acquire_admissions(roots: &[PathBuf]) -> Result<Vec<GenerationUpdate>, Or
     })
 }
 
+/// Take admission on every authority for an update that renames a
+/// candidate reporting `candidate` over the executable: as
+/// [`acquire_admissions`], except that a live process that will hand over to
+/// the candidate after the rename is admitted beside (see
+/// [`handover_of`]). Pinning waits for those processes to hand over.
+pub(super) fn acquire_candidate_admissions(
+    roots: &[PathBuf],
+    candidate: &HandoverCandidate,
+) -> Result<Vec<CandidateAdmission>, OrbitError> {
+    admit_each(roots, |root| {
+        let admission = GenerationUpdate::acquire_for_candidate(root, candidate)?;
+        admission.ensure_can_record()?;
+        Ok(admission)
+    })
+}
+
+/// Each live process the admissions let hand over, once, oldest first.
+pub(super) fn handover_of(admissions: &[CandidateAdmission]) -> Vec<ParticipantRecord> {
+    let mut handover = admissions
+        .iter()
+        .flat_map(|admission| admission.handover().iter().cloned())
+        .collect::<Vec<_>>();
+    // A process registers once per authority it joined, and may join one
+    // authority more than once.
+    handover.sort_by_key(|holder| (holder.pid, holder.started_at));
+    handover.dedup_by_key(|holder| holder.pid);
+    handover.sort_by_key(|holder| (holder.started_at, holder.pid));
+    handover
+}
+
 /// Observe admission for an installer that renames the executable at
-/// `candidate` over this one: as [`acquire_admissions`], except that a live
-/// process that will hand over to the candidate after the rename is admitted
-/// beside. Returns each such process once; the admissions are released on
-/// return, so this reserves nothing.
+/// `candidate` over this one, as [`acquire_candidate_admissions`] takes it,
+/// and name each process that would hand over. The admissions are released
+/// on return, so this reserves nothing.
 pub fn candidate_preflight(
     roots: &[PathBuf],
     candidate: &Path,
@@ -88,21 +118,7 @@ pub fn candidate_preflight(
             candidate.display()
         ))
     })?;
-    let admissions = admit_each(roots, |root| {
-        let admission = GenerationUpdate::acquire_for_candidate(root, &probed)?;
-        admission.ensure_can_record()?;
-        Ok(admission)
-    })?;
-    let mut handover = admissions
-        .iter()
-        .flat_map(|admission| admission.handover().iter().cloned())
-        .collect::<Vec<_>>();
-    // A process registers once per authority it joined, and may join one
-    // authority more than once.
-    handover.sort_by_key(|holder| (holder.pid, holder.started_at));
-    handover.dedup_by_key(|holder| holder.pid);
-    handover.sort_by_key(|holder| (holder.started_at, holder.pid));
-    Ok(handover)
+    Ok(handover_of(&acquire_candidate_admissions(roots, &probed)?))
 }
 
 fn admit_each<T>(
@@ -122,16 +138,47 @@ fn admit_each<T>(
         .collect()
 }
 
-/// Pin the candidate generation in every authority admission was taken on.
+/// An admission that can pin the installed candidate's generation.
+pub(super) trait Pinnable {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError>;
+}
+
+impl Pinnable for GenerationUpdate {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        GenerationUpdate::pin(self, digest, identity)
+    }
+}
+
+impl Pinnable for CandidateAdmission {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        CandidateAdmission::pin(self, digest, identity)
+    }
+}
+
+/// Pin the candidate generation in every authority admission was taken on,
+/// once any process admitted to hand over has.
 ///
-/// `admissions` is what [`acquire_admissions`] returned for `roots`, so the
-/// two are index-aligned.
+/// `admissions` is what [`acquire_admissions`] or
+/// [`acquire_candidate_admissions`] returned for `roots`, so the two are
+/// index-aligned.
 pub(super) fn pin_candidate(
     roots: &[PathBuf],
-    admissions: Vec<GenerationUpdate>,
+    admissions: Vec<impl Pinnable>,
     digest: &str,
-    identity: Option<&orbit_common::fs::generation::CompatibilityIdentity>,
-) -> Result<Vec<orbit_common::fs::generation::GenerationGuard>, OrbitError> {
+    identity: Option<&CompatibilityIdentity>,
+) -> Result<Vec<GenerationGuard>, OrbitError> {
     roots
         .iter()
         .zip(admissions)

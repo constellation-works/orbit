@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use orbit_cmd::update::converge::PROBE_TIMEOUT_ENV;
 use orbit_common::fs::generation::{
-    Access, GenerationGuard, Participant, ParticipantRole, QUIESCE_TIMEOUT_ENV,
+    Access, GenerationGuard, Participant, ParticipantRole, QUIESCE_TIMEOUT_ENV, RESUME_MCP_STDIO,
+    executable_generation,
 };
 use orbit_common::test_env;
 use serde_json::Value;
@@ -585,12 +586,135 @@ fn an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound() {
     install.assert_no_backup("outlasting tick");
 }
 
+/// Hold the installation's host-global authority the way an idle stdio
+/// `orbit mcp serve` does: registered to hand over with `mcp-stdio-v1`.
+fn idle_session(install: &Install) -> GenerationGuard {
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "d".repeat(64);
+    let participant = Participant {
+        digest: &digest,
+        identity: &identity,
+        role: ParticipantRole::McpServe,
+        access: Access::Write,
+        handover: Some(RESUME_MCP_STDIO),
+    };
+    GenerationGuard::join(
+        &install.home.join(".orbit"),
+        &participant,
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the session joins")
+}
+
+/// A release update stages and probes the release before admission, so it
+/// knows what the release resumes. A session it cannot resume refuses it
+/// untouched; a session it can is admitted beside, named in the report, and
+/// the release is pinned only once that session has released the replaced
+/// generation, as its exec does when it hands over.
+#[test]
+fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
+    let install = Install::new(None);
+    let session = idle_session(&install);
+    let record = fs::read(&install.generation).expect("generation record");
+
+    install.publish("98.0.0", Some(&tar_gz(&candidate_script("98.0.0"))), true);
+    let refused = install.run(&["update", "--version", "98.0.0"]);
+    assert_refused(
+        &refused,
+        "a release that cannot resume the session",
+        &format!("does not report the {RESUME_MCP_STDIO} resume capability"),
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("installed"),
+        install.before
+    );
+    assert_eq!(fs::read(&install.generation).expect("record"), record);
+    assert!(!staging_remains(
+        install.executable.parent().expect("install dir")
+    ));
+    install.assert_no_backup("a release that cannot resume the session");
+
+    let script = resuming_candidate_script("99.0.0");
+    install.publish("99.0.0", Some(&tar_gz(&script)), true);
+    let executable = install.executable.clone();
+    let installed = script.clone();
+    let handing_over = std::thread::spawn(move || {
+        let deadline = Instant::now() + UPDATE_TIMEOUT;
+        while fs::read(&executable).ok().as_deref() != Some(installed.as_slice()) {
+            assert!(Instant::now() < deadline, "the release was never installed");
+            std::thread::sleep(WAIT_SLICE);
+        }
+        // Still holding the replaced generation after the rename: the update
+        // must not pin until it is released.
+        std::thread::sleep(Duration::from_millis(1500));
+        let released = Instant::now();
+        drop(session);
+        released
+    });
+    let mut command = install.command();
+    command
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(["update", "--version", "99.0.0", "--json"]);
+    let output = output_of(&mut command).expect("run orbit update");
+    let finished = Instant::now();
+    let released = handing_over.join().expect("session thread");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        finished >= released,
+        "the update finished before the handover"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], std::process::id(), "{report}");
+    assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
+    assert_eq!(handover[0]["resume"], RESUME_MCP_STDIO, "{report}");
+    assert_eq!(fs::read(&install.executable).expect("installed"), script);
+    assert_eq!(
+        fs::read_to_string(&install.generation).expect("generation record"),
+        format!(
+            "1:{}\n",
+            executable_generation(&install.executable).expect("installed digest")
+        ),
+        "the release is pinned once the session handed over"
+    );
+}
+
+/// A release script reporting this build's admission contract, including the
+/// resume capabilities a live session hands over with.
+fn resuming_candidate_script(version: &str) -> Vec<u8> {
+    let contract = Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .args(["update", "--contract", "--json"])
+        .output()
+        .expect("contract of this build");
+    assert!(contract.status.success(), "{contract:?}");
+    let contract = String::from_utf8(contract.stdout).expect("contract JSON");
+    format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
+         if [ \"$1\" = update ] && [ \"$2\" = --contract ]; then \
+         echo '{}'; exit 0; fi\n\
+         exit 0\n",
+        contract.trim()
+    )
+    .into_bytes()
+}
+
 /// A candidate whose `--version` never returns is killed at the probe
-/// timeout. Until then every authority is held, so a command is refused as an
-/// upgrade in progress; afterwards nothing is held.
+/// timeout. The staged candidate is probed before admission, so a hung probe
+/// never holds an authority: commands run meanwhile, and nothing is held
+/// afterwards.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn a_hanging_candidate_probe_times_out_and_releases_every_authority() {
+fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let install = Install::new(None);
     let probing = install._root.path().join("probe-started");
     let script = format!(
@@ -621,11 +745,11 @@ fn a_hanging_candidate_probe_times_out_and_releases_every_authority() {
         std::thread::sleep(WAIT_SLICE);
     }
 
-    let held = install.run(&["task", "list"]);
-    assert_refused(
-        &held,
-        "a command during the hung probe",
-        "upgrade is in progress",
+    let during = install.run(&["update", "--preflight", "--json"]);
+    assert!(
+        during.status.success(),
+        "a hung candidate probe held an authority: {}",
+        String::from_utf8_lossy(&during.stderr)
     );
 
     let status = wait_exit(
