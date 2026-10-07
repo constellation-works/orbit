@@ -1,6 +1,6 @@
 //! Audit event listing and summary tile aggregation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
 use crate::state::{DashboardState, Ws};
@@ -47,7 +47,19 @@ const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
 /// the truncated start hour. [`build_sparkline`] never emits more than this.
 const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
+/// The incident rollup itself is bounded to this many source rows, so an
+/// exact incident drilldown never needs more IDs than this.
+const MAX_AUDIT_EVENT_IDS: usize = 10_000;
+
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
+    let event_ids = match q.ids.as_deref() {
+        Some(raw) => match parse_audit_event_ids(raw) {
+            Ok(ids) => Some(ids),
+            Err(message) => return bad_request(message),
+        },
+        None => None,
+    };
+
     let since = match q.since.as_deref() {
         Some(raw) => match parse_since(raw) {
             Ok(ts) => Some(ts),
@@ -139,7 +151,9 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     match blocking("audit list", move || {
-        let events = if post_filter.is_empty() {
+        let events = if let Some(ids) = event_ids.as_deref() {
+            runtime.list_audit_events_by_ids(ids, filter.workspace_id.as_deref())?
+        } else if post_filter.is_empty() {
             // Every requested predicate has a column, so the page is exactly the
             // SQL window: no prefetch, no Rust-side slicing.
             runtime.list_audit_events_filtered(&filter)?
@@ -156,6 +170,32 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         }
         Err(response) => *response,
     }
+}
+
+fn parse_audit_event_ids(raw: &str) -> Result<Vec<i64>, String> {
+    if raw.split(',').count() > MAX_AUDIT_EVENT_IDS {
+        return Err(format!(
+            "ids must contain at most {MAX_AUDIT_EVENT_IDS} values"
+        ));
+    }
+
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_id in raw.split(',') {
+        let id = raw_id
+            .parse::<i64>()
+            .map_err(|_| "ids must be comma-separated positive audit row IDs".to_string())?;
+        if id <= 0 {
+            return Err("ids must be comma-separated positive audit row IDs".to_string());
+        }
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Err("ids must include at least one audit row ID".to_string());
+    }
+    Ok(ids)
 }
 
 /// Predicates the SQLite schema has no column for, applied to each fetched

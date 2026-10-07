@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::{
-    AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery, JobRunState,
-    OrbitError,
+    AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
+    JobRunState, OrbitError,
 };
 use serde_json::json;
 
@@ -130,6 +130,84 @@ fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInse
         activity_id: None,
         step_index: None,
     }
+}
+
+#[test]
+fn incident_audit_ids_return_all_requested_rows_with_workspace_scope() {
+    isolated(
+        "audit::incident_audit_ids_return_all_requested_rows_with_workspace_scope",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..65 {
+                let mut event = row(
+                    &format!("incident-{index}"),
+                    None,
+                    AuditEventStatus::Failure,
+                );
+                event.command = "task".into();
+                event.subcommand = Some("add".into());
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            fixture
+                .runtime
+                .record_audit_event(&row(
+                    "unrelated",
+                    Some("orbit.task.show"),
+                    AuditEventStatus::Success,
+                ))
+                .unwrap();
+            let mut foreign = row(
+                "foreign-workspace",
+                Some("orbit.task.show"),
+                AuditEventStatus::Success,
+            );
+            foreign.workspace_id = Some("ws_other".into());
+            fixture.runtime.record_audit_event(&foreign).unwrap();
+
+            let stored = fixture
+                .runtime
+                .list_audit_events_filtered(&AuditEventFilter {
+                    limit: 100,
+                    ..AuditEventFilter::default()
+                })
+                .unwrap();
+            let target_ids = stored
+                .iter()
+                .filter(|event| event.execution_id.starts_with("incident-"))
+                .map(|event| event.id)
+                .collect::<Vec<_>>();
+            let foreign_id = stored
+                .iter()
+                .find(|event| event.execution_id == "foreign-workspace")
+                .unwrap()
+                .id;
+            assert_eq!(target_ids.len(), 65);
+
+            let requested_ids = target_ids
+                .iter()
+                .chain(std::iter::once(&foreign_id))
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let url = format!(
+                "/api/audit?workspace=ws_http_fixture&workspace_id=ws_http_fixture&ids={requested_ids}"
+            );
+            let returned = json_ok(fixture.server(false).get(&url));
+            let returned = returned.as_array().unwrap();
+            assert_eq!(
+                returned.len(),
+                65,
+                "exact IDs bypass the default 50-row page"
+            );
+            let returned_ids = returned
+                .iter()
+                .map(|event| event["id"].as_i64().unwrap())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(returned_ids, target_ids.into_iter().collect());
+            assert!(returned.iter().all(|event| event["status"] == "failure"));
+            assert!(!returned_ids.contains(&foreign_id));
+        },
+    );
 }
 
 #[test]

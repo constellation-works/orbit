@@ -6,6 +6,7 @@ import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateV
 const $ = (id) => document.getElementById(id);
 
 const AUDIT_LIMIT = positiveIntParam("audit", 50);
+const INCIDENT_ID_BATCH_SIZE = 500;
 const AUDIT_STATUSES = ["success", "failure", "denied"];
 const AUDIT_SUBTABS = ["events", "policy"];
 
@@ -21,6 +22,8 @@ let auditFilter = {
   // JobRun — see T20260427-26.
   execution_id: null,
   profile: null,
+  // Exact persisted row IDs from an incident evidence drilldown.
+  eventIds: [],
   // Time-window filter for the Events sub-tab. Accepts the same shorthands as
   // the API (`24h`, `7d`, `1w`, RFC3339); null means the API-side default.
   since: null,
@@ -141,6 +144,8 @@ function buildAuditHash() {
     if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.role) sp.set("role", auditFilter.role);
+  } else if (auditFilter.eventIds.length > 0) {
+    sp.set("ids", auditFilter.eventIds.join(","));
   } else {
     if (auditFilter.since) sp.set("since", auditFilter.since);
     if (auditFilter.status) sp.set("status", auditFilter.status);
@@ -240,6 +245,12 @@ function renderScopeChips() {
       window.location.hash = buildAuditHash();
     }));
   }
+  if (auditFilter.eventIds.length > 0) {
+    host.appendChild(removableChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
+      auditFilter.eventIds = [];
+      window.location.hash = buildAuditHash();
+    }));
+  }
   if (auditFilter.metric) {
     host.appendChild(removableChip("metric", auditFilter.metric, () => {
       auditFilter.metric = null;
@@ -257,6 +268,10 @@ function applyAuditHashQuery(query) {
   auditFilter.execution_id =
     query.get("execution_id") || query.get("run_id") || null;
   auditFilter.profile = query.get("profile") || null;
+  auditFilter.eventIds = (query.get("ids") || "")
+    .split(",")
+    .map(value => Number(value))
+    .filter(value => Number.isSafeInteger(value) && value > 0);
   auditFilter.q = query.get("q") || "";
   auditFilter.since = query.get("since") || (getWindow() === "all" ? null : getWindow());
   auditFilter.metric = query.get("metric") || null;
@@ -291,20 +306,38 @@ function fetchAndRenderAudit(ctx) {
     placeholdAuditAggregate();
     return Promise.resolve();
   }
+  const eventIds = auditFilter.eventIds.slice();
   const sp = new URLSearchParams();
   sp.set("limit", String(AUDIT_LIMIT));
-  const since = effectiveAuditWindow();
-  if (since) sp.set("since", since);
-  if (auditFilter.status) sp.set("status", auditFilter.status);
-  if (auditFilter.tool) sp.set("tool", auditFilter.tool);
-  if (auditFilter.role) sp.set("role", auditFilter.role);
-  if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
-  if (auditFilter.profile) sp.set("profile", auditFilter.profile);
-  if (auditFilter.q) sp.set("q", auditFilter.q);
+  if (auditFilter.eventIds.length > 0) {
+    sp.set("ids", auditFilter.eventIds.join(","));
+  } else {
+    const since = effectiveAuditWindow();
+    if (since) sp.set("since", since);
+    if (auditFilter.status) sp.set("status", auditFilter.status);
+    if (auditFilter.tool) sp.set("tool", auditFilter.tool);
+    if (auditFilter.role) sp.set("role", auditFilter.role);
+    if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
+    if (auditFilter.profile) sp.set("profile", auditFilter.profile);
+    if (auditFilter.q) sp.set("q", auditFilter.q);
+  }
   const path = `/api/audit?${sp.toString()}`;
+  const requestEvents = eventIds.length > 0
+    ? async () => {
+      const events = [];
+      for (let start = 0; start < eventIds.length; start += INCIDENT_ID_BATCH_SIZE) {
+        const batch = new URLSearchParams();
+        batch.set("limit", String(AUDIT_LIMIT));
+        batch.set("ids", eventIds.slice(start, start + INCIDENT_ID_BATCH_SIZE).join(","));
+        events.push(...await fetchJson(`/api/audit?${batch.toString()}`));
+      }
+      // Each batch is newest-first; restore that order across batches.
+      return events.sort((a, b) => b.id - a.id);
+    }
+    : () => fetchJson(path);
   // A slower search or the previous workspace must not paint over the visit
   // now on screen, and must not become the snapshot row expansion re-renders.
-  return requestPanel("audit-body", path, () => fetchJson(path), (events) => {
+  return requestPanel("audit-body", path, requestEvents, (events) => {
     lastAudit = events;
     renderAudit(events, ctx);
   }, "audit-count");
@@ -904,6 +937,7 @@ function emptyAuditFilter() {
     role: null,
     execution_id: null,
     profile: null,
+    eventIds: [],
     since: getWindow() === "all" ? null : getWindow(),
     metric: null,
     policyKind: null,
@@ -928,13 +962,15 @@ function navigateToRole(role, ctx) {
 /// and records the source metric so the landing chips explain the scope.
 function navigateToDrilldown(opts = {}, ctx) {
   auditFilter = emptyAuditFilter();
-  auditFilter.role = opts.role || null;
-  auditFilter.metric = opts.metric || null;
-  auditFilter.status = opts.status || null;
-  // ORB-10871: an incident names one surface, so its "open raw events" link
-  // lands on exactly the rows the incident collapsed rather than every failure
-  // by that actor.
-  auditFilter.tool = opts.tool || null;
+  auditFilter.eventIds = Array.isArray(opts.eventIds)
+    ? [...new Set(opts.eventIds.filter(id => Number.isSafeInteger(id) && id > 0))]
+    : [];
+  auditFilter.role = auditFilter.eventIds.length > 0 ? null : (opts.role || null);
+  auditFilter.metric = auditFilter.eventIds.length > 0 ? null : (opts.metric || null);
+  auditFilter.status = auditFilter.eventIds.length > 0 ? null : (opts.status || null);
+  // Surface and status filters remain useful for ordinary metric drilldowns.
+  // Incident drilldowns supply exact event IDs and clear these broader filters.
+  auditFilter.tool = auditFilter.eventIds.length > 0 ? null : (opts.tool || null);
   if (opts.window) auditFilter.since = opts.window === "all" ? null : opts.window;
   activeAuditSubtab = "events";
   syncAuditControls();

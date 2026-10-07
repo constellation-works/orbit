@@ -72,6 +72,9 @@ pub(super) struct AuditQuery {
     /// JSONL where `profile` is a typed field.
     #[serde(default)]
     pub(super) profile: Option<String>,
+    /// Comma-separated database row IDs for an exact incident-evidence view.
+    #[serde(default)]
+    pub(super) ids: Option<String>,
     #[serde(default)]
     pub(super) limit: Option<usize>,
     #[serde(default)]

@@ -385,11 +385,21 @@ function incidentDetailNode(incident, ctx) {
     title: "Every underlying event stays in the raw Audit view",
   });
   rawButton.type = "button";
-  rawButton.addEventListener("click", () => navigateToDrilldown({
-    role: incident.actor || null,
-    tool: incident.surface || null,
-    status: incident.class === "denied" ? "denied" : "failure",
-  }));
+  rawButton.addEventListener("click", () => {
+    const eventIds = Array.isArray(incident.events)
+      ? incident.events
+        .map(event => event.id)
+        .filter(id => Number.isSafeInteger(id) && id > 0)
+      : [];
+    const completeEventIds = eventIds.length > 0 && eventIds.length === asCount(incident.event_count)
+      ? eventIds
+      : null;
+    navigateToDrilldown({
+      role: completeEventIds ? null : (incident.actor || null),
+      tool: completeEventIds || incident.has_tool_identity === false ? null : (incident.surface || null),
+      eventIds: completeEventIds,
+    });
+  });
   actions.appendChild(rawButton);
   if (runIds.length > 0 && hasCtx(ctx, "setActiveTab")) {
     const runButton = el("button", { class: "chip", text: `Open run ${runIds[0]}` });

@@ -685,6 +685,11 @@ pub trait PluginStoreBackend: Send + Sync {
 pub trait AuditEventStoreBackend: Send + Sync {
     fn insert_audit_event_record(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError>;
     fn list_audit_events(&self, filter: &AuditEventFilter) -> Result<Vec<AuditEvent>, OrbitError>;
+    fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError>;
     fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError>;
     fn get_audit_event_stats(
         &self,
