@@ -633,7 +633,7 @@ the sweep succeeded.
 
 | Key | Default | What it does |
 |---|---|---|
-| `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. The file `orbit init` seeds sets `danger-full-access` globally. Security key, not inherited by a workspace file. |
+| `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. Under `workspace-write`, Codex's extra writable roots are Orbit's runtime stores, never the whole workspace `.orbit` or `~/.orbit`. The file `orbit init` seeds sets `danger-full-access` globally. Security key, not inherited by a workspace file. |
 | `execution.codex.approval_policy` | unset | `untrusted`, `on-request` or `never`. Security key. |
 | `execution.proc_spawn_max_timeout_minutes` | `45` | Longest timeout one `proc.spawn` call may run with inside a managed activity (1–1440). A call is also capped at the activity's remaining wall-clock budget, which the CLI runner passes to the agent as `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`. Outside an activity the ceiling stays 60 seconds. The tool result reports the effective `timeout_ceiling_ms` and its source. |
 | `review.before_pr` | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. PR route only: refused for local-only delivery. A delivery run or drain captures the value at submission, so a run in flight keeps it. Distributed PR claims use the owner's captured review contract, executed by compatible followers (details below). See [review-gate design](design/review-gate/2_design.md). |
