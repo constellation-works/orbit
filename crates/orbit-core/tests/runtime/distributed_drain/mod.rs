@@ -10,8 +10,8 @@
 //!
 //! This test binary is not a worker-capable Orbit entry point, so every leaf
 //! launch is refused (STD-03 §R19) and no worker process starts. A claimed leaf
-//! therefore ends at its launch and its failure settlement goes to the owner in
-//! the pass that bound it: the systemic executor fault the breaker exists for.
+//! therefore is cancelled and released with a host-suppressing environment
+//! failure. Tests of launched work explicitly advance the fixture's leaf.
 //!
 //! Host resource pressure is injected through the follower's resource probe.
 

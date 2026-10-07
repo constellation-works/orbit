@@ -459,6 +459,8 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
     }
     let pair = gc_pair(1);
     let drain = pair.start_drain();
+    // Cancellation's terminal hook and the launch pass both try delivery.
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let lost = pair.pass(&drain);
     assert!(error_of(&lost).contains("dropped"), "{lost}");
@@ -469,16 +471,8 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         .unwrap()
         .expect("claimed leaf");
     assert_eq!(claim.settlement_phase, "settling");
-    // The leaf has finished; only its settlement is still owed to the owner.
-    set_run_state(&pair.follower, &leaf, "running");
-    pair.follower_jobs
-        .finalize_job_run(
-            &leaf,
-            orbit_types::workflow::JobRunState::Failed,
-            Utc::now(),
-            None,
-        )
-        .unwrap();
+    // The leaf is cancelled; only its release is still owed to the owner.
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
     let (worktree, _) = leaf_worktree(&pair, &leaf);
     let timeout = "ssh: connect to host owner port 22: Connection timed out";
     *pair.wire.task_reads_fail.lock().unwrap() = Some(timeout.into());
@@ -534,7 +528,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "{report:#}"
     );
     assert_eq!(
-        report["task_status"], "blocked",
+        report["task_status"], "backlog",
         "the owner's answer decides: {report:#}"
     );
     assert!(worktree.exists());
@@ -703,7 +697,7 @@ fn replica_gc_learns_the_owner_prefix_from_mirrors_or_claim_admissions() {
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    assert_eq!(gc_report(&claimed, &leaf)["task_status"], "blocked");
+    assert_eq!(gc_report(&claimed, &leaf)["task_status"], "backlog");
     assert_eq!(
         gc_report(&claimed, &third_leaf)["action"],
         "skipped:task_prefix_unroutable"

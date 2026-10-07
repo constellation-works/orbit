@@ -510,7 +510,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   leaf whose worker died so its settlement is recorded and delivered. A leaf
   that was cancelled before it launched releases its claim instead: the task
   goes back to `backlog` on the owner with a comment naming the drain. A
-  launched leaf that ends without its handoff settles with a typed failure
+  pre-spawn launch failure also cancels the queued leaf and releases its claim
+  with class `environment`, suppressing further pulls on that host for the
+  window. If a child was spawned before registration or observer handoff
+  failed, the supervisor stops and reaps it when possible; launch intent stays
+  recorded until the run is reconciled. A pending run alone does not establish
+  that the worker never executed, so this case is not released as unlaunched.
+  A launched leaf that ends without its handoff settles with a typed failure
   class. Only `candidate` (the work failed) and `task_input` (final recovery
   rejected or archived the task) move the task to `blocked` on the owner, with
   a summary naming the leaf run, its failed step and that step's error. Every

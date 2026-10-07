@@ -47,13 +47,14 @@ fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume(
     let input = json!({"destination": pair.destination, "allowed_crews": ["luna", "sol"]});
     let drain = pair.run_drain_with_input(input.clone());
 
+    let first_leaf = pair.running_leaf(&drain, 1);
     let first = pair.pass(&drain);
-    assert!(launch_refused(&first), "{first}");
     assert_eq!(first["crews"]["allowed"], json!(["luna", "sol"]), "{first}");
     assert_eq!(claimed_tasks(&pair).len(), 1);
 
     // The source drain ends and a resumed run takes over with the same input
     // and run state, as `orbit job resume` submits it.
+    pair.leaf_fails_with(&first_leaf, "candidate validation failed");
     pair.follower_jobs
         .finalize_job_run(&drain, JobRunState::Failed, Utc::now(), None)
         .unwrap();
@@ -61,6 +62,8 @@ fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume(
     let mut state = pair.follower.read_run_state(&drain).unwrap().unwrap();
     state.run_id = resumed.clone();
     pair.follower.write_run_state(&resumed, &state).unwrap();
+    let next_leaf = pair.running_leaf(&resumed, 1);
+    pair.leaf_fails_with(&next_leaf, "candidate validation failed");
     for _ in 0..3 {
         pair.pass(&resumed);
     }
