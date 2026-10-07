@@ -1,5 +1,6 @@
 mod agent_invoke;
 mod crew_pools;
+mod exec;
 mod pipeline;
 
 /// Deterministic audit-insert fault plus the existing detached-worker seam.
