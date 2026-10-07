@@ -100,6 +100,64 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
     assert!(host.inputs("pr_failure_handoff").is_empty());
 }
 
+/// [ORB-14616] A report settlement would refuse only for its shape goes back
+/// to the reviewer once, with the typed defect, in the same attempt: the
+/// reviewer step dispatches a second time carrying `report_correction`, the
+/// engine never asks again, and one admission and one settlement follow.
+#[test]
+fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
+    const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
+                          `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
+    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes)
+        .with_report_defects([DEFECT, DEFECT]);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let reviews = host.inputs("agent_review_repair");
+    assert_eq!(reviews.len(), 2, "one correction, never a third reviewer");
+    assert_eq!(reviews[0].get("report_correction"), None);
+    assert_eq!(reviews[1]["report_correction"], DEFECT);
+    assert_eq!(
+        reviews[1]["attempt_id"], reviews[0]["attempt_id"],
+        "the correction belongs to the same attempt"
+    );
+    let asked = host.report_checks.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "the corrected report goes to settlement");
+    assert_eq!(asked[0].attempt_id, "rvw-1");
+    assert_eq!(asked[0].lineage_key, "lineage-1");
+    assert_eq!(asked[0].task_ids, ["T-1"]);
+    assert_eq!(asked[0].workspace_path, PathBuf::from(WORKSPACE));
+    assert_eq!(
+        host.inputs("review_gate_admit")
+            .iter()
+            .filter(|input| input["preflight"] != true && input.get("re_review_after").is_none())
+            .count(),
+        1,
+        "no second reviewer start"
+    );
+    let settle = host
+        .inputs("review_gate_settle")
+        .into_iter()
+        .filter(|input| input.pointer("/admission/applies") == Some(&json!(true)))
+        .count();
+    assert_eq!(settle, 1);
+    assert!(
+        matches!(
+            host.reviewer_events.lock().unwrap().as_slice(),
+            [
+                orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+            ]
+        ),
+        "both invocations are charged to the attempt"
+    );
+}
+
 /// Fixable findings: the reviewer commit becomes the reviewed head. Owner
 /// validation reruns on it with the implementation head as the ownership
 /// base, and only then is it pushed and opened with the "Review fixes"
@@ -404,6 +462,10 @@ pub(super) struct ScriptedHost {
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     log_tail: Option<String>,
     log_tail_run_ids: Mutex<Vec<String>>,
+    /// What the host answers, in turn, when the engine asks about a
+    /// returned reviewer's report; nothing once exhausted.
+    report_defects: Mutex<Vec<String>>,
+    report_checks: Mutex<Vec<orbit_engine::ReviewReportCorrectionRequest>>,
 }
 
 impl ScriptedHost {
@@ -424,7 +486,19 @@ impl ScriptedHost {
             admissions: Mutex::default(),
             log_tail: None,
             log_tail_run_ids: Mutex::default(),
+            report_defects: Mutex::default(),
+            report_checks: Mutex::default(),
         }
+    }
+
+    /// The host finds `defects`, in turn, in the returned reviewer's report.
+    pub(super) fn with_report_defects<const N: usize>(self, defects: [&str; N]) -> Self {
+        *self.report_defects.lock().expect("report defects") = defects
+            .iter()
+            .rev()
+            .map(|defect| defect.to_string())
+            .collect();
+        self
     }
 
     pub(super) fn with_log_tail(mut self, log_tail: impl Into<String>) -> Self {
@@ -520,6 +594,14 @@ impl RuntimeHost for ScriptedHost {
     ) -> Result<Option<u64>, OrbitError> {
         self.reviewer_events.lock().unwrap().push(request.event);
         Ok(None)
+    }
+
+    fn review_report_correction(
+        &self,
+        request: &orbit_engine::ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        self.report_checks.lock().unwrap().push(request.clone());
+        Ok(self.report_defects.lock().unwrap().pop())
     }
 
     fn run_deterministic(

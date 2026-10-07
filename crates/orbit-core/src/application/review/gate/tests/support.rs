@@ -12,9 +12,10 @@ use chrono::Utc;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
 use orbit_types::task::{Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
-    FindingDisposition, JobRun, PipelineState, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewFinding, ReviewLedger, ReviewReport,
-    ReviewValidation, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
+    FindingDisposition, JobRun, NegativeControl, PipelineState, REVIEW_CONTRACT_VERSION,
+    REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewFinding, ReviewLedger,
+    ReviewReport, ReviewValidation, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
+    ValidationRole,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -175,11 +176,30 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             check: None,
             control: None,
             sources: Vec::new(),
+            mutation_target: Vec::new(),
             baseline: None,
         }],
         retired_validation: Vec::new(),
         escalation: (verdict == ReviewVerdict::Reject)
             .then(|| "decide whether the note is required".to_string()),
+    }
+}
+
+/// [ORB-14616] A counterfactual control the reviewer ran on the candidate:
+/// it mutated `targets`, and the checks in `sources` rejected the mutation.
+/// The fixture's scope is `src.txt`; `README.md` is outside it.
+pub(super) fn counterfactual(sources: &[&str], targets: &[&str]) -> ReviewValidation {
+    ReviewValidation {
+        id: None,
+        command: "make test-guard".to_string(),
+        outcome: ValidationOutcome::Failed,
+        role: ValidationRole::ExpectedFailure,
+        note: Some("deleted the guarded conjunct; the repaired test failed".to_string()),
+        check: None,
+        control: Some(NegativeControl::Counterfactual),
+        sources: sources.iter().map(|source| (*source).to_string()).collect(),
+        mutation_target: targets.iter().map(|target| (*target).to_string()).collect(),
+        baseline: None,
     }
 }
 

@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use orbit_automation::review::{
-    ValidationContext, combined_task_meaning_digest, task_meaning_digest, validation_evidence,
-    validation_limitations, validation_role_counts,
+    ValidationContext, ValidationDefect, combined_task_meaning_digest, mutation_targets_restored,
+    task_meaning_digest, validation_evidence, validation_limitations, validation_role_counts,
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
@@ -439,8 +439,18 @@ impl Judgement {
 
     /// Cross-check the claimed verdict against what actually happened.
     /// `scope` is what validation sources are judged against: every task
-    /// selector plus the candidate's changed paths.
-    pub(super) fn reconcile_verdict(&mut self, repair: Option<&CommitIdentity>, scope: &[String]) {
+    /// selector plus the candidate's changed paths. `review_changed` is what
+    /// the reviewer's commit changed, where no file a control mutated may
+    /// remain changed [ORB-14616].
+    pub(super) fn reconcile_verdict(
+        &mut self,
+        repair: Option<&CommitIdentity>,
+        scope: &[String],
+        review_changed: &[String],
+    ) {
+        if let Err(defect) = mutation_targets_restored(&self.validation, review_changed) {
+            self.downgrade(&defect.reason());
+        }
         let open_findings = open_findings(&self.findings).count();
         match self.verdict {
             ReviewVerdict::Accept if repair.is_some() => self.downgrade(
@@ -466,17 +476,36 @@ impl Judgement {
         // reads the same function over the certificate's own scope and
         // retained obligations.
         if self.verdict.passed() {
-            let context = ValidationContext {
-                scope,
-                obligations: &self.retained_obligations,
-                retired: &self.retired_validation,
-                required_validation_commands: self.required_validation_commands.as_deref(),
-            };
-            match validation_evidence(&self.validation, &context) {
-                Ok(()) => self.validation_complete = true,
-                Err(defect) => self.downgrade(&defect.reason()),
+            match self.validation_defect(scope) {
+                None => self.validation_complete = true,
+                Some(defect) => self.downgrade(&defect.reason()),
             }
         }
+    }
+
+    /// What keeps the records of a passing verdict from establishing the
+    /// candidate over `scope`, if anything.
+    fn validation_defect(&self, scope: &[String]) -> Option<ValidationDefect> {
+        let context = ValidationContext {
+            scope,
+            obligations: &self.retained_obligations,
+            retired: &self.retired_validation,
+            required_validation_commands: self.required_validation_commands.as_deref(),
+        };
+        validation_evidence(&self.validation, &context).err()
+    }
+
+    /// [ORB-14616] The defect a reviewer that just returned can still correct
+    /// in its report: a passing verdict whose records fail only in their
+    /// shape ([`ValidationDefect::correctable`]) over `scope`. A report that
+    /// does not claim a pass, or fails on what its checks observed, has
+    /// nothing to correct before settlement.
+    pub(super) fn correctable_defect(&self, scope: &[String]) -> Option<ValidationDefect> {
+        if !self.verdict.passed() {
+            return None;
+        }
+        self.validation_defect(scope)
+            .filter(ValidationDefect::correctable)
     }
 
     pub(super) fn downgrade(&mut self, reason: &str) {

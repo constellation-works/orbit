@@ -192,6 +192,7 @@ impl ReviewedLeaf {
                 check: None,
                 control: None,
                 sources: Vec::new(),
+                mutation_target: Vec::new(),
                 baseline: None,
             }],
             retired_validation: Vec::new(),
@@ -289,6 +290,7 @@ impl ReviewedLeaf {
                 check: None,
                 control: None,
                 sources: Vec::new(),
+                mutation_target: Vec::new(),
                 baseline: None,
             })
             .collect(),

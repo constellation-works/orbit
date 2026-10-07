@@ -1943,6 +1943,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
                 check: None,
                 control: None,
                 sources: vec![],
+                mutation_target: Vec::new(),
                 baseline: None,
             })
             .collect(),

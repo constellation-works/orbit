@@ -15,7 +15,7 @@
 use chrono::{TimeZone, Utc};
 use orbit_automation::review::{
     LandingFacts, ValidationContext, ValidationDefect, certificate_acceptable, exclusion,
-    validation_evidence, validation_limitations,
+    mutation_targets_restored, validation_evidence, validation_limitations,
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
@@ -296,6 +296,7 @@ fn record(
         check: check.map(ToOwned::to_owned),
         control: None,
         sources: Vec::new(),
+        mutation_target: Vec::new(),
         baseline: None,
     }
 }
@@ -837,6 +838,113 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
         certificate_acceptable(&certificate_with(mislabeled, &scope, Vec::new())),
         Err(ReviewInvalidation::ValidationIncomplete)
     );
+}
+
+/// [ORB-14616] ORB-14521's shape: a test-only candidate whose reviewer proved
+/// the repaired test guards a production check by deleting a conjunct from
+/// that out-of-scope file, watching the test fail and restoring it. The
+/// mutated file is the control's `mutation_target`, judged only for its
+/// restoration; the checks that rejected the mutation stay its in-scope
+/// `sources`. Naming the mutated file as a source is a shape defect the
+/// reviewer is asked to correct, and a target the review left changed is
+/// refused naming the file.
+#[test]
+fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() {
+    let production = "crates/orbit-engine/src/converge.rs";
+    let mutation = |sources: &[&str], targets: &[&str]| {
+        let mut record = control(
+            "cargo test -p orbit-review --test fix guards_read_only",
+            Some(NegativeControl::Counterfactual),
+            ValidationOutcome::Failed,
+            sources,
+        );
+        record.mutation_target = targets.iter().map(|target| (*target).to_string()).collect();
+        let mut records = scoped_passes();
+        records.push(record);
+        records
+    };
+    let scope = scope();
+    let context = ValidationContext {
+        scope: &scope,
+        obligations: &[],
+        retired: &[],
+        required_validation_commands: Some(&[]),
+    };
+
+    let restored = mutation(&["crates/orbit-review/tests/fix.rs"], &[production]);
+    assert_eq!(validation_evidence(&restored, &context), Ok(()));
+    assert_eq!(
+        certificate_acceptable(&certificate_with(restored.clone(), &scope, Vec::new())),
+        Ok(()),
+        "an out-of-scope mutation target is not a source when the certificate is spent"
+    );
+    assert_eq!(
+        mutation_targets_restored(&restored, &[]),
+        Ok(()),
+        "a review that changed nothing restored every target"
+    );
+    assert_eq!(
+        mutation_targets_restored(&restored, &["crates/orbit-review/src/fix.rs".to_string()]),
+        Ok(()),
+        "a repair elsewhere does not touch the target"
+    );
+
+    for changed in [production.to_string(), format!("./{production}")] {
+        assert_eq!(
+            mutation_targets_restored(&restored, &[changed]),
+            Err(ValidationDefect::MutationTargetChanged {
+                command: "cargo test -p orbit-review --test fix guards_read_only".into(),
+                target: production.into(),
+            }),
+            "a target the final candidate does not carry unchanged names the file"
+        );
+    }
+
+    let old_shape = mutation(&["crates/orbit-review/tests/fix.rs", production], &[]);
+    let defect = validation_evidence(&old_shape, &context).expect_err("old shape is refused");
+    assert_eq!(
+        defect,
+        ValidationDefect::ControlOutOfScope {
+            command: "cargo test -p orbit-review --test fix guards_read_only".into(),
+            source: production.into(),
+        }
+    );
+    assert!(defect.correctable(), "{}", defect.reason());
+    assert!(
+        defect.reason().contains("mutation_target"),
+        "{}",
+        defect.reason()
+    );
+
+    let checks_out_of_scope = mutation(&[UNRELATED_FIXTURE], &[production]);
+    assert_eq!(
+        validation_evidence(&checks_out_of_scope, &context),
+        Err(ValidationDefect::ControlOutOfScope {
+            command: "cargo test -p orbit-review --test fix guards_read_only".into(),
+            source: UNRELATED_FIXTURE.into(),
+        }),
+        "a mutation target never lets the control's checks leave the scope"
+    );
+
+    for observed in [
+        ValidationDefect::RequiredNotPassed {
+            command: CODEQL.into(),
+            outcome: ValidationOutcome::Failed,
+        },
+        ValidationDefect::MutationTargetChanged {
+            command: "cargo test".into(),
+            target: production.into(),
+        },
+        ValidationDefect::DiagnosticInScope {
+            command: WORKSPACE.into(),
+            source: "crates/orbit-review/src/fix.rs".into(),
+        },
+    ] {
+        assert!(
+            !observed.correctable(),
+            "a defect in what the checks observed is never returned for correction: {observed:?}"
+        );
+    }
 }
 
 /// A required check that failed, was denied, never ran, or was dropped cannot

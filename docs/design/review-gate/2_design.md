@@ -301,6 +301,39 @@ never touched — is a `diagnostic`, not an `expected_failure`: the bounded task
 still passes on its required checks, and nothing imports a workspace-green
 requirement into it.
 
+A counterfactual names the files it temporarily mutated in `mutation_target`,
+apart from its `sources` [ORB-14616]. The mutated file is usually the
+production code the candidate's tests guard, so for a test-only change it is
+always outside the scope: ORB-14521's reviewer proved a repaired test by
+deleting a conjunct from an untouched production file, and naming that file
+in `sources` settled a correct candidate `incomplete`. `sources` still names
+the candidate's checks that rejected the mutation, every one inside the
+scope. A mutation target may lie anywhere, but settlement confirms each one
+came back byte-identical: no target may be among the paths the reviewer
+commit changes, which, since settlement commits everything the reviewer left
+in the worktree, are exactly the files the final candidate does not carry as
+the reviewer received them. A target left changed settles `incomplete` with
+`validation_contradicted` naming the file, whatever the verdict claimed.
+Coverage does not re-judge mutation targets: a certificate that passed
+settlement had them restored.
+
+A defect in a record's shape rather than in what its checks observed — a
+missing `note`, `control` or `sources`, or a source outside the scope such as
+an old-shape counterfactual's mutated file — goes back to the reviewer once
+before the verdict settles [ORB-14616]. When the reviewer step returns
+successfully, the engine asks the host (`RuntimeHost::review_report_correction`)
+to judge the attached report as settlement would, over the scope settlement
+would derive (the task selectors plus the implementation's paths and the
+reviewer's uncommitted ones), without committing or settling anything. Only a
+passing verdict whose first defect is one of those shape defects is returned.
+The engine then dispatches the reviewer once more in the same step, attempt
+and lineage, with the typed defect as its `report_correction` input; the
+reviewer corrects the report and puts it again, and settlement judges
+whatever it then says. Both invocations are charged to the attempt, and no
+minutes left means no correction. A required check that failed, a diagnostic
+inside the scope, or a mutation target left changed are observations, not
+shapes, and go straight to settlement.
+
 Report revisions are retained [ORB-14192]. Every time a `review-report.json`
 is attached, the artifact store parses it and appends its attempt, digest,
 verdict and validation records to `review-report-history.json` under the task

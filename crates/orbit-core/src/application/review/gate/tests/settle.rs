@@ -9,7 +9,8 @@ use orbit_types::workflow::{FindingDisposition, ReviewAttemptState, ReviewFindin
 use serde_json::json;
 
 use super::support::{
-    BEFORE_PR, gated_bundle_fixture, gated_fixture, report, write_report, write_report_bytes,
+    BEFORE_PR, counterfactual, gated_bundle_fixture, gated_fixture, report, write_report,
+    write_report_bytes,
 };
 
 #[test]
@@ -309,6 +310,88 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
         "The approach contradicts the acceptance criteria",
     ] {
         assert!(comment.contains(finding), "{finding} in {comment}");
+    }
+}
+
+/// [ORB-14616] ORB-14521's accept: a test-only candidate whose reviewer
+/// proved the repaired test guards a production file outside the scope by
+/// mutating that file and restoring it. Listed as the counterfactual's
+/// `mutation_target` and left byte-identical, it settles `accept`; left
+/// modified, the review settles `incomplete` naming the file; and the
+/// control's checks (its `sources`) must still lie inside the scope.
+#[test]
+fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration() {
+    struct Case {
+        name: &'static str,
+        sources: &'static [&'static str],
+        left_modified: bool,
+        escalation: Option<&'static str>,
+    }
+    for case in [
+        Case {
+            name: "restored byte-identical",
+            sources: &["src.txt"],
+            left_modified: false,
+            escalation: None,
+        },
+        Case {
+            name: "left modified in the final candidate",
+            sources: &["src.txt"],
+            left_modified: true,
+            escalation: Some("control `make test-guard` mutated `README.md`"),
+        },
+        Case {
+            name: "checks outside the scope",
+            sources: &["README.md"],
+            left_modified: false,
+            escalation: Some("negative control `make test-guard` names `README.md`, outside"),
+        },
+    ] {
+        let gated = gated_fixture(BEFORE_PR);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+        if case.left_modified {
+            fs::write(
+                gated.fixture.repo.join("README.md"),
+                "fixture
+mutated
+",
+            )
+            .expect("mutate the guarded file");
+        }
+        let mut accepted = report(attempt_id, ReviewVerdict::Accept, false);
+        accepted
+            .validation
+            .push(counterfactual(case.sources, &["README.md"]));
+        write_report(&gated.fixture.runtime, &gated.task_id, &accepted);
+
+        let settled = gated.settle(&admission);
+        let certificate = gated.certificate();
+        match case.escalation {
+            None => {
+                let settled = settled.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                assert_eq!(settled["verdict"], "accept", "{}", case.name);
+                assert_eq!(certificate.verdict, ReviewVerdict::Accept, "{}", case.name);
+                assert!(certificate.validation_complete, "{}", case.name);
+                assert_eq!(gated.log("HEAD", "%H"), gated.implementation_sha);
+            }
+            Some(expected) => {
+                let error = settled.expect_err(case.name);
+                assert!(
+                    error.to_string().contains("review_gate_blocked"),
+                    "{}: {error}",
+                    case.name
+                );
+                assert_eq!(
+                    certificate.verdict,
+                    ReviewVerdict::Incomplete,
+                    "{}",
+                    case.name
+                );
+                let escalation = certificate.escalation.unwrap_or_default();
+                assert!(escalation.contains(expected), "{}: {escalation}", case.name);
+            }
+        }
     }
 }
 

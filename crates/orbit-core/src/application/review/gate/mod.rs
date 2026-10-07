@@ -4,12 +4,14 @@
 mod admit;
 mod baseline;
 mod context;
+mod correction;
 mod host_evidence;
 mod judgement;
 mod release;
 mod settle;
 
 pub(crate) use admit::review_gate_admit;
+pub(crate) use correction::review_report_correction;
 pub(crate) use release::{record_reviewer_invocation, release_review_attempt};
 pub(crate) use settle::review_gate_settle;
 

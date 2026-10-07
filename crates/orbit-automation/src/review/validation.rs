@@ -20,6 +20,12 @@
 //! still be accounted for. Relabeling a failed required check therefore
 //! contradicts its own sources or its retained history instead of clearing it.
 //!
+//! A counterfactual control names the files it temporarily mutated apart
+//! from its sources [ORB-14616]: the mutated file is usually the production
+//! code a test-only change guards, outside the candidate's scope. Its sources
+//! (the checks that rejected the mutation) stay bound to the scope, and
+//! settlement confirms each mutation target came back byte-identical.
+//!
 //! An earlier record that carries an id is accounted for by that id alone
 //! [ORB-14370]: the final report carries it forward, whatever its command now
 //! reads, or retires it with a reason. Records written without ids keep the
@@ -67,6 +73,10 @@ pub enum ValidationDefect {
     /// A negative control whose source lies outside the candidate's scope:
     /// an unrelated failure is a diagnostic, not a deliberate control.
     ControlOutOfScope { command: String, source: String },
+    /// [ORB-14616] A file a control says it temporarily mutated that the
+    /// final candidate does not carry byte-identical to the reviewed
+    /// candidate: the mutation was left in place.
+    MutationTargetChanged { command: String, target: String },
     /// A failed diagnostic whose source lies inside the candidate's scope:
     /// that failure is the task's own and blocks like a required check.
     DiagnosticInScope { command: String, source: String },
@@ -103,6 +113,22 @@ pub enum ValidationDefect {
 }
 
 impl ValidationDefect {
+    /// [ORB-14616] Whether the defect is in the shape of a record rather
+    /// than in what the checks observed: a missing note, control kind or
+    /// sources, or a source outside the scope (such as a counterfactual
+    /// naming the file it mutated in `sources` instead of
+    /// `mutation_target`). The reviewer can correct such a report without
+    /// rerunning anything, so it is returned to the reviewer once before the
+    /// verdict settles.
+    pub fn correctable(&self) -> bool {
+        matches!(
+            self,
+            ValidationDefect::ClassificationUnexplained { .. }
+                | ValidationDefect::ClassificationUnevidenced { .. }
+                | ValidationDefect::ControlOutOfScope { .. }
+        )
+    }
+
     /// The escalation reason recorded on the certificate.
     ///
     /// A denied required check keeps its own `validation_unavailable` label:
@@ -154,7 +180,13 @@ impl ValidationDefect {
             ),
             ValidationDefect::ControlOutOfScope { command, source } => format!(
                 "validation_contradicted: negative control `{command}` names `{source}`, outside \
-                 the candidate's scope; record an unrelated failure as diagnostic"
+                 the candidate's scope; record an unrelated failure as diagnostic, and list a \
+                 file a counterfactual temporarily mutated in `mutation_target`, not `sources`"
+            ),
+            ValidationDefect::MutationTargetChanged { command, target } => format!(
+                "validation_contradicted: control `{command}` mutated `{target}`, which the \
+                 final candidate does not carry byte-identical to the reviewed candidate; the \
+                 mutation was not restored"
             ),
             ValidationDefect::DiagnosticInScope { command, source } => format!(
                 "validation_incomplete: diagnostic `{command}` failed in `{source}`, inside the \
@@ -345,9 +377,42 @@ pub fn validation_evidence(
     }
 }
 
+/// [ORB-14616] Whether every file a record says it temporarily mutated came
+/// back byte-identical: `review_changed` holds the paths the review changed
+/// on the reviewed candidate (its repair commit, or its uncommitted edits
+/// before settlement commits them), and no mutation target may be among
+/// them. Settlement checks this beside [`validation_evidence`] because only
+/// the repository can tell; a target is judged like a source, a bare path
+/// reading as its `file:` selector.
+pub fn mutation_targets_restored(
+    records: &[ReviewValidation],
+    review_changed: &[String],
+) -> Result<(), ValidationDefect> {
+    let changed = review_changed
+        .iter()
+        .map(|path| format!("file:{}", path.trim().trim_start_matches("./")))
+        .collect::<Vec<_>>();
+    for record in records {
+        if let Some(target) = record
+            .mutation_target
+            .iter()
+            .map(|target| target.trim())
+            .find(|target| !target.is_empty() && in_scope(target, &changed))
+        {
+            return Err(ValidationDefect::MutationTargetChanged {
+                command: record.command.clone(),
+                target: target.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A negative control: it failed, names its kind and the code it exercises,
 /// that code is the candidate's own, and a control run on the candidate does
-/// not share its check with a required pass there.
+/// not share its check with a required pass there. A counterfactual's
+/// `mutation_target` is not a source: it may lie anywhere, and
+/// [`mutation_targets_restored`] judges it.
 fn negative_control(
     record: &ReviewValidation,
     records: &[ReviewValidation],

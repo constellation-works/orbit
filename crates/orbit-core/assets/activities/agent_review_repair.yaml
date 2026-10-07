@@ -39,6 +39,9 @@ spec:
       crew:
         type: string
         description: The separately configured review crew resolved by review_gate_admit.
+      report_correction:
+        type: string
+        description: Set only when this invocation was started to correct the report of the same attempt; the defect settlement found in it.
   output_schema_json:
     type: object
     properties:
@@ -217,6 +220,14 @@ spec:
          positive evidence; a `passed` outcome contradicts the claim, and a
          control run on the candidate cannot share its check with a required
          pass. An unrelated failure is never a control.
+         A counterfactual lists the files it temporarily changed in
+         `mutation_target`, never in `sources`: for a test-only change that is
+         usually the production file the tests guard, outside the task's
+         selectors. `sources` then names the candidate's checks that rejected
+         the mutation. Restore every mutation target byte for byte (by
+         editing it back, never with Git) before you finish: settlement
+         refuses the record when the final candidate does not carry each
+         target exactly as you received it.
        - `excluded`: an action outside the authorized scope that you
          deliberately did not perform, such as a live deployment. Record it as
          `not_run` (or `denied`); it supplies no coverage and creates no
@@ -370,6 +381,8 @@ spec:
                          "description":"required for expected_failure"},
               "sources":{"type":"array","items":{"type":"string"},
                          "description":"repository-relative paths the outcome is about; required for expected_failure, a failed diagnostic and a baseline claim"},
+              "mutation_target":{"type":"array","items":{"type":"string"},
+                         "description":"counterfactual only: repository-relative paths the control temporarily changed and restored byte-identical; may lie outside the task's scope"},
               "baseline":{"type":"object","required":["base_commit","outcome"],
                           "description":"on a failed required record only: the same command rerun on base.commit",
                 "properties":{
@@ -387,7 +400,17 @@ spec:
 
        Attach the report for every task id in `task_ids`; the gate reads and
        merges every task's report for this attempt.
-    7. Return one Orbit response envelope whose result carries `summary` and
+    7. When `report_correction` is set, an earlier invocation of this same
+       attempt already reviewed the candidate and attached its report, and
+       settlement would refuse that report for the defect it names: a record
+       whose shape, not whose observed outcome, is wrong (a missing `note`,
+       `control` or `sources`, or a source outside the scope such as the file
+       a counterfactual mutated). Fetch the current report, correct the named
+       record and any other record with the same defect, keep every other
+       record, finding and the verdict as observed, and put it again. Do not
+       redo the review or relabel a failure to clear it. This correction is
+       asked once; whatever the report then says settles.
+    8. Return one Orbit response envelope whose result carries `summary` and
        `verdict`. Leave your fixes uncommitted in the worktree. The host
        treats every changed or untracked path you leave there as an intended
        reviewer fix and commits it under your identity, so write temporary

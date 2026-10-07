@@ -81,6 +81,7 @@ fn reviewer_needs_host(leaf: &ReviewedLeaf, attempt_id: &str, command: &str, os:
             check: None,
             control: None,
             sources: Vec::new(),
+            mutation_target: Vec::new(),
             baseline: None,
         })
         .collect(),
