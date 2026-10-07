@@ -8,7 +8,7 @@ use crate::runtime_memo::{DIAGNOSTICS_ERRORS_TTL, DIAGNOSTICS_FRICTION_TTL};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use orbit_cmd::DiagnosticsCommands;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
@@ -21,25 +21,45 @@ use super::{
     map_runtime_error, month_bounds_utc, validate_year_month,
 };
 use crate::log_format::{
-    Filters as LogFilters, format_message_html, format_source, read_recent_matching_events,
-    resolve_log_path,
+    Filters as LogFilters, format_message_html, read_recent_matching_events, resolve_log_path,
 };
 
 pub(super) async fn list_diagnostics_metrics(
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
-    let month = q.month.unwrap_or_else(current_year_month_utc);
-    if let Err(e) = validate_year_month(&month) {
-        return map_runtime_error(e);
-    }
+    let range = match DiagnosticsRange::from_query(&q, true) {
+        Ok(range) => range,
+        Err(error) => return map_runtime_error(error),
+    };
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     match super::blocking("diagnostics metrics", move || {
-        let mut entries = runtime.read_metrics_entries_limited(&month, limit)?;
+        if limit == 0 {
+            return Ok(json!([]));
+        }
+        let mut entries = Vec::new();
+        for month in runtime.list_metrics_months()? {
+            let (start, end) = month_bounds_utc(&month)?;
+            if range.since.is_some_and(|since| end < since) || start > range.until {
+                continue;
+            }
+            entries.extend(
+                runtime
+                    .read_metrics_entries(&month)?
+                    .into_iter()
+                    .filter(|entry| range.contains(entry.ts)),
+            );
+        }
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
         entries.truncate(limit);
         if entries.is_empty() {
-            diagnostics_metrics_from_invocations(&runtime, &month, limit).map(Value::Array)
+            let records = runtime.invocation_records(InvocationQuery {
+                since: range.since,
+                until: Some(range.until),
+                limit,
+                ..InvocationQuery::default()
+            })?;
+            Ok(Value::Array(diagnostics_metrics_values(records)))
         } else {
             serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
         }
@@ -51,20 +71,58 @@ pub(super) async fn list_diagnostics_metrics(
     }
 }
 
-fn diagnostics_metrics_from_invocations(
-    runtime: &OrbitRuntime,
-    month: &str,
-    limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let (since, until) = month_bounds_utc(month)?;
-    let records = runtime.invocation_records(InvocationQuery {
-        since: Some(since),
-        until: Some(until),
-        limit,
-        ..InvocationQuery::default()
-    })?;
+/// Legacy month requests remain supported; dashboard requests supply `since`.
+struct DiagnosticsRange {
+    key: String,
+    since: Option<DateTime<Utc>>,
+    until: DateTime<Utc>,
+}
 
-    Ok(diagnostics_metrics_values(records))
+impl DiagnosticsRange {
+    fn from_query(
+        q: &DiagnosticsQuery,
+        default_month: bool,
+    ) -> Result<Self, orbit_core::OrbitError> {
+        if q.since.is_some() && q.month.is_some() {
+            return Err(orbit_core::OrbitError::InvalidInput(
+                "supply either since or month, not both".to_string(),
+            ));
+        }
+        if let Some(raw) = q.since.as_deref() {
+            let raw = raw.trim();
+            return Ok(Self {
+                key: raw.to_string(),
+                since: if raw == "all" {
+                    None
+                } else {
+                    Some(crate::parse::parse_since(raw)?)
+                },
+                until: Utc::now(),
+            });
+        }
+        let month = q
+            .month
+            .clone()
+            .or_else(|| default_month.then(current_year_month_utc));
+        if let Some(month) = month {
+            let (since, until) = month_bounds_utc(&month)?;
+            Ok(Self {
+                key: month,
+                since: Some(since),
+                until,
+            })
+        } else {
+            Ok(Self {
+                key: "all".to_string(),
+                since: None,
+                until: Utc::now(),
+            })
+        }
+    }
+
+    fn contains(&self, ts: DateTime<Utc>) -> bool {
+        self.since.is_none_or(|since| ts >= since) && ts <= self.until
+    }
 }
 
 // Widened to pub(super) so tests under api/tests/ (per-module layout ORB-00224) can
@@ -311,15 +369,20 @@ pub(super) async fn list_diagnostics_errors(
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
+    let range = match DiagnosticsRange::from_query(&q, false) {
+        Ok(range) => range,
+        Err(error) => return map_runtime_error(error),
+    };
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
+    let key = (range.key.clone(), limit);
     // Reads up to 50k audit rows and a blob per agent invocation, and every
     // Errors tab polls it: memoized so overlapping polls share one scan, and
     // computed on the blocking pool, not the worker serving the request.
     let compute_runtime = Arc::clone(&runtime);
     match state
         .diagnostics_errors_memo()
-        .get_or_compute(&runtime, limit, DIAGNOSTICS_ERRORS_TTL, move || {
-            diagnostics_errors(&compute_runtime, limit).map(Value::Array)
+        .get_or_compute(&runtime, key, DIAGNOSTICS_ERRORS_TTL, move || {
+            diagnostics_errors(&compute_runtime, &range, limit).map(Value::Array)
         })
         .await
     {
@@ -330,41 +393,92 @@ pub(super) async fn list_diagnostics_errors(
 
 fn diagnostics_errors(
     runtime: &OrbitRuntime,
+    range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let mut rows = global_error_rows(limit)?;
-    rows.extend(agent_stderr_error_rows(runtime, limit)?);
-    rows.sort_by(|a, b| {
-        let left = a.get("ts").and_then(Value::as_str).unwrap_or("");
-        let right = b.get("ts").and_then(Value::as_str).unwrap_or("");
-        right.cmp(left)
+    // Read beyond the display cap so duplicate events cannot crowd out distinct failures.
+    let mut rows = global_error_rows_in_range(range, 50_000)?;
+    rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
+    let mut seen_process = HashSet::new();
+    rows.retain(|row| {
+        row["event_id"]
+            .as_str()
+            .is_none_or(|id| seen_process.insert(id.to_string()))
+    });
+    rows.truncate(limit);
+    let mut steps_by_run = HashMap::new();
+    for row in &mut rows {
+        if row["target"] != "orbit.job.step_finished" {
+            continue;
+        }
+        let Some(run) = row["job_run"].as_str() else {
+            continue;
+        };
+        let steps = steps_by_run.entry(run.to_string()).or_insert_with(|| {
+            runtime
+                .collect_run_audit_steps(run)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%run, %error, "diagnostics step join unavailable");
+                    Vec::new()
+                })
+        });
+        if let Some(step) = steps
+            .iter()
+            .rev()
+            .find(|step| Some(step.step_id.as_str()) == row["step"].as_str())
+        {
+            row["step_index"] = json!(step.step_index);
+            if let Some(message) = step
+                .error_message
+                .as_deref()
+                .filter(|message| !message.is_empty())
+            {
+                row["message"] = json!(redact_all(message));
+            }
+        }
+    }
+    rows.extend(agent_stderr_error_rows(runtime, range, limit)?);
+    rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
+    let mut seen = HashSet::new();
+    rows.retain(|row| {
+        row["event_id"]
+            .as_str()
+            .is_none_or(|id| seen.insert(id.to_string()))
     });
     rows.truncate(limit);
     Ok(rows)
 }
 
-fn global_error_rows(limit: usize) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let path = resolve_log_path(None)?;
-    global_error_rows_from_path(&path, limit)
-}
-
-// Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn global_error_rows_from_path(
-    path: &std::path::Path,
+fn global_error_rows_in_range(
+    range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let filters = LogFilters::from_query_parts(None, Some("error".to_string()), None)?;
-    // Read the raw JSONL events so run/task/step/provider survive; the
-    // rendered log-tail shape drops those fields.
-    let events = read_recent_matching_events(path, &filters, limit)
-        .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
+    let path = resolve_log_path(None)?;
+    let filters = LogFilters::new(
+        None,
+        Some(crate::log_format::LevelFilter::Error),
+        range.since,
+    );
+    let events = read_recent_matching_events(&path, &filters, limit).map_err(|error| {
+        orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
+    })?;
     Ok(events
         .into_iter()
+        .filter(|event| {
+            event["timestamp"]
+                .as_str()
+                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                .is_some_and(|ts| range.contains(ts.with_timezone(&Utc)))
+        })
         .map(|event| process_error_row(&event))
         .collect())
+}
+
+fn row_timestamp(row: &Value) -> Option<DateTime<Utc>> {
+    row["ts"].as_str().and_then(|ts| ts.parse().ok())
 }
 
 fn process_error_row(event: &Value) -> Value {
@@ -382,15 +496,16 @@ fn process_error_row(event: &Value) -> Value {
     json!({
         "ts": ts,
         "source": "process",
-        "message": strip_htmlish(&format_message_html(target, fields)),
-        "event_id": null,
+        "message": optional_log_field(fields, &["error_message", "error"])
+            .map(redact_all).unwrap_or_else(|| strip_htmlish(&format_message_html(target, fields))),
+        "event_id": optional_log_field(fields, &["event_id"]),
         "job_run": job_run,
         "step": optional_log_field(fields, &["step_id", "step", "activity_id"]),
         "step_index": null,
         "task_id": optional_log_field(fields, &["task_id"]),
         "provider": optional_log_field(fields, &["provider"]),
         "blob_ref": null,
-        "target": format_source(target, fields),
+        "target": redact_all(target),
         "affiliation": affiliation,
     })
 }
@@ -414,19 +529,35 @@ pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
 
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
+    range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let events = v2_audit_values(runtime, None, None, 50_000)?;
+    // Ancestors can precede the selected window. Keep them for step attribution,
+    // but only read stderr blobs belonging to invocations in the requested range.
+    let events = v2_audit_values(runtime, None, Some(range.until), 50_000)?;
     let by_id = events_by_id(&events);
     let step_index_by_id = step_index_by_id(&events);
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
     let mut blobs_read = 0usize;
+    let mut seen = HashSet::new();
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
     // `2 * limit` rows and the caller keeps only the newest `limit` of them.
     for event in events.iter().rev() {
         if event.get("body_kind").and_then(Value::as_str) != Some("cli_invocation_finished") {
+            continue;
+        }
+        if !event["ts"]
+            .as_str()
+            .and_then(|ts| ts.parse::<DateTime<Utc>>().ok())
+            .is_some_and(|ts| range.contains(ts))
+        {
+            continue;
+        }
+        if let Some(id) = event["event_id"].as_str()
+            && !seen.insert(id.to_string())
+        {
             continue;
         }
         let Some(blob_ref) = event.get("stderr_blob_ref").and_then(Value::as_str) else {
@@ -443,26 +574,52 @@ fn agent_stderr_error_rows(
             .unwrap_or("")
             .to_string();
         let step = enclosing_step_id_for_event(event, &by_id);
-        let step_index = step
-            .as_ref()
-            .and_then(|step| step_index_by_id.get(step).copied());
-        for parsed in parse_structured_error_lines(&stderr, &fallback_ts) {
-            rows.push(json!({
-                "ts": parsed.ts,
-                "source": "agent-stderr",
-                "message": redact_all(&parsed.message),
-                "job_run": event.get("run_id").and_then(Value::as_str),
-                "step": step,
-                "step_index": step_index,
-                "task_id": event.get("task_id").and_then(Value::as_str),
-                "provider": event.get("provider").and_then(Value::as_str),
-                "blob_ref": blob_ref,
-                "event_id": event.get("event_id").and_then(Value::as_str),
-                "target": parsed.target,
-            }));
-            if rows.len() >= limit.saturating_mul(2) {
-                return Ok(rows);
+        let step_index = step.as_ref().and_then(|step| {
+            step_index_by_id
+                .get(&(
+                    event["run_id"].as_str().unwrap_or("").to_string(),
+                    step.clone(),
+                ))
+                .copied()
+        });
+        let parsed = parse_structured_error_lines(&stderr, &fallback_ts);
+        let mut messages = Vec::new();
+        let mut targets = Vec::new();
+        let mut timestamps = Vec::new();
+        for line in parsed {
+            let Ok(ts) = line.ts.parse::<DateTime<Utc>>() else {
+                continue;
+            };
+            if !range.contains(ts) {
+                continue;
             }
+            let message = redact_all(&line.message);
+            if !messages.contains(&message) {
+                messages.push(message);
+            }
+            if !targets.contains(&line.target) {
+                targets.push(redact_all(&line.target));
+            }
+            timestamps.push(ts);
+        }
+        if messages.is_empty() {
+            continue;
+        }
+        rows.push(json!({
+            "ts": timestamps.into_iter().max().map(|ts| ts.to_rfc3339()).unwrap_or(fallback_ts),
+            "source": "agent-stderr",
+            "message": messages.join("\n"),
+            "job_run": event.get("run_id").and_then(Value::as_str),
+            "step": step,
+            "step_index": step_index,
+            "task_id": event.get("task_id").and_then(Value::as_str),
+            "provider": event.get("provider").and_then(Value::as_str),
+            "blob_ref": blob_ref,
+            "event_id": event.get("event_id").and_then(Value::as_str),
+            "target": targets.join(", "),
+        }));
+        if rows.len() >= limit.saturating_mul(2) {
+            break;
         }
     }
     Ok(rows)
@@ -498,7 +655,7 @@ pub(super) fn parse_structured_error_line(
     } else {
         (fallback_ts.to_string(), trimmed.strip_prefix("ERROR ")?)
     };
-    let (target, message) = rest.rsplit_once(": ")?;
+    let (target, message) = rest.split_once(": ")?;
     let target = target.trim();
     let message = message.trim();
     if target.is_empty() || message.is_empty() {
@@ -511,8 +668,9 @@ pub(super) fn parse_structured_error_line(
     })
 }
 
-fn step_index_by_id(events: &[Value]) -> HashMap<String, u32> {
+fn step_index_by_id(events: &[Value]) -> HashMap<(String, String), u32> {
     let mut result = HashMap::new();
+    let mut next_by_run = HashMap::new();
     for event in events {
         if event.get("body_kind").and_then(Value::as_str) != Some("step_started") {
             continue;
@@ -520,8 +678,15 @@ fn step_index_by_id(events: &[Value]) -> HashMap<String, u32> {
         let Some(step_id) = event.get("step_id").and_then(Value::as_str) else {
             continue;
         };
-        let index = result.len() as u32;
-        result.entry(step_id.to_string()).or_insert(index);
+        let run = event["run_id"].as_str().unwrap_or("");
+        let next = next_by_run.entry(run).or_insert(0);
+        result
+            .entry((run.to_string(), step_id.to_string()))
+            .or_insert_with(|| {
+                let index = *next;
+                *next += 1;
+                index
+            });
     }
     result
 }

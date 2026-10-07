@@ -49,9 +49,9 @@ pub(super) struct StateInner {
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
-    /// Per-server memo for `/api/diagnostics/errors`, keyed by the bounded
-    /// row limit. Collapses overlapping Errors-tab polls into one scan.
-    diagnostics_errors: RuntimeMemo<usize>,
+    /// Per-server memo for `/api/diagnostics/errors`, keyed by time range and
+    /// bounded row limit. Collapses overlapping Errors-tab polls into one scan.
+    diagnostics_errors: RuntimeMemo<(String, usize)>,
     /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
@@ -454,7 +454,7 @@ impl DashboardState {
     }
 
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
-    pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<usize> {
+    pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<(String, usize)> {
         &self.inner.diagnostics_errors
     }
 

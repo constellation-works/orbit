@@ -772,7 +772,7 @@ function runsScopeNote() {
   return el("div", {
     class: "runs-scope-note",
     text: "Every job run, newest first, with no time window.",
-    title: "The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures this month.",
+    title: "The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures in the selected window.",
   });
 }
 

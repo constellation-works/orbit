@@ -690,6 +690,31 @@ try {
     const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
     await assertNarrowTableLayouts(page);
+    for (const subtab of ['incidents', 'errors', 'metrics']) {
+      await page.evaluate(subtab => globalThis.showHealthEvidence(subtab), subtab);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        const body = page.locator('#diag-body');
+        if (!(await body.isVisible())) throw new Error(`Health ${subtab} invisible at ${width}px`);
+        if (subtab === 'metrics') {
+          const tables = await page.locator('#diag-implement-one-body table').evaluateAll(tables => tables.map(table => {
+            const rect = table.getBoundingClientRect();
+            const body = table.parentElement;
+            const title = body.previousElementSibling;
+            return { width: rect.width, available: body.clientWidth, scrollable: getComputedStyle(body).overflowX === 'auto',
+              titleCase: getComputedStyle(title).textTransform,
+              cells: [...table.querySelectorAll('td')].map(cell => ({ text: cell.textContent, clipped: cell.scrollWidth > cell.clientWidth + 1 })) };
+          }));
+          for (const table of tables) {
+            if (table.titleCase !== 'none' || table.cells.some(cell => cell.clipped) || (table.width > table.available + 1 && !table.scrollable)) {
+              throw new Error(`Diagnostics summary clips data at ${width}px: ${JSON.stringify(table)}`);
+            }
+          }
+        }
+        await page.screenshot({ path: path.join(evidence, `health-${subtab}-${width}.png`), fullPage: true });
+      }
+    }
+    console.log("Health behavior and summary layout passed at 1440px and 390px.");
     await page.evaluate(() => globalThis.showDiagnosticsEvidence());
     // Hold a real visible panel in refresh, then inspect its rendered accessible
     // feedback and retry affordance at desktop and narrow widths.
