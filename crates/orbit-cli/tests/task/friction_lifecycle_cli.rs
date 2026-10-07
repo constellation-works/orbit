@@ -550,3 +550,180 @@ fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
         "resolved"
     );
 }
+
+#[test]
+fn friction_title_is_redacted_on_add_and_update_before_persistence() {
+    let fixture = Fixture::new();
+    let add_token = format!("ghp_{}", "a".repeat(36));
+    let add_title = format!("CI leaked GITHUB_TOKEN={add_token} in build");
+    let safe_add_title = "CI leaked GITHUB_TOKEN=[REDACTED_SECRET] in build";
+
+    // 1. CLI friction add with secret-bearing title
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--title",
+        &add_title,
+        "--body",
+        "Build failure log excerpt",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    assert_eq!(created["title"], safe_add_title);
+    assert_eq!(created["redactions_applied"], true);
+    let redactions = created["redactions"].as_array().expect("redactions array");
+    assert!(
+        redactions.iter().any(|r| r["field_path"] == "title"),
+        "expected title in redactions report: {redactions:?}"
+    );
+
+    let id = created["id"].as_str().expect("friction id");
+
+    // Reading the persisted record via show
+    let shown = fixture.json(&["friction", "show", id, "--json"]);
+    assert_eq!(shown["title"], safe_add_title);
+    assert!(!shown.to_string().contains(&add_token));
+
+    // 2. CLI friction update with secret-bearing title
+    let update_token = format!("ghp_{}", "b".repeat(36));
+    let update_title = format!("Updated GITHUB_TOKEN={update_token} report");
+    let safe_update_title = "Updated GITHUB_TOKEN=[REDACTED_SECRET] report";
+
+    let updated = fixture.json(&["friction", "update", id, "--title", &update_title, "--json"]);
+    assert_eq!(updated["title"], safe_update_title);
+    assert_eq!(updated["redactions_applied"], true);
+    let update_redactions = updated["redactions"].as_array().expect("redactions array");
+    assert!(
+        update_redactions.iter().any(|r| r["field_path"] == "title"),
+        "expected title in redactions report: {update_redactions:?}"
+    );
+
+    let shown_after_update = fixture.json(&["friction", "show", id, "--json"]);
+    assert_eq!(shown_after_update["title"], safe_update_title);
+    assert!(!shown_after_update.to_string().contains(&update_token));
+
+    // 3. Tool run orbit.friction.add with secret-bearing title
+    let tool_add_token = format!("ghp_{}", "c".repeat(36));
+    let tool_add_title = format!("Tool add GITHUB_TOKEN={tool_add_token}");
+    let safe_tool_add_title = "Tool add GITHUB_TOKEN=[REDACTED_SECRET]";
+    let tool_add_input = json!({
+        "title": tool_add_title,
+        "body": "Reported via tool host",
+        "model": "codex",
+    })
+    .to_string();
+
+    let tool_created = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.friction.add",
+        "--input",
+        &tool_add_input,
+    ]);
+    assert_eq!(tool_created["title"], safe_tool_add_title);
+    assert_eq!(tool_created["redactions_applied"], true);
+
+    let tool_id = tool_created["id"].as_str().expect("tool friction id");
+    let tool_shown = fixture.json(&["friction", "show", tool_id, "--json"]);
+    assert_eq!(tool_shown["title"], safe_tool_add_title);
+    assert!(!tool_shown.to_string().contains(&tool_add_token));
+
+    // 4. Tool run orbit.friction.update with secret-bearing title
+    let tool_update_token = format!("ghp_{}", "d".repeat(36));
+    let tool_update_title = format!("Tool update GITHUB_TOKEN={tool_update_token}");
+    let safe_tool_update_title = "Tool update GITHUB_TOKEN=[REDACTED_SECRET]";
+    let tool_update_input = json!({
+        "id": tool_id,
+        "title": tool_update_title,
+        "model": "codex",
+    })
+    .to_string();
+
+    let tool_updated = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.friction.update",
+        "--input",
+        &tool_update_input,
+    ]);
+    assert_eq!(tool_updated["title"], safe_tool_update_title);
+    assert_eq!(tool_updated["redactions_applied"], true);
+
+    let tool_shown_after_update = fixture.json(&["friction", "show", tool_id, "--json"]);
+    assert_eq!(tool_shown_after_update["title"], safe_tool_update_title);
+    assert!(
+        !tool_shown_after_update
+            .to_string()
+            .contains(&tool_update_token)
+    );
+
+    // 5. Whole-token credential in title is rejected (same free-text policy as body)
+    let whole_token = format!("ghp_{}", "e".repeat(36));
+    fixture
+        .command(&[
+            "friction",
+            "add",
+            "--title",
+            &whole_token,
+            "--body",
+            "Valid body",
+            "--model",
+            "codex",
+            "--json",
+        ])
+        .assert()
+        .failure();
+
+    fixture
+        .command(&["friction", "update", id, "--title", &whole_token, "--json"])
+        .assert()
+        .failure();
+
+    // 6. Verify neither the audit log nor any file on disk contains the leaked tokens
+    let audit = fixture.json(&["audit", "list", "--json"]);
+    for token in [
+        &add_token,
+        &update_token,
+        &tool_add_token,
+        &tool_update_token,
+        &whole_token,
+    ] {
+        assert!(
+            !audit.to_string().contains(token),
+            "token leaked into audit log"
+        );
+    }
+
+    fn assert_no_token_in_dir(dir: &std::path::Path, tokens: &[&str]) {
+        if !dir.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                assert_no_token_in_dir(&path, tokens);
+            } else if path.is_file() {
+                let content = std::fs::read(&path).unwrap();
+                for token in tokens {
+                    assert!(
+                        !content.windows(token.len()).any(|w| w == token.as_bytes()),
+                        "secret token leaked to persisted file {path:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    assert_no_token_in_dir(
+        &fixture.repo,
+        &[
+            &add_token,
+            &update_token,
+            &tool_add_token,
+            &tool_update_token,
+            &whole_token,
+        ],
+    );
+}
