@@ -337,6 +337,97 @@ fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64,
 
 #[cfg(unix)]
 #[test]
+fn managed_global_plugin_tool_refusals_are_audited() {
+    let workspace = McpWorkspace::init();
+    let source = write_plugin_with_scope(&workspace.home, "policyglobal", "global");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("plugin source"),
+            "--enable",
+        ],
+    );
+
+    // A non-managed MCP session ignores the server's stray activity envelope.
+    let mut interactive = workspace.serve_with_args_and_env(
+        &[],
+        &[
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+            ("ORBIT_ACTIVITY_TOOLS", "orbit.task.show"),
+        ],
+    );
+    let output = interactive.call_tool_ok("policyglobal_echo", json!({}));
+    assert_eq!(output["plugin"], "policyglobal");
+    drop(interactive);
+
+    let base_env = [
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+        ("ORBIT_RUN_ID", "jrun-global-plugin-policy-test"),
+        ("ORBIT_TASK_ACTOR_KIND", "agent"),
+    ];
+    let mut env = base_env.to_vec();
+    env.push(("ORBIT_ACTIVITY_TOOLS", "policyglobal.echo"));
+    let mut allowed = workspace.serve_with_args_and_env(&[], &env);
+    let output = allowed.call_tool_ok("policyglobal_echo", json!({}));
+    assert_eq!(output["plugin"], "policyglobal");
+    drop(allowed);
+
+    let before = audit_count_for_tool(&workspace, "policyglobal.echo");
+    for (index, policy_env) in [
+        vec![("ORBIT_ACTIVITY_TOOLS", "orbit.task.show")],
+        vec![
+            ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+            ("ORBIT_ACTIVITY_TOOLS_DENY", "policyglobal.*"),
+            ("ORBIT_ACTIVITY_NAME", "plugin-policy-probe"),
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut env = base_env.to_vec();
+        env.extend(policy_env);
+        let mut client = workspace.serve_with_args_and_env(&[], &env);
+        let refused = client.call_tool_err("policyglobal_echo", json!({}));
+        assert_eq!(refused["code"], "policy_denied", "{refused}");
+        let reason = refused["message"].as_str().expect("policy refusal reason");
+        assert!(reason.contains("policyglobal.echo"), "{refused}");
+        assert_eq!(
+            audit_count_for_tool(&workspace, "policyglobal.echo"),
+            before + index as i64 + 1,
+            "each policy refusal must add exactly one durable row"
+        );
+        let db = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("audit db");
+        let audit: (String, i64, String, String, String) = db
+            .query_row(
+                "SELECT status, exit_code, subcommand, error_message, plugin_name FROM audit_events
+                 WHERE tool_name = ?1 ORDER BY id DESC LIMIT 1",
+                ["policyglobal.echo"],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("read the policy refusal audit row");
+        assert_eq!(audit.0, "denied");
+        assert_eq!(audit.1, 1);
+        assert_eq!(audit.2, "run-mcp");
+        assert!(
+            reason.ends_with(&audit.3),
+            "the audited cause must match the refusal: {audit:?}"
+        );
+        assert_eq!(audit.4, "policyglobal");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn unreachable_host_read_is_audited_once_by_cli() {
     let workspace = McpWorkspace::init();
     // The audit schema is opened lazily. Exercise an audited built-in before
@@ -597,6 +688,15 @@ fn plugin_add_refuses_a_source_inside_the_repository() {
 /// `ORBIT_ALLOWED_TOOLS` its plugin was granted. The plugin's tool reports
 /// the callback's exit status and stderr, so a refusal is observable.
 fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
+    write_callback_plugin_with_scope(home, namespace, requested, "workspace")
+}
+
+fn write_callback_plugin_with_scope(
+    home: &Path,
+    namespace: &str,
+    requested: &str,
+    scope: &str,
+) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
@@ -622,7 +722,7 @@ fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathB
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: {scope}\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
         ),
     )
     .expect("write plugin manifest");
@@ -932,6 +1032,111 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
         assert!(
             message.contains(refused) && message.contains("never widens"),
             "the refusal must name the session ceiling: {message}"
+        );
+    }
+}
+
+/// The global MCP path must mint the same immutable activity ceiling as the
+/// workspace path, including deny mode. Read the actual credential the host
+/// gives the sandboxed backend, rather than its informational environment.
+#[cfg(unix)]
+#[test]
+fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
+    let workspace = McpWorkspace::init();
+    let source = write_callback_plugin_with_scope(
+        &workspace.home,
+        "globalceiling",
+        "orbit.task.list, orbit.search",
+        "global",
+    );
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\n\
+         cat >/dev/null\n\
+         ceiling=$(sed -n 's/.*\"effective_tools\":[[:space:]]*\\(\\[[^]]*\\]\\).*/\\1/p' <&3)\n\
+         printf '{\"ok\":true,\"output\":{\"effective_tools\":%s}}\\n' \"$ceiling\"\n",
+    )
+    .expect("write callback credential probe");
+    run_orbit(
+        &workspace,
+        &["plugin", "add", source.to_str().expect("plugin source")],
+    );
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "enable",
+            "globalceiling",
+            "--grant",
+            "orbit_tools",
+        ],
+    );
+
+    for (policy_env, expected) in [
+        (vec![], vec!["orbit.search", "orbit.task.list"]),
+        (
+            vec![("ORBIT_ACTIVITY_TOOLS", "globalceiling.callback")],
+            vec![],
+        ),
+        (
+            vec![(
+                "ORBIT_ACTIVITY_TOOLS",
+                "globalceiling.callback,orbit.task.list",
+            )],
+            vec!["orbit.task.list"],
+        ),
+        (
+            vec![(
+                "ORBIT_ACTIVITY_TOOLS",
+                "globalceiling.callback,orbit.search",
+            )],
+            vec!["orbit.search"],
+        ),
+        (
+            vec![
+                ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+                ("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.search"),
+            ],
+            vec!["orbit.task.list"],
+        ),
+        (
+            vec![
+                ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+                ("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.task.*"),
+            ],
+            vec!["orbit.search"],
+        ),
+    ] {
+        let mut env = vec![
+            ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+            ("ORBIT_RUN_ID", "jrun-global-plugin-ceiling-test"),
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+        ];
+        env.extend(policy_env);
+        // A global plugin has no workspace filesystem grant. Start an
+        // unbound server outside the checkout to exercise its credential
+        // without a workspace binding or runtime.
+        let mut command = McpWorkspace::orbit_command(&workspace.home, &workspace.home);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let child = command
+            .args(["mcp", "serve"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn unbound global plugin server");
+        let (mut client, initialized) = McpClient::initialized(
+            child,
+            McpClient::initialize_params("global-plugin-ceiling", None),
+        );
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "orbit-mcp");
+        let output = client.call_tool_ok("globalceiling_callback", json!({}));
+        assert_eq!(
+            output["effective_tools"],
+            json!(expected),
+            "the host-issued callback credential must carry exactly the activity ceiling: {output}"
         );
     }
 }
