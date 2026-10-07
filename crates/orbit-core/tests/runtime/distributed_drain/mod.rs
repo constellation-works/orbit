@@ -70,6 +70,7 @@ mod pilot;
 mod recovery;
 mod settlement;
 mod single_pass;
+mod waiting;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";

@@ -156,12 +156,27 @@ impl PullPeer for FencedPeer<'_> {
 /// resets the breaker by starting a new drain.
 pub(crate) const CONSECUTIVE_FAILURE_BREAKER: usize = 3;
 
-/// What one [`PullDrain::refill_pass`] did: the claims it admitted, and the
-/// error that ended it, if one did. The two are independent — a pass can admit
-/// claims and then fail on a later one.
+/// What one [`PullDrain::refill_pass`] did: the claims it admitted, the
+/// error that ended it, if one did, and the owner's last answer. The three are
+/// independent — a pass can admit claims and then fail on a later one.
 pub(crate) struct RefillPass {
     pub(crate) admitted: usize,
     pub(crate) error: Option<OrbitError>,
+    /// The last receipt the owner returned to a request this pass sent or
+    /// retried [ORB-14475]: its diagnostics are what the owner kept off this
+    /// executor. `None` when the pass sent no request, or ended in an error
+    /// before one was answered.
+    pub(crate) answer: Option<Box<AdmissionReceipt>>,
+}
+
+/// How far one admission carried, and what that leaves the pass free to do.
+enum Reconciled {
+    /// Nothing the admission owes holds new requests back.
+    Open,
+    /// A settlement the owner has not accepted holds new requests back.
+    Held,
+    /// The owner answered a request idle: nothing ready for this executor.
+    Idle(Box<AdmissionReceipt>),
 }
 
 /// How the owner answered a bind.
@@ -205,10 +220,22 @@ impl PullDrain<'_> {
         ceiling: usize,
     ) -> RefillPass {
         let mut admitted = 0;
+        let mut answer = None;
         let error = self
-            .refill_into(destination, template, admitting, ceiling, &mut admitted)
+            .refill_into(
+                destination,
+                template,
+                admitting,
+                ceiling,
+                &mut admitted,
+                &mut answer,
+            )
             .err();
-        RefillPass { admitted, error }
+        RefillPass {
+            admitted,
+            error,
+            answer,
+        }
     }
 
     /// [`Self::refill_pass`] as a `Result`, for fixtures that only care
@@ -239,9 +266,15 @@ impl PullDrain<'_> {
         admitting: &dyn Fn() -> Result<bool, OrbitError>,
         ceiling: usize,
         admitted: &mut usize,
+        answer: &mut Option<Box<AdmissionReceipt>>,
     ) -> Result<(), OrbitError> {
-        if !self.reconcile_pending(destination)? {
-            return Ok(());
+        match self.reconcile_pending_answer(destination)? {
+            Reconciled::Open => {}
+            Reconciled::Held => return Ok(()),
+            Reconciled::Idle(receipt) => {
+                *answer = Some(receipt);
+                return Ok(());
+            }
         }
         let Some(mut next) = template()? else {
             return Ok(());
@@ -277,10 +310,14 @@ impl PullDrain<'_> {
             else {
                 break;
             };
-            if !self.reconcile(record)? {
-                break;
+            match self.reconcile(record)? {
+                Reconciled::Open => *admitted += 1,
+                Reconciled::Held => break,
+                Reconciled::Idle(receipt) => {
+                    *answer = Some(receipt);
+                    break;
+                }
             }
-            *admitted += 1;
         }
         Ok(())
     }
@@ -306,6 +343,16 @@ impl PullDrain<'_> {
         &self,
         destination: &PullDestination,
     ) -> Result<bool, OrbitError> {
+        self.reconcile_pending_answer(destination)
+            .map(|reconciled| matches!(reconciled, Reconciled::Open))
+    }
+
+    /// [`Self::reconcile_pending`], keeping the receipt of an unanswered
+    /// request that turned out idle.
+    fn reconcile_pending_answer(
+        &self,
+        destination: &PullDestination,
+    ) -> Result<Reconciled, OrbitError> {
         let fenced = FencedPeer {
             inner: self.peer,
             failed: RefCell::new(None),
@@ -316,7 +363,7 @@ impl PullDrain<'_> {
             launcher: self.launcher,
             refused_delivery: self.refused_delivery,
         };
-        let mut may_allocate = true;
+        let mut outcome = Reconciled::Open;
         let mut first_error = None;
         // Only admissions holding a slot move: finished history has nothing
         // left to reconcile, and is never read here.
@@ -325,7 +372,14 @@ impl PullDrain<'_> {
                 continue;
             }
             match pass.reconcile(record) {
-                Ok(allocate) => may_allocate &= allocate,
+                Ok(Reconciled::Open) => {}
+                // The latest idle answer wins; a held settlement never hides it.
+                Ok(idle @ Reconciled::Idle(_)) => outcome = idle,
+                Ok(Reconciled::Held) => {
+                    if matches!(outcome, Reconciled::Open) {
+                        outcome = Reconciled::Held;
+                    }
+                }
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
@@ -333,7 +387,7 @@ impl PullDrain<'_> {
         }
         match first_error {
             Some(error) => Err(error),
-            None => Ok(may_allocate),
+            None => Ok(outcome),
         }
     }
 
@@ -441,17 +495,17 @@ impl PullDrain<'_> {
         }
     }
 
-    /// Returns false for a newly reconciled idle receipt, and for a settlement
-    /// the owner refuses while holding its claim: nothing new is admitted
-    /// against an owner that will not accept what this executor already
-    /// owes it. Historical idle records are skipped so the next polling pass
-    /// can allocate a fresh ID.
-    fn reconcile(&self, mut record: LocalPullAdmission) -> Result<bool, OrbitError> {
+    /// Returns [`Reconciled::Idle`] for a newly reconciled idle receipt, and
+    /// [`Reconciled::Held`] for a settlement the owner refuses while holding
+    /// its claim: nothing new is admitted against an owner that will not
+    /// accept what this executor already owes it. Historical idle records are
+    /// skipped so the next polling pass can allocate a fresh ID.
+    fn reconcile(&self, mut record: LocalPullAdmission) -> Result<Reconciled, OrbitError> {
         if matches!(
             record.phase,
             LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused
         ) {
-            return Ok(true);
+            return Ok(Reconciled::Open);
         }
         loop {
             // A queued leaf can be cancelled while the owner bind response is
@@ -495,18 +549,25 @@ impl PullDrain<'_> {
                 },
                 LocalPullPhase::Launched => match self.settle_terminal_leaf(&record)? {
                     Some(settling) => settling,
-                    None => return Ok(true),
+                    None => return Ok(Reconciled::Open),
                 },
-                LocalPullPhase::Settling if self.release_held(&record)? => return Ok(true),
+                LocalPullPhase::Settling if self.release_held(&record)? => {
+                    return Ok(Reconciled::Open);
+                }
                 LocalPullPhase::Settling => {
                     let delivered = self.deliver(&record)?;
                     if delivered.phase == LocalPullPhase::Settling {
-                        return Ok(false);
+                        return Ok(Reconciled::Held);
                     }
                     delivered
                 }
-                LocalPullPhase::Settled | LocalPullPhase::Refused => return Ok(true),
-                LocalPullPhase::Idle => return Ok(false),
+                LocalPullPhase::Settled | LocalPullPhase::Refused => return Ok(Reconciled::Open),
+                LocalPullPhase::Idle => {
+                    return Ok(match record.receipt {
+                        Some(receipt) => Reconciled::Idle(Box::new(receipt)),
+                        None => Reconciled::Held,
+                    });
+                }
             };
         }
     }
@@ -710,7 +771,7 @@ impl PullDrain<'_> {
         &self,
         record: &LocalPullAdmission,
         refusal: OrbitError,
-    ) -> Result<bool, OrbitError> {
+    ) -> Result<Reconciled, OrbitError> {
         tracing::warn!(
             target: "orbit.core.pull",
             request_id = %record.request.request_id,

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
-use super::drain_summary::{pass_throttle_line, summarize_drain_leaves};
+use super::drain_summary::{pass_throttle_line, pass_waiting_lines, summarize_drain_leaves};
 use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
@@ -218,14 +218,18 @@ pub(crate) fn run_show_payload(
     if let Some(summary) = &drain_summary {
         header.push('\n');
         header.push_str(&summary.lines(run.state).join("\n"));
-    } else if let Some(line) = state
+    } else if let Some(pass) = state
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
-        .and_then(pass_throttle_line)
     {
         // A pull drain records its passes too, without a leaf summary.
-        header.push('\n');
-        header.push_str(&line);
+        for line in pass_throttle_line(pass)
+            .into_iter()
+            .chain(pass_waiting_lines(pass))
+        {
+            header.push('\n');
+            header.push_str(&line);
+        }
     }
     if let Some(pass) = state
         .as_ref()

@@ -1295,7 +1295,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
 /// A local drain's admission of `task` on the owner, as its gate leaves it
 /// while waiting for context locks: the wrapper and gate carry the task, and
 /// the task is still `backlog` with nothing reserved.
-fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
+pub(super) fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
     let jobs = orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),

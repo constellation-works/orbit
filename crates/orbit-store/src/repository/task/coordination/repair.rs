@@ -12,6 +12,7 @@
 //! objects and ran its implementation. The owner's own local drain takes the
 //! repair once [`REPAIR_OWNER_FALLBACK_SECONDS`] have passed without that
 //! executor pulling it. Any other follower never does.
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use chrono::Utc;
@@ -85,6 +86,7 @@ impl TaskCommitBoundary {
             let diagnose = |reason: String| AdmissionDiagnostic {
                 task_id: task_id.clone(),
                 reason,
+                blocked_by: Vec::new(),
             };
             let Some(task) = tasks
                 .iter()
@@ -279,6 +281,12 @@ impl TaskCommitBoundary {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
+                    blocked_by: conflicts
+                        .iter()
+                        .map(|conflict| conflict.held_by_id.clone())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
                 });
                 Ok(false)
             }

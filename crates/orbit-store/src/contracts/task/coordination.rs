@@ -512,6 +512,10 @@ pub struct ExecutionClaim {
 pub struct AdmissionDiagnostic {
     pub task_id: String,
     pub reason: String,
+    /// The tasks it waits on or is held behind, when the owner knows them: the
+    /// unfinished dependencies, or the holder of the protected footprint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

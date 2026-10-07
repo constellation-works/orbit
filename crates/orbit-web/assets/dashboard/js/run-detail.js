@@ -281,6 +281,8 @@ export function renderRunDetailMeta() {
   if (leaves) wrap.appendChild(leaves);
   const crews = buildCrewWindow(detail.crew_window || null);
   if (crews) wrap.appendChild(crews);
+  const waiting = buildStillWaiting(run.drain_last_pass || null);
+  if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap]);
@@ -344,6 +346,73 @@ function buildCrewWindow(window) {
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source}): ${exclusion.reason}` }),
     ]));
+  }
+  return panel;
+}
+
+// Reason codes whose `detail` is the sentence that names what clears the wait.
+const WAITING_DETAIL_REASONS = new Set([
+  "host_os_mismatch", "local_route_before_pr", "crew_unavailable", "owner_hold", "invalid_candidate",
+]);
+
+const KEPT_OFF_CAUSES = {
+  context_lock_conflict: "footprint holds",
+  dependency_not_done: "unmet dependencies",
+  host_os_mismatch: "for another OS",
+  crew_unavailable: "needing a crew this host cannot run",
+  owner_hold: "held on the owner",
+  invalid_candidate: "invalid",
+};
+
+// Consecutive idle owner answers after which a pull drain says why it claims
+// nothing. Mirrors the CLI's `idle:` line.
+const IDLE_SUMMARY_PASSES = 3;
+
+function waitingTaskText(task, fallback) {
+  let text = `Task ${task.task_id}: ${task.reason || fallback}`;
+  if (Array.isArray(task.blocked_by) && task.blocked_by.length > 0) text += ` blocked-by=${task.blocked_by.join(",")}`;
+  if (WAITING_DETAIL_REASONS.has(task.reason) && task.detail) text += ` (${task.detail})`;
+  return text;
+}
+
+// The backlog a drain's last admission pass left unstarted, for local and pull
+// drains alike: each task with its reason and the tasks it waits on. A pull
+// drain's list is the owner's last answer, so it is dated. Mirrors the
+// `Still waiting:` lines of `orbit run show`.
+function buildStillWaiting(pass) {
+  if (!pass) return null;
+  const deferred = Array.isArray(pass.deferred) ? pass.deferred : [];
+  const excluded = Array.isArray(pass.excluded) ? pass.excluded : [];
+  const queued = pass.queued || 0;
+  const excludedTotal = pass.excluded_total || 0;
+  if (queued === 0 && deferred.length === 0 && excludedTotal === 0) return null;
+  const panel = el("div", { class: "child-dispatch-panel still-waiting" });
+  const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
+  panel.appendChild(el("div", {
+    class: "label",
+    text: `still waiting: ${queued} admissible and ${excludedTotal} excluded backlog task(s) were never started at the last pass${answered}`,
+  }));
+  const rows = [
+    ...deferred.map((task) => waitingTaskText(task, "lock conflict")),
+    ...excluded.map((task) => waitingTaskText(task, "excluded")),
+  ];
+  if (excludedTotal > excluded.length) rows.push(`... and ${excludedTotal - excluded.length} more excluded`);
+  for (const text of rows) {
+    panel.appendChild(el("div", { class: "child-dispatch-row waiting-task" }, [
+      el("span", { class: "child-dispatch-meta", text }),
+    ]));
+  }
+  const byReason = pass.waiting_by_reason || {};
+  const keptOff = Object.values(byReason).reduce((sum, count) => sum + count, 0);
+  if ((pass.consecutive_idle_passes || 0) >= IDLE_SUMMARY_PASSES && keptOff > 0) {
+    const causes = Object.entries(byReason)
+      .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+      .map(([reason, count]) => `${count} ${KEPT_OFF_CAUSES[reason] || reason}`)
+      .join(", ");
+    panel.appendChild(el("div", {
+      class: "child-dispatch-row waiting-idle",
+      text: `idle: ${keptOff} backlog task(s) kept off this host for ${pass.consecutive_idle_passes} consecutive passes (${causes})`,
+    }));
   }
   return panel;
 }

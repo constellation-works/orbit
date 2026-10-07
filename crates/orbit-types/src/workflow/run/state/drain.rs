@@ -214,6 +214,21 @@ pub struct DrainAdmissionPass {
     /// The full count behind `excluded`.
     #[serde(default)]
     pub excluded_total: u64,
+    /// When the owner receipt behind `queued`, `deferred` and `excluded` was
+    /// recorded. Set by a pull drain, whose pass keeps the last answer it
+    /// has while it sends no request (throttled, held, owner unreachable), so
+    /// it can be older than `recorded_at`. A local drain classifies afresh
+    /// every pass and leaves it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_recorded_at: Option<DateTime<Utc>>,
+    /// Backlog tasks kept off this host, by reason code: the full count
+    /// behind `deferred` and `excluded`, which are bounded. Pull drains only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub waiting_by_reason: BTreeMap<String, u64>,
+    /// Consecutive owner answers that left tasks waiting and claimed none, up
+    /// to this pass. Pull drains only.
+    #[serde(default)]
+    pub consecutive_idle_passes: u32,
     /// Host resource pressure that held this pass's admissions [ORB-13901].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_throttle: Option<ResourceThrottle>,
