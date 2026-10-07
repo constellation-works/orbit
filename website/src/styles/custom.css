@@ -412,7 +412,8 @@ html:not([data-has-sidebar]) header.header {
   user-select: none;
 }
 
-.orbit-hero-install-copy {
+.orbit-hero-install-copy,
+.orbit-quickstart-copy-button {
   align-items: center;
   background: none;
   border: 1px solid transparent;
@@ -428,17 +429,22 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-hero-install-copy:hover,
-.orbit-hero-install-copy:focus-visible {
+.orbit-hero-install-copy:focus-visible,
+.orbit-quickstart-copy-button:hover,
+.orbit-quickstart-copy-button:focus-visible {
   border-color: var(--sl-color-gray-5);
   color: var(--sl-color-white);
 }
 
 .orbit-hero-install-copy .orbit-icon-check,
-.orbit-hero-install-copy.is-copied .orbit-icon-copy {
+.orbit-hero-install-copy.is-copied .orbit-icon-copy,
+.orbit-quickstart-copy-button .orbit-icon-check,
+.orbit-quickstart-copy-button.is-copied .orbit-icon-copy {
   display: none;
 }
 
-.orbit-hero-install-copy.is-copied .orbit-icon-check {
+.orbit-hero-install-copy.is-copied .orbit-icon-check,
+.orbit-quickstart-copy-button.is-copied .orbit-icon-check {
   color: var(--sl-color-text-accent);
   display: block;
 }
@@ -502,10 +508,10 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* Hero demo: a 37 s tour of the real dashboard, captured on a live workspace
-   and laid out for this column (6:5, drawn at 2x), rendered from
-   marketing/media/video/orbit-dashboard-tour. The frame's background is the
-   video's own, so letterboxing never shows in either theme. The figcaption
-   dates the capture, since its counts are a snapshot, not a live metric. */
+   and laid out for this column (6:5, drawn at 2x). The published clip fades
+   its side edges over the dashboard panels to hide labels cut by the capture
+   viewport. Its own background prevents letterboxing in either theme. The
+   figcaption dates the capture, since its counts are a snapshot. */
 .orbit-demo {
   display: flex;
   flex-direction: column;
@@ -1423,8 +1429,13 @@ a.orbit-card:focus-visible :is(h2, h3) {
 
 .orbit-mode .orbit-card-cmd {
   margin-top: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
   white-space: normal;
+}
+
+.orbit-command-token {
+  white-space: nowrap;
 }
 
 .orbit-mode dl {
@@ -1578,14 +1589,24 @@ a.orbit-card:focus-visible :is(h2, h3) {
 }
 
 .orbit-landing .orbit-quickstart-steps code {
+  background: none;
+  border: 0;
+  border-radius: 0;
   color: var(--sl-color-white);
   font-size: 0.875rem;
   overflow: hidden;
+  padding: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.orbit-quickstart-steps span {
+.orbit-quickstart-step-tools {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.orbit-quickstart-step-label {
   color: var(--sl-color-gray-4);
   font-size: 0.8125rem;
   white-space: nowrap;
@@ -1633,12 +1654,12 @@ a.orbit-card:focus-visible :is(h2, h3) {
     padding: 1.75rem 1.25rem;
   }
 
-  .orbit-quickstart-steps span {
+  .orbit-quickstart-step-label {
     display: none;
   }
 
   .orbit-quickstart-steps li {
-    grid-template-columns: 1rem minmax(0, 1fr);
+    grid-template-columns: 1rem minmax(0, 1fr) auto;
   }
 }
 

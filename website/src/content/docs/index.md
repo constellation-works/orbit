@@ -49,25 +49,32 @@ next: false
     </figure>
     <script>
       {
-        // Copy the hero install command. Clipboard access needs a secure
-        // context; without it, select the command so the reader can copy it.
-        const button = document.querySelector('.orbit-hero-install-copy');
+        // Copy commands on the hero and quickstart rows. Clipboard access needs
+        // a secure context; without it, select the command for manual copying.
         const status = document.querySelector('.orbit-hero-install-status');
-        let timer;
-        button?.addEventListener('click', async () => {
+        const timers = new WeakMap();
+        document.addEventListener('click', async (event) => {
+          const button = event.target instanceof Element ? event.target.closest('.orbit-hero-install-copy, .orbit-quickstart-copy-button') : null;
+          if (!button) return;
+          const label = button.classList.contains('orbit-hero-install-copy') ? 'Copy install command' : 'Copy command';
+          const code = button.closest('li')?.querySelector('code') ?? button.previousElementSibling;
+          const command = button.dataset.copy ?? code?.textContent;
+          if (!command) return;
           try {
-            await navigator.clipboard.writeText(button.dataset.copy);
+            await navigator.clipboard.writeText(command);
           } catch {
-            getSelection().selectAllChildren(button.previousElementSibling);
+            if (code) getSelection()?.selectAllChildren(code);
             return;
           }
           button.classList.add('is-copied');
-          status.textContent = 'Copied';
-          clearTimeout(timer);
-          timer = setTimeout(() => {
+          button.setAttribute('aria-label', 'Copied');
+          if (status && button.classList.contains('orbit-hero-install-copy')) status.textContent = 'Copied';
+          clearTimeout(timers.get(button));
+          timers.set(button, setTimeout(() => {
             button.classList.remove('is-copied');
-            status.textContent = '';
-          }, 1600);
+            button.setAttribute('aria-label', label);
+            if (status && button.classList.contains('orbit-hero-install-copy')) status.textContent = '';
+          }, 1600));
         });
       }
       {
@@ -207,7 +214,7 @@ next: false
     </a>
     <a class="orbit-card orbit-mode" href="/getting-started/workflows/">
       <div class="orbit-mode-head"><h3>Merge locally</h3></div>
-      <div class="orbit-card-cmd">orbit run ship "$TASK_ID" --mode local</div>
+      <div class="orbit-card-cmd">orbit run ship "$TASK_ID" <span class="orbit-command-token">--mode</span> local</div>
       <dl>
         <div><dt>Stops at</dt><dd><em>review</em>, already merged into the base branch. No pull request.</dd></div>
         <div><dt>With <code>--complete</code></dt><dd>closes the task once the work is merged and pushed</dd></div>
@@ -215,7 +222,7 @@ next: false
     </a>
     <a class="orbit-card orbit-mode" href="/how-to/continuous-delivery/">
       <div class="orbit-mode-head"><h3>Drain a backlog</h3></div>
-      <div class="orbit-card-cmd">orbit run auto --for 4h</div>
+      <div class="orbit-card-cmd">orbit run auto <span class="orbit-command-token">--for</span> 4h</div>
       <dl>
         <div><dt>Stops at</dt><dd>the end of the window; work already shipping still finishes</dd></div>
         <div><dt>With <code>--complete</code></dt><dd>covers every task the drain admits during the window</dd></div>
@@ -223,7 +230,7 @@ next: false
     </a>
     <a class="orbit-card orbit-mode" href="/how-to/recurring-work/">
       <div class="orbit-mode-head"><h3>Scheduled sweep</h3><span class="orbit-mode-badge is-muted">scheduler</span></div>
-      <div class="orbit-card-cmd">orbit run ship-sweep --dry-run</div>
+      <div class="orbit-card-cmd">orbit run ship-sweep <span class="orbit-command-token">--dry-run</span></div>
       <dl>
         <div><dt>Stops at</dt><dd><em>review</em>, in each workspace with <code>auto_ship</code> on</dd></div>
         <div><dt>With <code>--complete</code></dt><dd>never; a sweep cannot be granted completion</dd></div>
@@ -257,10 +264,22 @@ next: false
     </div>
   </div>
   <ol class="orbit-quickstart-steps">
-    <li><code>npm install -g @orbit-tools/cli</code><span>install</span></li>
-    <li><code>orbit init</code><span>once per machine</span></li>
-    <li><code>orbit workspace init --mcp</code><span>in your repository</span></li>
-    <li><code>orbit web serve</code><span>open the dashboard</span></li>
+    <li><code>npm install -g @orbit-tools/cli</code><div class="orbit-quickstart-step-tools"><span class="orbit-quickstart-step-label">install</span><button type="button" class="orbit-quickstart-copy-button" aria-label="Copy command">
+      <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+      <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+    </button></div></li>
+    <li><code>orbit init</code><div class="orbit-quickstart-step-tools"><span class="orbit-quickstart-step-label">once per machine</span><button type="button" class="orbit-quickstart-copy-button" aria-label="Copy command">
+      <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+      <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+    </button></div></li>
+    <li><code>orbit workspace init --mcp</code><div class="orbit-quickstart-step-tools"><span class="orbit-quickstart-step-label">in your repository</span><button type="button" class="orbit-quickstart-copy-button" aria-label="Copy command">
+      <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+      <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+    </button></div></li>
+    <li><code>orbit web serve</code><div class="orbit-quickstart-step-tools"><span class="orbit-quickstart-step-label">open the dashboard</span><button type="button" class="orbit-quickstart-copy-button" aria-label="Copy command">
+      <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+      <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+    </button></div></li>
   </ol>
 </section>
 
