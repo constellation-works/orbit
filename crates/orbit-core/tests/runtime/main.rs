@@ -14,6 +14,7 @@ mod artifact_tools;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;
+mod drain_cancel;
 mod final_recovery;
 mod rebase_recovery_attempts;
 mod relation_auto_close;

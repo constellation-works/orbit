@@ -881,7 +881,11 @@ reports the transport error); `--force` ends it, and anything undelivered stays
 recorded for the retry below.
 
 For the owner's local drain (`orbit run auto`), cancel still detaches the task
-runs it started, which finish on their own; `--force` cancels them too. Stops
+runs it started, which finish on their own; `--force` cancels them too and
+returns their tasks to `backlog`, preserving their candidates and recording
+the cancellation reason. Use `orbit run cancel <drain-run> --confirm --force
+--block` to keep those tasks blocked instead. The MCP forced-stop control
+returns cancelled local tasks to `backlog`. Stops
 are confirmed before each child is finalized. An unconfirmed stop is reported
 under `unstopped_children` with the child run ID and reason; the CLI exits 1
 and the dashboard flags the incomplete cancellation. The parent and children
