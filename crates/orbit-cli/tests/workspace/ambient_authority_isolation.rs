@@ -494,10 +494,13 @@ fn managed_orbit(cwd: &Path, home: &Path, sentinel: &Sentinel) -> Command {
         command.env_remove(name);
     });
     sentinel.export_authority(&mut command);
+    // This fixture exercises write destinations with a valid managed actor.
+    // Identity-less agent envelopes intentionally emit attribution warnings.
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        .env("ORBIT_AGENT_NAME", "codex");
     command
 }
 

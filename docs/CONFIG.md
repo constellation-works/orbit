@@ -343,6 +343,16 @@ Every `provider` string, whether in a crew, an activity's inline `provider`, or 
 - `copilot`, `cursor`, `pi`, `antigravity` and `opencode` have no aliases. The model vendor a lane runs (a Claude model through Copilot, say) never changes the provider identity.
 - The cross-repo Worker executor runs only `claude`, `codex`, `gemini` and `grok`. A Worker-routed step naming another lane is refused rather than re-pointed.
 
+Process audit attribution resolves `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`
+to a canonical agent family. If that pair is invalid (for example, `copilot`
+with a `claude-*` model), or an agent envelope has no identity, Orbit records
+`unknown` and emits a warning. Agent envelopes include non-empty name/model
+values, a truthy `ORBIT_MANAGED_RUN_CONTEXT`, and
+`ORBIT_TASK_ACTOR_KIND=agent`. These signals take precedence over
+`ORBIT_ACTOR`, the operator override, and the OS username for attribution.
+This changes the recorded identity only; command authorization still uses its
+existing agent-envelope rules.
+
 ### Resolution precedence
 
 **Which crew a task dispatches.** The first tier that is set wins:
