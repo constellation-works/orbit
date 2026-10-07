@@ -4,6 +4,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::TaskStatus;
 
 use super::super::TaskCommitBoundary;
+use super::super::landing::LandingStop;
 use super::codec::{CLAIM, RECEIPT, RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS, STATE};
 use super::releases::release_budget_comment;
 use super::{ClaimAuthority, MutationReceipt, decode, encode, invalid, row};
@@ -50,7 +51,9 @@ impl TaskCommitBoundary {
         let state = self.claim_state(claim.clone())?;
         if (matches!(
             claim.phase,
-            ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+            ExecutionClaimPhase::Running
+                | ExecutionClaimPhase::HandedOff
+                | ExecutionClaimPhase::RepairPending
         ) && state.bound_run.is_none())
             || (claim.phase == ExecutionClaimPhase::Claimed && state.bound_run.is_some())
         {
@@ -84,7 +87,10 @@ impl TaskCommitBoundary {
             ExecutionClaimPhase::HandedOff => TaskStatus::Review,
             ExecutionClaimPhase::Failed => TaskStatus::Blocked,
             ExecutionClaimPhase::Landed => TaskStatus::Done,
-            _ => TaskStatus::InProgress,
+            ExecutionClaimPhase::Claimed
+            | ExecutionClaimPhase::Running
+            | ExecutionClaimPhase::Revoked
+            | ExecutionClaimPhase::RepairPending => TaskStatus::InProgress,
         };
         if bundle.envelope.status != expected_status {
             return Err(invalid("stale_claim"));
@@ -503,15 +509,32 @@ impl TaskCommitBoundary {
                 state.claim.phase = ExecutionClaimPhase::Landed;
                 state.last_event = "landing_completed".into();
             }
-            ClaimMutation::StopLanding { handoff_id, reason } => {
-                self.stop_landing_attempt(
+            ClaimMutation::StopLanding {
+                handoff_id,
+                reason,
+                repairable,
+            } => {
+                match self.stop_landing_attempt(
                     auth,
                     &state,
                     handoff_id,
                     reason,
+                    *repairable,
                     &mut params,
                     &mut handoff_effects,
-                )?;
+                )? {
+                    LandingStop::Stopped => {}
+                    LandingStop::Repair => {
+                        state.claim.phase = ExecutionClaimPhase::RepairPending;
+                        state.landing_invalidated = true;
+                    }
+                    LandingStop::Blocked(comment) => {
+                        state.claim.phase = ExecutionClaimPhase::Failed;
+                        state.landing_invalidated = true;
+                        evidence.comment = Some(comment);
+                        release = true;
+                    }
+                }
                 state.last_event = "landing_stopped".into();
             }
             ClaimMutation::MergeIntent {

@@ -5,7 +5,8 @@
 //! branch moves. The landing names the accepted handoff and its task in that
 //! intent; a candidate that cannot fast-forward lands nothing and records none
 //! [ORB-13894]. PR reconciliation resolves external uncertainty before stopping
-//! a mismatched delivery, so subsequent attempts see the settled state.
+//! a mismatched delivery, so subsequent attempts see the settled state. A stop
+//! on a conflicting or stale base is marked repairable [ORB-14261].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -153,7 +154,8 @@ fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
     assert!(host.intents.lock().unwrap().is_empty());
     assert_eq!(
         host.steps.lock().unwrap().last(),
-        Some(&HandoffLandingStep::Stop)
+        Some(&HandoffLandingStep::Stop { repairable: true }),
+        "a landing branch that moved past the candidate's base earns an automatic repair"
     );
 }
 
@@ -177,7 +179,7 @@ impl RuntimeHost for ReconciliationHost {
         let mut updates = self.updates.lock().unwrap();
         if updates
             .last()
-            .is_some_and(|u| u.step == HandoffLandingStep::Stop)
+            .is_some_and(|u| matches!(u.step, HandoffLandingStep::Stop { .. }))
         {
             return Err(OrbitError::InvalidInput(
                 "landing attempt is already settled".into(),
@@ -189,7 +191,7 @@ impl RuntimeHost for ReconciliationHost {
                 assert_eq!(context.unresolved_merge_intent.as_ref(), Some(intent_id));
                 context.unresolved_merge_intent = None;
             }
-            HandoffLandingStep::Stop => {
+            HandoffLandingStep::Stop { .. } => {
                 assert!(
                     context.unresolved_merge_intent.is_none(),
                     "Stop must follow intent resolution"
@@ -255,7 +257,11 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
                 merged: true
             }
         );
-        assert_eq!(updates[1].step, HandoffLandingStep::Stop);
+        assert_eq!(
+            updates[1].step,
+            HandoffLandingStep::Stop { repairable: false },
+            "stale delivery evidence is not a base conflict a rebase repairs"
+        );
         let reason: String = serde_json::from_str(&updates[1].evidence).unwrap();
         assert!(
             reason.contains("delivery_evidence_stale")
@@ -284,6 +290,67 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             *host.updates.lock().unwrap(),
             updates,
             "retry retains the original Stop evidence"
+        );
+    }
+}
+
+/// A pull request the provider reports open with a fixed merge state.
+struct OpenPullRequestHost {
+    context: HandoffLandingContext,
+    steps: Mutex<Vec<HandoffLandingStep>>,
+    merge_state: &'static str,
+}
+
+impl RuntimeHost for OpenPullRequestHost {
+    fn handoff_landing_context(
+        &self,
+        _handoff_id: &str,
+    ) -> Result<HandoffLandingContext, OrbitError> {
+        Ok(self.context.clone())
+    }
+
+    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        self.steps.lock().unwrap().push(update.step.clone());
+        Ok(())
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        _input: Value,
+    ) -> Result<Value, OrbitError> {
+        assert_eq!(operation, "pr.status", "a stopped landing sends no merge");
+        let candidate = &self.context.candidate;
+        Ok(json!({"pull_request": {
+            "state": "OPEN",
+            "headRefName": candidate.source_branch,
+            "baseRefName": candidate.base_branch,
+            "headRefOid": candidate.candidate.commit,
+            "mergeStateStatus": self.merge_state,
+        }}))
+    }
+}
+
+/// [ORB-14261] Only a stop a rebase can cure earns the automatic repair: a
+/// conflicting or stale base. A protection refusal stays an operator's call.
+#[test]
+fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
+    for (merge_state, repairable) in [("DIRTY", true), ("BEHIND", true), ("DRAFT", false)] {
+        let sandbox = tempdir().unwrap();
+        let mut context = owner_checkout(sandbox.path()).context;
+        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        let host = OpenPullRequestHost {
+            context,
+            steps: Mutex::default(),
+            merge_state,
+        };
+
+        land(&host).expect_err("an unmergeable pull request stops the landing");
+
+        assert_eq!(
+            *host.steps.lock().unwrap(),
+            vec![HandoffLandingStep::Stop { repairable }],
+            "merge state {merge_state}"
         );
     }
 }

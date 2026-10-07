@@ -37,6 +37,13 @@ spec:
     is `resumed_repaired` with trigger `continuation` (`review` when the
     before-PR review refused it): the claimed implementer always runs and
     the leaf's own validation judges the result.
+    A repair claim's leaf instead passes `claim_repair`, the candidate an
+    owner's landing stopped on a base conflict or stale base. It is
+    squash-merged the same way and is always `resumed_repaired`: trigger
+    `conflict` with `conflicting_paths`, or `landing` when it applied
+    cleanly or its changes are already on the new base. If that candidate
+    cannot be restored, the repair leaf fails rather than implementing
+    fresh without its work.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, base_sha, task_ids]
@@ -62,6 +69,13 @@ spec:
           Claimed mode only: the preserved candidate's `branch` and
           `head_sha`, with `source_run_id`, `failed_step_id` and, when its
           leaf carried it to `origin`, `durable_ref`.
+      claim_repair:
+        type: [object, "null"]
+        description: >
+          Claimed mode only, a repair claim's leaf: the candidate whose
+          landing stopped (`branch`, `head_sha`, `base_sha`), with
+          `repairs_claim_id`, `handoff_id` and `stop_evidence`. It takes
+          precedence over `candidate`.
   output_schema_json:
     type: object
     required: [phase, outcome, implement]
@@ -79,7 +93,7 @@ spec:
         type: [object, "null"]
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
-          `validation`, `review` or `continuation`) and its `output`, plus `failed_step_id`,
+          `validation`, `review`, `continuation` or `landing`) and its `output`, plus `failed_step_id`,
           `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]

@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::contracts::TaskCoordinationRow;
 
-pub(super) const CLAIM: &str = "distributed-execution-claim-v1";
-pub(super) const STATE: &str = "distributed-claim-lifecycle-v1";
+pub(in super::super) const CLAIM: &str = "distributed-execution-claim-v1";
+pub(in super::super) const STATE: &str = "distributed-claim-lifecycle-v1";
 pub(super) const RECEIPT: &str = "distributed-claim-mutation-v1";
 
 /// Budgeted failure releases a task takes within

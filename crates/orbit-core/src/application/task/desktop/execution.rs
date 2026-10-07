@@ -66,6 +66,11 @@ impl ForeignExecution {
                  and recover the claim from the owner's operator console, before completing \
                  from review"
             ))),
+            ExecutionClaimPhase::RepairPending => Err(invalid(&format!(
+                "the landing of the handoff from run {run} on {host} stopped on its base and an \
+                 automatic repair is pending; let the repair re-hand it off, or recover the claim \
+                 from the owner's operator console, before completing from review"
+            ))),
             ExecutionClaimPhase::Revoked if self.handoff.is_none() => Err(invalid(&format!(
                 "the claim for run {run} on {host} was recovered before the run handed off; no \
                  owner-held evidence shows that the execution stopped, so inspect the run on \

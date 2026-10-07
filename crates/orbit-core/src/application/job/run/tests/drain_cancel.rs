@@ -348,6 +348,7 @@ fn admission(
             footprint: vec![],
             reservation_id: format!("reservation-{id}"),
             reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+            repair: None,
             phase: ExecutionClaimPhase::Claimed,
         }),
         task: Some(AdmissionTaskSummary {

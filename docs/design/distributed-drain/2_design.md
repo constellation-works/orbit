@@ -586,9 +586,9 @@ opens the PR, then hands off; it never runs merge completion.
 
 ### 3.1 Attempt ownership and recovery
 
-Claim phases are `claimed`, `running`, `handed_off`, `failed`, `revoked` and `landed`
-(`ExecutionClaimPhase`). Only `claimed` and `running` authorize execution writes; `claimed`,
-`running` and `handed_off` protect the footprint. Current claim ID, trusted runtime machine, bound
+Claim phases are `claimed`, `running`, `handed_off`, `repair_pending`, `failed`, `revoked` and
+`landed` (`ExecutionClaimPhase`). Only `claimed` and `running` authorize execution writes;
+`claimed`, `running`, `handed_off` and `repair_pending` protect the footprint. Current claim ID, trusted runtime machine, bound
 run and allowed phase are checked **inside the same transaction as every claim-scoped mutation**:
 task summaries, artifacts, comments, friction, run binding, failure settlement, promotion and
 cleanup. Mutation request IDs deduplicate append/create retries. Operator edits remain separately
@@ -688,13 +688,30 @@ attempt reconciles the provider's state or the local target ref for the same pin
 before retrying, and the store refuses revocation, recovery and reassignment until then. Repairs
 are a new authorized attempt with fresh validation and handoff; the owner never silently rebases.
 
+A stop on a base conflict (`DIRTY`), a stale base (`BEHIND`) or a local candidate that can no
+longer fast-forward is repairable ([ORB-14261]). The stop revokes the handoff's authority, moves the
+claim to `repair_pending` and returns the task to `in-progress`, still holding its footprint. The
+next pull by the claim's original executor — or, once 30 minutes have passed, the owner's own local
+drain; never another follower — admits the repair before any backlog task: a new claim carrying
+`ClaimRepair` (the superseded claim, its handoff, the preserved candidate and the stop evidence),
+with the superseded claim settled as `revoked` and a `pulled_by` event naming both, in one commit.
+The pull's ship contract must match the candidate's base, landing branch and delivery route. The
+claimed leaf receives `claim_repair`; its `resume_candidate` step squash-applies the candidate onto
+the leaf's fresh base and hands the implementer a `conflict` or `landing` repair, and the leaf then
+commits, rebases, revalidates and hands off again under the same task. `claim_repair` takes
+precedence over a kept `resume_candidate`, and a repair whose candidate cannot be restored fails the
+leaf rather than implementing afresh. Only one automatic repair is
+allowed: a repairable stop on a repair claim fails it and blocks the task with a comment carrying
+both attempts' claim, handoff, candidate and stop evidence. A repair leaf publishes from its own
+run branch, so the superseded pull request is left open for an operator to close.
+
 `handoff_land` reuses `pr_complete`'s pinned delivery identity (branch, base and head-commit pins,
 merged-with-merge-commit evidence, provider-state classification) with no follower run or path.
 The owner checks the head on every poll, resolves candidate and base in its own checkout, and
 verifies the validated base is reachable from `origin/<landing branch>`, fetched once from `origin`
 per attempt so a commit landed from another machine is not misread as missing. Changed identity, a
 conflict, unsatisfied protection or an exhausted check budget records a durable stop and leaves the
-task in `review`. Owner-local candidates fast-forward the local landing branch and are verified
+task in `review`, except that a repairable stop starts the automatic repair above. Owner-local candidates fast-forward the local landing branch and are verified
 from the ref; before the branch moves, the owner retains a direct landing intent naming the
 handoff's task, so delivery consumers attribute the fast-forward. No-diff delivery verifies its covering commit on the landing ref with no external
 call. Every completion re-runs authorization, candidate and validation checks inside the
@@ -966,7 +983,7 @@ Acceptance criteria, not reported as passing.
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
 | Handoff commits, response lost | Exactly one handoff and review transition |
 | Review-only handoff reaches the landing consumer | No merge without recorded authorization |
-| PR head/base changes or conflicts | Stop with evidence; fresh validated repair required |
+| PR head/base changes or conflicts | Stop with evidence; fresh validated repair required. A base conflict or stale base gets one automatic repair claim that re-hands off; a second blocks with both attempts' evidence ([ORB-14261]) |
 | Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
@@ -1036,5 +1053,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
 - [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; a claimed PR leaf continues a kept candidate it can fetch.
 - [ORB-14338] — carried an unpublished claimed candidate to a durable ref on `origin` so any host resumes it, gave claimed-local leaves candidate continuation, and recorded a typed reason in task history when a kept candidate is set aside.
+- [ORB-14261] — added one automatic repair of a handoff whose landing stopped on its base.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

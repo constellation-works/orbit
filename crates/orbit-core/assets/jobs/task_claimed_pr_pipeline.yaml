@@ -43,6 +43,12 @@
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
+# ORB-14261: a repair claim — admitted after the owner's landing of an earlier
+# handoff stopped on a base conflict or stale base — runs this same leaf with
+# `claim_repair` set. `resume_candidate` re-applies that handoff's candidate
+# onto the current base before the implementer, so the attempt rebases and
+# revalidates the preserved work instead of starting over.
+#
 schemaVersion: 2
 kind: Job
 metadata:
@@ -72,6 +78,9 @@ spec:
     base_sync: remote
     landing_branch: ""
     allowed_crews: []
+    # The repair a claim carries when it re-runs a handoff whose landing
+    # stopped on its base [ORB-14261]; null for a first attempt.
+    claim_repair: null
     title: null
     body: null
     # [ORB-14257] The candidate the owner kept from the task's last claim,
@@ -94,8 +103,12 @@ spec:
     # [ORB-14257] Carry the candidate the task's last claim committed onto
     # this base as uncommitted changes, so the implementer continues it
     # instead of starting over. The owner already retired one an operator
-    # discarded or whose spec changed. The implementer always runs: the
-    # handoff carries its summary, and `validate` judges the result.
+    # discarded or whose spec changed. [ORB-14261] A repair claim instead
+    # carries the candidate its stopped landing preserved, handed to the
+    # implementer as a `conflict` or `landing` repair; the leaf then commits,
+    # rebases, revalidates and hands off again under the same task. The
+    # implementer always runs: the handoff carries its summary, and
+    # `validate` judges the result.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -105,6 +118,7 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         candidate: "{{ input.resume_candidate }}"
         claimed: true
+        claim_repair: "{{ input.claim_repair }}"
 
     - id: implement_bundle
       loop:

@@ -446,15 +446,43 @@ pub enum ExecutionClaimPhase {
     Revoked,
     /// The owner landing consumer verified the merge and completed the task.
     Landed,
+    /// [ORB-14261] The owner's landing stopped because the handed-off
+    /// candidate conflicts with, or is stale against, its base. The handoff's
+    /// authority is revoked and the task waits `in-progress` for one repair
+    /// leaf; admitting that leaf settles this claim as `revoked`.
+    RepairPending,
 }
 
 impl ExecutionClaimPhase {
     pub fn protects_footprint(self) -> bool {
-        matches!(self, Self::Claimed | Self::Running | Self::HandedOff)
+        matches!(
+            self,
+            Self::Claimed | Self::Running | Self::HandedOff | Self::RepairPending
+        )
     }
     pub fn is_unsettled(self) -> bool {
-        matches!(self, Self::Claimed | Self::Running | Self::HandedOff)
+        matches!(
+            self,
+            Self::Claimed | Self::Running | Self::HandedOff | Self::RepairPending
+        )
     }
+}
+
+/// [ORB-14261] What a repair claim carries: the earlier claim whose landing
+/// stopped on a conflicting or stale base, the handoff it delivered, the
+/// candidate that handoff preserved and the stop's evidence. A claim carries
+/// at most one, and a claim that carries one is the task's only automatic
+/// repair: its own repairable stop blocks the task instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimRepair {
+    /// The claim this repair supersedes.
+    pub repairs_claim_id: String,
+    /// The handoff whose landing stopped.
+    pub handoff_id: String,
+    /// The candidate that handoff delivered, as the owner accepted it.
+    pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
+    /// The landing stop's evidence.
+    pub stop_evidence: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,6 +496,11 @@ pub struct ExecutionClaim {
     pub reservation_id: String,
     pub reservation_expires_at: String,
     pub phase: ExecutionClaimPhase,
+    /// Present on a claim admitted to repair an earlier claim's stopped
+    /// landing [ORB-14261]. The leaf restores this candidate instead of
+    /// implementing the task from scratch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<ClaimRepair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -811,9 +844,15 @@ pub enum ClaimMutation {
         evidence: String,
     },
     /// Stop the live attempt with durable evidence, leaving the task in review.
+    /// A `repairable` stop — the candidate conflicts with, or is stale
+    /// against, its base — instead moves an original claim to
+    /// `repair_pending`, and blocks the task when the claim is already its
+    /// repair [ORB-14261].
     StopLanding {
         handoff_id: String,
         reason: String,
+        #[serde(default)]
+        repairable: bool,
     },
 }
 

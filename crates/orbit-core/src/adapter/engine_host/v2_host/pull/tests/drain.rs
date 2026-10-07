@@ -95,6 +95,7 @@ impl PullPeer for Peer {
                     footprint: vec!["file:src.rs".into()],
                     reservation_id: "reservation".into(),
                     reservation_expires_at: "later".into(),
+                    repair: None,
                     phase: ExecutionClaimPhase::Claimed,
                 }),
                 task: (!self.idle.get()).then(|| AdmissionTaskSummary {
