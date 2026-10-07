@@ -12,6 +12,8 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
 
+use crate::fixture_crew;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     home: PathBuf,
@@ -35,6 +37,9 @@ impl Fixture {
             .args(["workspace", "init", "--name", "scratch-gc"])
             .assert()
             .success();
+        // The job validates the default crew before it runs, and the seeded
+        // one is disabled on a host without its agent CLI (a hosted runner).
+        fixture_crew::configure_sol(&fixture.home.join(".orbit"));
         fixture
     }
 
