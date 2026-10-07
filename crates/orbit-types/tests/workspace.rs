@@ -93,6 +93,41 @@ fn ambiguous_scp_credentials_are_fully_redacted() {
 }
 
 #[test]
+fn malformed_https_credentials_with_url_delimiters_are_fully_redacted() {
+    for (remote, password_fragments) in [
+        (
+            "https://deploy:abc/def@github.com/example/tasks.git",
+            ["abc", "def"],
+        ),
+        ("https://deploy:ab?cd@host/repo", ["ab", "cd"]),
+        ("https://deploy:ab#cd@host/repo", ["ab", "cd"]),
+    ] {
+        assert_eq!(redact_git_remote(remote), "***");
+
+        let diagnostic = validate_publication_remote(remote)
+            .expect_err("malformed credential-bearing HTTPS URL")
+            .to_string();
+        assert!(diagnostic.contains("'***'"), "{diagnostic}");
+        assert!(!diagnostic.contains("deploy"), "{diagnostic}");
+        for fragment in password_fragments {
+            assert!(!diagnostic.contains(fragment), "{diagnostic}");
+        }
+    }
+}
+
+#[test]
+fn valid_https_credentials_and_credential_free_urls_keep_existing_redaction() {
+    let credentialed = "https://deploy:hunter2@github.com/example/tasks.git";
+    assert_eq!(
+        redact_git_remote(credentialed),
+        "https://***@github.com/example/tasks.git"
+    );
+
+    let credential_free = "https://github.com/example/tasks.git";
+    assert_eq!(redact_git_remote(credential_free), credential_free);
+}
+
+#[test]
 fn scp_credential_redaction_preserves_bracketed_ipv6_colons() {
     let remote = "deploy:secret@[::1]:example/tasks.git";
     let redacted = "***@[::1]:example/tasks.git";

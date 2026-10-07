@@ -201,6 +201,12 @@ pub fn redact_git_remote(remote: &str) -> String {
     {
         return redacted;
     }
+    if remote.contains("://") && Url::parse(remote).is_err() && remote.contains('@') {
+        // A malformed URL can put password punctuation beyond the ordinary
+        // authority boundary, so the location of userinfo is ambiguous.
+        // Hide the whole remote rather than risk echoing any credential text.
+        return "***".to_string();
+    }
     redact_scp_userinfo(remote).unwrap_or_else(|| remote.to_string())
 }
 
