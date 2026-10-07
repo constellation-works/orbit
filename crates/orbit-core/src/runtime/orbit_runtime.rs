@@ -649,7 +649,17 @@ impl OrbitRuntime {
         orbit_store::compose::ensure_sqlite_store_ready(&self.context.persistence().audit_db)
     }
 
+    /// Identity used by this runtime's workspace-partitioned stores. A
+    /// selected explicit root uses its logical workspace binding; a checkout
+    /// uses its persisted partition ID, which may differ from the logical ID.
     pub fn workspace_id(&self) -> Result<String, OrbitError> {
+        if let Some(id) = builder::selected_explicit_root_workspace_id(
+            self.context.global_root(),
+            &self.context.paths().orbit_dir,
+            self.workspace_runtime_binding(),
+        ) {
+            return Ok(id.to_owned());
+        }
         workspace_id_for_orbit_dir(&self.context.paths().orbit_dir)
     }
 

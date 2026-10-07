@@ -143,6 +143,14 @@ Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.t
 
 Orbit has two roots: global `~/.orbit/` and the workspace `.orbit/`.
 
+Registered repositories may share one explicit data root. In that mode the
+selected logical workspace binding scopes runtime identity, tasks, job runs,
+friction, default v2 audit/recovery reads, reservations and workspace claims;
+the root's single compatibility `config.yaml` cannot identify every repository.
+Ordinary checkout roots keep their persisted partition identity, which can
+differ from the logical catalog ID. Opening a root without a selected binding
+retains the compatibility config identity.
+
 | Artifact | Strategy | Notes |
 |---|---|---|
 | Tasks, job runs, run traces | Workspace only | Per-repo backlog and execution artifacts |

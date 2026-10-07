@@ -15,7 +15,6 @@ use orbit_store::contracts::{
     TaskReservationCheckParams, TaskReservationReleaseParams, TaskReservationReleaseReason,
     TaskReservationReserveParams,
 };
-use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::task::{
     EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
@@ -519,13 +518,7 @@ pub(crate) fn workspace_orbit_dir(runtime: &OrbitRuntime) -> String {
 pub(crate) fn workspace_task_reservation_id(
     runtime: &OrbitRuntime,
 ) -> Result<Option<String>, OrbitError> {
-    match read_workspace_config_optional(&runtime.paths().orbit_dir)? {
-        Some(config) => Ok(Some(config.workspace_id)),
-        None => Err(OrbitError::Store(format!(
-            "task artifact workspace config is missing at '{}'; rebuild the runtime before writing task lock reservations",
-            runtime.paths().orbit_dir.join("config.yaml").display()
-        ))),
-    }
+    runtime.workspace_id().map(Some)
 }
 
 /// An `in-progress` or `review` task holds its context against other work,
