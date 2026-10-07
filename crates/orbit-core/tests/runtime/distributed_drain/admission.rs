@@ -152,12 +152,13 @@ fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
 }
 
 /// Owner admission hands selector-free implementation work to a follower on
-/// its first pass with an empty lock footprint; tagged no-diff stays on owner.
+/// its first pass with an empty lock footprint; tagged no-diff work is
+/// claimable by the follower too [ORB-14474].
 #[test]
-fn owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner() {
+fn owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work() {
     if !isolated(
         module_path!(),
-        "owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner",
+        "owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work",
     ) {
         return;
     }
@@ -179,10 +180,12 @@ fn owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner
     let drain = pair.start_drain();
     let first = pair.pass(&drain);
     assert!(launch_refused(&first), "{first}");
-    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
     let claims = pair.owner_claims();
     assert_eq!(claims.len(), 1, "{claims:#?}");
-    assert_eq!(claims[0]["claim"]["task_id"], pair.tasks[1]);
+    assert_eq!(
+        claims[0]["claim"]["task_id"], pair.tasks[0],
+        "the tagged task is the oldest candidate and the follower claims it: {claims:#?}"
+    );
     assert_eq!(claims[0]["claim"]["footprint"], json!([]), "{claims:#?}");
     let receipts = pair.follower_jobs.local_pull_admissions().unwrap();
     let receipt = receipts
@@ -193,12 +196,11 @@ fn owner_pull_admits_empty_context_without_locks_and_keeps_no_diff_work_on_owner
     assert!(receipt.invalid_candidates.is_empty(), "{receipt:#?}");
     assert!(receipt.task.as_ref().unwrap().context_files.is_empty());
     assert!(
-        receipt.deferred_conflicts.iter().any(|entry| {
-            entry.task_id == pair.tasks[0]
-                && entry.reason.contains("no-diff-expected")
-                && entry.reason.contains("verified handoff")
-        }),
-        "tag alone cannot establish a verified NoDiff handoff: {receipt:#?}"
+        receipt
+            .deferred_conflicts
+            .iter()
+            .all(|entry| !entry.reason.contains("no-diff-expected")),
+        "an executor with the NoDiff handoff is not refused tagged work: {receipt:#?}"
     );
 }
 

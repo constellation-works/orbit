@@ -29,6 +29,16 @@ struct CleanLeaf {
 
 impl CleanLeaf {
     fn new(already_landed: bool, completion: &str) -> Self {
+        Self::build(already_landed, completion, false)
+    }
+
+    /// A clean leaf whose task carries the `no-diff-expected` tag, claimed by
+    /// the follower through ordinary pull admission [ORB-14474].
+    fn tagged(completion: &str) -> Self {
+        Self::build(false, completion, true)
+    }
+
+    fn build(already_landed: bool, completion: &str, tagged: bool) -> Self {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{CHECK}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
@@ -50,6 +60,19 @@ impl CleanLeaf {
         );
         publish_origin(repo);
         let base = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        if tagged {
+            pair.wire
+                .owner
+                .update_task_as_human(
+                    &task,
+                    orbit_core::application::task::TaskUpdateParams {
+                        tags: Some(vec![orbit_types::task::NO_DIFF_EXPECTED_TAG.into()]),
+                        ..Default::default()
+                    },
+                    "fixture operator".into(),
+                )
+                .unwrap();
+        }
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         assert_eq!(pair.claimed_task(&leaf), task);
@@ -349,6 +372,71 @@ fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
         );
         assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
     }
+}
+
+/// The full-code-review chore shape: a `no-diff-expected` task the follower
+/// claims, whose leaf files findings on the owner through the claimed-owner
+/// broker and hands off `NoDiff`, with no PR [ORB-14474].
+#[test]
+fn a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_a_pr() {
+    if !isolated(
+        module_path!(),
+        "a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_a_pr",
+    ) {
+        return;
+    }
+    let fixture = CleanLeaf::tagged("done");
+    let owner_task = fixture.pair.owner_task(&fixture.task);
+    assert!(
+        owner_task["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG),
+        "{owner_task:#}"
+    );
+
+    let filed = fixture
+        .bound
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Finding from the review chore",
+                "description": "Found while reviewing the crate.",
+                "complexity": "low", "model": "codex",
+                "relations": [{"type": "spawned_from", "target": fixture.task}],
+            }),
+        )
+        .expect("a claimed no-diff leaf files a finding on the owner");
+    let id = filed["id"].as_str().expect("the new task's id");
+    let prefix = |id: &str| id.split('-').next().unwrap().to_string();
+    assert_eq!(prefix(id), prefix(&fixture.task), "owner prefix: {filed}");
+    let stored = fixture
+        .pair
+        .wire
+        .owner
+        .run_tool("orbit.task.show", json!({"id": id}))
+        .expect("the owner holds the filed task");
+    assert_eq!(stored["id"], id, "{stored}");
+
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    fixture
+        .settle(&handoff)
+        .expect("owner independently verifies the report");
+    let accepted = fixture
+        .pair
+        .wire
+        .owner
+        .accepted_task_handoff(&handoff.claim_id)
+        .unwrap();
+    engine_action(
+        &fixture.pair.wire.owner,
+        "handoff_land",
+        &json!({"handoff_id": accepted.handoff_id}),
+    )
+    .unwrap();
+    assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
+    fixture.assert_no_blocked();
 }
 
 #[test]

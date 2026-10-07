@@ -83,8 +83,10 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
 - `context_files` are optional for local auto, ship (including explicit selection), and owner
   pull admission. A backlog task with no selectors is admitted on the next pass without holding
   a context lock; it needs no `no-diff-expected` tag or pilot preparation. Conflicts from undeclared
-  edits are handled at landing by rebase and conflict repair. Remote pull still leaves tagged
-  `no-diff-expected` work on the owner. Invalid declared selectors still fail canonicalization.
+  edits are handled at landing by rebase and conflict repair. Remote pull claims tagged
+  `no-diff-expected` work like any other: the claimed leaf hands off `NoDiff`
+  ([task-pull](./specs/task-pull.md)). Work that must stay on the owner is pinned with an
+  `os:` tag or a crew, not by this tag. Invalid declared selectors still fail canonicalization.
   The v2 reservation path admits an empty surface as a no-op, while `orbit.task.locks.reserve`
   refuses an empty task-scope reservation.
 - Context is never pruned by filesystem existence. Selectors are canonicalized and held to
