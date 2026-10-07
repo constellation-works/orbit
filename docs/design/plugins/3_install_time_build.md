@@ -211,7 +211,8 @@ Orbit does not parse lockfiles, so it does not claim to verify them (§4, depend
 - **Size caps.** The outputs together are limited to the archive unpack limit
   (`MAX_UNPACKED_BYTES`, 256 MiB). The build directory is limited to 8 GiB, measured by Orbit
   while the phases run and again when each phase exits (§4, resource exhaustion). A directory
-  or entry that cannot be inspected refuses the phase because Orbit cannot verify the cap.
+  or entry that cannot be inspected refuses the phase because Orbit cannot verify the cap; a path
+  deleted mid-measurement does not.
 
 **Rationale.** The manifest, schemas, definitions, skills and tests the operator's consent
 covers come from the reviewed commit, and a build script cannot rewrite them. Its only influence

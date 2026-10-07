@@ -205,6 +205,19 @@ fn build_directory_size_does_not_follow_symlinks() {
     );
 }
 
+/// A path that vanishes while the size walk runs (a live build deleting its
+/// temporary files) holds nothing; only unreadable content fails closed.
+#[test]
+fn a_vanished_path_is_not_counted_as_unmeasurable() {
+    use crate::build_sandbox::supervise::tree_exceeds;
+
+    let dir = tempfile::tempdir().expect("build dir");
+    assert!(
+        !tree_exceeds(&dir.path().join("deleted"), 0),
+        "a path that no longer exists must not refuse a phase"
+    );
+}
+
 /// The phase runs from its requested working directory, which is the source
 /// checkout for plugin builds and may differ from the build directory root.
 #[cfg(unix)]
