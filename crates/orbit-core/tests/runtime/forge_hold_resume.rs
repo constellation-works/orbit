@@ -86,8 +86,19 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
         let root = TempDir::new().unwrap();
+        // This test binary cannot be re-executed as a worker. The substitute
+        // stays alive while the fixture does, so the supervisor never sees a
+        // resumed run's worker exit before its run starts and interrupts the
+        // run (blocking its task) while the test is still asserting.
+        orbit_core::test_support::install_substitute_pipeline_worker([
+            "sh".to_string(),
+            "-c".to_string(),
+            "i=0; while [ -d \"$1\" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done"
+                .to_string(),
+            "worker".to_string(),
+            root.path().to_string_lossy().into_owned(),
+        ]);
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         let jobs_dir = global.join("resources/jobs");
