@@ -39,6 +39,8 @@ fn recovery<'a>(
         by: "operator",
         now: now(),
         replay: None,
+        resolved_action_id: None,
+        expected_generation: None,
         action_terminal: false,
         action_failed_without_evidence: false,
     }
@@ -189,25 +191,28 @@ fn wedged() -> (
 }
 
 #[test]
-fn an_admitted_action_is_stopped_only_once_its_task_closed_without_acceptable_evidence() {
-    let (_store, host, _trigger, state) = wedged();
-    let liveness = delivery::action_liveness(&host, &state, now()).unwrap();
-    assert!(liveness.terminal);
-    assert!(liveness.failed_without_evidence);
+fn a_minted_action_is_stopped_only_once_its_task_closed_without_acceptable_evidence() {
+    for batch_state in [BatchState::Claimed, BatchState::Admitted] {
+        let (_store, host, _trigger, mut state) = wedged();
+        state.active.as_mut().unwrap().state = batch_state;
+        let liveness = delivery::action_liveness(&host, &state, now()).unwrap();
+        assert!(liveness.terminal);
+        assert!(liveness.failed_without_evidence);
 
-    // The executor can still replace malformed bytes while its task is open.
-    host.stopped.store(false, Ordering::SeqCst);
-    let open = delivery::action_liveness(&host, &state, now()).unwrap();
-    assert!(!open.terminal);
-    assert!(!open.failed_without_evidence);
+        // The executor can still replace malformed bytes while its task is open.
+        host.stopped.store(false, Ordering::SeqCst);
+        let open = delivery::action_liveness(&host, &state, now()).unwrap();
+        assert!(!open.terminal);
+        assert!(!open.failed_without_evidence);
 
-    // Valid evidence on a closed task is settled by acceptance, not failure.
-    host.stopped.store(true, Ordering::SeqCst);
-    *host.raw_evidence.lock().unwrap() = None;
-    host.evidence(state.active.as_ref().unwrap());
-    let accepted = delivery::action_liveness(&host, &state, now()).unwrap();
-    assert!(accepted.terminal);
-    assert!(!accepted.failed_without_evidence);
+        // Valid evidence on a closed task is settled by acceptance, not failure.
+        host.stopped.store(true, Ordering::SeqCst);
+        *host.raw_evidence.lock().unwrap() = None;
+        host.evidence(state.active.as_ref().unwrap());
+        let accepted = delivery::action_liveness(&host, &state, now()).unwrap();
+        assert!(accepted.terminal);
+        assert!(!accepted.failed_without_evidence);
+    }
 }
 
 #[test]
@@ -239,6 +244,38 @@ fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
     assert_eq!(attempt.attempt, 2);
     assert_eq!(attempt.batch, state.active.unwrap().batch);
     assert_eq!(after.covered, revision(0));
+}
+
+/// Deterministic interleaving: admission changes the action after the host's
+/// terminal probe and before recovery loads its checkpoint.
+#[test]
+fn a_terminal_proof_cannot_reissue_a_concurrently_admitted_replacement() {
+    let (store, _host, trigger, state) = wedged();
+    let reissue = request(false, true);
+    let mut operation = recovery(&trigger, "v1", &reissue);
+    operation.expected_generation = Some(state.generation);
+    operation.action_terminal = true;
+    operation.action_failed_without_evidence = true;
+
+    let mut admitted = state.clone();
+    admitted.generation += 1;
+    let active = admitted.active.as_mut().unwrap();
+    active.attempt += 1;
+    active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
+    active.action_id = Some("replacement-action".into());
+    assert!(store.automation_commit(&state, &admitted, None).unwrap());
+
+    let error = recovery::apply(store.as_ref(), &operation).unwrap_err();
+    assert!(
+        matches!(error, AutomationError::Deferred(reason) if reason == "concurrent_evaluation")
+    );
+    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(admitted));
+    assert!(
+        store
+            .automation_recoveries(CONSUMER, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

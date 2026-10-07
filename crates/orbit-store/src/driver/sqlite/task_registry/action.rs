@@ -3,6 +3,21 @@ use super::TaskRegistryStore;
 use orbit_common::OrbitError;
 use rusqlite::{OptionalExtension, params};
 impl TaskRegistryStore {
+    pub(crate) fn task_action_id(
+        &self,
+        workspace: &str,
+        key: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.read()?
+            .query_row(
+                "SELECT task_id FROM task_action_keys WHERE workspace_id=?1 AND action_key=?2",
+                params![workspace, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     pub(crate) fn reserve_task_action(
         &self,
         workspace: &str,

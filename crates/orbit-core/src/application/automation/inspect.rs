@@ -177,7 +177,7 @@ pub fn unadmittable_delivery_definitions(
         .collect())
 }
 
-/// A delivery auto-task whose admitted action stopped without evidence its
+/// A delivery auto-task whose claimed or admitted action stopped without evidence its
 /// settlement would accept — usually a task closed with missing or malformed
 /// coverage. The next evaluation settles it; one still reported means none is
 /// running here, and the consumer admits nothing until it does or an operator
@@ -187,11 +187,13 @@ pub struct WedgedConsumer {
     pub definition: String,
     /// The stopped action: the task the consumer is still waiting on.
     pub action_id: String,
+    /// The task's terminal status, or `deleted` when the recorded task is gone.
+    pub terminal_status: String,
     /// The last validation reason recorded against its evidence, if any.
     pub reason: Option<String>,
 }
 
-/// Every delivery auto-task here holding a stopped admitted action, in
+/// Every delivery auto-task here holding a stopped claimed or admitted action, in
 /// definition order, by the same rule reset and recovery accept.
 pub fn wedged_delivery_consumers(
     runtime: &OrbitRuntime,
@@ -215,9 +217,21 @@ pub fn wedged_delivery_consumers(
             continue;
         }
         if let Some(active) = state.and_then(|state| state.active) {
+            let Some(action_id) = super::task::action_id(runtime, &active)? else {
+                continue;
+            };
+            let terminal_status = match runtime.get_task(&action_id) {
+                Ok(task) => task.status.to_string(),
+                Err(OrbitError::NotFound {
+                    kind: orbit_common::NotFoundKind::Task,
+                    ..
+                }) => "deleted".into(),
+                Err(error) => return Err(error),
+            };
             wedged.push(WedgedConsumer {
                 definition: definition.name.clone(),
-                action_id: active.action_id.unwrap_or_default(),
+                action_id,
+                terminal_status,
                 reason: active.reason,
             });
         }
@@ -268,6 +282,7 @@ pub fn inspect_auto_task(
             enabled: runtime.auto_task_enabled(definition),
             admission_deferred,
             adopts_settings: true,
+            definition: Some(definition),
         },
         now,
     )
@@ -305,6 +320,7 @@ pub fn inspect_routine(
             enabled: definition.enabled,
             admission_deferred: false,
             adopts_settings: false,
+            definition: None,
         },
         now,
     )
@@ -322,6 +338,7 @@ struct Inspection<'a> {
     admission_deferred: bool,
     /// The evaluator adopts a compatible edit of this kind on its own.
     adopts_settings: bool,
+    definition: Option<&'a AutoTaskDefinition>,
 }
 
 fn inspect(
@@ -338,6 +355,7 @@ fn inspect(
         enabled,
         admission_deferred,
         adopts_settings,
+        definition,
     } = request;
 
     let consumer = super::consumer_key(runtime, kind, name)?;
@@ -354,7 +372,17 @@ fn inspect(
     let adoptable = adopts_settings && enabled && ownership.owned_here;
     let refusals = match &state {
         Some(state) if definition_changed && adoptable => {
-            adoption_refusals(runtime, store.as_ref(), state, epoch, trigger)?
+            let action_terminal = definition.is_some_and(|definition| {
+                super::auto_task_action_liveness(runtime, definition, Some(state), now).terminal
+            });
+            adoption_refusals(
+                runtime,
+                store.as_ref(),
+                state,
+                epoch,
+                trigger,
+                action_terminal,
+            )?
         }
         _ => Vec::new(),
     };
@@ -409,6 +437,7 @@ fn adoption_refusals(
     state: &AutomationState,
     epoch: &str,
     trigger: &DeliveryTrigger,
+    action_terminal: bool,
 ) -> Result<Vec<String>, OrbitError> {
     let repository = if state.branch == trigger.branch {
         // Adoption is judged from the checkout, and `auto-task show` must not
@@ -421,7 +450,7 @@ fn adoption_refusals(
         state.repository.clone()
     };
 
-    delivery::adopt::refusals(store, state, epoch, trigger, &repository, None)
+    delivery::adopt::refusals(store, state, epoch, trigger, &repository, action_terminal)
         .map_err(orbit_automation::automation_error_to_orbit)
 }
 

@@ -90,6 +90,10 @@ impl TaskStoreBackend for TaskV2Store {
         self.create_task_with_key(params, Some(key))
     }
 
+    fn automation_task_for_key(&self, key: &str) -> Result<Option<Task>, OrbitError> {
+        self.in_boundary(|| self.automation_task_for_key(key))
+    }
+
     fn task_candidates(
         &self,
         filter: &crate::contracts::TaskListFilter,

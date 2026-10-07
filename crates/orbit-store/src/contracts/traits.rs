@@ -128,6 +128,14 @@ pub trait TaskStoreBackend: Send + Sync {
         ))
     }
 
+    /// Read the published task for an automation action key in this workspace.
+    /// A reservation without a readable bundle is not proof of a minted task.
+    fn automation_task_for_key(&self, _key: &str) -> Result<Option<Task>, OrbitError> {
+        Err(OrbitError::Store(
+            "automation task lookup unavailable".into(),
+        ))
+    }
+
     fn list_tasks(&self) -> Result<Vec<Task>, OrbitError>;
     fn task_status_index(&self) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         Ok(self

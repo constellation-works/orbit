@@ -213,7 +213,7 @@ impl AfterLandingHealth {
         };
         let branch = self.branch_phrase();
         let progress = match (&self.wedged_action, &self.stall) {
-            (Some(action), _) => format!("wedged on {action}"),
+            (Some(_), _) => "wedged on a closed batch task".to_string(),
             (None, Some(stall)) => format!("stalled ({stall})"),
             (None, None) => "not wedged or stalled".to_string(),
         };
@@ -397,23 +397,32 @@ pub fn after_landing_health(
         return Ok(Some(health));
     }
 
+    let diagnostic = inspect::inspect_auto_task(runtime, &definition, now)?;
+    let configured_epoch = super::ownership::auto_task_epoch(
+        &definition,
+        &super::ownership::with_resolved_owner(declared, &ownership),
+    )?;
+    let definition_changed = diagnostic
+        .state
+        .as_ref()
+        .is_some_and(|state| state.epoch != configured_epoch);
     if let Some(wedged) = inspect::wedged_delivery_consumers(runtime, now)?
         .into_iter()
         .find(|wedged| wedged.definition == AFTER_LANDING_CONSUMER)
     {
         health.problems.push(format!(
-            "wedged on action {} that closed without accepted coverage evidence{}",
-            wedged.action_id,
+            "wedged on a batch task ({}) that closed without accepted coverage evidence{}; recover with `orbit auto-task recover {AFTER_LANDING_CONSUMER} {}--reissue-action --reason \"re-examine the unpaid batch\"`",
+            wedged.terminal_status,
             wedged
                 .reason
                 .as_deref()
                 .map(|reason| format!(" ({reason})"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            if definition_changed { "--adopt-settings " } else { "" }
         ));
         health.wedged_action = Some(wedged.action_id);
     }
 
-    let diagnostic = inspect::inspect_auto_task(runtime, &definition, now)?;
     if let Some(stall) = diagnostic
         .state
         .as_ref()

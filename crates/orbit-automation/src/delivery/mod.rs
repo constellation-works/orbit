@@ -93,6 +93,12 @@ pub trait DeliveryHost {
     /// Canonical action admission must resolve the same durable key on replay.
     fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError>;
 
+    /// Resolve a minted action after a crash before its id was checkpointed.
+    /// This lookup is read-only and must use the attempt's durable action key.
+    fn action_id(&self, attempt: &BatchAttempt) -> Result<Option<String>, AutomationError> {
+        Ok(attempt.action_id.clone())
+    }
+
     fn outcome(&self, attempt: &BatchAttempt) -> Result<ActionOutcome, AutomationError>;
 }
 
