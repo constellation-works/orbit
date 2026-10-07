@@ -60,10 +60,11 @@ pub(crate) const RUNTIME_FILES: &[&str] = &[
 
 /// `/proc` entries describing the machine rather than another process.
 ///
-/// `/proc` as a whole is deliberately absent: `/proc/<pid>/environ` of any
-/// same-user process would hand the child the parent's credentials, which is
-/// exactly the disclosure this confinement exists to prevent. The child's own
-/// `/proc/self` is granted after `fork`, where it resolves to the child.
+/// `/proc` as a whole is deliberately absent: non-ptrace-gated files such as
+/// `/proc/<pid>/cmdline` would expose other processes' arguments, which may
+/// contain credentials. Landlock's separate ptrace restriction already denies
+/// `environ` outside the child's domain, regardless of filesystem grants. The
+/// child's own `/proc/self` is granted after `fork`, where it resolves to the child.
 const RUNTIME_PROC_DIRS: &[&str] = &["/proc/sys"];
 const RUNTIME_PROC_FILES: &[&str] = &[
     "/proc/cpuinfo",
