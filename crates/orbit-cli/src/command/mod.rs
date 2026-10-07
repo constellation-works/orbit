@@ -3,6 +3,7 @@ pub mod auto_task;
 pub mod clock;
 pub mod config;
 pub mod doctor;
+mod doctor_permissions;
 pub mod friction;
 pub mod gc;
 pub mod host;

@@ -7,6 +7,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
+use crate::command::doctor_permissions::state_directory_permissions_row;
 use crate::command::mcp::registered_clients_for_workspace;
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
@@ -17,7 +18,8 @@ use crate::output::color::{Domain, Role};
     about = "Diagnose workspace health, provider CLIs, and filesystem access",
     long_about = "Diagnose workspace health, provider CLIs, and filesystem access\n\n\
         With no subcommand, checks the workspace: config, database, disk, indexes, locks, and \
-        runs. The subcommands run focused diagnostics for provider CLIs and filesystem access.",
+        runs. Default database checks read the header and schema; --deep also scans every \
+        database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs and filesystem access.",
     args_conflicts_with_subcommands = true
 )]
 pub struct DoctorCommand {
@@ -28,6 +30,10 @@ pub struct DoctorCommand {
     /// Emit machine-readable JSON instead of the table.
     #[arg(long)]
     pub json: bool,
+
+    /// Scan every database page with SQLite quick_check; default checks only read the header and schema.
+    #[arg(long)]
+    pub deep: bool,
 
     /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
@@ -99,9 +105,11 @@ impl Execute for DoctorCommand {
         }
         let mut results = Vec::new();
         if self.fix_stale_locks {
+            let started = std::time::Instant::now();
             let cleared = runtime.remove_stale_lock_files()?;
             eprintln!("Cleared {cleared} stale lock holder record(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-locks".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Cleared {cleared} stale lock holder record(s)."),
@@ -109,9 +117,11 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_stale_task_locks {
+            let started = std::time::Instant::now();
             let released = runtime.clear_stale_task_reservations()?;
             eprintln!("Released {released} stale task reservation(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-task-locks".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Released {released} stale task reservation(s)."),
@@ -119,9 +129,11 @@ impl Execute for DoctorCommand {
             });
         }
         if self.remove_graph {
+            let started = std::time::Instant::now();
             let removed = runtime.remove_retired_graph_state()?;
             eprintln!("Removed {removed} retired graph location(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "remove-graph".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Removed {removed} retired graph location(s)."),
@@ -129,9 +141,11 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_stale_artifacts {
+            let started = std::time::Instant::now();
             let removed = runtime.remove_stale_definition_artifacts()?;
             eprintln!("Retired {removed} deprecated definition artifact(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-artifacts".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Retired {removed} deprecated definition artifact(s)."),
@@ -139,6 +153,7 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_retired_activity_backends {
+            let started = std::time::Instant::now();
             let report = runtime.repair_retired_activity_backends()?;
             eprintln!(
                 "Removed retired spec.backend from {} activity file(s).",
@@ -152,6 +167,7 @@ impl Execute for DoctorCommand {
                 );
             }
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-retired-activity-backends".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!(
@@ -162,6 +178,7 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_orphan_task_stores {
+            let started = std::time::Instant::now();
             if !self.confirm {
                 return Err(orbit_core::OrbitError::InvalidInput(
                     "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
@@ -172,6 +189,7 @@ impl Execute for DoctorCommand {
             let message = orphan_task_store_removal_message(&removed);
             eprintln!("{message}");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-orphan-task-stores".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message,
@@ -179,11 +197,13 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_automation_pins {
+            let started = std::time::Instant::now();
             let cleanup =
                 orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
             let message = automation_pin_cleanup_message(&cleanup);
             eprintln!("{message}");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-automation-pins".to_string(),
                 status: if cleanup.kept.is_empty()
                     && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
@@ -196,19 +216,24 @@ impl Execute for DoctorCommand {
                 remediation: None,
             });
         }
-        results.extend(runtime.doctor_workspace()?);
-        results.push(state_directory_permissions_row(runtime));
-        results.extend(routed_provider_rows(runtime));
-        results.push(mcp_registration_row(
-            runtime,
-            orbit_common::fs::path::home_dir().ok().as_deref(),
-        ));
-        // Machine-global rows, composed here rather than in `doctor_workspace`:
-        // `orbit-cmd` does not know about MCP and must not learn, and this is
-        // the one crate that already assembles both [ORB-11053].
-        results.extend(caller_authorization_rows());
-        results.push(clock_unit_row(&runtime.global_root()));
-        results.push(orbit_cmd::hosts::doctor_hosts_row(&runtime.global_root()));
+        results.extend(runtime.doctor_workspace_with_depth(self.deep)?);
+        results.push(WorkspaceDoctorResult::timed(|| {
+            state_directory_permissions_row(runtime)
+        }));
+        results.extend(WorkspaceDoctorResult::timed_many(|| {
+            routed_provider_rows(runtime)
+        }));
+        results.push(WorkspaceDoctorResult::timed(|| {
+            mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
+        }));
+        // Machine-global checks belong to the CLI, which assembles MCP and cmd surfaces.
+        results.extend(WorkspaceDoctorResult::timed_many(caller_authorization_rows));
+        results.push(WorkspaceDoctorResult::timed(|| {
+            clock_unit_row(&runtime.global_root())
+        }));
+        results.push(WorkspaceDoctorResult::timed(|| {
+            orbit_cmd::hosts::doctor_hosts_row(&runtime.global_root())
+        }));
         let failures = results
             .iter()
             .filter(|row| row.status == WorkspaceDoctorStatus::Error)
@@ -273,6 +298,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
         Ok(config) => config,
         Err(error) => {
             return vec![WorkspaceDoctorResult {
+                duration_ms: 0,
                 check_name: "provider-routing".to_string(),
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("cannot inspect effective crew routing: {error}"),
@@ -314,6 +340,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
                 ),
                 Err(error) => {
                     return vec![WorkspaceDoctorResult {
+                        duration_ms: 0,
                         check_name: "provider-routing".to_string(),
                         status: WorkspaceDoctorStatus::Error,
                         message: format!("cannot inspect {complexity} crew pool: {error}"),
@@ -331,6 +358,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
         let check_name = format!("provider:{name}");
         let Some(crew) = config.crews.get(&name) else {
             return WorkspaceDoctorResult {
+                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("routed crew '{name}' is not configured"),
@@ -342,12 +370,14 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
             Ok(Some(def)) => match def.command.as_deref() {
                 Some(program) => match runtime.locate_provider_launcher(program) {
                     Some(path) => WorkspaceDoctorResult {
+                        duration_ms: 0,
                         check_name,
                         status: WorkspaceDoctorStatus::Ok,
                         message: format!("crew '{name}' uses provider '{provider}'; CLI '{}' found at {} (authentication not checked)", program, path.display()),
                         remediation: None,
                     },
                     None => WorkspaceDoctorResult {
+                        duration_ms: 0,
                         check_name,
                         status: WorkspaceDoctorStatus::Error,
                         message: format!("crew '{name}' uses provider '{provider}'; CLI '{program}' was not found"),
@@ -355,6 +385,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
                     },
                 },
                 None => WorkspaceDoctorResult {
+                    duration_ms: 0,
                     check_name,
                     status: WorkspaceDoctorStatus::Skipped,
                     message: format!("crew '{name}' uses provider '{provider}', which has no CLI command"),
@@ -362,12 +393,14 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
                 },
             },
             Ok(None) => WorkspaceDoctorResult {
+                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("crew '{name}' uses provider '{provider}', but no executor definition exists"),
                 remediation: Some(format!("Restore the '{provider}' executor definition or change crew '{name}'.")),
             },
             Err(error) => WorkspaceDoctorResult {
+                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("cannot inspect provider '{provider}' for crew '{name}': {error}"),
@@ -401,6 +434,7 @@ fn mcp_registration_row(
     );
     if clients.is_empty() {
         WorkspaceDoctorResult {
+            duration_ms: 0,
             check_name: "mcp-registration".to_string(),
             status: WorkspaceDoctorStatus::Warning,
             message: "no Orbit MCP client registration found for this workspace".to_string(),
@@ -408,6 +442,7 @@ fn mcp_registration_row(
         }
     } else {
         WorkspaceDoctorResult {
+            duration_ms: 0,
             check_name: "mcp-registration".to_string(),
             status: WorkspaceDoctorStatus::Ok,
             message: format!(
@@ -540,145 +575,6 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
     Ok(Payload::list(values, table).into())
 }
 
-/// Report Orbit-owned state directories whose write bits let another local
-/// principal replace or unlink private files held beneath them.
-fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    #[cfg(unix)]
-    {
-        use std::collections::BTreeSet;
-        use std::os::unix::fs::PermissionsExt;
-
-        fn visit(
-            path: &std::path::Path,
-            descend: bool,
-            seen: &mut BTreeSet<std::path::PathBuf>,
-            writable: &mut Vec<(std::path::PathBuf, u32)>,
-        ) -> std::io::Result<()> {
-            if !seen.insert(path.to_path_buf()) {
-                return Ok(());
-            }
-            let metadata = std::fs::symlink_metadata(path)?;
-            if !metadata.is_dir() {
-                return Ok(());
-            }
-            let mode = metadata.permissions().mode() & 0o777;
-            if mode & 0o022 != 0 {
-                writable.push((path.to_path_buf(), mode));
-            }
-            if !descend {
-                return Ok(());
-            }
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    visit(&entry.path(), true, seen, writable)?;
-                }
-            }
-            Ok(())
-        }
-
-        let mut seen = BTreeSet::new();
-        let mut writable = Vec::new();
-        let global = runtime.global_root();
-        let workspace = runtime.paths().orbit_dir.clone();
-        let configured_roots = [
-            (global.clone(), false),
-            (global.join("state"), true),
-            (global.join("tasks"), true),
-            (global.join("cache"), true),
-            (global.join("frictions"), true),
-            (workspace.clone(), false),
-            (workspace.join("state"), true),
-            (workspace.join("tasks"), true),
-            (workspace.join("frictions"), true),
-        ];
-        for (configured_root, descend) in configured_roots {
-            let root = match configured_root.canonicalize() {
-                Ok(root) => root,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return WorkspaceDoctorResult {
-                        check_name: "state-directory-permissions".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!(
-                            "could not resolve Orbit state directory '{}': {error}",
-                            configured_root.display()
-                        ),
-                        remediation: Some(
-                            "Fix the directory access error named above, then rerun `orbit doctor`."
-                                .to_string(),
-                        ),
-                    };
-                }
-            };
-            if let Err(error) = visit(&root, descend, &mut seen, &mut writable) {
-                return WorkspaceDoctorResult {
-                    check_name: "state-directory-permissions".to_string(),
-                    status: WorkspaceDoctorStatus::Error,
-                    message: format!(
-                        "could not inspect Orbit state directory '{}': {error}",
-                        root.display()
-                    ),
-                    remediation: Some(
-                        "Fix the directory access error named above, then rerun `orbit doctor`."
-                            .to_string(),
-                    ),
-                };
-            }
-        }
-
-        if writable.is_empty() {
-            return WorkspaceDoctorResult {
-                check_name: "state-directory-permissions".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: "all Orbit state directories deny group/world write access".to_string(),
-                remediation: None,
-            };
-        }
-
-        let sample = writable
-            .iter()
-            .take(5)
-            .map(|(path, mode)| format!("{} ({mode:04o})", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let remainder = writable.len().saturating_sub(5);
-        let suffix = if remainder == 0 {
-            String::new()
-        } else {
-            format!(", and {remainder} more")
-        };
-        WorkspaceDoctorResult {
-            check_name: "state-directory-permissions".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "{} Orbit state director{} group/world writable: {sample}{suffix}",
-                writable.len(),
-                if writable.len() == 1 {
-                    "y is"
-                } else {
-                    "ies are"
-                }
-            ),
-            remediation: Some(
-                "Remove group/world write permission from every named directory (for example, \
-                 `chmod go-w <directory>`), then rerun `orbit doctor`."
-                    .to_string(),
-            ),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = runtime;
-        WorkspaceDoctorResult {
-            check_name: "state-directory-permissions".to_string(),
-            status: WorkspaceDoctorStatus::Skipped,
-            message: "Unix directory mode checks are not available on this platform".to_string(),
-            remediation: None,
-        }
-    }
-}
-
 /// Whether this machine still carries retired destination-side MCP caller
 /// authorization files [ORB-12564].
 ///
@@ -694,6 +590,7 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
     let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
     if ignored.is_empty() {
         return vec![WorkspaceDoctorResult {
+            duration_ms: 0,
             check_name: "mcp-callers".to_string(),
             status: WorkspaceDoctorStatus::Ok,
             message: "no retired MCP caller-authorization files; a session served over SSH \
@@ -707,6 +604,7 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
     vec![WorkspaceDoctorResult {
+        duration_ms: 0,
         check_name: "mcp-callers".to_string(),
         status: WorkspaceDoctorStatus::Warning,
         message: format!(
@@ -742,6 +640,7 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
             row
         }
         Err(error) => WorkspaceDoctorResult {
+            duration_ms: 0,
             check_name: "clock-unit".to_string(),
             status: WorkspaceDoctorStatus::Warning,
             message: format!("could not inspect the sweep clock unit: {error}"),
@@ -768,6 +667,7 @@ pub(super) fn clock_unit_row_from_inspection(
         ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
     };
     WorkspaceDoctorResult {
+        duration_ms: 0,
         check_name: "clock-unit".to_string(),
         status,
         message: inspection.doctor_message(),
@@ -838,15 +738,20 @@ fn automation_pin_cleanup_message(
 }
 
 fn human_detail(row: &WorkspaceDoctorResult) -> String {
-    row.remediation.as_ref().map_or_else(
+    let mut detail = row.remediation.as_ref().map_or_else(
         || row.message.clone(),
         |remediation| format!("{}\nAction: {remediation}", row.message),
-    )
+    );
+    if row.duration_ms > 1000 {
+        detail.push_str(&format!(" ({:.2} s)", row.duration_ms as f64 / 1000.0));
+    }
+    detail
 }
 
 pub(crate) fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
     json!({
         "check": row.check_name,
+        "duration_ms": row.duration_ms,
         "status": match row.status {
             WorkspaceDoctorStatus::Ok => "ok",
             WorkspaceDoctorStatus::Warning => "warning",

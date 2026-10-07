@@ -1,0 +1,59 @@
+Diagnose workspace health, provider CLIs, and filesystem access
+
+With no subcommand, checks the workspace: config, database, disk, indexes, locks, and runs. Default database checks read the header and schema; --deep also scans every database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs and filesystem access.
+
+Usage: orbit doctor [OPTIONS]
+       orbit doctor <COMMAND>
+
+Commands:
+  providers  Show each executor's provider CLI, configured sandbox, and Linux sandbox readiness
+  fs-access  Dry-run a workspace-relative path against a filesystem profile's read and modify rules
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --json
+          Emit machine-readable JSON instead of the table
+
+      --deep
+          Scan every database page with SQLite quick_check; default checks only read the header and schema
+
+      --fix-stale-locks
+          Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace
+
+      --fix-stale-task-locks
+          Release only task reservations whose owner/task state is conclusively inactive
+
+      --remove-graph
+          Remove retired graph state from this worktree and the shared workspace
+
+      --fix-stale-artifacts
+          Retire deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted
+
+      --fix-retired-activity-backends
+          Remove known retired `spec.backend` values (`http`, `auto`) from schemaVersion 2 agent-loop activities. Unknown backends and unrelated parse failures are left untouched
+
+      --fix-orphan-task-stores
+          Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm
+
+      --fix-automation-pins
+          Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs
+
+      --confirm
+          Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

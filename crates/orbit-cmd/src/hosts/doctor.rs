@@ -158,6 +158,7 @@ fn row(
 ) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
         check_name: CHECK.to_string(),
+        duration_ms: 0,
         status,
         message,
         remediation: remediation.map(ToOwned::to_owned),
