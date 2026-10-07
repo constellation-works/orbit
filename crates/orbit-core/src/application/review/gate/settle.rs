@@ -284,12 +284,23 @@ fn settle(
         },
         None => reviewed.head.clone(),
     };
+    let carry = match context.task_ids.as_slice() {
+        [task_id] => super::super::evidence::evidence_carry(
+            runtime,
+            task_id,
+            &context.workspace_path,
+            &reviewed.base,
+            &final_candidate,
+        )?,
+        _ => super::super::evidence::EvidenceCarry::None,
+    };
     judgement.reconcile_external_evidence(
         runtime,
         context,
         &final_candidate,
         repair.as_ref(),
         &validation_scope,
+        carry.carried(),
     )?;
     judgement.reconcile_verdict(repair.as_ref(), &validation_scope);
     let now = Utc::now();
@@ -356,6 +367,7 @@ fn settle(
         budget: settled.budget,
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),
+        evidence_carried: judgement.evidence_carried.clone(),
         issued_at: now,
     };
     if super::super::evidence::evidence_only(&certificate, &judgement.external_evidence) {
@@ -367,6 +379,10 @@ fn settle(
             candidate: certificate.final_candidate.clone(),
             task_meaning_digest: certificate.task_meaning_digest.clone(),
             requirements: judgement.external_evidence,
+            task_spec_digest: context
+                .tasks
+                .first()
+                .map(orbit_types::task::Task::spec_digest),
         };
         if context.claimed {
             publish_held_candidate(context, &hold.candidate.commit);

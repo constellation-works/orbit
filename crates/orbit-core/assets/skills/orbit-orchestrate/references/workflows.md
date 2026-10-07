@@ -94,9 +94,24 @@ candidate onto the new base as uncommitted changes, then:
 | Outcome | When | Implementation step |
 |---|---|---|
 | `resumed_validated` | The failed step is `commit` or later, the candidate applies cleanly, and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_held` | The last run was held on named external evidence, that evidence arrived (`review_evidence_received` is the task's latest decision), and the held commit applies cleanly. | Skipped, and validation does not run at resume time. The candidate goes to commit, validation and the fresh review that finds the evidence. |
 | `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths, the failing command and output, or the review findings. |
 | `resumed_unjudged` | The failed step is `commit` or later, and a required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
-| `fresh` | No candidate was preserved, an operator discarded it, the task's description, acceptance criteria or selectors changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason is recorded. |
+| `fresh` | No candidate was preserved, an operator discarded it, the task's description or acceptance criteria changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason and its `reason_code` are recorded. |
+
+Context selectors are preparation hints, not what the task means: a task
+pilot or operator editing them keeps the candidate, and the resumed review
+reads the current selectors.
+
+A resumed held candidate on the hold's own base has the held tree, so the
+evidence matches it directly. On a moved base the review gate counts the
+evidence only while the candidate's whole patch over its base is unchanged
+(`git patch-id --stable`); the review manifest and certificate then record
+`evidence_carried` with the two trees and the patch id. A conflict resolution
+or any other change re-requests the evidence, and the admission output's
+`evidence_carry` names the typed reason (`patch_changed` or
+`source_unavailable`). The same rule applies when completion rebases a
+reviewed head for re-review.
 
 Whenever a candidate was found, the outcome, the source run, branch and SHA
 are written to the task's history as a `candidate_resume` event and returned

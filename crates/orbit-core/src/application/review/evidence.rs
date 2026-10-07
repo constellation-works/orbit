@@ -1,6 +1,7 @@
 //! Hold external checks without accepting a candidate or blocking for repairs.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use orbit_automation::review::{
     ValidationContext, combined_task_meaning_digest, task_meaning_digest, validation_evidence,
@@ -10,11 +11,13 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
-    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
-    ReviewCertificate, ReviewEvidenceHold, ReviewEvidenceRequirement, ReviewExternalEvidence,
+    FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
+    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    REVIEW_REPORT_HISTORY_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
+    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
     ReviewValidation, ValidationOutcome, ValidationRole,
 };
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
@@ -160,6 +163,142 @@ pub(super) fn satisfied_external_evidence(
     Ok(satisfied)
 }
 
+/// [ORB-14450] Whether evidence checked on the task's last settled candidate
+/// counts for `head`, a candidate on `base` with another tree.
+pub(super) enum EvidenceCarry {
+    /// Nothing to carry: no evidence on an earlier tree, or the same tree.
+    None,
+    /// The patch is unchanged, so that evidence counts for `head`.
+    Carried(ReviewEvidenceCarried),
+    /// The evidence does not count for `head` and is requested again.
+    Rerequested {
+        from_tree: String,
+        to_tree: String,
+        reason: ReviewEvidenceRerequestReason,
+    },
+}
+
+impl EvidenceCarry {
+    pub(super) fn carried(&self) -> Option<&ReviewEvidenceCarried> {
+        match self {
+            Self::Carried(carried) => Some(carried),
+            Self::None | Self::Rerequested { .. } => None,
+        }
+    }
+
+    /// The admission output's `evidence_carry`.
+    pub(super) fn to_json(&self) -> Value {
+        match self {
+            Self::None => Value::Null,
+            Self::Carried(carried) => json!({"outcome": "carried", "carried": carried}),
+            Self::Rerequested {
+                from_tree,
+                to_tree,
+                reason,
+            } => json!({
+                "outcome": "rerequested",
+                "from_tree": from_tree,
+                "to_tree": to_tree,
+                "reason": reason,
+            }),
+        }
+    }
+}
+
+/// Compare `head`'s patch over `base` with the patch of the task's last
+/// settled candidate over its base, when passing external evidence exists
+/// on that candidate's tree or on the tree it was already carried from. A resumed held candidate on a moved base and a
+/// completion-step rebase both land here: the evidence carries only when
+/// `git patch-id --stable` of the whole change is unchanged.
+pub(super) fn evidence_carry(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    workspace_path: &Path,
+    base: &SourceRevision,
+    head: &SourceRevision,
+) -> Result<EvidenceCarry, OrbitError> {
+    let Some(certificate) = runtime
+        .get_task_artifact(task_id, REVIEW_GATE_ARTIFACT)?
+        .and_then(|artifact| serde_json::from_slice::<ReviewCertificate>(&artifact.content).ok())
+    else {
+        return Ok(EvidenceCarry::None);
+    };
+    let source = &certificate.final_candidate;
+    if source.tree.is_empty() || source.tree == head.tree {
+        return Ok(EvidenceCarry::None);
+    }
+    // The evidence was checked on the settled tree itself, or on the tree
+    // that settlement already carried it from.
+    let on_tree = |tree: &str| {
+        let revision = SourceRevision {
+            commit: String::new(),
+            tree: tree.to_string(),
+        };
+        satisfied_external_evidence(runtime, task_id, &revision).map(|found| !found.is_empty())
+    };
+    let evidence_tree = if on_tree(&source.tree)? {
+        source.tree.clone()
+    } else {
+        match certificate
+            .evidence_carried
+            .as_ref()
+            .filter(|carried| carried.to_tree == source.tree)
+        {
+            Some(carried) if carried.from_tree != head.tree && on_tree(&carried.from_tree)? => {
+                carried.from_tree.clone()
+            }
+            _ => return Ok(EvidenceCarry::None),
+        }
+    };
+    let rerequested = |reason| EvidenceCarry::Rerequested {
+        from_tree: evidence_tree.clone(),
+        to_tree: head.tree.clone(),
+        reason,
+    };
+    let Ok(from) = orbit_engine::review_gate::patch_id(
+        workspace_path,
+        &certificate.base.commit,
+        &source.commit,
+    ) else {
+        return Ok(rerequested(
+            ReviewEvidenceRerequestReason::SourceUnavailable,
+        ));
+    };
+    let to = orbit_engine::review_gate::patch_id(workspace_path, &base.commit, &head.commit)?;
+    Ok(match (from, to) {
+        (Some(from), Some(to)) if from == to => EvidenceCarry::Carried(ReviewEvidenceCarried {
+            from_tree: evidence_tree.clone(),
+            to_tree: head.tree.clone(),
+            patch_id: to,
+        }),
+        _ => rerequested(ReviewEvidenceRerequestReason::PatchChanged),
+    })
+}
+
+/// [ORB-14450] The passing result/log pairs on the tree `carry` came from,
+/// restated for `candidate`. Empty unless `carry` leads to its tree.
+pub(super) fn carried_external_evidence(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    candidate: &SourceRevision,
+    carry: Option<&ReviewEvidenceCarried>,
+) -> Result<BTreeMap<String, ReviewExternalEvidence>, OrbitError> {
+    let Some(carry) = carry.filter(|carry| carry.to_tree == candidate.tree) else {
+        return Ok(BTreeMap::new());
+    };
+    let source = SourceRevision {
+        commit: String::new(),
+        tree: carry.from_tree.clone(),
+    };
+    Ok(satisfied_external_evidence(runtime, task_id, &source)?
+        .into_iter()
+        .map(|(path, mut evidence)| {
+            evidence.candidate = candidate.clone();
+            (path, evidence)
+        })
+        .collect())
+}
+
 fn reserved_artifact(path: &str) -> bool {
     matches!(
         path,
@@ -248,7 +387,7 @@ pub(crate) fn resume_evidence_hold(
             actor: "system".into(),
             status: Some(TaskStatus::Backlog),
             expected_status: Some(vec![TaskStatus::InProgress]),
-            status_event: Some("review_evidence_received".into()),
+            status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
             status_note: Some(format!("run={}; all named external checks arrived for the held candidate; queued for fresh review.", hold.run_id)),
             ..Default::default()
         })?;

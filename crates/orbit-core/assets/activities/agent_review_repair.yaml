@@ -136,6 +136,9 @@ spec:
        result path changed. Record it as `required` and `passed`, naming its
        result and log artifacts in `note`; do not request that check again.
        A repair that changes the tree needs evidence for the repaired tree.
+       When the manifest names `evidence_carried`, those entries were checked
+       on its `from_tree` and Orbit verified that this candidate carries the
+       same patch onto a new base; treat them as verified for `candidate.tree`.
        Before repeating an expensive workspace-required check, inspect the
        implementer's retained evidence and the workspace's reuse guidance.
        Reuse it only when workspace guidance permits, the check completed

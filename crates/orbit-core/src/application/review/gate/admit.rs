@@ -17,6 +17,10 @@ use serde_json::{Value, json};
 
 use super::super::REVIEW_AUDIT;
 use super::super::admission::run_review_admission;
+use super::super::evidence::{
+    EvidenceCarry, carried_external_evidence, evidence_carry,
+    satisfied_external_evidence as satisfied_external_evidence_on,
+};
 use crate::OrbitRuntime;
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
@@ -260,6 +264,16 @@ fn admit(
         )));
     }
     let (task_digests, task_meaning_digest) = &context.task_digests;
+    let carry = match context.task_ids.as_slice() {
+        [task_id] => evidence_carry(
+            runtime,
+            task_id,
+            &context.workspace_path,
+            &candidate.base,
+            &candidate.head,
+        )?,
+        _ => EvidenceCarry::None,
+    };
 
     let store = runtime.review_store()?;
     let lineage_key = context.lineage_key();
@@ -302,12 +316,20 @@ fn admit(
     let previous_report = runtime
         .get_task_artifact(&context.task_ids[0], REVIEW_REPORT_ARTIFACT)?
         .and_then(|artifact| orbit_types::workflow::ReviewReport::parse(&artifact.content).ok());
+    let mut satisfied_external_evidence = carried_external_evidence(
+        runtime,
+        &context.task_ids[0],
+        &candidate.head,
+        carry.carried(),
+    )?;
+    satisfied_external_evidence.extend(satisfied_external_evidence_on(
+        runtime,
+        &context.task_ids[0],
+        &candidate.head,
+    )?);
     let manifest = ReviewManifest {
-        satisfied_external_evidence: super::super::evidence::satisfied_external_evidence(
-            runtime,
-            &context.task_ids[0],
-            &candidate.head,
-        )?,
+        satisfied_external_evidence,
+        evidence_carried: carry.carried().cloned(),
         previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),
@@ -366,6 +388,7 @@ fn admit(
         "implementation_commit_count": candidate.commits.len(),
         "task_meaning_digest": manifest.task_meaning_digest,
         "task_selectors": selectors,
+        "evidence_carry": carry.to_json(),
         "manifest_artifact": REVIEW_MANIFEST_ARTIFACT,
         "report_artifact": REVIEW_REPORT_ARTIFACT,
         "budget": ledger.budget,

@@ -19,6 +19,10 @@ pub struct ReviewManifest {
     /// these checks; a reviewer repair that changes the tree does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub satisfied_external_evidence: BTreeMap<String, super::super::ReviewExternalEvidence>,
+    /// [ORB-14450] Set when some of `satisfied_external_evidence` was checked
+    /// on an earlier tree whose patch this candidate carries unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_carried: Option<super::super::ReviewEvidenceCarried>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,6 +131,11 @@ pub struct ReviewCertificate {
     /// issued before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors_widened: Vec<String>,
+    /// [ORB-14450] External evidence checked on an earlier tree that this
+    /// verdict counted because the final candidate carries its patch
+    /// unchanged onto a new base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_carried: Option<super::super::ReviewEvidenceCarried>,
     pub issued_at: DateTime<Utc>,
 }
 

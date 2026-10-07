@@ -718,8 +718,8 @@ pub enum CandidateFreshReason {
     /// The candidate was never pushed and could not be made durable, and
     /// the claim runs on a host other than the one that made it.
     NotDurable,
-    /// The task's description, acceptance criteria or selectors changed
-    /// since the candidate was kept.
+    /// The task's description or acceptance criteria changed since the
+    /// candidate was kept. A selector edit does not retire it.
     SpecChanged,
     /// An operator discarded the candidate since it was kept.
     Discarded,
@@ -743,7 +743,7 @@ impl CandidateFreshReason {
 pub struct PreservedClaimCandidate {
     pub candidate: ClaimCandidateRef,
     /// The task's spec digest when the claim settled; a later change to the
-    /// description, criteria or selectors retires the candidate.
+    /// description or criteria retires the candidate.
     pub task_spec_digest: String,
     pub recorded_at: String,
 }

@@ -247,6 +247,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         retired_validation: vec![],
         validation_scope: vec![],
         selectors_widened: vec![],
+        evidence_carried: None,
         issued_at: Utc::now(),
     };
     let content = serde_json::to_vec(&certificate).unwrap();

@@ -22,6 +22,7 @@ mod review_continuation;
 #[cfg(target_os = "linux")]
 mod review_evidence_fulfilment;
 mod review_gate_audit;
+mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
 mod sandbox_off;

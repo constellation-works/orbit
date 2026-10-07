@@ -10,8 +10,17 @@ spec:
     `pr_failure_handoff` recorded on the run the task was linked to before
     this run (`prior_job_run_id`). It is used only when no operator discarded
     it since that run (`orbit task update --discard-candidate`) and the task's
-    description, acceptance criteria and selectors still match the digest
-    recorded with it; otherwise the outcome is `fresh` with the reason.
+    description and acceptance criteria still match the digest recorded with
+    it (a selector edit keeps it); otherwise the outcome is `fresh` with the
+    reason and a `reason_code`. A run held on named external evidence records
+    no handoff: when the task's latest decision is that run's
+    `review_evidence_received`, the candidate is the commit the task's
+    `review-evidence-hold.json` names, under the same discard and spec
+    checks. A clean merge of it is `resumed_held`: `implement` is false and
+    validation is not run here, so the pipeline's own validation and fresh
+    review judge it. A conflict is `resumed_repaired` with trigger
+    `conflict`, and a held commit no longer in the repository is `fresh`
+    with `candidate_missing`.
     A usable candidate is squash-merged onto the run's clean checkout of
     `base_sha` and left as uncommitted changes. A candidate whose failed
     step is the implementation (`implement_bundle` or `implement_one`) or
@@ -84,11 +93,17 @@ spec:
         type: string
       outcome:
         type: string
-        enum: [fresh, resumed_validated, resumed_repaired, resumed_unjudged]
+        enum: [fresh, resumed_validated, resumed_held, resumed_repaired, resumed_unjudged]
       implement:
         type: boolean
       reason:
         type: [string, "null"]
+      reason_code:
+        type: [string, "null"]
+        description: >
+          Set when `outcome` is `fresh`: `bundle`, `no_prior_run`,
+          `no_candidate`, `candidate_discarded`, `spec_unrecorded`,
+          `spec_changed`, `candidate_missing` or `already_on_base`.
       repair:
         type: [object, "null"]
         description: >

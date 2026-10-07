@@ -1938,6 +1938,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         retired_validation: vec![],
         validation_scope: vec![],
         selectors_widened: vec![],
+        evidence_carried: None,
         issued_at: Utc::now(),
     }
 }
