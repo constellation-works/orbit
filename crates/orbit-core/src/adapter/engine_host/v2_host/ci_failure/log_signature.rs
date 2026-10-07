@@ -246,7 +246,7 @@ const ERROR_MARKERS: &[&str] = &[
 ///    nextest `FAIL […]`, a name listed after libtest `failures:`).
 /// 3. A specific `##[error]` annotation.
 /// 4. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
-/// 5. The nearest unannotated content line before a generic trailer.
+/// 5. The nearest unannotated content line with letters or digits before a generic trailer.
 /// 6. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
 ///
@@ -649,7 +649,7 @@ fn is_assertion_payload(lowered: &str) -> bool {
 fn is_diagnostic_content(line: &str) -> bool {
     let payload = signature_payload(line);
     let trimmed = payload.trim();
-    !trimmed.is_empty() && !trimmed.starts_with("##[")
+    trimmed.chars().any(char::is_alphanumeric) && !trimmed.starts_with("##[")
 }
 
 fn is_run_command_payload(payload: &str) -> bool {

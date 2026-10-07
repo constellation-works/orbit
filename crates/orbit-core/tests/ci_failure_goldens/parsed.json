@@ -336,5 +336,85 @@
       ],
       "skipped_keys": []
     }
+  ],
+  "rustfmt_diff_ending_in_a_brace_does_not_abort_unrelated_filings": [
+    {
+      "filed_count": 2,
+      "tasks": [
+        {
+          "failure_key": "d8df5c05d493ff98",
+          "signature": "+ let value = <n>;",
+          "step_fallback": false,
+          "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z Diff in crates/example/src/lib.rs:12:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  fn main() {\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z -    let value=1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z +    let value = 1;\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "7449dfc6da479410",
+          "signature": "error: unrelated regression still files",
+          "step_fallback": false,
+          "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: unrelated regression still files\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "d8df5c05d493ff98"
+      ]
+    }
+  ],
+  "symbols_only_content_uses_the_step_fallback": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "dfb62a66f8e38017",
+          "signature": "run ci",
+          "step_fallback": true,
+          "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo fmt --check\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z  }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ----------\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "dfb62a66f8e38017"
+      ]
+    }
+  ],
+  "symbols_only_failure_identity_uses_exact_key_coverage": [
+    {
+      "filed_count": 2,
+      "tasks": [
+        {
+          "failure_key": "50420a63ae5db53b",
+          "signature": "✗",
+          "step_fallback": false,
+          "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "7449dfc6da479410",
+          "signature": "error: unrelated regression still files",
+          "step_fallback": false,
+          "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: unrelated regression still files\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "50420a63ae5db53b"
+      ]
+    }
   ]
 }
