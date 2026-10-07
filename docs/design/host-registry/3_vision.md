@@ -3,15 +3,15 @@ summary: "Host Registry — Vision"
 type: design
 title: "Host Registry — Vision"
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: vision
 tags: [host-registry, machine-identity, workspace-catalog]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11008, ORB-11009]
+related_artifacts: [ORB-11008, ORB-11009, ORB-14448, ORB-14449]
 ---
 
 # Host Registry — Vision
@@ -33,7 +33,10 @@ chosen remote server; this surface has no cross-host workspace list or
 host-qualified selector. The implemented federated stdio mode is a separate
 exception: it lists and routes to the accepting machine and configured SSH
 destinations through host-qualified selectors. The local host registry remains
-neither a fleet inventory nor a general routing authority. Owner and replica
+neither a fleet inventory nor a general routing authority. The specified host file
+([specs/host-commands.md](./specs/host-commands.md)) records operator-registered hosts with
+immutable identity only. Its one routing rule is the task-id prefix
+([specs/host-routing.md](./specs/host-routing.md)). Owner and replica
 checkout roles stay catalog vocabulary, not a fleet control plane.
 
 ## Questions that require evidence
@@ -81,5 +84,7 @@ crash-safe writes, future-version rejection checks and rollback classification.
 
 - [ORB-11008] recorded the federated multi-host MCP policy later specified in federated-mcp
 - [ORB-11009] moved that contract out of this vision and into `docs/design/federated-mcp/`
+- [ORB-14448] host file and `orbit host` commands (specified)
+- [ORB-14449] task-prefix routing and `--host` selection (specified)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
