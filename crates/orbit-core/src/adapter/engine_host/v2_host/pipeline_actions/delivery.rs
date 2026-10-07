@@ -11,8 +11,9 @@ use super::action_failed;
 
 /// Translate the gate's `{task_ids, mode}` into the resolved delivery route.
 /// The decision is the application's
-/// ([`OrbitRuntime::resolve_delivery_route`]); a refusal fails the step
-/// before the gate reserves anything.
+/// ([`OrbitRuntime::resolve_admitted_delivery_route`]); a refusal — including
+/// a PR route with no forge remote — fails the step before the gate reserves
+/// anything or creates a worktree.
 pub(in super::super) fn resolve_delivery_job(
     runtime: &OrbitRuntime,
     action: &str,
@@ -36,7 +37,11 @@ pub(in super::super) fn resolve_delivery_job(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let route = runtime
-        .resolve_delivery_route(&tasks, mode)
+        .resolve_admitted_delivery_route(
+            &tasks,
+            mode,
+            &crate::application::job::delivery::PrForgeCheck::default(),
+        )
         .map_err(|error| action_failed(action, error.to_string()))?;
     let mut output = serde_json::json!({
         "job_name": route.job_name,

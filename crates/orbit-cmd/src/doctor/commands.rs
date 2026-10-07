@@ -188,6 +188,7 @@ impl DoctorCommands for OrbitRuntime {
             WorkspaceDoctorResult::timed(|| doctor_check_blocked_task_recovery(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_stalled_automation(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_review(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_forge_remote(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_host_shutdown(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_validation_env(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_orphan_task_stores(self)),

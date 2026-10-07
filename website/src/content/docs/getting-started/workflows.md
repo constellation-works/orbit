@@ -55,8 +55,15 @@ A ship run uses the workspace's ship mode:
 - **`local`** commits and merges into the base branch before the task reaches
   `review`, so `review` is not a pre-merge stop.
 
-Set the mode with `orbit workspace init --ship-mode`. On the CLI, `--mode` and
-`--base` override it for one run.
+Set the mode with `orbit workspace init --ship-mode`, or change it later with
+`orbit workspace ship-mode pr|local`. On the CLI, `--mode` and `--base` override
+it for one run.
+
+PR mode needs a Git remote on a forge host. If no remote names a network host
+(only a local bare repository, say), Orbit refuses to ship an untagged task
+before creating a worktree, and `orbit doctor` warns on its `forge-remote` row.
+Switch the workspace to `local`, or tag a single task
+`delivery:task_local_pipeline` to deliver just that task locally.
 
 ## Drain the backlog
 

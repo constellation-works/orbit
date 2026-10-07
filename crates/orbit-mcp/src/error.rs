@@ -119,6 +119,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+        OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",

@@ -42,6 +42,7 @@ mod invocation_metrics;
 mod job_finalization;
 mod local_route_before_pr;
 mod plugin_inspection;
+mod pr_forge_admission;
 mod provider_failure_hold;
 
 mod task_delivery;

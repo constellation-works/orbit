@@ -1,5 +1,6 @@
 use crate::workspace::{
-    WorkspacePublicationBinding, redact_git_remote, validate_publication_remote,
+    WorkspacePublicationBinding, git_remote_network_host, redact_git_remote,
+    validate_publication_remote,
 };
 
 #[test]
@@ -87,5 +88,32 @@ fn malformed_credential_urls_are_rejected_with_redacted_diagnostics() {
         assert!(diagnostic.contains(redacted), "{diagnostic}");
         assert!(!diagnostic.contains(username), "{diagnostic}");
         assert!(!diagnostic.contains(password), "{diagnostic}");
+    }
+}
+
+/// PR admission counts a remote as a forge candidate when it names any network
+/// host, across the URL forms Git accepts; local paths never do.
+#[test]
+fn network_host_is_read_from_every_git_url_form_and_never_from_a_local_path() {
+    for (remote, host) in [
+        ("https://github.com/example/orbit.git", Some("github.com")),
+        ("git@github.com:example/orbit.git", Some("github.com")),
+        (
+            "ssh://git@GHE.Example.com:2222/team/orbit.git",
+            Some("ghe.example.com"),
+        ),
+        (
+            "https://git.example.com:8443/team/orbit",
+            Some("git.example.com"),
+        ),
+        ("forge-alias:team/orbit.git", Some("forge-alias")),
+        ("/srv/git/orbit.git", None),
+        ("file:///srv/git/orbit.git", None),
+        ("./orbit.git", None),
+        ("~/git/orbit.git", None),
+        ("C:\\git\\orbit.git", None),
+        ("origin", None),
+    ] {
+        assert_eq!(git_remote_network_host(remote).as_deref(), host, "{remote}");
     }
 }

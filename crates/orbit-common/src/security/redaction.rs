@@ -399,6 +399,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             task_id: redact(&task_id),
             run_id: redact(&run_id),
         },
+        OrbitError::PrForgeRemoteMissing { remotes } => OrbitError::PrForgeRemoteMissing {
+            remotes: redact(&remotes),
+        },
         OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun {
                 task_id: redact(&task_id),

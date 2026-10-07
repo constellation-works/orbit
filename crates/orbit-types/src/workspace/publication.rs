@@ -188,6 +188,21 @@ pub fn git_remote_identity(remote: &str) -> Result<String, WorkspaceError> {
     Ok(parsed.identity)
 }
 
+/// The network host a Git remote names, lowercased and without a port.
+/// `None` for a local path, a `file:` URL, or a value that is not a Git URL.
+pub fn git_remote_network_host(remote: &str) -> Option<String> {
+    if looks_like_local_path(remote) {
+        return None;
+    }
+    let identity = parse_git_remote(remote).ok()?.identity;
+    let authority = identity.split('/').next()?;
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    (!host.is_empty()).then(|| host.to_string())
+}
+
 pub fn git_remotes_equivalent(left: &str, right: &str) -> Result<bool, WorkspaceError> {
     Ok(git_remote_identity(left)? == git_remote_identity(right)?)
 }

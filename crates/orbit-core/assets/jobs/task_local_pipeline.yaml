@@ -23,7 +23,8 @@ spec:
   state: enabled
   owns_task_worktree: true
   # Holds each task's delivery slot while live; a task may also select this
-  # job for local shipping with a `delivery:task_local_pipeline` tag.
+  # job for local shipping with a `delivery:task_local_pipeline` tag, which a
+  # PR-mode workspace honours too (the per-task local override).
   task_delivery:
     modes: [local]
   kind: workflow

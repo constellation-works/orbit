@@ -1729,6 +1729,20 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
         git(&work, &["push", "--quiet", "-u", "origin", "main"]);
+        if mode == "pr" {
+            // PR admission needs a remote on a forge host. Delivery still
+            // fetches and pushes through the local `origin`; this one is
+            // never contacted.
+            git(
+                &work,
+                &[
+                    "remote",
+                    "add",
+                    "upstream",
+                    "https://github.com/orbit-test/fresh-host.git",
+                ],
+            );
+        }
 
         orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
             "init",

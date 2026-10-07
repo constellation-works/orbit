@@ -1,9 +1,10 @@
-//! Workspace and checkout mutations: registration, source-remote rebinding,
-//! role assignment, removal, and path overrides.
+//! Workspace and checkout mutations: registration, source-remote and
+//! ship-mode rebinding, role assignment, removal, and path overrides.
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::validate_machine_id;
+use orbit_types::workflow::{ShipMode, resolved_ship_mode};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, git_remote_identity,
     git_remotes_equivalent, redact_git_remote, validate_source_repository_fingerprint,
@@ -126,6 +127,55 @@ pub fn reconcile_workspace_source_remote(
     workspace.git_remote = Some(remote.to_string());
     workspace.updated_at = Utc::now();
     Ok(())
+}
+
+/// The result of rebinding one workspace's registered ship mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceShipModeRebind {
+    pub workspace_id: String,
+    /// The effective mode before the rebind.
+    pub previous: ShipMode,
+    /// The stored value before the rebind; `None` when it was unset, which
+    /// resolves to `pr`.
+    pub previous_stored: Option<String>,
+    pub ship_mode: ShipMode,
+    /// Whether the stored value changed. Rebinding an unset mode to `pr`
+    /// stores it explicitly without changing the effective mode.
+    pub changed: bool,
+}
+
+/// Set a workspace's registered ship mode, touching nothing else on the
+/// record but `updated_at`. Managed defaults and config files are not this
+/// registry's, so they are never read or written here.
+pub fn rebind_workspace_ship_mode(
+    registry: &mut WorkspaceRegistry,
+    id_or_name: &str,
+    ship_mode: ShipMode,
+) -> Result<WorkspaceShipModeRebind, OrbitError> {
+    let workspace_id = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?
+        .id
+        .clone();
+    let workspace = registry
+        .workspaces
+        .iter_mut()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.clone()))?;
+    let previous = resolved_ship_mode(workspace);
+    let previous_stored = workspace.ship_mode.clone();
+    let stored = ship_mode.as_input_value();
+    let changed = previous_stored.as_deref() != Some(stored);
+    if changed {
+        workspace.ship_mode = Some(stored.to_string());
+        workspace.updated_at = Utc::now();
+    }
+    Ok(WorkspaceShipModeRebind {
+        workspace_id,
+        previous,
+        previous_stored,
+        ship_mode,
+        changed,
+    })
 }
 
 /// Rebind an owned workspace's portable source-repository identity.

@@ -39,6 +39,36 @@ pub(super) fn doctor_check_plugin_builds(runtime: &OrbitRuntime) -> WorkspaceDoc
     )
 }
 
+/// A workspace registered for PR delivery whose Git remotes name no network
+/// host would fail every shipped task at `pr_open`; admission refuses those
+/// tasks with the same verdict this row reports.
+pub(super) fn doctor_check_forge_remote(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "forge-remote";
+    if runtime.automatic_delivery_ship_mode() != orbit_core::ShipMode::Pr {
+        return check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "workspace is not registered for PR delivery; no forge remote needed".to_string(),
+        );
+    }
+    match runtime.pr_forge_refusal() {
+        None => check(
+            CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "PR delivery has a Git remote on a network host".to_string(),
+        ),
+        Some(refusal) => actionable_check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            refusal.to_string(),
+            "Run `orbit workspace ship-mode local` to deliver locally, or add a Git remote on \
+             your forge host. A single task can ship locally with the \
+             `delivery:task_local_pipeline` tag."
+                .to_string(),
+        ),
+    }
+}
+
 /// Warn when git still tracks files under `.orbit/`. Sync rewrites the
 /// managed ignore block but never runs git; the operator untracks once.
 pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {

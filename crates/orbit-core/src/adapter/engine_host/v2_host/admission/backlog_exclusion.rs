@@ -57,6 +57,12 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// `backlog` rather than failing a gate run on every drain pass; `detail`
     /// carries the refusal, naming the plugin when one is installed.
     DeliveryJobUnavailable,
+    /// The drain delivers in PR mode, the task would ship through the PR
+    /// pipeline, and no Git remote of the checkout names a network host, so
+    /// `pr_open` could never succeed. `detail` names the remotes,
+    /// `orbit workspace ship-mode local`, and the `delivery:task_local_pipeline`
+    /// tag that delivers just this task locally.
+    PrForgeRemoteMissing,
     /// The run window permits a set of crews and this task's effective crew is
     /// not one of them [ORB-11242]. The task is left in `backlog` exactly as
     /// it is — never silently re-crewed — and the remaining eligible work
@@ -520,14 +526,30 @@ fn backlog_snapshot_in_mode(
     // A selection the gate would refuse is withheld here instead: the task is
     // still `backlog` after a refused gate, so the drain would otherwise
     // dispatch it again, and fail again, on every pass. A task with no
-    // `delivery:<job>` tag resolves to the default without a catalog read.
+    // `delivery:<job>` tag resolves to the default without a catalog read; the
+    // checkout's remotes are read once, only if a task takes the PR route.
+    let forge = crate::application::job::delivery::PrForgeCheck::default();
+    let mut routed_locally = std::collections::BTreeSet::new();
     backlog.retain(|task| {
-        let Err(error) = runtime.resolve_delivery_route(std::slice::from_ref(*task), mode) else {
-            return true;
+        let (reason, error) = match runtime.resolve_admitted_delivery_route(
+            std::slice::from_ref(*task),
+            mode,
+            &forge,
+        ) {
+            Ok(route) => {
+                if route.delivers_locally() {
+                    routed_locally.insert(task.id.clone());
+                }
+                return true;
+            }
+            Err(error @ orbit_common::OrbitError::PrForgeRemoteMissing { .. }) => {
+                (BacklogTaskExclusionReason::PrForgeRemoteMissing, error)
+            }
+            Err(error) => (BacklogTaskExclusionReason::DeliveryJobUnavailable, error),
         };
         excluded.push(BacklogTaskExclusion {
             id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::DeliveryJobUnavailable,
+            reason,
             conflicts: Vec::new(),
             crew: None,
             detail: Some(error.to_string()),
@@ -590,12 +612,19 @@ fn backlog_snapshot_in_mode(
     // closed at local-route admission while `review.before_pr` is on. Hold it
     // here so the drain does not spawn that delivery. Tasks already excluded
     // above keep the more specific reason. PR delivery skips this, and turning
-    // the switch off (workspace overriding global included) clears it.
-    if mode == ShipMode::Local && runtime.operation_policy().review_before_pr.value {
+    // the switch off (workspace overriding global included) clears it. A PR
+    // drain holds only the tasks a `delivery:task_local_pipeline` tag routes
+    // locally.
+    if runtime.operation_policy().review_before_pr.value
+        && (mode == ShipMode::Local || !routed_locally.is_empty())
+    {
         let detail = crate::application::review::local_route_before_pr_conflict(
             runtime.operation_policy().review_before_pr.source.label(),
         );
-        for task in backlog.drain(..) {
+        backlog.retain(|task| {
+            if mode == ShipMode::Pr && !routed_locally.contains(&task.id) {
+                return true;
+            }
             excluded.push(BacklogTaskExclusion {
                 id: task.id.clone(),
                 reason: BacklogTaskExclusionReason::LocalRouteBeforePr,
@@ -603,7 +632,8 @@ fn backlog_snapshot_in_mode(
                 crew: None,
                 detail: Some(detail.clone()),
             });
-        }
+            false
+        });
     }
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an

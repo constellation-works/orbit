@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
+use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
 use crate::application::task::TaskListFilter;
 
 use super::input::{action_failed, bounded_usize, requested_workspace_root, string_array};
@@ -27,6 +28,10 @@ const NO_DIFF_TAGS: [&str; 2] = ["no-diff-needed", "no-diff-expected"];
 /// only the per-task sample so evidence size stops scaling with terminal
 /// workspace history [ORB-11244].
 const MAX_EXCLUDED_SAMPLE: usize = 20;
+/// A task the workspace's PR pipeline could not deliver: no Git remote of the
+/// checkout names a network host. Preparing it would only stage work that
+/// fails at `pr_open`.
+const PR_FORGE_REMOTE_MISSING: &str = "pr_forge_remote_missing";
 
 pub(in super::super) fn prepare(
     runtime: &OrbitRuntime,
@@ -83,6 +88,14 @@ pub(in super::super) fn prepare(
         None => BTreeMap::new(),
     };
 
+    // Shared with delivery admission: the workspace's own ship mode decides
+    // whether a task would take the PR route.
+    let ship_mode = runtime.automatic_delivery_ship_mode();
+    let forge = PrForgeCheck::default();
+    let forge_refused = |tags: &[String]| {
+        tags_route_through_pr_pipeline(tags, ship_mode) && forge.require(runtime).is_err()
+    };
+
     let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
             .list_tasks()
@@ -116,6 +129,9 @@ pub(in super::super) fn prepare(
             .filter(|task| {
                 if active_preparations.contains_key(&task.id) {
                     excluded.record(&task.id, "already_preparing", &active_preparations);
+                    false
+                } else if forge_refused(&task.tags) {
+                    excluded.record(&task.id, PR_FORGE_REMOTE_MISSING, &active_preparations);
                     false
                 } else {
                     true
@@ -169,7 +185,8 @@ pub(in super::super) fn prepare(
                 active_preparations
                     .contains_key(&envelope.id)
                     .then_some("active_pilot_prepared")
-            });
+            })
+            .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
             let reason = if reason.is_none()
                 && envelope.context_files.is_empty()
                 && fresh_no_target_assessment(
@@ -310,6 +327,13 @@ pub(in super::super) fn prepare(
         "excluded_by_reason": excluded.by_reason,
         "excluded_sample_truncated": excluded.total > excluded.sample.len(),
         "excluded_omitted_count": excluded.total.saturating_sub(excluded.sample.len()),
+        // The one refusal behind every `pr_forge_remote_missing` exclusion,
+        // naming the remotes and both ways out.
+        "pr_forge_refusal": excluded
+            .by_reason
+            .contains_key(PR_FORGE_REMOTE_MISSING)
+            .then(|| forge.require(runtime).err().map(|error| error.to_string()))
+            .flatten(),
     }))
 }
 

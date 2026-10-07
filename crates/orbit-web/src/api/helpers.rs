@@ -251,6 +251,16 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         error @ orbit_core::OrbitError::ShipRunInFlight { .. } => {
             ship_run_in_flight_conflict(error)
         }
+        // A well-formed ship the workspace's remotes cannot deliver as a PR:
+        // the caller rebinds the ship mode or tags the task, then retries.
+        error @ orbit_core::OrbitError::PrForgeRemoteMissing { .. } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": error.to_string(),
+                "code": "pr_forge_remote_missing",
+            })),
+        )
+            .into_response(),
         // [ORB-10709] Another operator holds this workspace's claim. A 409 for
         // the same reason a duplicate dispatch is one: the request is
         // well-formed, and the caller can retry once the claim lapses or is

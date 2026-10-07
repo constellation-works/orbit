@@ -868,6 +868,16 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         "{text}"
     );
 
+    // PR admission needs a remote on a forge host; this one is never contacted.
+    git(
+        &fixture,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/orbit-test/audit-qa.git",
+        ],
+    );
     fixture
         .command(&[
             "workspace",

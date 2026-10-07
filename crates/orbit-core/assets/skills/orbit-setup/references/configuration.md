@@ -81,8 +81,12 @@ authored as TOML. Read-only identity keys are listed and refused by
 even though those keys are not listed by `orbit config keys`. Creating a crew
 still requires a `[crews.<name>]` table with `model` and `provider`. Set
 workspace ship mode with
-`orbit workspace init --ship-mode pr|local`; verify the registered workspace
-with `orbit workspace show`. Base branch and ship mode govern source delivery,
+`orbit workspace init --ship-mode pr|local`, or rebind a registered workspace
+without re-initializing it with `orbit workspace ship-mode pr|local` (no
+argument prints the current mode); verify with `orbit workspace show`. PR mode
+needs a Git remote on a forge host: when no remote names a network host, ship
+and the drain refuse untagged tasks before dispatch and `orbit doctor` warns on
+its `forge-remote` row. Base branch and ship mode govern source delivery,
 not task snapshot publication.
 
 ## Crews
