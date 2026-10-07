@@ -1,6 +1,6 @@
 ---
 title: Routines and Auto-Tasks
-description: "How Orbit schedules unattended work: the sweep clock, routines that fire jobs, and auto-tasks that mint recurring chores as tasks."
+description: "How Orbit schedules unattended work: the host scheduler clock, routines that fire jobs, and auto-tasks that mint recurring chores as tasks."
 sidebar:
   order: 4
 ---
@@ -11,7 +11,7 @@ same path:
 
 <ol class="orbit-pipeline" aria-label="How a scheduled fire flows through Orbit">
   <li>
-    <span class="orbit-pipeline-step">Sweep clock</span>
+    <span class="orbit-pipeline-step">Scheduler clock</span>
     <span class="orbit-pipeline-note">The OS wakes <code>orbit clock tick</code></span>
   </li>
   <li>
@@ -38,7 +38,7 @@ Ask your agent to **schedule a weekly QA sweep** or **ship the backlog every
 routine or auto-task you asked for. Everything ships disabled until then.
 :::
 
-## The sweep clock
+## The host scheduler clock
 
 `orbit clock tick` is the scheduler: one pass that fires whatever is due,
 records it, and exits. The operating system runs it once a minute, through a

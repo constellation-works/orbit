@@ -16,7 +16,7 @@ global state for shared defaults and the audit trail.
   defaults with workspace entries. A workspace skill or policy profile
   overrides the global one with the same name. Activities and jobs work the
   other way: a shipped default keeps its name, so a workspace file can add a
-  new name but not replace a shipped one.
+  new name but a workspace file with a shipped name is ignored.
 
 [Scoping Rules](../../reference/scoping/) has the full table and the
 `.orbit/` layout.

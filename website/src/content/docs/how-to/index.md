@@ -23,7 +23,7 @@ agent can do most of them for you with the bundled `orbit-setup` or
   </a>
   <a class="orbit-card" href="./recurring-work/">
     <h3>Schedule Recurring Work</h3>
-    <p>Run jobs and file recurring chores on a schedule with the sweep clock, routines, and auto-tasks.</p>
+    <p>Run jobs and file recurring chores on a schedule with the host scheduler clock, routines, and auto-tasks.</p>
   </a>
 </div>
 

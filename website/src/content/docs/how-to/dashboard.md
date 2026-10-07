@@ -86,7 +86,7 @@ prove that a particular task or run succeeded.
 | **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
-| **Automation** | **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | The workspace's `config.toml`. |
@@ -251,7 +251,7 @@ counts still cover the full window.
 
 ## Automation
 
-**Automation** has three views: **Routines** (with the sweep clock),
+**Automation** has three views: **Routines** (with the host scheduler clock),
 **Auto-tasks**, and **Jobs**. Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
@@ -270,11 +270,11 @@ will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
 Each row's switch writes the routine's `enabled` field. It does not start or
-stop the sweep clock.
+stop the host scheduler clock.
 
-### Sweep clock
+### Scheduler clock
 
-The bar above the routines shows this host's sweep clock (`orbit clock tick`):
+The bar above the routines shows this host's scheduler clock (`orbit clock tick`):
 health, provider, whether the service is enabled, cadence, and the last and
 next tick.
 
@@ -288,7 +288,7 @@ The CLI equivalents are `orbit clock status`, `orbit clock pause`,
 
 ### Auto-tasks
 
-Definitions live in `.orbit/auto_tasks/` and are checked on every sweep clock
+Definitions live in `.orbit/auto_tasks/` and are checked on every scheduler clock
 tick, so pausing the clock pauses scheduled mints. Rows are grouped **On a
 schedule**, **On delivery** (minted after landed deliveries), and
 **Disabled**. The stats strip counts definitions with an open duplicate, and
@@ -449,7 +449,7 @@ It returns `200` when every check passes and `503` when any fails. Plain
 
 - [First Task](../../getting-started/first-task/): take one task from your
   agent's request to a reviewed pull request.
-- [Schedule Recurring Work](../recurring-work/): routines, the sweep clock,
+- [Schedule Recurring Work](../recurring-work/): routines, the host scheduler clock,
   and auto-task definitions.
 - [Run a Delivery Window](../continuous-delivery/): prepare, start, stop, and
   recover a bounded drain.

@@ -35,7 +35,7 @@ CLI envelope, `ORBIT_ACTIVITY_TOOLS`, and the audit trail.
 A job is a workflow: ordered steps, plus an `enabled` or `disabled` state,
 optional default input, and a concurrency limit. A job runs when something
 invokes it: `orbit run`, a task ship, or a [routine](../scheduling/#routine)
-firing on the sweep clock.
+firing on the host scheduler clock.
 
 Each step has exactly one body:
 

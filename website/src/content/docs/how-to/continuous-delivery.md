@@ -33,7 +33,7 @@ anything.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
   `task_pilot_pipeline`. To pilot new and edited tasks automatically, turn on
   the `task_pilot` routine in **Automation → Routines**. It is off by default
-  and runs on the sweep clock.
+  and runs on the host scheduler clock.
 - **CLI:**
 
   ```bash

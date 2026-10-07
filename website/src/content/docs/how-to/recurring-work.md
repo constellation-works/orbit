@@ -1,11 +1,11 @@
 ---
 title: Schedule Recurring Work
-description: "Run Orbit unattended: the sweep clock, routines that fire jobs on a schedule, and auto-task definitions that mint tasks."
+description: "Run Orbit unattended: the host scheduler clock, routines that fire jobs on a schedule, and auto-task definitions that mint tasks."
 sidebar:
   order: 4
 ---
 
-A per-machine **sweep clock** drives all scheduled work. On each tick, due
+A per-machine **host scheduler clock** drives all scheduled work. On each tick, due
 **routines** start job runs and due **auto-tasks** file tasks. Every routine
 and auto-task Orbit seeds starts disabled. [Routines and Auto-Tasks](../../concepts/scheduling/) explains
 the model; this page is the procedure.
