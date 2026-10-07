@@ -98,14 +98,14 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                 )
                 .unwrap();
                 let connection = rusqlite::Connection::open(database).unwrap();
-                // Terminal upserts also include the unchanged pipeline column.
-                // Reject only the summary change while the run stays running.
+                // Run state lives in its own table, so the terminal write on
+                // `job_runs` is unaffected. Reject only the summary change.
                 connection
                     .execute_batch(match fault {
                         SummaryFault::State => {
                             "CREATE TRIGGER fail_summary BEFORE UPDATE OF pipeline_state_json \
-                             ON job_runs WHEN OLD.state = 'running' AND NEW.state = 'running' \
-                             AND NEW.pipeline_state_json IS NOT OLD.pipeline_state_json \
+                             ON job_run_states \
+                             WHEN NEW.pipeline_state_json IS NOT OLD.pipeline_state_json \
                              BEGIN SELECT RAISE(ABORT, 'injected state failure'); END;"
                         }
                         SummaryFault::Diagnostic => {
