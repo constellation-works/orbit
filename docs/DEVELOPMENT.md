@@ -180,6 +180,10 @@ which also checks row keyboard access: no task, run or friction row nests a
 control inside a button, each row list is one Tab stop with Up/Down between
 rows, Enter and Space toggle a task row, its disclosure keeps focus across a
 refresh that rebuilds the row, and `/` focuses the task search.
+It also dispatches Ship from the detail and row controls, suppresses duplicate
+clicks while the request is pending, preserves failure feedback and retry after
+a concurrent refresh, surfaces the server's conflict for a live run, and enables
+both controls after the task returns to backlog without a reload.
 
 The Operations browser fixture also checks the responsive dashboard shell. At
 375×812, the brand, workspace picker, Drain indicator and Refresh icon share

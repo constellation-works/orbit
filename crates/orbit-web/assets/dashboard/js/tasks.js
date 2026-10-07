@@ -67,12 +67,10 @@ onWorkspaceChange(() => {
   restoredCommentHash = null;
 });
 
-// ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
-// a write against a live pipeline, so a second click must not launch a second
-// run: the id stays here for the life of the page once a dispatch succeeds (the
-// server rejects a duplicate with 409 regardless), and is released only when the
-// dispatch failed and retrying is the right move.
-let shipInFlightTaskIds = new Set();
+// Guard duplicate clicks while a Ship request is pending. Once the server
+// accepts it, the server's 409 protects the live run; releasing this guard lets
+// a task returned to backlog be shipped again without reloading the page.
+const shipInFlightTaskIds = new Set();
 // Row shortcuts (Approve on a proposed task, Ship on a backlog one): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
@@ -2389,6 +2387,7 @@ async function shipTask(task, detail, btnNode, context) {
   let dispatched = false;
   try {
     const result = await postJson(requestPath, { task_ids: [task.id] });
+    shipInFlightTaskIds.delete(dispatchKey);
     dispatched = true;
     if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
@@ -2397,16 +2396,14 @@ async function shipTask(task, detail, btnNode, context) {
     expandedTaskIds.delete(task.id);
     await refreshTasks(context);
   } catch (error) {
-    // Only a failed dispatch releases the guard; a succeeded one stays held so
-    // a second click cannot queue a duplicate run behind the first.
     if (!dispatched) shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
+    // A refresh may have replaced the detail while this request was pending.
+    renderTasks(taskList(context), context);
+    detail = $("detail-" + task.id) || detail;
+    btnNode = detail.querySelector(".action.ship") || btnNode;
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
-    if (dispatched) {
-      btnNode.disabled = true;
-      btnNode.textContent = "submitted";
-    }
     detail.prepend(actionErrorNode(dispatched
       ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
       : `ship failed: ${error.message || String(error)}`));
@@ -2816,6 +2813,7 @@ async function runQuickAction(task, kind, context) {
   try {
     if (kind === "ship") {
       const result = await postJson(requestPath, { task_ids: [task.id] });
+      shipInFlightTaskIds.delete(dispatchKey);
       dispatched = true;
       if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
@@ -2830,8 +2828,6 @@ async function runQuickAction(task, kind, context) {
     quickActionState.delete(task.id);
     await refreshTasks(context);
   } catch (error) {
-    // A failed ship releases the duplicate-dispatch guard; a succeeded one keeps
-    // it, exactly as the detail's Ship does.
     if (kind === "ship" && !dispatched) shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
     quickActionState.set(task.id, { kind: "error", text: dispatched
@@ -3013,7 +3009,7 @@ export function renderTasks(tasks, context) {
           // the cached projection must not be rebuilt just because a refresh
           // has a read in flight.
           const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}`;
+          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
           const existingDetail = existingRowNodes.get(key);
           let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
           if (!detail) {
