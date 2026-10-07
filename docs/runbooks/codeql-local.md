@@ -226,6 +226,7 @@ reason:
 | `timed_out` | The run exceeded three hours. |
 | `results_unreadable` | The SARIF could not be read. |
 | `command_not_allowed` | The command is not this script with admitted options. |
+| `artifact_not_allowed` | An evidence or log path is invalid or canonicalizes to a reserved review artifact. |
 | `candidate_unreachable` | The held commit could not be fetched, or its tree differs. |
 | `disk_insufficient` | The free space is below `min_free_mib`. |
 | `sandbox_unavailable` | Bubblewrap could not provide the required Linux namespace. |

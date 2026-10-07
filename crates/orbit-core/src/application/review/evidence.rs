@@ -8,7 +8,9 @@ use orbit_automation::review::{
 };
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{ArtifactWriter, Task, TaskStatus};
+use orbit_types::task::{
+    ArtifactWriter, Task, TaskStatus, canonical_artifact_path, validate_relative_artifact_path,
+};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
@@ -61,16 +63,7 @@ pub(super) fn with_external_checks_passed(
     requirements: &[ReviewEvidenceRequirement],
 ) -> Option<Vec<ReviewValidation>> {
     let mut validation = records.to_vec();
-    let mut seen = std::collections::BTreeSet::new();
-    for required in requirements {
-        if required.name.trim().is_empty()
-            || required.command.trim().is_empty()
-            || reserved_artifact(&required.artifact)
-            || orbit_types::task::validate_relative_artifact_path(&required.artifact).is_err()
-            || !seen.insert(&required.artifact)
-        {
-            return None;
-        }
+    for required in canonical_requirements(requirements)? {
         let mut matched = false;
         for record in &mut validation {
             if record.command == required.command && record.role == ValidationRole::Required {
@@ -89,6 +82,37 @@ pub(super) fn with_external_checks_passed(
         }
     }
     Some(validation)
+}
+
+/// Use the store's key for every evidence locator guard. Keep the review
+/// contract's refusal of leading `./`, even though the store strips it.
+pub(super) fn evidence_artifact_path(raw: &str) -> Option<String> {
+    validate_relative_artifact_path(raw).ok()?;
+    let path = canonical_artifact_path(raw).ok()?;
+    (!reserved_artifact(&path)).then_some(path)
+}
+
+/// Normalize locators before persisting a hold or comparing requirements.
+pub(super) fn canonical_requirements(
+    requirements: &[ReviewEvidenceRequirement],
+) -> Option<Vec<ReviewEvidenceRequirement>> {
+    let mut seen = std::collections::BTreeSet::new();
+    requirements
+        .iter()
+        .map(|required| {
+            let artifact = evidence_artifact_path(&required.artifact)?;
+            if required.name.trim().is_empty()
+                || required.command.trim().is_empty()
+                || !seen.insert(artifact.clone())
+            {
+                return None;
+            }
+            Some(ReviewEvidenceRequirement {
+                artifact,
+                ..required.clone()
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn evidence_hold(
@@ -114,8 +138,11 @@ pub(crate) fn evidence_ready(
     if hold.schema_version != 1 || hold.requirements.is_empty() {
         return Ok(false);
     }
+    let Some(requirements) = canonical_requirements(&hold.requirements) else {
+        return Ok(false);
+    };
     let evidence = satisfied_external_evidence(runtime, task_id, &hold.candidate)?;
-    Ok(hold.requirements.iter().all(|required| {
+    Ok(requirements.iter().all(|required| {
         evidence
             .values()
             .any(|result| result.matches_requirement(required, &hold.candidate))
@@ -156,8 +183,11 @@ pub(super) fn satisfied_external_evidence(
         let Some(artifact) = runtime.get_task_artifact(task_id, path)? else {
             continue;
         };
-        let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&artifact.content)
+        let Ok(mut evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&artifact.content)
         else {
+            continue;
+        };
+        let Some(log_artifact) = evidence_artifact_path(&evidence.log_artifact) else {
             continue;
         };
         if evidence.schema_version != 1
@@ -165,23 +195,21 @@ pub(super) fn satisfied_external_evidence(
             || evidence.candidate.tree != candidate.tree
             || evidence.command.trim().is_empty()
             || evidence.outcome != ValidationOutcome::Passed
-            || evidence.log_artifact == *path
+            || log_artifact == *path
             || !accepted_writer(evidence.kind, *writer)
-            || !orbit_types::task::canonical_artifact_path(&evidence.log_artifact)
-                .ok()
-                .and_then(|log| writers.get(&log))
+            || !writers
+                .get(&log_artifact)
                 .is_some_and(|log_writer| accepted_writer(evidence.kind, *log_writer))
-            || reserved_artifact(&evidence.log_artifact)
-            || orbit_types::task::validate_relative_artifact_path(&evidence.log_artifact).is_err()
         {
             continue;
         }
         if runtime
-            .get_task_artifact(task_id, &evidence.log_artifact)?
+            .get_task_artifact(task_id, &log_artifact)?
             .is_none_or(|log| log.content.is_empty())
         {
             continue;
         }
+        evidence.log_artifact = log_artifact;
         satisfied.insert(path.clone(), evidence);
     }
     Ok(satisfied)

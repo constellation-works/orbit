@@ -455,7 +455,16 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
                     ("outcome", json!("failed")),
                     ("log_artifact", json!("evidence/missing-log.json")),
                     ("log_artifact", json!(requirement.artifact)),
+                    (
+                        "log_artifact",
+                        json!(format!(" {}/ ", requirement.artifact)),
+                    ),
                     ("log_artifact", json!(REVIEW_EVIDENCE_HOLD_ARTIFACT)),
+                    (
+                        "log_artifact",
+                        json!(format!(" {REVIEW_EVIDENCE_HOLD_ARTIFACT}")),
+                    ),
+                    ("log_artifact", json!(format!("{REVIEW_GATE_ARTIFACT}/"))),
                 ] {
                     let mut invalid = evidence.clone();
                     invalid[field] = wrong;

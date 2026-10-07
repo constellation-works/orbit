@@ -52,7 +52,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::evidence::{evidence_hold, evidence_ready, hold_is_current};
+use super::evidence::{evidence_artifact_path, evidence_hold, evidence_ready, hold_is_current};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD, RetryKey,
@@ -100,6 +100,8 @@ pub(crate) enum FulfilmentRefusal {
     HoldNotCurrent,
     /// A requirement names a command other than the CodeQL script's.
     CommandNotAllowed,
+    /// An evidence or log locator is invalid or names a reserved review artifact.
+    ArtifactNotAllowed,
     /// This process is not the task owner that should fulfil its evidence.
     NotOwner,
     /// This host is not Linux, so no run here can be complete.
@@ -132,6 +134,7 @@ impl FulfilmentRefusal {
         match self {
             Self::HoldNotCurrent => "hold_not_current",
             Self::CommandNotAllowed => "command_not_allowed",
+            Self::ArtifactNotAllowed => "artifact_not_allowed",
             Self::NotOwner => "not_owner",
             Self::HostNotLinux => "host_not_linux",
             Self::SandboxUnavailable => "sandbox_unavailable",
@@ -563,6 +566,12 @@ impl OrbitRuntime {
         run_id: &str,
         min_free_mib: u64,
     ) -> Result<Vec<CodeqlRun>, (FulfilmentRefusal, String)> {
+        // Persisted holds can predate review admission's path guards. Refuse
+        // unsafe locators before running any candidate-controlled script.
+        for requirement in &hold.requirements {
+            fulfilment_artifact_paths(&requirement.artifact)
+                .map_err(|error| (FulfilmentRefusal::ArtifactNotAllowed, error.to_string()))?;
+        }
         if let Some((refusal, reason)) = self.fulfilment_disabled_refusal() {
             return Err((refusal, reason));
         }
@@ -825,7 +834,9 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         let mut artifacts = Vec::new();
         for run in runs {
-            let log_artifact = log_artifact_path(&run.requirement.artifact);
+            // Check both final store keys at the system-authority write boundary.
+            // Build the whole batch first, so a refusal cannot partially write it.
+            let (artifact, log_artifact) = fulfilment_artifact_paths(&run.requirement.artifact)?;
             let log = json!({
                 "schema_version": 1,
                 "run_id": run_id,
@@ -857,7 +868,7 @@ impl OrbitRuntime {
                     outcome: ValidationOutcome::Passed,
                     log_artifact,
                 };
-                artifacts.push(json_artifact(&run.requirement.artifact, &evidence)?);
+                artifacts.push(json_artifact(&artifact, &evidence)?);
             }
         }
         let comment = match refusal {
@@ -1079,6 +1090,18 @@ fn log_artifact_path(artifact: &str) -> String {
         Some(stem) => format!("{stem}.log.json"),
         None => format!("{artifact}.log.json"),
     }
+}
+
+fn fulfilment_artifact_paths(artifact: &str) -> Result<(String, String), OrbitError> {
+    let refused = || {
+        OrbitError::InvalidInput(
+            "external evidence and log artifacts must have valid, non-reserved review paths"
+                .to_string(),
+        )
+    };
+    let artifact = evidence_artifact_path(artifact).ok_or_else(refused)?;
+    let log = evidence_artifact_path(&log_artifact_path(&artifact)).ok_or_else(refused)?;
+    Ok((artifact, log))
 }
 
 fn json_artifact(path: &str, value: &impl serde::Serialize) -> Result<TaskArtifact, OrbitError> {
