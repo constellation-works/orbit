@@ -11,7 +11,7 @@ doc_role: decisions
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-config/src/registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**", "crates/orbit-mcp/src/federated/**", "crates/orbit-core/src/application/gc.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11008, ORB-11009, ORB-12725, ORB-14447, ORB-14448, ORB-14449]
+related_artifacts: [ORB-11008, ORB-11009, ORB-12725, ORB-14447, ORB-14448, ORB-14449, ORB-14451]
 ---
 
 # Host Registry — Decisions
@@ -222,7 +222,8 @@ protocol skew showed up only when admission refused.
 
 **Decision.** The operator registers remote hosts one at a time with `orbit host add`, which
 reads the host's identity from the host itself
-([host-commands](./specs/host-commands.md)). An entry stores the operator's name, the SSH
+([host-commands](./specs/host-commands.md)), or from the dashboard's Settings › Hosts view,
+which calls the same operations. An entry stores the operator's name, the SSH
 target, and two facts the host cannot change: `machine_id` and `task_prefix`. Everything
 else is read live when asked and never persisted: reachability, version, protocol and
 workspaces. The legacy fleet-registry tables stay unread.
@@ -296,5 +297,6 @@ stops asking the wrong host. Cost:
 - [ORB-14447] replica worktree GC resolves a task id with the local prefix from the local store (interim fix for DANI-10433)
 - [ORB-14448] host file and `orbit host` commands
 - [ORB-14449] task-prefix routing and `--host` selection
+- [ORB-14451] dashboard Settings › Hosts over the same registry operations
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -11,7 +11,7 @@ doc_role: design
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access]
-related_artifacts: [ORB-14448, ORB-14449]
+related_artifacts: [ORB-14448, ORB-14449, ORB-14451]
 ---
 
 # Host Registry — Design
@@ -133,6 +133,8 @@ Remote host registration, listing and removal are specified in [specs/host-comma
 
 ### Web
 
+The specified Settings › Hosts view and `/api/hosts` routes manage the serving host's host file through the same registry operations as `orbit host` ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]).
+
 Orbit Web loads local workspaces from orbit-registry, derives checkout-path health, and opens active runtimes lazily through orbit-cmd. Each request pins one immutable registry generation. A successful refresh swaps the complete snapshot and evicts incompatible cached runtimes; a failed refresh retains the last valid snapshot. An invalid initial load fails startup.
 
 ### MCP
@@ -166,5 +168,6 @@ Older databases may retain tables and migration records from the removed fleet-r
 
 - [ORB-14448] host file and `orbit host` commands (specified)
 - [ORB-14449] task-prefix routing and `--host` selection (specified)
+- [ORB-14451] dashboard Settings › Hosts (specified)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
