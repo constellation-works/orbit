@@ -97,6 +97,7 @@ function matchesChain(path, chain) {
 
 const ids = [
   'audit-body', 'audit-policy-body', 'audit-count', 'audit-search',
+  'plugins-body', 'plugins-count',
   'scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-meta',
   'scoreboard-insights', 'scoreboard-orchestration', 'scoreboard-count',
   'scoreboard-insights-count', 'scoreboard-orchestration-count',
@@ -112,8 +113,8 @@ const document = {
 };
 const window = { location: { search: '?window=24h', hash: '' }, confirm: () => true };
 const pending = [];
-const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
-const fetch = path => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), resolve }));
+const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload, text: async () => JSON.stringify(payload) });
+const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, Node,
 });
@@ -132,6 +133,10 @@ await scoreboardModule.evaluate();
 const audit = modules.get('audit.js').namespace;
 const scoreboard = scoreboardModule.namespace;
 const common = modules.get('common.js').namespace;
+const pluginsModule = load('plugins.js');
+await pluginsModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await pluginsModule.evaluate();
+const plugins = pluginsModule.namespace;
 const ctx = {};
 const text = id => document.getElementById(id).textContent;
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setTimeout(resolve, 0)); };
@@ -277,4 +282,38 @@ await audit.fetchAndRenderPolicy(ctx);
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
 assert.ok(placeheld('audit-policy-body') && !text('audit-policy-body').includes('policy-workspace-b'), 'aggregate policy drops the previous workspace');
 
-console.log('audit, policy, and scoreboard drop superseded responses; aggregate scoreboard surfaces are placeheld');
+common.setWorkspace('ws-a');
+const initialPlugins = plugins.fetchAndRenderPlugins();
+assert.equal(pending.at(-1).url.pathname, '/api/plugins');
+assert.equal(pending.at(-1).options.method, undefined, 'plugin listing uses GET');
+pending.at(-1).resolve(response([{
+  name: 'example', version: '1', status: 'disabled', host_enabled: false, workspace_toggle: false,
+  capabilities: { enable: { authorized: true } }, panels: [],
+}]));
+await settle();
+await initialPlugins;
+
+const pluginCard = () => document.getElementById('plugins-body').querySelector('.plugin-card');
+const pluginToggle = () => pluginCard().querySelector('.plugin-toggle');
+const staleRefreshAction = pluginToggle().listeners.click[0]();
+const enableRequest = pending.at(-1);
+assert.equal(enableRequest.url.pathname, '/api/plugins/example/enable');
+assert.equal(enableRequest.options.method, 'POST');
+enableRequest.resolve(response({ plugin: {} }));
+await settle();
+const failedListing = pending.at(-1);
+assert.equal(failedListing.url.pathname, '/api/plugins');
+failedListing.resolve(response({ error: 'plugin listing unavailable' }, 500));
+await staleRefreshAction;
+assert.equal(pluginCard().querySelector('.plugin-change-error'), null, 'a failed listing refresh is not shown as a failed plugin change');
+assert.ok(document.getElementById('plugins-body').querySelector('.panel-placeholder.action-error')?.textContent.includes('Refresh failed; showing stale data'), 'a failed listing refresh is reported by the panel stale-data note');
+assert.ok(pluginCard().textContent.includes('Host: disabled'), 'a failed listing refresh retains the last plugin state');
+
+const rejectedAction = pluginToggle().listeners.click[0]();
+const refusedEnable = pending.at(-1);
+assert.equal(refusedEnable.url.pathname, '/api/plugins/example/enable');
+refusedEnable.resolve(response({ error: 'plugin write refused' }, 403));
+await rejectedAction;
+assert.equal(pluginCard().querySelector('.plugin-change-error')?.textContent, 'plugin write refused', 'a rejected mutation remains visible on its plugin card');
+
+console.log('audit, policy, scoreboard, and plugin panel behaviors passed');
