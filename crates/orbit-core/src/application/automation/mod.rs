@@ -32,8 +32,8 @@ pub(crate) use deadline::expiring_frozen_batch_tasks;
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
-    inspect_auto_task, inspect_routine, unadmittable_delivery_definitions,
-    unresolvable_delivery_branches, wedged_delivery_consumers,
+    inspect_auto_task, inspect_auto_task_with_open_instance, inspect_routine,
+    unadmittable_delivery_definitions, unresolvable_delivery_branches, wedged_delivery_consumers,
 };
 pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
 pub use recovery::recover_auto_task;

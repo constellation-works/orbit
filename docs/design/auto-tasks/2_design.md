@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-08
 last_validated: 2026-09-27
 status: Accepted
 feature: auto-tasks
@@ -395,6 +395,14 @@ with `expected_enabled` compare-and-swap, the governed dashboard operation
 disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
+
+The dashboard's `GET /api/auto-tasks` lists workspace task metadata once per
+request and groups it by definition provenance tag. It reads no task bodies on
+the indexed path and uses each group's newest instance for `last_minted_*`.
+Both duplicate flags use the scheduler's shared listed-set rule: done,
+archived, rejected and someday instances do not count as open. Delivery-schedule
+automation diagnostics reuse the same open-instance result. The projection is
+recomputed on each request; it does not cache instance state.
 
 List responses expose separate `capabilities` decisions for auto-task toggle,
 manual mint, routine toggle, clock service, and clock cadence. Each decision

@@ -208,7 +208,7 @@ impl OrbitRuntime {
 ///
 /// Exactly one definition of "still-open auto-task instance" exists in the
 /// system [ORB-12158]. Both scheduler dedupe (`skip_if_open`) and the dashboard
-/// (`open_duplicate`, `may_create_open_duplicate`) consume this query.
+/// (`open_duplicate`, `may_create_open_duplicate`) consume the same listed-set rule.
 pub fn open_auto_task_instance(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
@@ -225,21 +225,25 @@ pub(crate) fn open_auto_task_instances(
     name: &str,
 ) -> Result<Vec<String>, OrbitError> {
     let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(name)])?;
+    Ok(open_auto_task_instances_from_tasks(&tasks)
+        .map(|task| task.id.clone())
+        .collect())
+}
+
+/// Still-open instances from an already-listed set of one definition's mints,
+/// preserving the listing order. Callers must select the definition's provenance
+/// tag first. Scheduler dedupe and dashboard projections share this rule.
+pub fn open_auto_task_instances_from_tasks<'a>(
+    tasks: impl IntoIterator<Item = &'a Task>,
+) -> impl Iterator<Item = &'a Task> {
     // `someday` is an explicit "not now" park, not an active instance
     // [ORB-12148]: it must not block every later mint of this auto-task.
-    Ok(tasks
-        .into_iter()
-        .filter(|task| {
-            !matches!(
-                task.status,
-                TaskStatus::Done
-                    | TaskStatus::Archived
-                    | TaskStatus::Rejected
-                    | TaskStatus::Someday
-            )
-        })
-        .map(|task| task.id)
-        .collect())
+    tasks.into_iter().filter(|task| {
+        !matches!(
+            task.status,
+            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
+        )
+    })
 }
 
 pub fn run_auto_task_scheduler_at(

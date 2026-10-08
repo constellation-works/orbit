@@ -198,6 +198,16 @@ impl Fixture {
         self.server_impl(operator, false, false)
     }
 
+    pub(super) fn counted_task_server(&self) -> Server {
+        self.server_impl_with_log(
+            false,
+            false,
+            false,
+            &self.path("process.log"),
+            Some(&self.path("task-query.jsonl")),
+        )
+    }
+
     pub(super) fn replay_server(&self) -> Server {
         self.server_impl(true, false, true)
     }
@@ -207,7 +217,7 @@ impl Fixture {
     }
 
     pub(super) fn split_log_server(&self) -> Server {
-        self.server_impl_with_log(false, false, false, &self.path("orbit.jsonl"))
+        self.server_impl_with_log(false, false, false, &self.path("orbit.jsonl"), None)
     }
 
     fn server_impl(&self, operator: bool, resources: bool, replay_worker: bool) -> Server {
@@ -216,6 +226,7 @@ impl Fixture {
             resources,
             replay_worker,
             &self.path("process.log"),
+            None,
         )
     }
 
@@ -225,6 +236,7 @@ impl Fixture {
         resources: bool,
         replay_worker: bool,
         log_path: &Path,
+        task_query_log: Option<&Path>,
     ) -> Server {
         orbit_common::test_env::assert_child_test_exists("server_child");
         let log = tempfile::NamedTempFile::new_in(self.temp.path()).unwrap();
@@ -245,8 +257,12 @@ impl Fixture {
             .env("ORBIT_LOG_PATH", log_path)
             .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
             .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
+        if let Some(path) = task_query_log {
+            command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
+        }
         let mut server = Server {
             process: Process(command.spawn().unwrap()),
+            task_query_log: task_query_log.map(Path::to_owned),
             client: Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(5))
@@ -342,12 +358,21 @@ impl Fixture {
 
 pub(super) struct Server {
     process: Process,
+    task_query_log: Option<PathBuf>,
     log: tempfile::NamedTempFile,
     client: Client,
     pub(super) origin: String,
 }
 
 impl Server {
+    pub(super) fn task_query_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.task_query_log.as_ref().unwrap())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
     pub(super) fn pid(&self) -> u32 {
         self.process.0.id()
     }
@@ -378,6 +403,16 @@ pub(super) fn json_ok(response: Response) -> Value {
 }
 
 pub(super) fn serve_fixture() {
+    if let Some(path) = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE") {
+        // Count real store operations across the server's blocking threads.
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter("orbit.store.task_query=trace")
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .with_span_list(false)
+            .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
+            .init();
+    }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
     // Ordinary fixtures launch a harmless stub; replay fixtures execute only
     // their disposable sleep job through the real worker.

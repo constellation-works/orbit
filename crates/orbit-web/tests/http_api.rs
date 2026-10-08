@@ -3,6 +3,8 @@
 
 #[path = "http_api/audit.rs"]
 mod audit;
+#[path = "http_api/auto_tasks.rs"]
+mod auto_tasks;
 #[path = "http_api/automation.rs"]
 mod automation;
 #[path = "http_api/diagnostics_errors.rs"]
