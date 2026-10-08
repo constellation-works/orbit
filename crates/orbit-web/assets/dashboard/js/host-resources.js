@@ -27,13 +27,21 @@ export function hostReading(payload, resource) {
 const RESOURCES = ['cpu', 'memory', 'disk'];
 const CPU_MEASURE = 'cpu load: the 1-minute load average divided by online cores. 100% means every core is busy; above 100% means work is queueing.';
 
+/// CPU load as a multiple of online cores ("1.6×"), the one unit the top bar
+/// and the Drain card's throttle note both state it in. `percent` is the host
+/// API's cpu percent, where 100 means every core is busy. A `threshold` keeps
+/// up to two decimals, so 75% reads 0.75× rather than rounding to 0.8×.
+export function cpuLoadMultiple(percent, threshold = false) {
+  return `${threshold ? Number((percent / 100).toFixed(2)) : (percent / 100).toFixed(1)}×`;
+}
+
 /// How one resource reads in its chip and in the title. CPU is load relative to
 /// cores, so it can pass 100%; it is never labelled as a plain CPU percentage.
 function describeResource(payload, resource) {
   const { reading, known, severity, held, note } = hostReading(payload, resource);
   const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
   const label = resource === 'cpu' ? 'load' : resource === 'memory' ? 'mem' : 'disk';
-  const value = !known ? '-' : resource === 'cpu' ? `${(reading.percent / 100).toFixed(1)}×` : `${reading.percent.toFixed(0)}%`;
+  const value = !known ? '-' : resource === 'cpu' ? cpuLoadMultiple(reading.percent) : `${reading.percent.toFixed(0)}%`;
   const detail = !known ? `${resource}${path} ${note}`
     : resource === 'cpu' ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
     : `${resource}${path} ${reading.percent.toFixed(1)}% (${note})`;

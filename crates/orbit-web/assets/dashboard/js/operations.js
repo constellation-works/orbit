@@ -3,6 +3,7 @@
 import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
+import { cpuLoadMultiple } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -1399,6 +1400,34 @@ function autoDrainBlocked(payload) {
   return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_LOCK_REASONS.has(autoDrainReason(task)));
 }
 
+// Readiness reasons that mean "waiting on slots or host pressure": a full
+// workspace, a throttle, a scheduled shutdown or stopped admissions.
+const AUTO_DRAIN_CAPACITY_REASONS = new Set(["capacity_saturated", "resource_throttled", "host_shutdown_scheduled", "admissions_stopped", "cpu_light_budget_full"]);
+
+// Every readiness task lands in exactly one pool group, so the group counts add
+// up to the backlog total. Each group keeps its per-reason counts for the
+// stat's tooltip. The word "blocked" is left to the task status.
+const AUTO_DRAIN_POOL_GROUPS = [
+  { key: "eligible", label: "Pool: eligible" },
+  { key: "locks", label: "Pool: waiting on locks" },
+  { key: "capacity", label: "Pool: waiting on capacity" },
+  { key: "other", label: "Pool: waiting, other" },
+];
+
+function autoDrainPool(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const groups = Object.fromEntries(AUTO_DRAIN_POOL_GROUPS.map(({ key, label }) => [key, { key, label, count: 0, reasons: new Map() }]));
+  for (const task of tasks) {
+    const reason = autoDrainReason(task);
+    const key = task.eligible === true ? "eligible"
+      : AUTO_DRAIN_LOCK_REASONS.has(reason) ? "locks"
+      : AUTO_DRAIN_CAPACITY_REASONS.has(reason) ? "capacity" : "other";
+    groups[key].count += 1;
+    groups[key].reasons.set(reason, (groups[key].reasons.get(reason) || 0) + 1);
+  }
+  return AUTO_DRAIN_POOL_GROUPS.map(({ key }) => groups[key]);
+}
+
 // Holder ids for a lock-blocked row. Context locks report
 // `conflicts[].locking_task_id`; same-wave deferrals report
 // `conflicts[].blocking_task_id` plus `blocking_task_ids`; live-child claims
@@ -1970,9 +1999,9 @@ function autoDrainCapacity(capacity, counts, blocked) {
   return result;
 }
 
-function autoDrainStat(tone, label, value) {
+function autoDrainStat(tone, label, value, detail = "") {
   return el("div", { class: `drain-stat ${tone}${value > 0 ? " nonzero" : ""}` }, [
-    el("span", { class: "drain-stat-label", title: label }, [el("span", { class: "drain-stat-dot" }), el("span", { text: label })]),
+    el("span", { class: "drain-stat-label", title: detail ? `${label} (${detail})` : label }, [el("span", { class: "drain-stat-dot" }), el("span", { text: label })]),
     el("span", { class: "drain-stat-value mono", text: String(value) }),
   ]);
 }
@@ -2049,6 +2078,17 @@ function autoDrainHostWaitList(tasks, workspace) {
   return list;
 }
 
+// A throttle reading in the unit the top bar uses: CPU as load per core
+// ("load 1.6× cores"), memory and disk as percentages. A threshold is bare
+// (no leading label) and keeps two decimals so 0.75× does not round to 0.8×.
+function throttleReading(resource, percent, threshold = false) {
+  if (resource === "cpu") {
+    const load = cpuLoadMultiple(Number(percent), threshold);
+    return threshold ? `${load} cores` : `load ${load} cores`;
+  }
+  return threshold ? `${percent}%` : `${resource} ${Math.round(Number(percent))}%`;
+}
+
 // Sustained host pressure holds every new admission until it clears, so the
 // card names the resource, value, threshold and since-when instead of leaving
 // an idle drain to read as an empty backlog.
@@ -2056,7 +2096,7 @@ function autoDrainThrottleNote(capacity) {
   const resources = capacity?.resource_throttle?.resources;
   if (!Array.isArray(resources) || resources.length === 0) return null;
   const held = resources
-    .map(item => `${item.resource} ${Math.round(Number(item.percent))}% (throttled at ≥ ${item.high_percent}% since ${time(item.since)}; resumes below ${item.resume_percent}%)`)
+    .map(item => `${throttleReading(item.resource, item.percent)} (throttled at ≥ ${throttleReading(item.resource, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item.resource, item.resume_percent, true)})`)
     .join("; ");
   const note = el("p", { class: "operation-control-note drain-throttle-note", text: `Admissions throttled: ${held}. Running tasks are not touched.` });
   note.setAttribute("role", "status");
@@ -2085,10 +2125,10 @@ function renderAutoDrain(payload) {
   // could start against it.
   body.append(
     autoDrainCapacity(payload.capacity || {}, counts, blocked.length),
-    el("div", { class: "drain-stats" }, [
-      autoDrainStat("eligible", "Pool: eligible", counts.eligible),
-      autoDrainStat("blocked", "Pool: blocked", blocked.length),
-    ]),
+    el("div", { class: "drain-stats" }, autoDrainPool(payload).map(group => autoDrainStat(
+      group.key, group.label, group.count,
+      group.key === "eligible" ? "" : [...group.reasons].map(([reason, n]) => `${reason} ${n}`).join(", "),
+    ))),
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
   const hostWaits = autoDrainHostWaits(payload);

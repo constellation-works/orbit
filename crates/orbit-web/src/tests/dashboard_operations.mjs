@@ -180,7 +180,7 @@ assert(durations.map(node => node.textContent).join(' ') === '15m 30m 1h 2h 4h 8
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const poolCount = tone => drainBody.querySelector(`.drain-stat.${tone} .drain-stat-value`).textContent;
-assert(poolCount('eligible') === '1' && poolCount('blocked') === '2', `counts use strict server eligibility and lock reasons: ${drainText()}`);
+assert(poolCount('eligible') === '1' && poolCount('locks') === '2' && poolCount('capacity') === '1' && poolCount('other') === '5', `counts use strict server eligibility and reason groups: ${drainText()}`);
 assert(drainBody.querySelector('.drain-capacity-count').textContent.includes('Workspace: 4 of 4') && drainText().includes('0 free slots'), `capacity labels workspace slot occupancy: ${drainText()}`);
 assert(drainBody.querySelector('.drain-slots').textContent.includes('1 occupied slot'), 'a saturated workspace says how many slots must clear');
 assert(drainText().includes('ORB-14334 waits on ORB-14488') && drainText().includes('lock · …/src/a-long-lock-selector'), 'a lock-blocked task names its holder and the shortened lock');
@@ -200,7 +200,7 @@ assert(drainText().includes('No auto-delivery window is live. Deliver settlement
 // More than three blocked tasks collapse to "+N more".
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
 await fetchAndRenderOperations();
-assert(poolCount('blocked') === '5' && drainText().includes('+2 more'), 'blocked list is capped at three lines');
+assert(poolCount('locks') === '5' && drainText().includes('+2 more'), 'blocked list is capped at three lines');
 readinessTasks.splice(-3);
 
 // A task whose `os:` tags this host cannot run names the host it waits for,
@@ -208,7 +208,7 @@ readinessTasks.splice(-3);
 readinessTasks.push({ task_id: 'ORB-40', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' });
 await fetchAndRenderOperations();
 assert(drainText().includes('ORB-40 waits for a macos host (os:macos)'), `an OS wait is named on the card: ${drainText()}`);
-assert(poolCount('blocked') === '2', 'an OS wait is not counted as blocked by a running task');
+assert(poolCount('locks') === '2' && poolCount('other') === '6', 'an OS wait is not counted as waiting on a running task');
 readinessTasks.splice(-1);
 
 // Duration, stepper and completion drive the Start label and the submitted body.
@@ -325,8 +325,8 @@ await fetchAndRenderOperations();
 assert(
   drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04 01:41 PDT') &&
   drainText().includes('; resumes below 80%)') &&
-  drainText().includes('cpu 89% (throttled at ≥ 90% since 2026-10-04 01:40 PDT') &&
-  drainText().includes('; resumes below 75%)') &&
+  drainText().includes('load 0.9× cores (throttled at ≥ 0.9× cores since 2026-10-04 01:40 PDT') &&
+  drainText().includes('; resumes below 0.75× cores)') &&
   drainText().includes('Running tasks are not touched.'),
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
 );
@@ -335,6 +335,46 @@ assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'stat
 resourceThrottle = null;
 await fetchAndRenderOperations();
 assert(!drainText().includes('Admissions throttled'), 'the note clears with the throttle');
+
+// ORB-14705: the pool figures partition the readiness tasks, so they add up to
+// the backlog and name each group; "blocked" stays a task status.
+const backlogTask = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
+drainTasksOverride = [
+  ...Array.from({ length: 17 }, (_, i) => backlogTask(i, 'context_lock_conflict')),
+  ...Array.from({ length: 13 }, (_, i) => backlogTask(17 + i, 'resource_throttled')),
+  ...Array.from({ length: 3 }, (_, i) => backlogTask(30 + i, 'capacity_saturated')),
+  backlogTask(33, 'operator_validation_handoff'),
+  backlogTask(34, 'pilot_already_landed'),
+  backlogTask(35, 'surface_reserved'),
+];
+await fetchAndRenderAutoDrainPane();
+const poolGroups = Array.from(drainBody.querySelectorAll('.drain-stat')).map(node => ({
+  label: node.querySelector('.drain-stat-label').textContent,
+  title: node.querySelector('.drain-stat-label').title,
+  value: Number(node.querySelector('.drain-stat-value').textContent),
+}));
+assert(poolGroups.map(group => `${group.label}=${group.value}`).join('; ') === 'Pool: eligible=0; Pool: waiting on locks=17; Pool: waiting on capacity=16; Pool: waiting, other=3', `pool groups: ${JSON.stringify(poolGroups)}`);
+assert(poolGroups.reduce((sum, group) => sum + group.value, 0) === 36, 'the pool figures sum to the 36 readiness tasks');
+assert(poolGroups[2].title.includes('resource_throttled 13') && poolGroups[2].title.includes('capacity_saturated 3'), `the capacity group lists its reasons: ${poolGroups[2].title}`);
+assert(['operator_validation_handoff 1', 'pilot_already_landed 1', 'surface_reserved 1'].every(part => poolGroups[3].title.includes(part)), `the other group lists its reasons: ${poolGroups[3].title}`);
+assert(!poolGroups.some(group => /blocked/i.test(`${group.label} ${group.title}`)), `no pool label calls a readiness group blocked: ${JSON.stringify(poolGroups)}`);
+drainTasksOverride = null;
+
+// The throttle note and the top bar's load chip state one CPU reading in one
+// unit: 164% of cores is "1.6× cores" in both, and 75% is a bare 0.75× threshold.
+{
+  const { renderHostResources } = await import('./js/host-resources.js');
+  const reading = percent => ({ percent, severity: 'critical' });
+  renderHostResources({ cpu: reading(164), memory: reading(40), disk: { path: '/', ...reading(50) }, throttle: true, pressures: [{ resource: 'cpu' }], reason: 'cpu high', thresholds: { enabled: true }, stale: false, sample_age_seconds: 1 });
+  const chip = get('host-resource-chips').querySelector('[data-resource="cpu"] .v');
+  resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
+  await fetchAndRenderAutoDrainPane();
+  const note = drainBody.querySelector('.drain-throttle-note').textContent;
+  assert(chip.textContent === '1.6× cores' && note.includes(`load ${chip.textContent} (throttled at ≥ 0.9× cores`) && note.includes('resumes below 0.75× cores'), `chip ${chip.textContent} vs note ${note}`);
+  assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
+  resourceThrottle = null;
+  await fetchAndRenderAutoDrainPane();
+}
 
 // ORB-14489: zero free slots alone does not imply that finishing a task can
 // unblock admission. Exercise the readiness-to-card boundary for each reason.

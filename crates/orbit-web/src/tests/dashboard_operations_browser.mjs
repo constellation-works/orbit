@@ -267,7 +267,7 @@ try {
     if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
     if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
     if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
-    if (result.durations !== 6 || !result.text.includes('Pool: blocked')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    if (result.durations !== 6 || !result.text.includes('Pool: waiting on locks') || /Pool: blocked/.test(result.text)) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
@@ -393,6 +393,23 @@ try {
   if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
   fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
+  // ORB-14705: a 36-task backlog (17 locks, 13 throttled, 3 saturated, 3 other)
+  // reads as four figures that add up, at desktop and phone widths.
+  await page.evaluate(() => {
+    const task = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
+    const reasons = [...Array(17).fill('context_lock_conflict'), ...Array(13).fill('resource_throttled'), ...Array(3).fill('capacity_saturated'), 'operator_validation_handoff', 'pilot_already_landed', 'surface_reserved'];
+    return globalThis.setDrainFixtureReadiness({
+      capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } },
+      tasks: reasons.map((reason, i) => task(i, reason)),
+    });
+  });
+  for (const [label, width, dock] of [['1440', 1440, 336], ['390', 390, null]]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await drainCheck(`backlog36-${label}`, dock);
+    const pool = await page.evaluate(() => [...document.querySelectorAll('#auto-drain-panel .drain-stat')].map(node => Number(node.querySelector('.drain-stat-value').textContent)));
+    if (pool.reduce((sum, n) => sum + n, 0) !== 36) throw new Error(`Pool figures at ${label}px do not sum to 36: ${pool}`);
+  }
+  await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness());
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
   const logDrainState = await page.locator('#dock-tab-drain').getAttribute('aria-label');
