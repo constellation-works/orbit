@@ -292,6 +292,25 @@ pub fn resolve_shared_worktree_path(repo_root: &Path, run_id: &str) -> Result<Pa
     worktree_directory(repo_root, &shared_worktree_dir_name(run_id)?)
 }
 
+/// Where a short-lived detached checkout (a base rerun, host evidence) goes:
+/// the managed worktree root of the primary checkout that owns `repo`'s Git
+/// common directory, never the common directory itself. The Linux Git
+/// protection scan refuses any symlink under the common directory, and a
+/// checkout of a repository with symlinked files is not Git metadata.
+pub(crate) fn scratch_checkout_path(repo: &Path, dir_name: &str) -> Result<PathBuf, OrbitError> {
+    let common = orbit_common::fs::git::git_common_dir(repo)?;
+    let primary = common
+        .parent()
+        .filter(|_| common.file_name().is_some_and(|name| name == ".git"))
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "Git common directory '{}' is not a primary checkout's `.git`",
+                common.display()
+            ))
+        })?;
+    worktree_directory(primary, dir_name)
+}
+
 /// Join `dir_name` as one child of the worktree root. A name that is not a
 /// single normal component, or a join that does not stay under that root,
 /// is rejected.
