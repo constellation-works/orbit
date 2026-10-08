@@ -882,6 +882,8 @@ three are safe; none strands a claim, and none fails a task that never ran.
   leaf's claim as released, stops the leaf's process group, and every claim —
   running or not — goes back to the owner's `backlog` with a comment naming
   the drain and the reason. The stopped leaves are listed as `forced_runs`.
+  The release holds even with `--block`, which only decides how the stopped
+  leaves' own local task couplings are left.
   A leaf that had already recorded its handoff is left to finish and deliver
   it. `--force` on a drain that already ended still stops the leaves it left
   running. It touches only what that drain carries: the leaves it admitted

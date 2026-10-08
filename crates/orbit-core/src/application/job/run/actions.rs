@@ -353,7 +353,7 @@ impl OrbitRuntime {
             run.state,
         )?;
         self.mark_cancelled_pipeline_state(&cancelled_run)?;
-        self.settle_child_dispatches_on_cancel(&cancelled_run, request.actor, depth)?;
+        self.settle_child_dispatches_on_cancel(&cancelled_run, request, depth)?;
         self.record_event(OrbitEvent::JobRunCancelled {
             job_id: run.job_id.clone(),
             run_id: run_id.to_string(),
@@ -683,13 +683,17 @@ impl OrbitRuntime {
     /// `running`: a cancelled parent must still name the child it left behind,
     /// which is the only handle on that work.
     ///
+    /// A cascaded child inherits the parent's task disposition
+    /// (`request.block_task`), so a cancel that returns tasks to backlog does
+    /// not block the tasks of the children it propagates to.
+    ///
     /// Cascading is best effort. A child that already terminalized, or that
     /// refuses cancellation, is recorded as such and never blocks the parent's
     /// own cancellation from completing.
     fn settle_child_dispatches_on_cancel(
         &self,
         run: &JobRun,
-        actor: &str,
+        request: CancellationRequest<'_>,
         depth: usize,
     ) -> Result<(), OrbitError> {
         let Some(state) = self.read_run_state(&run.run_id)? else {
@@ -714,7 +718,7 @@ impl OrbitRuntime {
                 let (outcome, error) = match policy {
                     ChildCancellationPolicy::Detach => ("detached".to_string(), None),
                     ChildCancellationPolicy::Cascade => {
-                        self.cascade_cancel_child(&child_run_id, actor, depth)
+                        self.cascade_cancel_child(&child_run_id, request, depth)
                     }
                 };
                 (
@@ -744,7 +748,7 @@ impl OrbitRuntime {
     fn cascade_cancel_child(
         &self,
         child_run_id: &str,
-        actor: &str,
+        request: CancellationRequest<'_>,
         depth: usize,
     ) -> (String, Option<String>) {
         // A dispatch graph is a DAG in practice, so this bound is a backstop
@@ -760,10 +764,10 @@ impl OrbitRuntime {
         match self.cancel_job_run_cascading(
             child_run_id,
             CancellationRequest {
-                actor,
+                actor: request.actor,
                 source: CHILD_CASCADE_SOURCE,
                 reason: None,
-                block_task: true,
+                block_task: request.block_task,
             },
             signal_run_owner_process,
             depth + 1,

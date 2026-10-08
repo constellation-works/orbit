@@ -210,7 +210,10 @@ orbit run cancel <run_id> --confirm --block --reason "hold for diagnosis"
 ```
 
 Use `--block` only when the task should wait for manual recovery instead of
-returning to the backlog with its candidate preserved.
+returning to the backlog with its candidate preserved. The choice reaches every task
+the cancel stops: leaves a `--force` pull-drain cancel stops and children a cancel
+cascades to follow it. A forced pull-drain leaf's claim is the exception: it is always
+released to the owner's backlog, with or without `--block`.
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.

@@ -675,3 +675,135 @@ fn forced_local_cancel_handles_children_persisted_during_stop_and_preserves_othe
         "the final scan must include lineage closed by the parent's cancellation"
     );
 }
+
+#[test]
+fn forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim()
+ {
+    if run_isolated_test(std::any::type_name_of_val(
+        &forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let owner = Arc::new(Owner::default());
+    let runtime = runtime.with_drain_owner_transport(owner.clone());
+
+    for (block_task, expected) in [(false, TaskStatus::Backlog), (true, TaskStatus::Blocked)] {
+        let selected = drain(
+            &runtime,
+            "workspace_pull_pipeline",
+            json!({"destination": destination()}),
+        );
+        let mut leaf = None;
+        let mut task_id = None;
+        let cancel = runtime
+            .cancel_job_run_with_options_and_signal(
+                &selected.run_id,
+                CancellationRequest {
+                    actor: "operator",
+                    source: "fixture",
+                    reason: None,
+                    block_task,
+                },
+                true,
+                |_| {
+                    let record = admission(&runtime, &owner, &selected, LocalPullPhase::Launching);
+                    let leaf_run = runtime
+                        .stores()
+                        .jobs()
+                        .get_job_run(record.leaf_run_id.as_ref().unwrap())
+                        .unwrap()
+                        .unwrap();
+                    task_id = Some(in_progress_task(&runtime, &leaf_run));
+                    leaf = Some(leaf_run.run_id);
+                    Ok("confirmed_fixture_stop".into())
+                },
+            )
+            .unwrap();
+        let leaf = leaf.unwrap();
+
+        assert_eq!(cancel.forced_runs, vec![leaf.clone()]);
+        let policy = runtime
+            .read_run_state(&leaf)
+            .unwrap()
+            .and_then(|state| state.task_cancellation_policy)
+            .expect("the stopped leaf persists the cancellation policy");
+        assert_eq!(
+            policy.block, block_task,
+            "the operator's choice reaches the stopped leaf, not a forced default"
+        );
+        assert_eq!(
+            runtime.get_task(&task_id.unwrap()).unwrap().status,
+            expected
+        );
+        // The release promise is independent of the choice: the owner's claim
+        // is released (its task returns to backlog) even under `--block`.
+        assert!(
+            owner.claims.lock().unwrap().is_empty(),
+            "block_task={block_task} must not keep the owner's claim"
+        );
+        assert!(
+            runtime
+                .stores()
+                .jobs()
+                .local_pull_for_run(&leaf)
+                .unwrap()
+                .is_some_and(|record| matches!(record.settlement, Some(ClaimMutation::Release(_)))),
+            "block_task={block_task} must leave the recorded settlement a release"
+        );
+    }
+}
+
+#[test]
+fn cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+
+    for (block_task, expected) in [(false, TaskStatus::Backlog), (true, TaskStatus::Blocked)] {
+        let parent = drain(&runtime, "task_pr_pipeline", json!({}));
+        let child = insert_pending_run(&runtime, "task_pr_pipeline");
+        let task_id = in_progress_task(&runtime, &child);
+        let mut state = runtime.read_run_state(&parent.run_id).unwrap().unwrap();
+        state.record_child_dispatch(ChildDispatch::submitted(
+            child.run_id.clone(),
+            "task_pr_pipeline".into(),
+            "invoke".into(),
+            true,
+            false,
+            Utc::now(),
+        ));
+        runtime.write_run_state(&parent.run_id, &state).unwrap();
+
+        runtime
+            .cancel_job_run_with_options_and_signal(
+                &parent.run_id,
+                CancellationRequest {
+                    actor: "operator",
+                    source: "fixture",
+                    reason: None,
+                    block_task,
+                },
+                false,
+                |_| Ok("confirmed_fixture_stop".into()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .get_job_run_backend(&child.run_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            JobRunState::Cancelled
+        );
+        assert_eq!(
+            runtime.get_task(&task_id).unwrap().status,
+            expected,
+            "the cascaded child follows block_task={block_task}"
+        );
+    }
+}

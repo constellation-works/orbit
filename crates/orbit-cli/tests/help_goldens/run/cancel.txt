@@ -46,7 +46,7 @@ A running follower pull drain (`workspace_pull_pipeline`) is cancelled gracefull
 
 `--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the task runs it started, which a plain cancel leaves running. A child whose stop cannot be confirmed is listed with its reason and makes the command exit 1. For any other run it changes nothing.
 
-Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow.
+Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
 
 Examples:
   orbit run cancel jrun-20260706-0120-2 --confirm

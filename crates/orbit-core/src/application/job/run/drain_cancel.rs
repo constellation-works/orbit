@@ -17,7 +17,9 @@
 //!   never a leaf another live drain carries. A leaf whose stop cannot be
 //!   confirmed keeps its claim (`unstopped_leaves`). If the drain worker
 //!   itself cannot be confirmed stopped, cancellation fails before finalizing
-//!   the drain or changing its carried claims. A local auto drain's
+//!   the drain or changing its carried claims. Each released claim returns to
+//!   the owner's backlog even under `--block`, which only sets how the stopped
+//!   leaves' own local task couplings are left. A local auto drain's
 //!   `--force` also stops the children its cancel would otherwise detach,
 //!   returning their tasks to backlog unless blocking was requested and
 //!   reporting unconfirmed stops in `unstopped_children`.
@@ -387,14 +389,7 @@ impl OrbitRuntime {
             if !launched {
                 continue;
             }
-            match self.stop_released_leaf(
-                &record,
-                &leaf_run,
-                request.actor,
-                request.source,
-                request.reason,
-                &cause,
-            ) {
+            match self.stop_released_leaf(&record, &leaf_run, request, &cause) {
                 Ok(true) => result.forced_runs.push(leaf),
                 Ok(false) => {}
                 Err(why) => {
@@ -435,13 +430,15 @@ impl OrbitRuntime {
     /// confirmed leaves the release held — never delivered while the leaf
     /// still runs — until the leaf is seen to stop. Either is the `Err`
     /// reason.
+    ///
+    /// The operator's `block_task` choice rides the leaf's own cancellation
+    /// (its local task coupling), but never the claim: the release recorded
+    /// above sends the owner's task to the backlog whichever way it is set.
     fn stop_released_leaf(
         &self,
         record: &LocalPullAdmission,
         leaf: &JobRun,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         cause: &str,
     ) -> Result<bool, String> {
         if leaf.state == JobRunState::Running
@@ -462,23 +459,13 @@ impl OrbitRuntime {
         if !matches!(settling.settlement, Some(ClaimMutation::Release(_))) {
             return Ok(false);
         }
-        self.cancel_job_run_cascading(
-            &leaf.run_id,
-            CancellationRequest {
-                actor,
-                source,
-                reason,
-                block_task: true,
-            },
-            signal_run_owner_confirmed,
-            0,
-        )
-        .map_err(|error| {
-            format!(
-                "stop unconfirmed: {error}; its release is held, and reaches the owner only \
+        self.cancel_job_run_cascading(&leaf.run_id, request, signal_run_owner_confirmed, 0)
+            .map_err(|error| {
+                format!(
+                    "stop unconfirmed: {error}; its release is held, and reaches the owner only \
                  once the leaf is seen to stop"
-            )
-        })?;
+                )
+            })?;
         Ok(true)
     }
 
