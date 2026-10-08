@@ -2695,7 +2695,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
             "type": "chore",
             "tags": ["mcp-roundtrip"],
             "crew": "sol",
-            "orchestrator": "terra",
+            "orchestrator": "sol",
             "relations": [{"type": "related_to", "target": "DK-00042"}],
         }),
     );
@@ -2713,14 +2713,14 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert_eq!(shown["description"], "Created over the MCP stdio transport");
     assert_eq!(shown["tags"], json!(["mcp-roundtrip"]));
     assert_eq!(shown["crew"], "sol");
-    assert_eq!(shown["orchestrator"], "terra");
+    assert_eq!(shown["orchestrator"], "sol");
     assert_eq!(shown["job_run_id"], "jrun-mcp-projection");
     assert_eq!(
         client.call_tool_ok(
             "orbit_task_show",
             json!({ "id": task_id, "fields": ["crew", "orchestrator"] }),
         ),
-        json!({"crew": "sol", "orchestrator": "terra"})
+        json!({"crew": "sol", "orchestrator": "sol"})
     );
     assert_eq!(
         client.call_tool_ok(
@@ -2769,7 +2769,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Execution Crew: sol"), "{stdout}");
-    assert!(stdout.contains("Orchestrator: terra"), "{stdout}");
+    assert!(stdout.contains("Orchestrator: sol"), "{stdout}");
 
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
@@ -2784,7 +2784,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).expect("orchestrator JSON"),
-        json!("terra")
+        json!("sol")
     );
 
     let output = orbit_ok(

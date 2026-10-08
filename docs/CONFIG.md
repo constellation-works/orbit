@@ -20,7 +20,7 @@ To add a new execution lane rather than configure a shipped one, see the [execut
 Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.
 
 - **Tables** layer down to individual settings. **Scalars and arrays** replace the matching global value.
-- **Named crews** layer by crew name and field, so `[crews.sol]` with only `model = "gpt-5.6-terra"` in the workspace file overrides one field of the global `sol` crew.
+- **Named crews** layer by crew name and field, so `[crews.sol]` with only `model = "gpt-6-astra"` in the workspace file overrides one field of the global `sol` crew.
 - **Security exceptions.** `execution.codex.sandbox`, `execution.codex.approval_policy` and `execution.env.pass` never inherit from global once a workspace file exists. If the workspace file omits one, its built-in default applies. A workspace file holding only `[plugin_enablement]` does not count: those keys keep inheriting.
 - **Global-only.** A `[machine]` table in a workspace file is refused at load, naming the file.
 - **Workspace-only.** A `[plugin_enablement]` table in the global file is refused at load, naming the file.
@@ -258,7 +258,7 @@ provider = "gemini"
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
-| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) | `astra` |
+| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `luna` (`gpt-6-luna`) | `astra` |
 | `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`) | `antigravity` |
 | `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
@@ -482,7 +482,7 @@ Orbit does not write OpenCode's `opencode.json` MCP config, and `orbit mcp init`
 ```toml
 [workflow]
 low_complexity_crews = ["luna"]
-medium_complexity_crews = ["grok", "terra"]
+medium_complexity_crews = ["grok", "sol"]
 hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
