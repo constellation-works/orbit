@@ -7,6 +7,7 @@ mod inspection;
 mod launcher;
 #[cfg(unix)]
 mod orchestrator_env;
+mod spawn_diagnostics;
 mod stdout_preview;
 #[cfg(unix)]
 mod supervisor;
