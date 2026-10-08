@@ -97,8 +97,8 @@ On minimal Linux images, also supply the prepared browser's
 
 ## Rotation and retention
 
-Rotation is size-based. Long-lived commands (`mcp serve`, `web serve`, `sweep`, and
-`clock tick`) rotate at startup; short-lived commands check the active file on their first
+Rotation is size-based. Long-lived commands (`mcp serve`, `mcp listen`, `web serve`,
+`sweep`, and `clock tick`) rotate at startup; short-lived commands check the active file on their first
 JSONL write and rotate it only if it exceeds the per-file cap. The active file is renamed to
 `orbit.jsonl.<UTC-timestamp>`. Archives older than the retention window are deleted, then
 the oldest archives are deleted until the total-size cap holds.
@@ -162,7 +162,7 @@ On Linux, the sweep unit logs to the journal, which rotates independently.
 Confirm that the effective active path exists and receives a new expected event. For retention,
 compare the active file and archives against the configured per-file, total-size, and age caps;
 remember that global JSONL rotation walks archives from long-lived processes (`mcp serve`,
-`sweep` / `clock tick`, `web serve`) and when the active file exceeds its budget on first write,
+`mcp listen`, `sweep` / `clock tick`, `web serve`) and when the active file exceeds its budget on first write,
 while sweep-log rotation runs opportunistically on each pass. Short-lived commands, including
 `orbit --help`, do not open the JSONL file.
 
