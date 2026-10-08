@@ -492,11 +492,12 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
                     "fields":{"job_run_id":run, "step_id":"fulfil", "outcome":"error", "success":false, "event_id":id},
                 })
             };
+            // Appended in time order, as the log is: the old record comes first.
             let mut records = vec![
+                process("run-a", old, "process-old"),
                 process("run-a", recent, "process-a"),
                 process("run-a", recent, "process-a"),
                 process("run-b", recent, "process-b"),
-                process("run-a", old, "process-old"),
                 process("run-future", now + Duration::minutes(10), "future"),
             ];
             records.push(

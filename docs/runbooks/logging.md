@@ -68,7 +68,9 @@ The dashboard log snapshot (`/api/log`) and Errors tab
 (`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
 to show valid records on either side. File access and read errors still fail the
 request. The snapshot reads only the active file. The Errors tab also reads
-rotated archives that reach into its window. When retention has already pruned
+rotated archives that reach into its window, reading each only back to its first
+record older than the window (a 60 s margin allows for out-of-order stamps) and not
+opening an archive last written before the window. When retention has already pruned
 the start of the window, its header shows "covers since" with the oldest
 retained instant.
 
