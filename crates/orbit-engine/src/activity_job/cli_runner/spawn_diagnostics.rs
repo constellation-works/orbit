@@ -94,6 +94,7 @@ fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
         // Matches both the documented quoted form (`run 'agent login' first`)
         // and the live cursor-agent 2026.09.10 wording (`run agent login first`).
         Provider::Cursor => Some("Authentication required. Please run"),
+        Provider::Antigravity => Some("authentication required"),
         _ => None,
     }
 }
@@ -191,8 +192,8 @@ pub(super) fn macos_keychain_auth_diagnostic(
 
 /// Test-friendly variant: callers pass HOME explicitly instead of reading
 /// process-global state, which the compiler's carve-out also depends on.
-// pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-fn macos_keychain_auth_diagnostic_with(
+// The parent module visibility lets the mirrored sibling test supply HOME.
+pub(super) fn macos_keychain_auth_diagnostic_with(
     provider: &str,
     sandbox: Option<&ResolvedSandbox>,
     output: &str,
