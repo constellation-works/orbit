@@ -83,6 +83,10 @@ provider = "codex"
 model = "luna-model"
 "#;
 
+/// An empty `[crews]` table: no crew and no default, so a run that names no
+/// crew resolves none.
+const NO_CREWS: &str = "[workflow]\n\n[crews]\n";
+
 /// What Codex wrote when its content filter ended a review of sandbox code
 /// (run jrun-20261006-0104-c24).
 const CONTENT_FILTER: &str = "This content was flagged for possible cybersecurity risk. If this \
@@ -119,6 +123,11 @@ fn fixture(config: &str) -> Fixture {
 impl Fixture {
     /// An admissible backlog task that runs as `crew`.
     fn task(&self, crew: &str) -> String {
+        self.task_with_crew(Some(crew))
+    }
+
+    /// An admissible backlog task, pinned to `crew` when one is given.
+    fn task_with_crew(&self, crew: Option<&str>) -> String {
         std::fs::write(self.repo.join("feature.txt"), "feature\n").unwrap();
         self.runtime
             .add_task(TaskAddParams {
@@ -130,7 +139,7 @@ impl Fixture {
                 complexity: TaskComplexity::Medium,
                 task_type: Some(TaskType::Bug),
                 status: Some(TaskStatus::Backlog),
-                crew: Some(crew.to_string()),
+                crew: crew.map(ToOwned::to_owned),
                 ..Default::default()
             })
             .unwrap()
@@ -139,7 +148,11 @@ impl Fixture {
 
     /// A running local pipeline that admitted `task` on `crew`.
     fn admit(&self, task: &str, crew: &str) -> String {
-        let input = json!({ "task_ids": [task], "crew": crew });
+        self.admit_with_input(task, json!({ "task_ids": [task], "crew": crew }))
+    }
+
+    /// A running local pipeline that admitted `task` with run `input`.
+    fn admit_with_input(&self, task: &str, input: Value) -> String {
         let run = self
             .jobs
             .insert_job_run(
@@ -249,6 +262,11 @@ fn step_failure(class: ProviderFailureClass, detail: &str) -> String {
         "step `implement_one`: {}",
         provider_failure_text(class, "codex", detail)
     )
+}
+
+/// A step failure of `class` that names no provider.
+fn providerless_failure(class: ProviderFailureClass, detail: &str) -> String {
+    format!("step `implement_one`: {} {detail}", class.marker())
 }
 
 /// Capacity and an unusable provider hold the task in the backlog with the
@@ -404,6 +422,73 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
             .unwrap();
     }
     assert!(fx.admitted(&task, &["sol"]), "the hold has lapsed");
+}
+
+/// A capacity failure that names no provider, on a run that resolved no crew,
+/// excludes nothing but still holds the task: admission defers it until
+/// not-before, then draws it again.
+#[test]
+fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
+    if !isolated(
+        "provider_failure_hold::a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before",
+    ) {
+        return;
+    }
+    let fx = fixture(NO_CREWS);
+    let task = fx.task_with_crew(None);
+    let run = fx.admit_with_input(&task, json!({ "task_ids": [task] }));
+    fx.fail(
+        &run,
+        &providerless_failure(
+            ProviderFailureClass::Capacity,
+            "Selected model is at capacity. Please try a different model.",
+        ),
+    );
+
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+    let hold = fx.last_hold(&task);
+    assert_eq!(hold.class, ProviderFailureClass::Capacity);
+    assert_eq!(hold.provider, None);
+    assert!(hold.excluded_crews.is_empty(), "{hold:?}");
+    assert_eq!(hold.run_id, run);
+
+    assert!(!fx.admitted(&task, &[]), "the backoff holds the task");
+    let deferred = fx.exclusion(&task, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+    let detail = deferred["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(&run)
+            && detail.contains("provider_capacity")
+            && detail.contains(&hold.not_before.to_rfc3339()),
+        "the deferral names the run, the failure and the time: {detail}"
+    );
+
+    // The same hold, lapsed, no longer withholds the task.
+    let lapsed = ProviderFailureHold {
+        not_before: Utc::now() - Duration::minutes(1),
+        ..hold
+    };
+    for (status, event, note) in [
+        (TaskStatus::InProgress, None, None),
+        (
+            TaskStatus::Backlog,
+            Some(PROVIDER_FAILURE_HOLD_EVENT.to_string()),
+            Some(lapsed.text("lapsed fixture hold")),
+        ),
+    ] {
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    status_event: event,
+                    status_note: note,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    assert!(fx.admitted(&task, &[]), "the hold has lapsed");
 }
 
 /// The incident end to end: a fake Codex emits its content-filter frames, the

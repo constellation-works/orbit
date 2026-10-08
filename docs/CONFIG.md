@@ -540,7 +540,7 @@ Run finalization then moves the task to `backlog` under a `provider_failure_hold
 2. its complexity pool;
 3. `default_crew`.
 
-`crew_selection.source` names the hold. When every one of those crews is excluded, the local drain defers the task, and `orbit run readiness --json` reports it with `reason: "provider_backoff"` and the release time. An explicit run-input `crew` ignores the hold.
+`crew_selection.source` names the hold. When every one of those crews is excluded, the local drain defers the task, and `orbit run readiness --json` reports it with `reason: "provider_backoff"` and the release time. A hold can exclude no crew at all, when the failed run resolved none; the task still defers until `not_before`. An explicit run-input `crew` ignores the hold.
 
 Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
 
