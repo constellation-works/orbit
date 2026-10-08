@@ -2992,10 +2992,16 @@ export function renderTasks(tasks, context) {
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
-  // ORB-10972: the rail shows the same filtered count the panel header does,
-  // so the Tasks entry reads correctly from any other tab.
+  // ORB-10972: the rail shows the matching total the panel header reports, so
+  // the Tasks entry reads correctly from any other tab. The rows on this page
+  // are not that total once the list is paginated (ORB-14701).
   const railCount = document.getElementById("rail-count-tasks");
-  if (railCount) railCount.textContent = String(filtered.length);
+  if (railCount) {
+    const meta = tasksMeta(context);
+    const matching = meta && Number.isFinite(meta.total) ? meta.total : filtered.length;
+    railCount.textContent = String(matching);
+    railCount.title = "Tasks matching the current status filter";
+  }
   renderFilterSummary(context);
   if (filtered.length === 0 && nodes.length === 0) {
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
