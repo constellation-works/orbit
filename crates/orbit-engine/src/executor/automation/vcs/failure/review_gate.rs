@@ -9,7 +9,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::freshness::remote_branch_sha;
-use super::super::git::git_output;
+use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::conflict::pipeline_checkpoint_string;
 use super::preserve::recorded_spec_digest;
@@ -18,6 +18,12 @@ use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 /// A fresh run resets its review ledger; bound automatic continuations across
 /// those lineages by the preserved tree instead of the rewritten commit.
 const REVIEW_TIMEOUT_MAX_REQUEUES: usize = 1;
+
+/// Subject of the commit that preserves a timed-out reviewer's uncommitted edits.
+const PARTIAL_REPAIR_SUBJECT: &str = "review: partial reviewer repairs preserved";
+
+/// Trailer that marks a partial-repair commit as the gate's own.
+const PARTIAL_REPAIR_RUN_TRAILER: &str = "Orbit-Review-Run:";
 
 /// Preserve a candidate the before-PR review gate refused to publish.
 ///
@@ -58,7 +64,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             workspace_path,
             model,
             &format!(
-                "review: partial reviewer repairs preserved [{}]\n\nOrbit-Review-Run: {run_id}\n\
+                "{PARTIAL_REPAIR_SUBJECT} [{}]\n\n{PARTIAL_REPAIR_RUN_TRAILER} {run_id}\n\
                  Orbit-Review-Step: {failed_step_id}{attempt_trailer}",
                 task.id
             ),
@@ -76,6 +82,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     }
     let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     let candidate_tree = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{tree}"])?;
+    let implementation_tree = implementation_tree(workspace_path)?;
     let pushed = push_batch_changes_inner(
         host,
         &review_gate_preservation_push_input(input, &head, workspace_path, &head_sha)?,
@@ -105,15 +112,13 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         && failed_step_id == "review"
         && error_message.contains("review_timeout_incomplete:");
     let timeout_requeues = if timed_out {
-        let tree_marker = format!("candidate_tree={candidate_tree}");
         host.get_task_history(&task.id)?
             .iter()
             .filter(|entry| {
                 entry.event == "review_timeout_incomplete"
-                    && entry
-                        .note
-                        .as_deref()
-                        .is_some_and(|note| note.split(", ").any(|field| field == tree_marker))
+                    && entry.note.as_deref().is_some_and(|note| {
+                        recorded_implementation_tree(note) == Some(implementation_tree.as_str())
+                    })
             })
             .count()
     } else {
@@ -149,11 +154,11 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "Awaiting named external evidence. Attach each matching passing result and its log to the task; once all checks arrive, delivery is requeued for review.".to_string()
     } else if timeout_exhausted {
         format!(
-            "Reviewer timed out again on the same candidate tree; automatic timeout requeue limit exhausted ({timeout_requeues}/{REVIEW_TIMEOUT_MAX_REQUEUES}). Delivery is blocked. Repair the candidate or record an operator decision before continuing; the partial report is retained."
+            "Reviewer timed out again on the same implementation tree; automatic timeout requeue limit exhausted ({timeout_requeues}/{REVIEW_TIMEOUT_MAX_REQUEUES}). Delivery is blocked. Repair the candidate or record an operator decision before continuing; the partial report is retained."
         )
     } else if timed_out {
         format!(
-            "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued ({}/{REVIEW_TIMEOUT_MAX_REQUEUES} automatic timeout requeues for this candidate tree). A fresh run starts a new review lineage with its captured budget; resuming the same lineage uses its remaining budget.",
+            "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued ({}/{REVIEW_TIMEOUT_MAX_REQUEUES} automatic timeout requeues for this implementation tree). A fresh run starts a new review lineage with its captured budget; resuming the same lineage uses its remaining budget.",
             timeout_requeues + 1,
         )
     } else {
@@ -161,7 +166,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     };
     let note = format!(
         "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
-         candidate={head_sha}, candidate_tree={candidate_tree}, branch={head}; no PR was opened; {continuation}"
+         candidate={head_sha}, candidate_tree={candidate_tree}, implementation_tree={implementation_tree}, branch={head}; no PR was opened; {continuation}"
     );
     let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
         "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
@@ -218,6 +223,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "branch": head,
         "head_sha": head_sha,
         "candidate_tree": candidate_tree,
+        "implementation_tree": implementation_tree,
         "partial_repair_commit": partial_repair.map(|commit| commit.commit),
         "uncommitted_paths": leftover,
         "push": pushed,
@@ -225,6 +231,51 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "task_status": status.to_string(),
         "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
+}
+
+/// The tree of the implementation commit under the candidate head.
+///
+/// Walks back over the gate's own partial-repair commits, which stack when a
+/// requeued run builds on a preserved candidate and times out again. The
+/// timeout bound is keyed on this tree: the reviewer's partial work changes
+/// the candidate tree on every timeout and must not renew the allowance.
+fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
+    let mut commit = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    loop {
+        let message = git_output_raw(
+            workspace_path,
+            &["log", "-1", "--format=%B", "--end-of-options", &commit],
+        )?;
+        let is_partial_repair = message
+            .lines()
+            .next()
+            .is_some_and(|subject| subject.starts_with(PARTIAL_REPAIR_SUBJECT))
+            && message
+                .lines()
+                .any(|line| line.starts_with(PARTIAL_REPAIR_RUN_TRAILER));
+        if !is_partial_repair {
+            break;
+        }
+        let lineage = git_output(
+            workspace_path,
+            &["rev-list", "--parents", "-n", "1", &commit],
+        )?;
+        match lineage.split_whitespace().nth(1) {
+            Some(parent) => commit = parent.to_string(),
+            None => break,
+        }
+    }
+    git_output(
+        workspace_path,
+        &["rev-parse", "--verify", &format!("{commit}^{{tree}}")],
+    )
+}
+
+/// The tree a recorded timeout counted against. Rows written before the
+/// implementation tree was recorded carry only `candidate_tree=`.
+fn recorded_implementation_tree(note: &str) -> Option<&str> {
+    let field = |key: &str| note.split(", ").find_map(|field| field.strip_prefix(key));
+    field("implementation_tree=").or_else(|| field("candidate_tree="))
 }
 
 /// Push input for a review-gate preservation.

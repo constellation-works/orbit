@@ -237,9 +237,11 @@ spec:
     # `review_gate_settle` (no retry): substantive failures preserve the
     # candidate and block the task; evidence-only gaps hold it in progress.
     # A reviewer timeout preserves partial work and allows one automatic
-    # backlog requeue per task/candidate tree; another timeout on that tree
+    # backlog requeue per task/implementation tree (the candidate tree beneath
+    # the reviewer's partial-repair commits); another timeout on that tree
     # blocks with review_timeout_requeue_exhausted. Fresh runs have new review
-    # lineages and budgets, but rewriting the commit does not reset this bound.
+    # lineages and budgets, but neither rewriting the commit nor the reviewer's
+    # partial work resets this bound.
     # None of these outcomes opens a PR.
     - id: review_gate_admit
       retry:
