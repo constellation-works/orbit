@@ -164,8 +164,14 @@ pub(crate) fn ensure_completion_run_stopped(
     calling_run_id: Option<&str>,
 ) -> Result<(), OrbitError> {
     let mut pending = Vec::new();
-    pending.extend(task.job_run_id.clone());
-    pending.extend(replacement_run_id.map(str::to_string));
+    if runtime.task_run_is_local(task) {
+        pending.extend(task.job_run_id.clone());
+    }
+    pending.extend(
+        replacement_run_id
+            .filter(|id| runtime.task_run_is_local(task) || task.job_run_id.as_deref() != Some(*id))
+            .map(str::to_string),
+    );
     let mut visited = HashSet::new();
 
     while let Some(run_id) = pending.pop() {
@@ -233,8 +239,13 @@ fn completion_evidence_present(
     }
 
     let job_run_id = match &params.job_run_id {
-        Some(replacement) => replacement.as_deref(),
-        None => task.job_run_id.as_deref(),
+        Some(replacement) => replacement.as_deref().filter(|id| {
+            runtime.task_run_is_local(task) || task.job_run_id.as_deref() != Some(*id)
+        }),
+        None => task
+            .job_run_id
+            .as_deref()
+            .filter(|_| runtime.task_run_is_local(task)),
     };
     let Some(job_run_id) = job_run_id.map(str::trim).filter(|id| !id.is_empty()) else {
         return Ok(false);

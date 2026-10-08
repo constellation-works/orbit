@@ -623,9 +623,10 @@ impl OrbitRuntime {
             Ok(episode) => episode,
             Err(reason) => return Ok(BlockedRecoveryPreparation::Skip { reason }),
         };
+        let task = self.get_task(&input.task_id)?;
         let failed_run = match &episode.failed_run_id {
-            Some(run_id) => self.get_job_run_backend(run_id)?,
-            None => None,
+            Some(run_id) if self.task_run_is_local(&task) => self.get_job_run_backend(run_id)?,
+            _ => None,
         };
         let failed_step = failed_run.as_ref().and_then(|run| {
             run.steps
@@ -637,9 +638,25 @@ impl OrbitRuntime {
         // the diagnostic on the owner's task, without copying the run state.
         let settled_failure = if episode.source == BlockSource::ClaimFailed && failed_run.is_none()
         {
-            Some(self.get_task(&input.task_id)?.execution_summary)
+            Some(task.execution_summary.clone())
         } else {
             None
+        };
+        let diagnostic = failed_step
+            .and_then(|step| step.error_message.clone())
+            .filter(|message| !message.trim().is_empty())
+            .or_else(|| settled_failure.filter(|message| !message.trim().is_empty()))
+            .unwrap_or_else(|| episode.note.clone());
+        let error_message = match &task.job_run_machine {
+            Some(location) if !self.task_run_is_local(&task) => format!(
+                "Failed run executed on {} ({}); its run state is on that machine.\n\n{diagnostic}",
+                location
+                    .machine_name
+                    .as_deref()
+                    .unwrap_or(&location.machine_id),
+                location.machine_id,
+            ),
+            _ => diagnostic,
         };
         let (base_ref, base_sha) = self.recovery_base()?;
         let checkout = self.create_recovery_checkout(recovery_run_id, &base_sha)?;
@@ -655,11 +672,7 @@ impl OrbitRuntime {
                 .map(|step| step.target_id.to_string())
                 .unwrap_or_else(|| episode.source.as_str().to_string()),
             job_id: failed_run.as_ref().map(|run| run.job_id.to_string()),
-            error_message: failed_step
-                .and_then(|step| step.error_message.clone())
-                .filter(|message| !message.trim().is_empty())
-                .or_else(|| settled_failure.filter(|message| !message.trim().is_empty()))
-                .unwrap_or_else(|| episode.note.clone()),
+            error_message,
         }))
     }
 

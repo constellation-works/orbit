@@ -239,10 +239,15 @@ The blocked-task recovery backstop freezes its final-recovery crew draw in
 the recovery run's state. Its activity's `run_id` retains the originating
 failed run as evidence; the executor injects the executing recovery run as
 `job_run_id` before crew resolution and dispatch. That identity takes
-precedence for draw persistence. A follower's
-claimed run need not exist in the owner's run store. In that case,
-preparation uses the failure settlement recorded in the task's execution
-summary, falling back to the block history note if the summary is empty.
+precedence for draw persistence. Run IDs are machine-local: when the task's
+`job_run_machine` names another machine, preparation never reads that ID
+from the owner's run store, even if an unrelated local run shares it. It
+names the execution machine and uses the failure settlement recorded in
+the task's execution summary, falling back to the block history note if
+the summary is empty. Local bindings and legacy records without a machine
+binding continue to resolve local run state. Task crew projections,
+activity attribution, incident diagnosis, completion checks, and CLI resume
+guidance apply the same machine check to task-derived run lookups.
 The agent can inspect additional owner-side task comments and artifacts for
 preserved candidate evidence. The backstop applies the typed decision under
 the recovery run's identity and removes its detached base checkout.

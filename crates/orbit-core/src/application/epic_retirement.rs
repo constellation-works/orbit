@@ -184,10 +184,10 @@ pub fn assess_epic_retirement(snapshot: EpicRetirementSnapshot<'_>) -> EpicRetir
         }
     }
 
-    let recorded_runs: BTreeSet<&str> = snapshot
+    let recorded_runs: BTreeMap<&str, _> = snapshot
         .runs
         .iter()
-        .map(|run| run.run_id.as_str())
+        .map(|run| (run.run_id.as_str(), run.executed_on.as_ref()))
         .collect();
     for task in snapshot.tasks {
         if !family.contains(task.id.as_str())
@@ -203,7 +203,11 @@ pub fn assess_epic_retirement(snapshot: EpicRetirementSnapshot<'_>) -> EpicRetir
         else {
             continue;
         };
-        if recorded_runs.contains(job_run_id) {
+        if recorded_runs.get(job_run_id).is_some_and(|local| {
+            task.job_run_machine.as_ref().is_none_or(|bound| {
+                local.is_some_and(|location| location.machine_id == bound.machine_id)
+            })
+        }) {
             continue;
         }
         blockers.push(EpicRetirementBlocker {

@@ -91,9 +91,10 @@ pub(crate) fn blocked_next_step(
         return None;
     }
     let run_id = blocking_run_id(task, history)?;
-    let resumable = runtime
-        .show_job_run_observed(&run_id)
-        .is_ok_and(|run| is_resumable(run.state));
+    let resumable = runtime.task_run_is_local(task)
+        && runtime
+            .show_job_run_observed(&run_id)
+            .is_ok_and(|run| is_resumable(run.state));
     Some(next_step(&task.id, run_id, resumable))
 }
 
