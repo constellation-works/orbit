@@ -133,9 +133,10 @@ metadata, environment files, symlinks and malformed paths are refused, with
 exact paths. Protected metadata names and environment patterns (including `.envrc`)
 ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and `.Env.local`
 are refused even on Linux. Both peers require the same protocol revision (currently 10).
-Tagged `no-diff-expected` tasks remain on the owner with a receipt reason.
-An ordinary claim that proves its implementation changes nothing may instead
-hand off `NoDiff`. In claimed mode the implementer writes the verifier report
+Tagged `no-diff-expected` tasks are claimable and hand off `NoDiff` with no
+PR; a review needs no report, and a tagged claim that changes code is refused
+as `no_diff_expected_changed`. An ordinary claim that proves its
+implementation changes nothing may also hand off `NoDiff`. In claimed mode the implementer writes the verifier report
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
 references; commit imports and verifies them through the claim. The owner
 rechecks the report against its live base before authorized completion without

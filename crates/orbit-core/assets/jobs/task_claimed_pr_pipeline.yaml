@@ -349,6 +349,9 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     # No branch publication, PR or reviewer is needed for a verified clean base.
+    # [ORB-14791] A `no-diff-expected` review reaches here with no report: the
+    # commit step pins the tag's skip to this run and base instead, and refuses
+    # a changed worktree, since this route cannot deliver code.
     - id: validate_no_diff
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_validate

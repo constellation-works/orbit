@@ -32,6 +32,7 @@ use super::git_ops::{
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
+use super::tagged_no_diff;
 
 pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -330,6 +331,17 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // before mutating the index, then stage exactly those paths.
     let candidate_paths = task_candidate_paths(&workspace_path, new_path_policy)?;
     let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
+    let claimed = matches!(new_path_policy, NewPathPolicy::Claimed);
+    // ORB-14791: a claimed tagged leaf hands off NoDiff and has no PR route
+    // for a change; refuse one before the index is touched.
+    if claimed && no_diff_expected && (head_moved || !candidate_paths.is_empty()) {
+        return Err(tagged_no_diff::diff_refused(
+            &task.id,
+            &workspace_path,
+            candidate_paths.len(),
+            head_moved,
+        ));
+    }
     stage_paths(&workspace_path, &candidate_paths)?;
 
     let changed_files = staged_changed_files(&workspace_path)?;
@@ -343,13 +355,25 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             // deliver; it just is not sitting uncommitted.
             return Ok(already_committed_result(&task.id, base_sha.as_deref()));
         }
-        if (no_diff_expected || allow_empty) && !matches!(new_path_policy, NewPathPolicy::Claimed) {
+        if (no_diff_expected || allow_empty) && !claimed {
             return Ok(skipped_no_diff_expected_result(&task.id));
+        }
+        let run_id = input_string_field(input, "run_id");
+        let run_id = run_id.as_deref().unwrap_or(batch_id);
+        // ORB-14791: a claimed tagged task whose implementer supplied no
+        // clean-tree report (a review files findings, not a report) skips as
+        // on the owner, pinned to this run and base for the NoDiff handoff.
+        if claimed
+            && no_diff_expected
+            && !super::super::claim::carries_no_diff_artifacts(input)
+            && let Some(base_sha) = base_sha.as_deref()
+        {
+            return Ok(tagged_no_diff::checkpoint(&task.id, run_id, base_sha));
         }
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            if matches!(new_path_policy, NewPathPolicy::Claimed) {
+            if claimed {
                 super::super::claim::import_implementation_evidence(
                     host,
                     &task.id,
@@ -357,23 +381,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                     input,
                 )?;
             }
-            return verify_clean_tree(
-                host,
-                &task,
-                &workspace_path,
-                input_string_field(input, "run_id")
-                    .as_deref()
-                    .unwrap_or(batch_id),
-                base_sha,
-            )
-            .map_err(|error| {
-                match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+            return verify_clean_tree(host, &task, &workspace_path, run_id, base_sha).map_err(
+                |error| match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
                     Ok(OrbitError::Execution(observed)) => {
                         OrbitError::Execution(format!("{observed}; {error}"))
                     }
                     Ok(observed) | Err(observed) => observed,
-                }
-            });
+                },
+            );
         }
         return Err(empty_stage_error(
             &task.id,
