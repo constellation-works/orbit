@@ -11,6 +11,10 @@
 //! again until the task changes. The approval rechecks the opt-out tag and the
 //! pilot-assessed material under the task lock it writes under, so an operator
 //! edit racing the drain is never approved over.
+//!
+//! A `verified_no_diff` assessment of a task not tagged `no-diff-expected`
+//! holds it as `pilot_verified_no_diff`, ahead of the readiness gaps its
+//! empty selectors leave; the apply step then closes it when it qualifies.
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
@@ -22,6 +26,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 
 use super::apply::{PreparedTaskSnapshot, ValidatedTask};
 use super::input::action_failed;
@@ -170,6 +175,9 @@ pub(super) fn assess(
         .get("release_action_required")
         .filter(|finding| !finding.is_null());
     let no_diff = snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    let verified_no_diff = (!no_diff)
+        .then(|| VerifiedNoDiff::from_assessment(assessment))
+        .flatten();
 
     let (decision, classification, evidence) = if current.status != TaskStatus::Proposed {
         (
@@ -179,6 +187,8 @@ pub(super) fn assess(
         )
     } else if auto_approval_opted_out(&current.tags) {
         ("withhold", NO_AUTO_APPROVE_TAG, Value::Null)
+    } else if let Some(finding) = &verified_no_diff {
+        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
     } else if let Some(reason) =
         approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
     {

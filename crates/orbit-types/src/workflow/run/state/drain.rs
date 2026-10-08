@@ -208,6 +208,13 @@ pub struct DrainApprovalReport {
     /// The most recent of those (bounded list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved: Vec<String>,
+    /// Proposed tasks Orbit automation filed that this drain archived because
+    /// task-pilot verified them already fixed by a commit on the base branch.
+    #[serde(default)]
+    pub closed_total: u64,
+    /// The most recent of those (bounded list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<String>,
     /// Proposed tasks the latest pass left proposed, with the reason: the
     /// qualification they miss, or the task-pilot classification that held
     /// them (bounded list).

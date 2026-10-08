@@ -17,6 +17,7 @@ mod listing;
 mod params;
 mod paths;
 mod pilot_admission;
+mod pilot_no_diff;
 mod pr_closure;
 mod query;
 mod records;
@@ -58,6 +59,7 @@ pub(crate) use pilot_admission::{
     HostOperationalHold, NativeOsHold, NativeOsRequirement, OperatorValidationHold,
     OperatorValidationRequirement, PilotAdmissionHold, operator_validation_requirements,
 };
+pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};

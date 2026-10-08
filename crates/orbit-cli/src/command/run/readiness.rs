@@ -112,9 +112,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));
     }
-    if let Some(approvals) = approval_line(&payload["approvals"]) {
-        lines.push(approvals);
-    }
+    lines.extend(approval_lines(&payload["approvals"]));
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -167,10 +165,11 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
 }
 
 /// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the
-/// remaining proposed tasks are held.
-fn approval_line(approvals: &Value) -> Option<String> {
+/// remaining proposed tasks are held. A task task-pilot verified as already
+/// fixed gets its own line with the pilot's evidence.
+fn approval_lines(approvals: &Value) -> Vec<String> {
     if approvals["enabled"].as_bool() != Some(true) {
-        return None;
+        return Vec::new();
     }
     let held = approvals["held_by_reason"]
         .as_object()
@@ -184,13 +183,27 @@ fn approval_line(approvals: &Value) -> Option<String> {
         .filter(|reasons| !reasons.is_empty())
         .map(|reasons| format!(" ({reasons})"))
         .unwrap_or_default();
-    Some(format!(
-        "Proposed approval: {} approved by drain {}; {} awaiting pilot; {} held{held}.",
+    let closed = match approvals["closed_total"].as_u64() {
+        Some(total) if total > 0 => format!("; {total} closed as already fixed"),
+        _ => String::new(),
+    };
+    let mut lines = vec![format!(
+        "Proposed approval: {} approved by drain {}{closed}; {} awaiting pilot; {} held{held}.",
         approvals["approved_total"],
         approvals["drain_run_id"].as_str().unwrap_or("-"),
         approvals["awaiting_pilot"],
         approvals["held_total"],
-    ))
+    )];
+    for task in approvals["held"].as_array().into_iter().flatten() {
+        if task["reason"] == "pilot_verified_no_diff" {
+            lines.push(format!(
+                "  Task {}: pilot_verified_no_diff ({})",
+                task["task_id"].as_str().unwrap_or("-"),
+                task["detail"].as_str().unwrap_or("no evidence recorded"),
+            ));
+        }
+    }
+    lines
 }
 
 /// [ORB-14624] While CPU alone throttles, the reserved light slots are the

@@ -1634,7 +1634,7 @@ function autoDrainApprovalsLine(approvals) {
   const reasons = Object.entries(approvals.held_by_reason || {})
     .map(([reason, count]) => `${count} × ${(reason || "unclassified").replaceAll("_", " ")}`);
   const heldTasks = (Array.isArray(approvals.held) ? approvals.held : [])
-    .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}`);
+    .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}${task.reason === "pilot_verified_no_diff" && task.detail ? ` (${task.detail})` : ""}`);
   const title = [
     AUTO_DRAIN_APPROVE_RULE,
     reasons.length ? `Held in the latest pass: ${reasons.join(", ")}.` : "",

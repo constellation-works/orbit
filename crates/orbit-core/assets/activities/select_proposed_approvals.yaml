@@ -22,7 +22,15 @@ spec:
     which that step verifies against this drain. Without `approve_proposed`
     the step is a no-op, and a drain whose admissions were stopped selects
     nothing. Every held task is reported with its reason, and the held view
-    is written to the drain run's `drain_approvals` report.
+    is written to the drain run's `drain_approvals` report. A task whose
+    current pilot assessment is `verified_no_diff` (and is not tagged
+    `no-diff-expected`) is held as `pilot_verified_no_diff` with the pilot's
+    evidence and cited commits, never by a readiness gap. When the task was
+    filed by Orbit automation (`ci-failure-sweep`, `delivery-code-review` or
+    `auto-task:*`), not tagged `no-auto-approve`, and every cited commit
+    exists with at least one an ancestor of the base branch, the pass
+    archives it with a system comment naming the commits and the assessment
+    (`closed`) instead; a stopped drain closes nothing.
   input_schema_json:
     type: object
     properties:
@@ -56,5 +64,9 @@ spec:
         type: number
       held_by_reason:
         type: object
+      closed:
+        type: array
+        items:
+          type: string
   action: select_proposed_approvals
   config: {}

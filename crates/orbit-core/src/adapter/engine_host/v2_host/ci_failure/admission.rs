@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::adapter::engine_host::v2_host::task_pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
+use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 
 const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
@@ -146,15 +147,11 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
         ("withhold", "duplicate", duplicate_of.clone())
     } else if !warnings.is_empty() {
         ("withhold", "warnings", json!(warnings))
-    } else if disposition == "verified_no_diff" {
-        (
-            "withhold",
-            "covering_proof_missing",
-            json!({
-                "pilot_evidence": assessment.get("evidence").cloned().unwrap_or(Value::Null),
-                "required_action": "provide concrete covering task and commit evidence or return actionable selectors",
-            }),
-        )
+    } else if let Some(finding) = VerifiedNoDiff::from_assessment(assessment) {
+        // Never promoted. The apply step archives the task once a cited
+        // commit is proven on the base branch, the same rule an approval
+        // drain applies; without that proof it stays proposed.
+        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
     } else if disposition != "selectors" || selectors.is_empty() {
         (
             "withhold",

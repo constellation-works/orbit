@@ -79,6 +79,32 @@ impl Workspace {
         }
     }
 
+    /// Run git in the fixture repository and return its trimmed stdout.
+    fn git(&self, args: &[&str]) -> String {
+        let mut command = std::process::Command::new("git");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command.args(args).current_dir(&self.repo).output().unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    /// Commit a README edit on the current branch and return its SHA.
+    fn commit(&self, message: &str) -> String {
+        std::fs::write(self.repo.join("README.md"), format!("{message}\n")).unwrap();
+        self.git(&["commit", "-am", message]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    /// A commit on a side branch, so it exists but is not on `main`.
+    fn side_commit(&self) -> String {
+        self.git(&["checkout", "-b", "side"]);
+        let sha = self.commit("side change");
+        self.git(&["checkout", "main"]);
+        sha
+    }
+
     fn task(
         &self,
         title: &str,
@@ -880,4 +906,268 @@ fn candidates_with_no_crew_are_never_bundled_with_crewed_candidates() {
     assert_eq!(next["task_ids"], json!([task_crewed.id]));
     assert_eq!(next["candidate_count"], 1);
     assert_eq!(next["deferred_candidates"], 0);
+}
+
+/// A `verified_no_diff` assessment whose evidence is `evidence`.
+fn verified_no_diff(task: &Task, evidence: &str) -> Value {
+    let mut verified = assessment(task);
+    verified["context_files_after"] = json!([]);
+    verified["disposition"] = json!("verified_no_diff");
+    verified["evidence"] = json!(evidence);
+    verified["assessment_rationale"] = json!("The fix is already on the base branch.");
+    verified
+}
+
+fn held_detail<'a>(selection: &'a Value, task: &Task) -> Option<&'a str> {
+    selection["held"]
+        .as_array()?
+        .iter()
+        .find(|held| held["task_id"] == task.id.as_str())?["detail"]
+        .as_str()
+}
+
+#[test]
+fn an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let landed = workspace.commit("the fix");
+    let side = workspace.side_commit();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let sweep_tags = ["ci-failure-sweep", "ci-failure:fixture-key"];
+    let covered = workspace.task(
+        "covered",
+        &sweep_tags,
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let off_base = workspace.task(
+        "off base",
+        &sweep_tags,
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let unknown = workspace.task(
+        "unknown sha",
+        &["auto-task:delivery-code-review"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let uncited = workspace.task(
+        "uncited",
+        &["delivery-code-review"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+
+    // Piloted outside the drain, as the CI sweep or an operator does.
+    let pilot = workspace.running("task_pilot_pipeline", json!({}));
+    let applied = workspace
+        .apply(
+            &pilot,
+            vec![
+                verified_no_diff(
+                    &covered,
+                    &format!("Commit {landed} already fixed the README."),
+                ),
+                verified_no_diff(
+                    &off_base,
+                    &format!("Commit {side} already fixed the README."),
+                ),
+                verified_no_diff(
+                    &unknown,
+                    &format!("Run 18234567890 passed after {landed} and 0badc0ffee1."),
+                ),
+                verified_no_diff(
+                    &uncited,
+                    "The failing test does not exist at this revision.",
+                ),
+            ],
+            json!({}),
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["closed"], json!([covered.id]), "{selection}");
+    assert_eq!(
+        selection["task_ids"],
+        json!([]),
+        "no verified-no-diff task is piloted again"
+    );
+    assert_eq!(workspace.status(&covered), TaskStatus::Archived);
+    let comment = workspace
+        .runtime
+        .get_task_comments(&covered.id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert!(
+        comment.message.contains(&landed) && comment.message.contains("operation_id="),
+        "the archive comment names the commit and the assessment: {comment:?}"
+    );
+
+    for (task, cited) in [(&off_base, side.as_str()), (&unknown, "0badc0ffee1")] {
+        assert_eq!(workspace.status(task), TaskStatus::Proposed);
+        assert_eq!(
+            held_reason(&selection, task),
+            Some("pilot_verified_no_diff")
+        );
+        assert!(
+            held_detail(&selection, task).is_some_and(|detail| detail.contains(cited)),
+            "{selection}"
+        );
+    }
+    assert_eq!(workspace.status(&uncited), TaskStatus::Proposed);
+    assert_eq!(
+        held_reason(&selection, &uncited),
+        Some("pilot_verified_no_diff")
+    );
+    assert!(
+        held_detail(&selection, &uncited).is_some_and(|detail| detail.contains("no commit cited")),
+        "{selection}"
+    );
+
+    let report = workspace
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_approvals
+        .unwrap();
+    assert_eq!(report.closed_total, 1);
+    assert_eq!(report.closed, vec![covered.id.clone()]);
+    assert_eq!(report.held_by_reason["pilot_verified_no_diff"], 3);
+}
+
+#[test]
+fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let landed = workspace.commit("the fix");
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let filed = workspace.task(
+        "filed",
+        &["drain-robustness"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let evidence = format!("Commit {landed} already carries the README change.");
+
+    // The drain pilots it and holds it under the real reason.
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([filed.id]));
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![verified_no_diff(&filed, &evidence)])
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(
+        decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(decision["evidence"]["cited_commits"], json!([landed]));
+    assert_eq!(decision["closed"], false, "{applied}");
+
+    let next = workspace.select(&drain);
+    assert_eq!(workspace.status(&filed), TaskStatus::Proposed);
+    assert_eq!(next["closed"], json!([]));
+    assert_eq!(held_reason(&next, &filed), Some("pilot_verified_no_diff"));
+    assert!(
+        held_detail(&next, &filed).is_some_and(|detail| detail.contains(&evidence)),
+        "{next}"
+    );
+
+    // `orbit run show` renders the drain's report; readiness reads the same.
+    let report = workspace
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_approvals
+        .unwrap();
+    let held = report
+        .held
+        .iter()
+        .find(|held| held.task_id == filed.id)
+        .unwrap();
+    assert_eq!(held.reason.as_deref(), Some("pilot_verified_no_diff"));
+    assert!(
+        held.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains(&landed))
+    );
+    let readiness = workspace
+        .runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        held_reason(&readiness["approvals"], &filed),
+        Some("pilot_verified_no_diff"),
+        "{readiness}"
+    );
+    assert!(
+        held_detail(&readiness["approvals"], &filed)
+            .is_some_and(|detail| detail.contains(&evidence)),
+        "{readiness}"
+    );
+    assert_eq!(workspace.status(&filed), TaskStatus::Proposed);
+}
+
+#[test]
+fn the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let landed = workspace.commit("the fix");
+    let sweep_apply = |task: &Task, evidence: &str| {
+        let sweep = workspace.running("ci_failure_sweep_pipeline", json!({}));
+        workspace
+            .apply(
+                &sweep,
+                vec![verified_no_diff(task, evidence)],
+                json!({"ci_sweep_filing": {
+                    "task_id": task.id, "failure_key": "fixture-key", "tested_commit": "0123abcd",
+                    "workflow": "ci", "job": "test", "step": "cargo test",
+                    "run_urls": ["https://github.com/example/repo/actions/runs/1"],
+                }}),
+            )
+            .unwrap()
+    };
+    let tags = ["ci-failure-sweep", "ci-failure:fixture-key"];
+
+    let covered = workspace.task("covered", &tags, &["file:README.md"], TaskComplexity::Low);
+    let applied = sweep_apply(&covered, &format!("Fixed by {landed}."));
+    let decision = &applied["ci_sweep_admission"][0];
+    assert_eq!(
+        decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(decision["closed"], true, "{applied}");
+    assert_eq!(decision["covering_commits"], json!([landed]));
+    assert_eq!(workspace.status(&covered), TaskStatus::Archived);
+
+    let uncited = workspace.task("uncited", &tags, &["file:README.md"], TaskComplexity::Low);
+    let applied = sweep_apply(
+        &uncited,
+        "The failing test does not exist at this revision.",
+    );
+    let decision = &applied["ci_sweep_admission"][0];
+    assert_eq!(
+        decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(decision["closed"], false, "{applied}");
+    assert_eq!(workspace.status(&uncited), TaskStatus::Proposed);
 }
