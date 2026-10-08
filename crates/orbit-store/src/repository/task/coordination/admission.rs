@@ -9,15 +9,20 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{
-    TaskStatus, automatic_dispatch_cmp, satisfy_completed_archived_dependencies,
-};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::fresh_offer_history;
+use super::selection::{AdmissionSnapshot, Screen};
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
+
+/// The in-section re-check of assessment-scoped holds a caller gives
+/// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
+/// history read with it, to the hold's diagnostic, or `None` when it is free.
+pub type ValidationHold<'a> =
+    dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
@@ -55,7 +60,10 @@ fn row<T: Serialize>(kind: &str, id: &str, value: &T) -> Result<TaskCoordination
         payload_json: encode(value)?,
     })
 }
-fn canonical_footprint(files: &[String], root: &Path) -> Result<Vec<String>, OrbitError> {
+pub(super) fn canonical_footprint(
+    files: &[String],
+    root: &Path,
+) -> Result<Vec<String>, OrbitError> {
     files
         .iter()
         .map(|f| {
@@ -80,11 +88,10 @@ pub(super) fn os_unavailable(
             .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
     ))
 }
-fn overlaps(left: &[String], right: &[String]) -> bool {
+pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
     left.iter()
         .any(|a| right.iter().any(|b| workspace_relative_paths_overlap(a, b)))
 }
-
 impl TaskCommitBoundary {
     pub(crate) fn guard_ordinary_footprint(
         &self,
@@ -167,12 +174,16 @@ impl TaskCommitBoundary {
 
     /// Reconciliation does not reapply old binary or ship compatibility checks.
     /// The caller must authenticate and authorize the identity on every call.
+    ///
+    /// A pure read, so it shares the boundary with ordinary participants: a
+    /// receipt and its claim are published together by an admission, which
+    /// excludes this read until both have landed.
     pub fn lookup_admission(
         &self,
         identity: &AdmissionIdentity,
         request_id: &str,
     ) -> Result<AdmissionLookup, OrbitError> {
-        self.with_admission(|| {
+        self.enter_ordinary(|| {
             let Some(row) = self.receipt_row(&identity.location().machine_id, request_id)? else {
                 return Ok(AdmissionLookup::NotFound);
             };
@@ -199,16 +210,27 @@ impl TaskCommitBoundary {
     /// trusted arguments supplied after authorization, never payload identity.
     /// No local run, worktree, branch or public pull endpoint is created here.
     ///
-    /// `admission_holds` maps each task held by a live owner-local delivery or
-    /// successful pilot preparation to its trusted diagnostic. It is deferred
-    /// even while it is still `backlog`: a local drain's gate waiting for
-    /// context locks has neither moved the task nor reserved its footprint
-    /// yet, so status and reservations alone would hand it out a second time
-    /// [ORB-13918].
+    /// Candidates are selected from the generated index before the exclusive
+    /// section, which stalls every task write on the host [ORB-14724]. The
+    /// section re-reads only what one decision rests on: the candidate, its
+    /// dependencies, the in-flight tasks whose footprints can conflict, claims
+    /// and reservations. A candidate that changed after selection is judged on
+    /// what the section reads, so a stale selection can defer it but never
+    /// admit it.
     ///
-    /// `validation_hold` reads assessment-scoped holds under the owner admission
-    /// lock, before queue depth or claim selection. A pilot apply cannot race
-    /// this check and leave a newly held task claimed from an older snapshot.
+    /// `admission_holds` maps each task held by a live owner-local delivery,
+    /// a successful pilot preparation or a current pilot finding to its
+    /// trusted diagnostic. It is deferred even while it is still `backlog`: a
+    /// local drain's gate waiting for context locks has neither moved the task
+    /// nor reserved its footprint yet, so status and reservations alone would
+    /// hand it out a second time [ORB-13918].
+    ///
+    /// `validation_hold` re-checks assessment-scoped holds inside the section
+    /// for each candidate about to be committed, given the comments and
+    /// history of the bundle read there; it must not read the task store
+    /// itself. A pilot apply that lands after the caller computed
+    /// `admission_holds` therefore cannot leave a newly held task claimed from
+    /// an older snapshot.
     ///
     /// `held` maps each `backlog` task the owner is withholding for a red
     /// base to why [ORB-14258]. Its last delivery failed a required command
@@ -224,15 +246,19 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
-        validation_hold: &dyn Fn(&orbit_types::task::Task) -> Result<Option<String>, OrbitError>,
+        validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
+        let snapshot = self.admission_snapshot()?;
+        #[cfg(test)]
+        super::selection::after_selection::run();
         self.with_admission(|| {
             self.admit_locked(
                 identity,
                 request,
                 repo_root,
                 orbit_dir,
+                &snapshot,
                 admission_holds,
                 held,
                 validation_hold,
@@ -247,9 +273,10 @@ impl TaskCommitBoundary {
         request: &AdmissionRequest,
         repo_root: &Path,
         orbit_dir: &Path,
+        snapshot: &AdmissionSnapshot,
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
-        validation_hold: &dyn Fn(&orbit_types::task::Task) -> Result<Option<String>, OrbitError>,
+        validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
@@ -262,80 +289,7 @@ impl TaskCommitBoundary {
             }
             return self.lookup_admission(identity, &request.request_id);
         }
-        let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
-        let mut archived_histories = BTreeMap::new();
-        let mut tasks = self
-            .bundle_store
-            .list_bundles()?
-            .into_iter()
-            .map(|mut bundle| {
-                if bundle.envelope.status == TaskStatus::Archived {
-                    archived_histories.insert(
-                        bundle.envelope.id.clone(),
-                        task_history_from_events(std::mem::take(&mut bundle.events)),
-                    );
-                }
-                translator.task_from_bundle(bundle)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut admission_holds = admission_holds.clone();
-        for task in tasks
-            .iter()
-            .filter(|task| task.status == TaskStatus::Backlog)
-        {
-            if let Some(reason) = validation_hold(task)? {
-                admission_holds.insert(task.id.clone(), reason);
-            }
-        }
-        tasks.sort_by(automatic_dispatch_cmp);
-        let mut statuses: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
-        let dependencies = tasks
-            .iter()
-            .flat_map(|t| t.dependencies())
-            .collect::<BTreeSet<_>>();
-        for dependency in &dependencies {
-            if statuses.contains_key(dependency) {
-                continue;
-            }
-            let Some(binding) = self.registry.find_task_binding(dependency)? else {
-                continue;
-            };
-            // The host admission lock excludes every partition's ordinary
-            // writers, so a cross-workspace dependency cannot move here.
-            let owner = TaskCommitBoundary {
-                store: self.store.clone(),
-                registry: self.registry.clone(),
-                bundle_store: crate::repository::task::v2_bundle::TaskBundleStoreV2::new(
-                    self.registry.clone(),
-                    binding.partition_id.clone(),
-                ),
-                workspace_id: binding.partition_id.clone(),
-                partition_dir: self
-                    .registry
-                    .workspace_partition_dir(&binding.partition_id)?,
-            };
-            owner.verify_journal_binding()?;
-            owner.recover_if_pending()?;
-            match owner.bundle_store.read_bundle_lightweight(dependency) {
-                Ok(bundle) => {
-                    statuses.insert(dependency.clone(), bundle.envelope.status);
-                    if bundle.envelope.status == TaskStatus::Archived {
-                        archived_histories
-                            .insert(dependency.clone(), task_history_from_events(bundle.events));
-                    }
-                }
-                Err(OrbitError::NotFound { .. }) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        // Project dependency satisfaction from the same canonical snapshots
-        // read under the host admission lock, without changing stored statuses.
-        // An absent or incomplete completion history keeps the archived dead end.
-        let Ok(()) = satisfy_completed_archived_dependencies::<std::convert::Infallible>(
-            &mut statuses,
-            dependencies,
-            |id| Ok(archived_histories.remove(id)),
-        );
+        let in_flight = self.in_flight_locked(snapshot, repo_root)?;
         let claims = self.execution_claims()?;
         let drain_released =
             self.drain_releases(&identity.location().machine_id, &request.run_context.run_id)?;
@@ -343,6 +297,17 @@ impl TaskCommitBoundary {
             &orbit_dir.to_string_lossy(),
             Some(&self.workspace_id),
         )?;
+        let screen = Screen {
+            identity,
+            request,
+            repo_root,
+            admission_holds,
+            held,
+            drain_released: &drain_released,
+            claims: &claims,
+            in_flight: &in_flight.footprints,
+            reservations: &reservations,
+        };
         let mut receipt = AdmissionReceipt {
             schema_version: 1,
             request: request.clone(),
@@ -353,165 +318,75 @@ impl TaskCommitBoundary {
             deferred_conflicts: Vec::new(),
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
-            queue_depth: tasks
+            queue_depth: snapshot
+                .backlog
                 .iter()
-                .filter(|task| {
-                    task.status == TaskStatus::Backlog
-                        && !admission_holds.contains_key(&task.id)
-                        && !held.contains_key(&task.id)
-                        && task
-                            .dependencies()
-                            .iter()
-                            .all(|id| statuses.get(id) == Some(&TaskStatus::Done))
-                })
+                .filter(|task| screen.queued(task, &snapshot.statuses))
                 .count(),
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(identity, request, &key, orbit_dir, &tasks, &mut receipt)? {
+        if self.admit_repair_locked(
+            identity,
+            request,
+            &key,
+            orbit_dir,
+            &in_flight.tasks,
+            &mut receipt,
+        )? {
             return self.lookup_admission(identity, &request.request_id);
         }
-        for task in tasks
-            .iter()
-            .filter(|task| task.status == TaskStatus::Backlog)
-        {
-            // Side-effect-only work goes to an executor whose protocol
-            // includes the verified NoDiff handoff [ORB-14259]. Admission
-            // refuses an older caller revision before this point, so the
-            // deferral guards a relaxed schema check.
-            if identity.is_remote()
-                && request.caller_schema < NO_DIFF_HANDOFF_PROTOCOL_SCHEMA
-                && task
-                    .tags
-                    .iter()
-                    .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+        let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
+        for selected in &snapshot.backlog {
+            // A task the selection already rules out is reported from it; a
+            // stale reason only defers the task to the next request.
+            if screen
+                .footprint(selected, &snapshot.statuses, &mut receipt)
+                .is_none()
             {
-                receipt.deferred_conflicts.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: format!(
-                        "no-diff-expected work waits for an executor with the NoDiff handoff (protocol revision {NO_DIFF_HANDOFF_PROTOCOL_SCHEMA}); the executor runs revision {}",
-                        request.caller_schema
-                    ),
-                    blocked_by: Vec::new(),
-                });
                 continue;
             }
-            let unmet = task
-                .dependencies()
-                .into_iter()
-                .filter(|id| statuses.get(id) != Some(&TaskStatus::Done))
-                .collect::<Vec<_>>();
-            if !unmet.is_empty() {
-                receipt.invalid_candidates.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: "dependency is missing or not done".into(),
-                    blocked_by: unmet,
-                });
+            // Only a survivor is re-read, and every fact is judged again on
+            // what this section reads.
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(&selected.id)? else {
+                receipt.queue_depth = receipt.queue_depth.saturating_sub(1);
                 continue;
-            }
-            if let Some(reason) = admission_holds.get(&task.id) {
-                receipt.deferred_conflicts.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: reason.clone(),
-                    blocked_by: Vec::new(),
-                });
-                continue;
-            }
-            if let Some(why) = held.get(&task.id) {
-                receipt.deferred_conflicts.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: format!("held for a red base: {why}"),
-                    blocked_by: Vec::new(),
-                });
-                continue;
-            }
-            // A task whose `os:` tags the executor's OS does not satisfy stays
-            // for a host that does, rather than being claimed and failed. The
-            // tags are read at each admission, so a retag applies to the next.
-            if let Some(reason) = os_unavailable(task, request) {
-                receipt.os_unavailable.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason,
-                    blocked_by: Vec::new(),
-                });
-                continue;
-            }
-            // A task the executor cannot run stays for the owner or another
-            // follower; claiming it would only burn the claim [ORB-13941].
-            if let Some(reason) = request
-                .crews
-                .as_ref()
-                .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
-            {
-                receipt.crew_unavailable.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason,
-                    blocked_by: Vec::new(),
-                });
-                continue;
-            }
-            // Nor one this drain already gave back for its host's failure,
-            // nor any task once a release blamed the host whatever crew runs
-            // there [ORB-14257]; they stay for another host or a later drain.
-            if let Some((why, release)) = drain_released
-                .tasks
-                .get(&task.id)
-                .map(|release| ("this drain released it", release))
-                .or_else(|| {
-                    drain_released
-                        .host
-                        .as_ref()
-                        .map(|release| ("this drain's host is suppressed for its window", release))
-                })
-            {
-                receipt.crew_unavailable.push(AdmissionDiagnostic {
-                    task_id: task.id.clone(),
-                    reason: format!("{why} ({}): {}", release.class.as_str(), release.reason),
-                    blocked_by: Vec::new(),
-                });
-                continue;
-            }
-            let footprint = match canonical_footprint(&task.context_files, repo_root) {
-                Ok(files) => files,
-                Err(error) => {
-                    receipt.invalid_candidates.push(AdmissionDiagnostic {
-                        task_id: task.id.clone(),
-                        reason: error.to_string(),
-                        blocked_by: Vec::new(),
-                    });
-                    continue;
-                }
             };
-            let claim_conflict = claims.iter().find(|claim| {
-                claim.phase.protects_footprint()
-                    && (claim.task_id == task.id || overlaps(&footprint, &claim.footprint))
-            });
-            let status_conflict = tasks
+            let comments = bundle
+                .comments
                 .iter()
-                .filter(|t| matches!(t.status, TaskStatus::InProgress | TaskStatus::Review))
-                .find(|held| {
-                    held.context_files.iter().any(|file| {
-                        canonical_selector_in_workspace(file, repo_root)
-                            .is_ok_and(|file| overlaps(&footprint, &[file]))
-                    })
-                });
-            let reservation_conflict = reservations.iter().find(|r| overlaps(&footprint, &r.files));
-            let blocker = claim_conflict
-                .map(|c| c.task_id.as_str())
-                .or_else(|| status_conflict.map(|t| t.id.as_str()))
-                .or_else(|| reservation_conflict.map(|r| r.reservation_id.as_str()));
-            if let Some(blocker) = blocker {
+                .map(|comment| TaskComment {
+                    at: comment.at,
+                    by: comment.by.clone(),
+                    message: comment.body.clone(),
+                })
+                .collect::<Vec<_>>();
+            let history = task_history_from_events(bundle.events.clone());
+            let task = translator.task_from_bundle(bundle)?;
+            let statuses = self
+                .dependency_statuses(task.dependencies().into_iter().collect(), &BTreeMap::new())?;
+            if !screen.queued(&task, &statuses) {
+                receipt.queue_depth = receipt.queue_depth.saturating_sub(1);
+            }
+            if task.status != TaskStatus::Backlog {
+                continue;
+            }
+            let Some(footprint) = screen.footprint(&task, &statuses, &mut receipt) else {
+                continue;
+            };
+            if let Some(reason) = validation_hold(&task, &comments, &history)? {
+                receipt.queue_depth = receipt.queue_depth.saturating_sub(1);
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
-                    reason: format!("protected footprint held by {blocker}"),
-                    blocked_by: vec![blocker.to_string()],
+                    reason,
+                    blocked_by: Vec::new(),
                 });
                 continue;
             }
             let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
             let machine_id = &identity.location().machine_id;
-            let offer = self.candidate_offer(task, machine_id)?;
+            let offer = self.candidate_offer(&task, machine_id)?;
             let resume_candidate = offer
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())

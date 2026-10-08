@@ -179,6 +179,15 @@ for a pull drain as for a local one.
    not by the boundary. Look up the receipt by workspace, runtime machine namespace, and
    request ID. An existing ID with different input yields `request_mismatch`; identical input
    returns its original outcome without new admission, history, or reservation.
+   The exclusive section stalls every task write on the host, so it costs one decision, not the
+   partition [ORB-14724]. Candidates — the `backlog`, `in-progress` and `review` tasks and the
+   statuses of the backlog's dependencies — are selected from the generated task index before
+   the section, under the ordinary shared boundary, as are pilot operator-validation holds for
+   every backlog task. Inside, the section reads the in-flight tasks and computes their
+   footprints once, then re-reads a candidate the selection did not rule out, its dependencies
+   and its pilot hold, and judges it again on that read. A candidate that changed after
+   selection is deferred or skipped, never admitted from the selection. When selection could
+   not prove the index fresh, the section lists every bundle for the in-flight tasks instead.
 3. For a new request, select from current ready tasks in canonical order. Exclude invalid entries
    and report diagnostics. Skip candidates conflicting with status-derived locks of `in-progress`
    or `review` tasks or active reservations; record `deferred_conflicts`. Also defer a task a live

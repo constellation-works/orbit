@@ -122,6 +122,10 @@ mod handoff;
 mod landing;
 mod lifecycle;
 mod repair;
+mod selection;
+
+#[cfg(test)]
+mod tests;
 
 // Shared with sibling modules through `super::`.
 use boundary::BoundaryDepth;

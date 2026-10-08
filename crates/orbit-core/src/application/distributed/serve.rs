@@ -34,7 +34,7 @@ use orbit_store::contracts::{
     HandoffObservation, HandoffReviewObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
     JobRunState,
@@ -44,6 +44,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::application::automation::source::Source;
+use crate::application::task::PilotAdmissionHold;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -395,6 +396,21 @@ impl crate::OrbitRuntime {
                 )
             });
         }
+        // Backlog holds are read before the admission section, which stalls
+        // every task write on the host [ORB-14724]. The section re-checks
+        // pilot holds only for the candidate it is about to claim, from the
+        // bundle it read, so one applied after this read is still honoured.
+        let backlog =
+            self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?;
+        for task in &backlog {
+            let comments = self.get_task_comments(&task.id)?;
+            if let Some(PilotAdmissionHold::OperatorValidation(hold)) =
+                self.pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
+            {
+                self.record_operator_validation_hold(&task.id, &hold)?;
+                admission_holds.insert(task.id.clone(), hold.detail());
+            }
+        }
         boundary.admit_task(
             identity,
             request,
@@ -402,12 +418,13 @@ impl crate::OrbitRuntime {
             &self.paths().repo_root,
             &self.data_root(),
             &admission_holds,
-            &self.baseline_held_tasks()?,
-            &|task| match self.pilot_admission_hold(&task.id)? {
-                Some(crate::application::task::PilotAdmissionHold::OperatorValidation(hold)) => {
-                    self.record_operator_validation_hold(&task.id, &hold)?;
-                    Ok(Some(hold.detail()))
-                }
+            &self.baseline_held_tasks(&backlog),
+            &|task, comments, history| match self.pilot_admission_hold_in(
+                task,
+                comments,
+                &|| Ok(history.to_vec()),
+            )? {
+                Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
                 _ => Ok(None),
             },
         )
@@ -417,12 +434,10 @@ impl crate::OrbitRuntime {
     /// [ORB-14258]. Read before the admission lock: the check consults Git
     /// (and may refresh the base from `origin`), and a hold that lifts a
     /// moment late only defers the task to the next request.
-    fn baseline_held_tasks(&self) -> Result<BTreeMap<String, String>, OrbitError> {
+    fn baseline_held_tasks(&self, backlog: &[Task]) -> BTreeMap<String, String> {
         let mut held = BTreeMap::new();
-        for task in
-            self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
-        {
-            match self.standing_baseline_hold(&task) {
+        for task in backlog {
+            match self.standing_baseline_hold(task) {
                 Ok(Some(why)) => {
                     held.insert(task.id.clone(), why);
                 }
@@ -432,7 +447,7 @@ impl crate::OrbitRuntime {
                 }
             }
         }
-        Ok(held)
+        held
     }
 
     /// Each task a live run on this owner holds the delivery slot of, mapped
