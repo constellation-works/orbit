@@ -377,6 +377,10 @@ pub(super) async fn control_clock(
         let action = body.action;
         let cadence_seconds = body.cadence_seconds;
         move || {
+            #[cfg(test)]
+            if let Some(result) = state.test_clock_mutation() {
+                return Ok(result);
+            }
             Ok(match action {
                 ClockAction::Enable => set_clock_enabled(state.global_root(), true).map(|_| ()),
                 ClockAction::Disable => set_clock_enabled(state.global_root(), false).map(|_| ()),
@@ -414,15 +418,6 @@ pub(super) async fn control_clock(
         .await;
         return map_runtime_error(error);
     }
-    let after = match blocking("clock status after", {
-        let state = state.clone();
-        move || state.clock_status()
-    })
-    .await
-    {
-        Ok(status) => status,
-        Err(response) => return *response,
-    };
     record_operation_audit(
         &runtime,
         workspace,
@@ -436,9 +431,19 @@ pub(super) async fn control_clock(
         started,
     )
     .await;
+    let state_after = state.clone();
+    let after = tokio::task::spawn_blocking(move || state_after.clock_status()).await;
+    let (clock, changed) = match after {
+        Ok(Ok(status)) => (clock_json(&status), json!(before != status)),
+        Ok(Err(error)) => (unavailable_clock_json(&error.to_string()), Value::Null),
+        Err(error) => (
+            unavailable_clock_json(&format!("clock status after panicked: {error}")),
+            Value::Null,
+        ),
+    };
     Json(json!({
-        "clock": clock_json(&after),
-        "changed": before != after,
+        "clock": clock,
+        "changed": changed,
         "message": match body.action {
             ClockAction::Enable => "Sweep clock enabled",
             ClockAction::Disable => "Sweep clock paused",
