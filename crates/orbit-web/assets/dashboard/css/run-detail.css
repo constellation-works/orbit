@@ -49,6 +49,7 @@
 .run-hold-message { border-color: #3c2c55; background: #0d0914; color: #dac8fa; }
 .run-hold p { margin: 0; font-size: 13px; line-height: 1.55; }
 .run-meta-grid .value { color: var(--fg); }
+.run-meta-grid .duration { white-space: nowrap; }
 
 /* Child-run lineage (ORB-10971) */
 .child-dispatch-panel {
@@ -250,7 +251,7 @@
 .step-row.expanded { background: rgba(110, 159, 255, 0.05); }
 .step-row .idx { color: var(--fg-dim); }
 .step-row .target { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.step-row .duration, .step-row .exit { color: var(--fg-dim); text-align: right; }
+.step-row .duration, .step-row .exit { color: var(--fg-dim); text-align: right; white-space: nowrap; }
 .step-row .exit.fail { color: var(--state-failed); font-weight: 600; }
 
 /* The fixed tracks need ~400px before the target gets any, and the panel

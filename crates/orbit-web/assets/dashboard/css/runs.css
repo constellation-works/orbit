@@ -150,6 +150,7 @@
 }
 .runs-row .duration { color: var(--fg-dim); text-align: right; }
 .runs-row .num { text-align: right; color: var(--fg-dim); }
+.runs-row .duration, .runs-row .num { white-space: nowrap; }
 .runs-row .num.hot { color: var(--state-failed); }
 .runs-row .state { text-align: left; }
 .runs-row .long-run-flag {

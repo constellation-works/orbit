@@ -142,14 +142,7 @@ let runsLoading = false;
 let currentMeta = { limit: 25, total: 100, truncated: true };
 let currentRunsList = [];
 
-function fmtDuration(ms) {
-  if (ms == null) return "-";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const mins = Math.floor(ms / 60000);
-  const secs = Math.floor((ms % 60000) / 1000);
-  return `${mins}m ${secs}s`;
-}
+const { fmtDuration } = load('common.js').namespace;
 
 initRuns({
   navigateToRun: () => {},

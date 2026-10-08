@@ -227,7 +227,6 @@ td .rel-rate { font-size: 12px; }
 #diag-implement-one-body .card-title { text-transform: none; overflow-wrap: anywhere; }
 #diag-implement-one-body .summary-table { table-layout: auto; }
 #diag-implement-one-body .summary-table th:first-child { width: auto; }
-#diag-implement-one-body .summary-table td { white-space: normal; overflow-wrap: anywhere; }
+#diag-implement-one-body .summary-table td:not(.num) { min-width: 12ch; white-space: normal; overflow-wrap: anywhere; }
 #diag-implement-one-body .card-body { overflow-x: auto; }
 .diag-table td.c-target { overflow-wrap: anywhere; }
-#diag-implement-one-body .summary-table td:nth-child(2) { white-space: nowrap; }
