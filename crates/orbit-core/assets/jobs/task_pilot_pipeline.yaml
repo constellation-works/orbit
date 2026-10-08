@@ -22,6 +22,9 @@
 # execution, claimed by a follower, or retired during preparation settle as
 # superseded without pilot writes. Durable material edits by an operator or
 # another writer likewise refuse the stale write and settle as superseded.
+# Prepare reads each task's history boundary no later than the snapshot apply
+# compares against; an automatically selected task moved out of selection
+# before its hydration settles superseded in prepare, and apply carries it.
 # Under a routine claim, a task whose selector material the branch head changed
 # since the claim froze its source settles superseded_by_source: prepare sets
 # it aside, apply skips it, and its member is claimed afresh at the head.
