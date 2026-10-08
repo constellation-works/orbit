@@ -1,30 +1,9 @@
-//! Admitted unit tests: deterministic fault injection/cache concurrency and
-//! combinatorial pure hysteresis. No mutable Orbit state or ambient host pressure.
-use super::super::host_resource::*;
-use chrono::{Duration, TimeZone, Utc};
+use super::super::pressure::ResourcePressureEvaluator;
+use super::super::{DiskSample, ResourceSeverity};
+use super::fixtures::sample;
+use chrono::Duration;
 use orbit_config::{ConfigScope, ConfigSnapshot, ConfigStore};
 use std::path::PathBuf;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
-
-fn sample(
-    second: i64,
-    cpu: Option<f64>,
-    memory: Option<f64>,
-    disk: Option<f64>,
-) -> HostResourceSample {
-    HostResourceSample {
-        sampled_at: Utc.timestamp_opt(1_700_000_000 + second, 0).unwrap(),
-        cpu_percent: cpu,
-        memory_percent: memory,
-        disks: vec![DiskSample {
-            path: PathBuf::from("/workspace"),
-            used_percent: disk,
-        }],
-    }
-}
 
 #[test]
 fn sustained_pressure_holds_until_below_resume_for_each_resource() {
@@ -107,46 +86,6 @@ fn stale_invalid_disabled_and_observation_gaps_fail_open() {
         assert!(!disabled.throttle);
         assert_eq!(disabled.severity, ResourceSeverity::Critical);
     }
-}
-
-#[test]
-fn overlapping_callers_reuse_one_sample_including_unknown() {
-    struct Counter(AtomicUsize);
-    impl HostResourceProbe for Counter {
-        fn sample(&self, _: &[PathBuf]) -> HostResourceSample {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            sample(0, None, None, None)
-        }
-    }
-    let source = Arc::new(Counter(AtomicUsize::new(0)));
-    let cache = Arc::new(CachedHostResourceProbe::new(source.clone()));
-    std::thread::scope(|scope| {
-        for _ in 0..16 {
-            let cache = cache.clone();
-            scope.spawn(move || {
-                assert!(
-                    cache
-                        .sample(&[PathBuf::from("/workspace")])
-                        .cpu_percent
-                        .is_none()
-                )
-            });
-        }
-    });
-    assert_eq!(source.0.load(Ordering::SeqCst), 1);
-    cache.sample(&[PathBuf::from("/other")]);
-    assert_eq!(
-        source.0.load(Ordering::SeqCst),
-        2,
-        "different filesystems need their own observations"
-    );
-    std::thread::sleep(RESOURCE_CACHE_TTL + std::time::Duration::from_millis(30));
-    cache.sample(&[PathBuf::from("/other")]);
-    assert_eq!(
-        source.0.load(Ordering::SeqCst),
-        3,
-        "expired unknown samples must be retried"
-    );
 }
 
 #[test]

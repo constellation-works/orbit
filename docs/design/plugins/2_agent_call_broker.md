@@ -297,7 +297,7 @@ processes too, so a bearer token would authenticate nothing.
 
 - **Linux.** Bubblewrap gives every agent run its own PID namespace (`--unshare-all`). When the
   host spawns the agent it already records that namespace (`bind_worker_namespace` in
-  `crates/orbit-core/src/runtime/recovery_authority.rs`). On accept, the broker reads the peer's
+  `crates/orbit-core/src/runtime/recovery_authority/worker.rs`). On accept, the broker reads the peer's
   UID and host-namespace PID (`SO_PEERCRED`; `SO_PEERPIDFD` where the kernel has it, so a
   recycled PID cannot be substituted). It accepts the connection only if the UID is its own and
   `/proc/<pid>/ns/pid` is the run's recorded namespace, with the leader's start time and boot
