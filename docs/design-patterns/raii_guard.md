@@ -100,14 +100,17 @@ pub(super) struct SignalHandlerGuard {
 }
 
 impl SignalHandlerGuard {
-    pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
+    pub(super) fn install() -> Result<Self, OrbitError> {
         acquire_handlers()?;                  // refcount++; first waiter installs
-        let slot = if is_child_process_group_leader(child_pid) {
+        Ok(Self { slot: None })
+    }
+
+    pub(super) fn register_process_group(&mut self, child_pid: u32) {
+        self.slot = if is_child_process_group_leader(child_pid) {
             register_pgid(child_pid)           // only a verified live group leader
         } else {
             None
         };
-        Ok(Self { slot })
     }
 
     pub(super) fn release_process_group(&mut self) {
@@ -126,6 +129,8 @@ impl Drop for SignalHandlerGuard {
 `acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that records a pending forward and `killpg`s every registered child group. Every waiter observes that pending signal, including waits started during another child's termination grace period. Observing it does not consume it: all overlapping waits terminate, so a late child cannot postpone forwarding until its normal completion. The last drop restores the previous dispositions, clears the pending signal, and re-raises it (except `SIG_IGN`) with the mutex released. A subsequent handler lifetime starts without a pending signal.
 
 Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
+
+Both runner entry points install the guard before calling the sandbox's spawn operation, then register the returned child's group. A signal received before registration stays pending; the wait loop checks it before its first blocking wait and terminates and reaps the group. `SupervisedChild` keeps the guard through relay and pipe setup, so error cleanup also kills and reaps before the last guard can restore and re-raise. If spawn fails before creating a child, the guard still restores and re-raises any pending signal. Callers of `supervise_child` already own a spawned child; supervision installs the handler before pipe setup, but the caller owns the preceding spawn window.
 
 Patterns to copy:
 

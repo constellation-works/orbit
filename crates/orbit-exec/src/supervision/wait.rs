@@ -35,6 +35,25 @@ pub(crate) struct SupervisedChild {
 }
 
 impl SupervisedChild {
+    /// Intercept termination before the spawn operation can create a child.
+    /// Keep the handler with cleanup ownership until the child is reaped,
+    /// including errors during relay or pipe setup.
+    pub(crate) fn spawn(
+        spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    ) -> Result<Self, OrbitError> {
+        #[cfg(unix)]
+        let signal_guard = SignalHandlerGuard::install()?;
+        let child = Self::new(spawn()?);
+        #[cfg(unix)]
+        let mut child = child;
+        #[cfg(unix)]
+        {
+            child.signal_guard = Some(signal_guard);
+            child.register_process_group();
+        }
+        Ok(child)
+    }
+
     pub(crate) fn new(process: Child) -> Self {
         Self {
             process,
@@ -53,6 +72,13 @@ impl SupervisedChild {
         #[cfg(unix)]
         if let Some(guard) = self.signal_guard.as_mut() {
             guard.release_process_group();
+        }
+    }
+
+    #[cfg(unix)]
+    fn register_process_group(&mut self) {
+        if let Some(guard) = self.signal_guard.as_mut() {
+            guard.register_process_group(self.process.id());
         }
     }
 
@@ -176,20 +202,23 @@ pub(crate) struct WaitResult {
 }
 
 pub(crate) fn wait_with_optional_timeout(
-    child: Child,
+    child: SupervisedChild,
     timeout_ms: Option<u64>,
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
 ) -> Result<WaitResult, OrbitError> {
-    wait_with_timeout_and_output_limit(
+    wait_cancellable(
         child,
         timeout_ms,
         debug,
         stdin_payload,
         output_capture_limit(),
+        None,
+        None,
     )
 }
 
+#[cfg(test)]
 pub(super) fn wait_with_timeout_and_output_limit(
     child: Child,
     timeout_ms: Option<u64>,
@@ -255,6 +284,17 @@ fn wait_cancellable(
     stdout_relay: Option<PipeWriter>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
+    // Runner-owned children already intercepted signals before spawning.
+    // Adopt externally spawned children before any fallible pipe setup, and
+    // keep cleanup ownership if handler installation fails.
+    #[cfg(unix)]
+    if child.signal_guard.is_none() {
+        #[cfg(test)]
+        inject_supervision_failure(SupervisionFailure::SignalInstall)?;
+        child.signal_guard = Some(SignalHandlerGuard::install()?);
+        child.register_process_group();
+    }
+
     // Every pipe worker is bounded by `drain_stop`: once the child is gone
     // the supervisor waits at most `DRAIN_BUDGET` for them (see its docs).
     // Dropping it on an early error return stops them as well.
@@ -308,15 +348,6 @@ fn wait_cancellable(
         None => None,
     };
 
-    // Keep the handler in the child guard so error cleanup kills and reaps
-    // before its last drop restores handlers and re-raises a pending signal.
-    #[cfg(all(test, unix))]
-    inject_supervision_failure(SupervisionFailure::SignalInstall)?;
-    #[cfg(unix)]
-    {
-        child.signal_guard = Some(SignalHandlerGuard::install(child.process.id())?);
-    }
-
     let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     // A descendant that stays stopped would hold the child's wait until the
     // deadline; see `stopped_descendants`.
@@ -331,6 +362,14 @@ fn wait_cancellable(
         bool,
         Option<i32>,
     ) = loop {
+        // Check before waiting or another cancellation cause: registration
+        // may have raced a signal before the handler could fan it out.
+        #[cfg(unix)]
+        if let Some(signal) = child.take_signal() {
+            terminate_process_group(&mut child.process, signal, WAIT_POLL_INTERVAL)?;
+            break (false, Some(signal), false, Some(128 + signal));
+        }
+
         if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
             kill_process_group(child.process.id());
             let _ = child.process.kill();

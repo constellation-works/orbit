@@ -49,7 +49,7 @@ fn supervision_errors_kill_the_process_group_and_reap_the_child() {
         (Some(SupervisionFailure::Watch(1)), false), // Captured stdout.
         (Some(SupervisionFailure::Watch(1)), true),  // Relayed stdout.
         (Some(SupervisionFailure::Watch(2)), false), // Stderr, after two workers.
-        (Some(SupervisionFailure::SignalInstall), false), // After all workers.
+        (Some(SupervisionFailure::SignalInstall), false), // Before pipe setup.
         (Some(SupervisionFailure::Wait), false),     // Handler already installed.
     ];
     for (failure, relay) in cases {
