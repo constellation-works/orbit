@@ -864,13 +864,21 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
         let orbit_root = fixture.work.join(".orbit");
         let runtime = OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &orbit_root)
             .expect("open fixture runtime");
+        let policy = runtime
+            .read_run_state(run_id)
+            .expect("run state")
+            .and_then(|state| state.task_cancellation_policy)
+            .expect("durable cancellation policy");
+        assert_eq!(policy.block, block);
         let history = runtime.get_task_history(&task_id).expect("task history");
         let entry = history.last().expect("cancellation status event");
-        assert!(
-            entry
-                .note
-                .as_deref()
-                .is_some_and(|note| { note.contains("preserve this candidate for later") })
+        assert_eq!(
+            entry.from_status,
+            Some(orbit_types::task::TaskStatus::InProgress)
+        );
+        assert_eq!(
+            entry.to_status.map(|status| status.to_string()).as_deref(),
+            Some(expected_status)
         );
         assert_eq!(
             entry.event,

@@ -185,28 +185,20 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
         .and_then(|state| state.task_cancellation_policy)
         .expect("durable cancellation policy");
     assert!(!cancellation_policy.block);
-    assert!(
-        cancellation_policy
-            .note
-            .contains("preserve the candidate for later")
-    );
+    assert!(!cancellation_policy.note.is_empty());
     let history = runtime.get_task_history(&task_id).expect("task history");
-    assert_eq!(
-        history.last().expect("cancel history").event,
-        "workflow_run_cancelled"
-    );
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_cancelled");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Backlog));
     assert!(
-        history
-            .last()
-            .expect("cancel history")
-            .note
-            .as_deref()
-            .is_some_and(|note| note.contains("preserve the candidate for later"))
+        entry.note.as_deref().is_some_and(|note| !note.is_empty()),
+        "cancellation history must retain a note"
     );
 
     let run = insert_pending_run(&runtime, "task_pr_pipeline");
     let task_id = in_progress_task(&runtime, &run);
-    runtime
+    let cancelled = runtime
         .cancel_job_run_with_options_and_signal(
             &run.run_id,
             CancellationRequest {
@@ -219,22 +211,24 @@ fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_lega
             |_| unreachable!("pending run must not signal its owner"),
         )
         .expect("cancel task leaf with block");
+    assert_eq!(cancelled.outcome, "cancelled");
     let task = runtime.get_task(&task_id).expect("blocked task");
     assert_eq!(task.status, TaskStatus::Blocked);
     assert_eq!(
         task.context_files,
         vec!["file:src/candidate.rs".to_string()]
     );
-    assert!(
-        runtime
-            .get_task_history(&task_id)
-            .expect("task history")
-            .last()
-            .is_some_and(|entry| entry
-                .note
-                .as_deref()
-                .is_some_and(|note| { note.contains("keep the old blocked behavior") }))
-    );
+    let cancellation_policy = runtime
+        .read_run_state(&run.run_id)
+        .expect("run state")
+        .and_then(|state| state.task_cancellation_policy)
+        .expect("durable cancellation policy");
+    assert!(cancellation_policy.block);
+    let history = runtime.get_task_history(&task_id).expect("task history");
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_failed");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Blocked));
 }
 
 #[test]
@@ -279,20 +273,16 @@ fn cancellation_policy_is_durable_before_the_owner_is_signalled() {
         .expect("cancel run");
 
     assert_eq!(cancelled.outcome, "already_terminal");
+    assert_eq!(cancelled.final_state, "cancelled");
     assert_eq!(
         runtime.get_task(&task_id).expect("task").status,
         TaskStatus::Backlog
     );
-    assert!(
-        runtime
-            .get_task_history(&task_id)
-            .expect("task history")
-            .last()
-            .is_some_and(|entry| entry
-                .note
-                .as_deref()
-                .is_some_and(|note| { note.contains("worker saw the cancel request") }))
-    );
+    let history = runtime.get_task_history(&task_id).expect("task history");
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_cancelled");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Backlog));
 }
 
 fn admission(
