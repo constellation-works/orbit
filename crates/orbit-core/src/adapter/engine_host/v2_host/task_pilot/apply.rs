@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::ci_failure::admission as ci_failure_admission;
+use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF};
 
 use super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
@@ -792,6 +793,12 @@ pub(in super::super) fn apply(
                     .map(|()| applied),
                 (outcome, _) => outcome,
             };
+            if matches!(
+                outcome,
+                Ok(ApplyTaskOutcome::Applied(_) | ApplyTaskOutcome::AlreadyApplied(_))
+            ) {
+                close_verified_no_diff(runtime, &mut validated);
+            }
             match outcome {
                 Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
                     if let Some(fingerprint) = fingerprint {
@@ -1137,4 +1144,40 @@ fn approve_promoted(
         decision["evidence"] = evidence;
     }
     Ok(())
+}
+
+/// Close a task either authority held as `pilot_verified_no_diff` once its
+/// pilot write landed, recording on the decision whether it was archived and
+/// on which commits, or why it stays proposed. The pilot write already
+/// stands, so a failed close is reported rather than failing the apply.
+fn close_verified_no_diff(runtime: &OrbitRuntime, validated: &mut ValidatedTask) {
+    let decision = match validated.admission.as_mut() {
+        Some(Admission::CiSweep(decision) | Admission::Drain(decision))
+            if decision["classification"] == PILOT_VERIFIED_NO_DIFF =>
+        {
+            decision
+        }
+        _ => return,
+    };
+    match runtime.close_verified_no_diff(&validated.task_id) {
+        Ok(Some(NoDiffClosure::Archived { covering_commits })) => {
+            decision["closed"] = json!(true);
+            decision["covering_commits"] = json!(covering_commits);
+        }
+        Ok(Some(NoDiffClosure::Held { reason, .. })) => {
+            decision["closed"] = json!(false);
+            decision["not_closed_reason"] = json!(reason);
+        }
+        Ok(None) => decision["closed"] = json!(false),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.task_pilot",
+                task_id = %validated.task_id,
+                %error,
+                "could not close a task task-pilot verified as already fixed"
+            );
+            decision["closed"] = json!(false);
+            decision["not_closed_reason"] = json!(error.to_string());
+        }
+    }
 }

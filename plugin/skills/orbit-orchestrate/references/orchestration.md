@@ -402,9 +402,16 @@ configuration.
   promotion authority (this drain or the CI sweep). The drain does not pilot
   it; it stays `proposed`, held with reason `no-auto-approve`, until a human
   approves it. File a task with that tag when it needs a human decision.
+- A task whose current pilot assessment is `verified_no_diff`, and that is
+  not tagged `no-diff-expected`, is held as `pilot_verified_no_diff` with the
+  pilot's evidence and the commits it cites. When Orbit automation filed it
+  (`ci-failure-sweep`, `delivery-code-review` or `auto-task:*`), the pass
+  archives it with a system comment once every cited commit exists and at
+  least one is on the base branch. Human- and orchestrator-filed tasks are
+  never closed this way; archive or re-scope them yourself.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
-  report approved and held counts with each hold reason. A held task is not
-  piloted again until it changes.
+  report approved, closed and held counts with each hold reason. A held task
+  is not piloted again until it changes.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
 

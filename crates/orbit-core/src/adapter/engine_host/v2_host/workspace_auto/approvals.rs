@@ -10,18 +10,23 @@
 //! left no decision behind (a failed or stale pilot) is not retried until the
 //! task changes either. Creation-grant rows are not changes here: every write
 //! to a task holding a grant appends one after its own entry to re-seal it.
+//!
+//! A task whose current pilot assessment is `verified_no_diff` is held as
+//! `pilot_verified_no_diff` with the pilot's evidence. An approval pass
+//! archives one Orbit automation filed once its cited commits are proven on
+//! the base branch; the read-only readiness view only reports it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskStatus};
+use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, TaskStatus};
 use orbit_types::workflow::{DrainApprovalReport, DrainWaitingTask, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskListFilter;
+use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskListFilter};
 use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::super::task_pilot::{approval_disqualification, approved_by_drain, held_classification};
@@ -46,6 +51,8 @@ pub(super) struct ApprovalSnapshot {
     /// Qualifying tasks with no current hold, oldest first.
     pub(super) candidates: Vec<ApprovalCandidate>,
     pub(super) held: Vec<DrainWaitingTask>,
+    /// Tasks this pass archived as proven already fixed.
+    pub(super) closed: Vec<String>,
 }
 
 impl ApprovalSnapshot {
@@ -60,9 +67,12 @@ impl ApprovalSnapshot {
 }
 
 /// Classify the workspace's `proposed` tasks for the drain `drain_run_id`.
+/// With `close`, a proven `verified_no_diff` task Orbit automation filed is
+/// archived instead of held.
 pub(super) fn approval_snapshot(
     runtime: &OrbitRuntime,
     drain_run_id: Option<&str>,
+    close: bool,
 ) -> Result<ApprovalSnapshot, OrbitError> {
     let mut proposed = runtime
         .task_candidates(
@@ -85,6 +95,7 @@ pub(super) fn approval_snapshot(
     let mut snapshot = ApprovalSnapshot {
         candidates: Vec::new(),
         held: Vec::new(),
+        closed: Vec::new(),
     };
     for task in proposed {
         let held = |reason: &str, detail: Option<String>| DrainWaitingTask {
@@ -93,9 +104,39 @@ pub(super) fn approval_snapshot(
             blocked_by: Vec::new(),
             detail,
         };
-        if let Some(reason) =
-            approval_disqualification(&task.tags, &task.context_files, task.complexity)
+        let disqualified =
+            approval_disqualification(&task.tags, &task.context_files, task.complexity);
+        if disqualified != Some(NO_AUTO_APPROVE_TAG)
+            && let Some((_, finding)) =
+                runtime.verified_no_diff(&task.id, task.status, &task.tags)?
         {
+            // The close re-reads the finding under the task lock. A failed
+            // close leaves the task held rather than failing the pass.
+            let detail = match close.then(|| runtime.close_verified_no_diff(&task.id)) {
+                Some(Ok(Some(NoDiffClosure::Archived { .. }))) => {
+                    snapshot.closed.push(task.id.clone());
+                    continue;
+                }
+                Some(Ok(Some(NoDiffClosure::Held { finding, reason }))) => {
+                    format!("{}; not closed: {reason}", finding.detail())
+                }
+                Some(Err(error)) => {
+                    tracing::warn!(
+                        target: "orbit.core.job_run",
+                        task_id = %task.id,
+                        %error,
+                        "drain could not close a task task-pilot verified as already fixed"
+                    );
+                    format!("{}; not closed: {error}", finding.detail())
+                }
+                Some(Ok(None)) | None => finding.detail(),
+            };
+            snapshot
+                .held
+                .push(held(PILOT_VERIFIED_NO_DIFF, Some(detail)));
+            continue;
+        }
+        if let Some(reason) = disqualified {
             snapshot.held.push(held(reason, None));
             continue;
         }
@@ -199,7 +240,8 @@ fn approved_by(runtime: &OrbitRuntime, run_id: &str, task_ids: &[String]) -> Vec
         .collect()
 }
 
-/// Replace the held view and add `approved` to the drain's durable report.
+/// Replace the held view and add `approved` and the pass's closed tasks to
+/// the drain's durable report.
 /// Best effort, like the admission pass record: a drain that cannot write its
 /// report must still approve and admit work.
 fn record_report(
@@ -208,6 +250,7 @@ fn record_report(
     snapshot: &ApprovalSnapshot,
     approved: &[String],
 ) {
+    let closed = &snapshot.closed;
     let held_by_reason = snapshot.held_by_reason();
     let result =
         runtime
@@ -222,6 +265,10 @@ fn record_report(
                 report.approved.extend(approved.iter().cloned());
                 let excess = report.approved.len().saturating_sub(REPORTED_TASKS);
                 report.approved.drain(..excess);
+                report.closed_total += closed.len() as u64;
+                report.closed.extend(closed.iter().cloned());
+                let excess = report.closed.len().saturating_sub(REPORTED_TASKS);
+                report.closed.drain(..excess);
                 report.held = snapshot.held.iter().take(REPORTED_TASKS).cloned().collect();
                 report.held_total = snapshot.held.len() as u64;
                 report.held_by_reason = held_by_reason.clone();
@@ -247,6 +294,7 @@ fn drain_run_id(input: &Value) -> Option<&str> {
 
 fn held_json(snapshot: &ApprovalSnapshot) -> Value {
     json!({
+        "closed": snapshot.closed,
         "held": snapshot.held.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
         "held_total": snapshot.held.len(),
         "held_by_reason": snapshot.held_by_reason(),
@@ -275,11 +323,11 @@ pub(in super::super) fn select_proposed_approvals(
             "drain_promotion": Value::Null,
         }));
     };
-    let snapshot = approval_snapshot(runtime, Some(run_id))
+    // A stopped drain admits nothing, so it approves and closes nothing either.
+    let admissions_stopped = live_admissions_stop(runtime, input).is_some();
+    let snapshot = approval_snapshot(runtime, Some(run_id), !admissions_stopped)
         .map_err(|error| action_failed(action, format!("read proposed tasks: {error}")))?;
     record_report(runtime, run_id, &snapshot, &[]);
-    // A stopped drain admits nothing, so it approves nothing either.
-    let admissions_stopped = live_admissions_stop(runtime, input).is_some();
     let task_ids = if admissions_stopped {
         Vec::new()
     } else {
@@ -329,7 +377,8 @@ pub(in super::super) fn record_proposed_approvals(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let approved = approved_by(runtime, run_id, &task_ids);
-    let snapshot = approval_snapshot(runtime, Some(run_id))
+    let admissions_stopped = live_admissions_stop(runtime, input).is_some();
+    let snapshot = approval_snapshot(runtime, Some(run_id), !admissions_stopped)
         .map_err(|error| action_failed(action, format!("read proposed tasks: {error}")))?;
     record_report(runtime, run_id, &snapshot, &approved);
     let mut output = held_json(&snapshot);
@@ -361,8 +410,10 @@ pub(super) fn readiness_approvals(
         .read_run_state(run_id)?
         .and_then(|state| state.drain_approvals)
         .unwrap_or_default();
-    let snapshot = approval_snapshot(runtime, Some(run_id))?;
+    let snapshot = approval_snapshot(runtime, Some(run_id), false)?;
     let mut value = held_json(&snapshot);
+    value["closed"] = json!(report.closed);
+    value["closed_total"] = json!(report.closed_total);
     value["enabled"] = json!(true);
     value["drain_run_id"] = json!(run_id);
     value["approved_total"] = json!(report.approved_total);

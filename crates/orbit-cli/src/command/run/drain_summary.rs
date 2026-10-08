@@ -301,8 +301,17 @@ fn kept_off_cause(reason: &str) -> &str {
 /// The `Approved:` line for an `--approve-proposed` drain, then each held
 /// proposed task with the reason it stayed proposed.
 fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
+    let closed = if report.closed_total > 0 {
+        format!(
+            "; {} closed as already fixed ({})",
+            report.closed_total,
+            report.closed.join(", ")
+        )
+    } else {
+        String::new()
+    };
     let mut lines = vec![format!(
-        "{} {} proposed task(s) moved to backlog; {} held{}",
+        "{} {} proposed task(s) moved to backlog{closed}; {} held{}",
         crate::output::color::bold("Approved:"),
         report.approved_total,
         report.held_total,
@@ -380,7 +389,8 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     }
     // A host-OS wait names the host it waits for, and a native-OS
     // requirement the tag to add. A local-route before-PR hold names the
-    // remedy. Other details (long repair instructions) stay in `--json`.
+    // remedy. A verified-no-diff hold names the pilot's evidence and the
+    // commits it cites. Other details (long repair instructions) stay in `--json`.
     if matches!(
         task.reason.as_deref(),
         Some(
@@ -390,6 +400,7 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
                 | "crew_unavailable"
                 | "owner_hold"
                 | "invalid_candidate"
+                | "pilot_verified_no_diff"
         )
     ) && let Some(detail) = &task.detail
     {

@@ -32,7 +32,14 @@ spec:
     (`changed_since_pilot` for a material change) and an edited task is
     piloted again on the next pass. A held task's pilot history entry records
     the hold classification so the drain does not pilot it again until it
-    changes.
+    changes. Under either authority a `verified_no_diff` assessment of a task
+    not tagged `no-diff-expected` is never promoted: it is classified
+    `pilot_verified_no_diff` with the pilot's evidence and cited commits.
+    After the pilot write, a task Orbit automation filed (tagged
+    `ci-failure-sweep`, `delivery-code-review` or `auto-task:*`) is archived
+    with a system comment when every cited commit exists and at least one is
+    an ancestor of the base branch (`closed`, `covering_commits`); otherwise
+    it stays proposed (`not_closed_reason`).
   input_schema_json:
     type: object
     # No `crew`: this apply step is deterministic and runs no agent, so it has

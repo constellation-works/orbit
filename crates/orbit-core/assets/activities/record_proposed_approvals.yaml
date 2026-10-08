@@ -12,7 +12,12 @@ spec:
     `drain_approvals` report, and the held view of every remaining `proposed`
     task is refreshed with its reason: the qualification it misses, the
     task-pilot classification that held it, or `pilot_unresolved` when the
-    pilot left no decision.
+    pilot left no decision. A task whose current pilot assessment is
+    `verified_no_diff` (and is not tagged `no-diff-expected`) is held as
+    `pilot_verified_no_diff` with the pilot's evidence and cited commits;
+    one Orbit automation filed is archived instead (`closed`) when a cited
+    commit is proven on the base branch, unless the drain's admissions are
+    stopped.
   input_schema_json:
     type: object
     required: [task_ids]
@@ -41,6 +46,10 @@ spec:
         type: number
       held_by_reason:
         type: object
+      closed:
+        type: array
+        items:
+          type: string
       pilot_run_id:
         oneOf:
           - type: string

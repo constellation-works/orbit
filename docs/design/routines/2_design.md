@@ -308,9 +308,13 @@ integration head: freshness is scoped to workflow and ref for both landing branc
 pilot proves the repair already landed on integration, admission leaves the deduped task in
 proposed quarantine and reports `release_promotion_or_hotfix_needed` with the red release
 SHA/run and the pilot's covering repair evidence. The sweep performs neither release
-promotion nor hotfix dispatch. A no-diff assessment without concrete covering proof is
-reported as `covering_proof_missing` and remains proposed for a later bounded pilot instead
-of being treated as already landed. The routine is a scheduling surface only: an
+promotion nor hotfix dispatch. A `verified_no_diff` assessment is never promoted: admission
+reports it as `pilot_verified_no_diff` with the pilot's evidence and the commits it cites.
+After the pilot write the task is archived, with a system comment naming the covering
+commits and the assessment, only when every cited commit exists and at least one is an
+ancestor of the base branch. An `--approve-proposed` drain applies the same rule. Without
+that proof (no commit cited, an unknown SHA, or none on the base branch) the task stays
+proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
 Publication shares that release boundary. A job can fail because the repository already
