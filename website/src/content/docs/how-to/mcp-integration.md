@@ -25,6 +25,11 @@ This registers Orbit with every agent client it finds, with **operator**
 authority, so your agent can ship tasks and run drains as well as file them.
 Start a fresh agent session afterwards so the tools load.
 
+The registration launches `orbit mcp serve --operator`. Operator sessions can
+dispatch workflows, resume runs, and run governed commands; agents launched by
+Orbit get agent-only authority. Authority is checked when a tool is called,
+so every session sees the same `tools/list` rather than a filtered tool list.
+
 `orbit mcp init` registers Orbit with the narrower **agent-only** authority:
 the agent can file and update tasks but cannot dispatch runs. Use it to pick
 clients or to limit an agent:

@@ -20,54 +20,38 @@
   <img src="docs/assets/orbit-demo.gif" alt="Animated tour of the real Orbit dashboard on a live workspace: proposed tasks waiting for your approval, an auto-drain running tasks in parallel while overlapping work waits on file locks, a task's durable record, the run list, a pull-request pipeline run stepping from isolated worktree through implement, commit, review gate, and push to pr_open, the audit log of every tool call, and a scoreboard comparing Codex, Claude, Grok, and Gemini." width="880" />
 </p>
 
-Orbit is a local-first runtime for coding agents. You keep using Claude Code, Codex, Cursor, Copilot, or any of the other supported CLIs. Orbit gives them a durable task queue, isolated sandboxed worktrees, file-level locks for parallel runs, a gated pipeline that ends in a pull request, and an audit log of every step.
+Orbit is a local-first runtime for coding agents. Keep using your authenticated agent CLI; Orbit adds a durable task queue, sandboxed worktrees, file locks for parallel runs, a gated delivery pipeline, and an audit log.
 
-**Why:** agents are fast enough that planning, review, and traceability are the first things to go. Six months later nobody can say why a line was written. Orbit makes those disciplines cheap and keeps you out of the clerical work. The agent files the task, Orbit runs it, and every commit carries a task ID you can trace back to the prompt, the plan, and the review.
+**Why:** fast agents make planning, review, and traceability easy to lose. Orbit keeps the prompt, plan, and review behind every change, with a task ID on every workflow commit.
 
-- **Single binary, no cloud.** State lives in `~/.orbit` and `.orbit/`. Nothing phones home.
-- **Bring your own agents.** Orbit drives the provider CLIs you already have authenticated, and never asks for API keys.
-- **MIT licensed.** No paid tier, no hosted offering.
-
----
+- **Single binary, no cloud.** State lives in `~/.orbit` and `.orbit/`; Orbit sends no telemetry.
+- **Bring your own agents.** Use the provider CLIs you already have authenticated, without giving Orbit API keys.
+- **MIT licensed.** No paid tier or hosted offering.
 
 ## How it works
 
 ```text
-$ orbit init                                 # one-time, per machine
-$ cd my-repo && orbit workspace init --mcp   # per repo; wires Orbit into your agent CLIs
-$ orbit web serve                            # open the Orbit dashboard in your browser
-
 You:    The fsProfile lookup is undocumented. Get that fixed.
-Agent:  orbit.task.add       → ORB-1042 · proposed
-        Filed with acceptance criteria. Approve it and ship?
+Agent:  Files a proposed task with acceptance criteria. Approve it and ship?
 You:    Yes.
-Agent:  orbit.task.update    → ORB-1042 · backlog
-        orbit.workflow.ship  → worktree isolated · file scope locked · plan → execute → review
-        Pull request opened. ORB-1042 is in review. The diff and the merge are yours.
-
-$ orbit task update ORB-1042 --approve       # after you merge: review → done
+Agent:  Queues it, then runs plan → execute → review in a locked, isolated worktree.
+        Opens a pull request. Review and merge it, then approve the task to close it.
 ```
 
-<sub>Illustrative session. The tool names are real, and the IDs are placeholders.</sub>
-
-For more than one task, hand your agent a spec and ask it to orchestrate. The bundled `orbit-orchestrate` skill splits the spec into tasks, queues them once you approve, runs them in parallel with `orbit run auto`, and diagnoses any run that fails.
-
-1. **Nothing starts without you.** New tasks land in `proposed`, and only your approval moves them to `backlog`.
-2. **Every run ends at a pull request.** Orbit never merges on its own. Merging the PR and completing the task are separate decisions, unless you explicitly pass `--complete`.
-3. **Everything is on the record.** `orbit task show ORB-1042` reconstructs the prompt, plan, execution trace, and review thread, even months later.
-
----
+Nothing starts without approval; PR runs stop for your review unless you authorize `--complete`. The task record keeps the prompt, plan, execution trace, and review. For larger specs, ask your agent to orchestrate: the bundled `orbit-orchestrate` skill splits the work, queues it once approved, runs it in parallel, and diagnoses failures ([delivery workflows](https://orbit-cli.com/getting-started/workflows/)).
 
 ## Quick start
 
-**You need:** macOS or Linux (x64 or arm64; on Windows, run Orbit inside WSL2, as there is no native Windows build: see the [Windows WSL2 guide](docs/runbooks/windows-wsl2.md)), Node 18+, at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests.
+**You need:** macOS or Linux (x64 or arm64; Windows uses [WSL2](docs/runbooks/windows-wsl2.md)), Node 18+, an authenticated agent CLI, and authenticated `gh` for pull requests.
 
 ```bash
 npm install -g @orbit-tools/cli
-orbit init    # asks for a machine name and a task-ID prefix, links Orbit's skills into your agents, and on Linux prepares the sandbox
+orbit init    # machine name, task-ID prefix, agent skills, and Linux sandbox setup
 ```
 
-**Then let your agent set up the repo.** Open your agent in the repository and ask it to *"set up Orbit for this repo"*. The bundled `orbit-setup` skill registers the repo, connects your agent over MCP, and runs `orbit doctor`, asking only for what it can't infer, such as the branch pull requests should target. Start a fresh agent session when it finishes so the Orbit tools load, then ask for something: it files the task, asks for approval, ships it, and reports the PR. Watch it all with `orbit web serve`.
+Open your agent in the repo and ask it to **“set up Orbit for this repo”**. The bundled `orbit-setup` skill registers it, connects MCP, runs `orbit doctor`, and asks for choices such as the PR target branch. Start a fresh agent session, then ask: **“Add a hello.txt file containing hello; file it as an Orbit task.”** Approve and ship the task when prompted, review and merge the PR, then approve the task to close it. Watch with `orbit web serve`.
+
+Prefer a plugin? [Install Orbit for Claude Code, Codex, or Cursor](https://orbit-cli.com/getting-started/install/#install-as-an-agent-plugin). Every MCP tool has a CLI twin; for the same loop without an agent, see [your first task from the terminal](https://orbit-cli.com/getting-started/first-task/#from-the-terminal).
 
 <details>
 <summary>Set up the repo by hand</summary>
@@ -78,14 +62,9 @@ orbit doctor
 orbit web serve
 ```
 
-Review and commit the checkout files listed by `workspace init` before the first ship. Local delivery refuses tracked changes and merge conflicts in the base checkout, and untracked paths that overlap the incoming changes; the list includes MCP client files.
+Review and commit the checkout files listed by `workspace init`, including MCP client files, before the first ship. Local delivery refuses tracked changes, merge conflicts, and untracked paths overlapping incoming changes.
 
-`orbit doctor` reports missing CLIs for crews selected by the default, system,
-or complexity routing and warns when no Orbit MCP client is registered for this
-workspace. It checks CLI presence and registration files only; provider sign-in
-and MCP connectivity are not checked. Use `orbit doctor providers` to inspect
-all executor definitions, including providers not selected by workflow routing.
-On Linux, see [sandbox readiness and distro coverage](docs/runbooks/linux-sandbox.md).
+`orbit doctor` checks CLI presence for default, system, and complexity-routed crews and warns when no MCP client is registered; it does not check provider sign-in or MCP connectivity. Use `orbit doctor providers` for all executor definitions. See [Linux sandbox readiness and distro coverage](docs/runbooks/linux-sandbox.md).
 
 </details>
 
@@ -97,111 +76,24 @@ On Linux, see [sandbox readiness and distro coverage](docs/runbooks/linux-sandbo
 | Route tasks to crews by complexity | `orbit config set --global workflow.hard_complexity_crews '["opus"]'` ([more](#crews-and-complexity-routing)) |
 | Upgrade | `npm install -g @orbit-tools/cli@latest` (`orbit update --check` shows what's new) |
 
-<details>
-<summary><strong>The same loop without an agent</strong></summary>
-
-Every MCP tool has a CLI twin.
-
-```bash
-TASK_ID=$(orbit task add --title "..." --description "..." \
-  --acceptance-criteria "..." --complexity medium --workspace .)
-orbit task update "$TASK_ID" --approve   # proposed → backlog
-orbit run ship "$TASK_ID"                # async; prints a run ID
-orbit run show <RUN_ID>                  # progress and outcome
-orbit task update "$TASK_ID" --approve   # after merging the PR: review → done
-```
-
-</details>
-
----
-
 ## Features
 
-### Plan and govern
-- **Durable tasks with intent.** Tasks carry acceptance criteria, a file scope, dependencies, and typed relations. They move through `proposed → backlog → in-progress → review → done`, and that state survives sessions and branches.
-- **Structured audit log.** Every tool call, provider exchange, and state transition is recorded as an append-only, queryable event tagged with the agent and model that produced it (`orbit audit`).
-- **Friction ledger.** When the work was harder than it should have been, whether from a confusing error, a missing flag, or an undocumented convention, the agent records it with `orbit friction add` instead of quietly working around it. A task that resolves the friction closes it on completion.
-- **Local search.** `orbit search` runs fast lexical search (SQLite FTS5) over tasks and frictions. It needs no model download.
-
-### Execute safely in parallel
-- **Isolated, sandboxed runs.** Each run gets its own git worktree and runs its agent CLI under `sandbox-exec` on macOS or Bubblewrap on Linux. On Linux, worker runs are also memory-bounded in a cgroup.
-- **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later.
-- **Gated pipeline.** Each run goes plan → execute → review, with repair budgets and failure recovery. Dependencies gate admission, so you declare the order once and the queue enforces it.
-- **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](#crews-and-complexity-routing)).
-
-### Run unattended
-- **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
-- **Opt-in completion.** `--complete` merges PRs once GitHub allows it and closes tasks after the merge is verified. Nothing else turns this on.
-- **Continuous review.** The shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read everything that landed since their last run, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence.
-- **Recurring work as data.** Scheduled task templates live in `.orbit/auto_tasks/*.yaml`, and one machine scheduler (`orbit clock`) runs routines and auto-tasks.
-- **Multi-machine.** A distributed drain spreads a backlog across machines through durable claims. A federated MCP server puts local and SSH-remote workspaces under one namespace.
-
-### Observe and extend
-- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, per-agent scoreboard, jobs, frictions, and effective config, with inline editing.
-- **Plugins** (`orbit plugin`). A plugin can add its own tools, jobs, routines, auto-tasks, skills, and CLI commands. Plugins run sandboxed under explicit permission grants, and `orbit plugin scaffold` generates a starter.
-- **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.
-
-You can adopt these one at a time. The task layer and audit log work from day one. Parallel drains, auto-tasks, and plugins switch on when you want them.
-
----
+- [Plan and govern](https://orbit-cli.com/concepts/#plan-and-govern): durable tasks, audit records, friction, and local search.
+- [Execute safely in parallel](https://orbit-cli.com/concepts/#execute-safely-in-parallel): sandboxes, locks, gated pipelines, and nine agent CLIs.
+- [Run unattended](https://orbit-cli.com/concepts/#run-unattended): bounded drains, optional completion, recurring reviews, and multiple machines.
+- [Observe and extend](https://orbit-cli.com/concepts/#observe-and-extend): dashboard, plugins, and bundled agent skills.
 
 ## Crews and complexity routing
 
-A crew is a named provider, model and effort level, for example `opus`, `sonnet` or `haiku` on Claude Code, or `astra`, `sol` or `luna` on Codex. Every task has a complexity: `low`, `medium`, `hard` or `xhard`. You set it when you file the task, or the task pilot assesses it. A task filed without a crew draws one from the pool for its complexity:
-
-```toml
-# ~/.orbit/config.toml, as `orbit init` writes it when it detects Codex and Claude Code
-[workflow]
-low_complexity_crews    = ["haiku", "luna"]
-medium_complexity_crews = ["sol", "sonnet"]
-hard_complexity_crews   = ["opus"]
-xhard_complexity_crews  = ["opus", "astra"]
-```
-
-- **Seeded from your CLIs.** `orbit init` fills the pools from the agent CLIs it detects, so a Claude-only or Codex-only machine gets pools of its own crews.
-- **Redrawn when the tier changes.** If the task pilot or `orbit task update --complexity` moves a task to another tier, a crew drawn from a pool is drawn again from the new tier's pool. A crew you name yourself (`--crew opus`) stays pinned.
-- **Weighted or empty.** Pools can be weighted (`["sol:70", "sonnet:30"]`). An empty pool falls back to `workflow.default_crew`.
-- **Changed per machine or per drain.** Edit a pool with `orbit config set --global workflow.hard_complexity_crews '["opus", "sol"]'`, or replace one for a single drain with `orbit run auto --hard-complexity-crews opus`.
-
-[docs/CONFIG.md](docs/CONFIG.md) covers the details: [what `orbit init` seeds](docs/CONFIG.md#workflow--branch-and-crew-defaults) for each combination of CLIs, [crew definitions](docs/CONFIG.md#crewsname--which-provider-model-runs-the-task), and [complexity pools](docs/CONFIG.md#automatic-crew-pools-by-complexity), including weighting, admission-time checks and provider failure holds.
-
----
-
-## Agent plugins
-
-To give a single agent Orbit's MCP tools and skills without installing the CLI on `PATH`, add the plugin. It launches the pinned npm CLI. The dashboard and cross-agent workspace setup still need the CLI install.
-
-```bash
-# Claude Code
-/plugin marketplace add constellation-works/orbit
-/plugin install orbit
-
-# Codex CLI
-codex plugin marketplace add constellation-works/orbit --ref agent-main
-codex plugin add orbit@orbit
-
-# Cursor (local plugin from a checkout)
-mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
-```
-
-Want to be walked through setup? Ask your agent to *"set up Orbit for this repo"*, and the bundled `orbit-setup` skill takes it from there.
-
----
+Crews name a provider, model, and effort level; complexity pools choose one for a task without an explicit crew. See [crew definitions](docs/CONFIG.md#crewsname--which-provider-model-runs-the-task), [init's seeded pools](docs/CONFIG.md#workflow--branch-and-crew-defaults), and [complexity routing, weighting, and overrides](docs/CONFIG.md#automatic-crew-pools-by-complexity).
 
 ## MCP and authority
 
-`orbit workspace init --mcp` registers `orbit mcp serve --operator` with your agent CLIs. That operator session is the only one that can dispatch workflows, resume runs, or run commands. Agents launched by Orbit get an agent-only surface. Authority is enforced when a tool is called, not by hiding tools, so every session sees the same `tools/list`. Use `orbit mcp init` alone for an agent-only registration, or `orbit mcp init --federated` to put several machines under one namespace ([details](docs/design/federated-mcp/)).
+[Connect your agent](https://orbit-cli.com/how-to/mcp-integration/#connect) explains operator and agent-only authority; [federated MCP](https://orbit-cli.com/how-to/mcp-integration/#register-the-federated-mux) connects multiple machines.
 
 ## Where state lives
 
-| Path | Holds |
-|---|---|
-| `~/.orbit/` | Machine state: task bundles, `orbit.db` (audit, runs, routines, frictions), workspace registry, shipped resources, skills, `config.toml` |
-| `<repo>/.orbit/` | Workspace state: identity, local config overrides, auto-tasks, routines, worktrees, and logs. Gitignored, and safe to delete for a clean slate. |
-
-Backups, stuck runs, database recovery, and upgrades are covered in the [runbooks](docs/INDEX.md#runbooks).
-
----
+[Scoping rules](https://orbit-cli.com/reference/scoping/#where-state-lives) explain machine and workspace state. See the [runbooks](docs/INDEX.md#runbooks) for backups, recovery, and upgrades.
 
 ## Learn more
 
@@ -213,7 +105,7 @@ Backups, stuck runs, database recovery, and upgrades are covered in the [runbook
 
 ## Contributing
 
-Pull requests are welcome, from typo fixes to new executors. Small fixes can go straight to a PR, and bigger changes start with an issue. See [CONTRIBUTING.md](CONTRIBUTING.md) to get set up.
+Pull requests are welcome, from typo fixes to new executors. Small fixes can go straight to a PR; bigger changes start with an issue. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

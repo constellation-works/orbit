@@ -1,7 +1,7 @@
 ---
 codebase: orbit
 owner: daniel
-summary: The engineering framework for AI coding agents — tasks for every change, ADRs for load-bearing decisions, structured audit of every tool call, and conflict-aware parallel dispatch, local-first.
+summary: Orbit is a local-first runtime for coding agents.
 status: active
 stack: Rust
 gate: pr

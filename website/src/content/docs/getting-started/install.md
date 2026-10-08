@@ -34,6 +34,28 @@ The package downloads the matching native binary and puts `orbit` on your
 your agent CLIs, links Orbit's skills into your agents, and on Linux prepares
 the sandbox.
 
+## Install as an agent plugin
+
+To give a single agent Orbit's MCP tools and skills without installing the CLI
+on `PATH`, add the plugin. It launches the pinned npm CLI. The dashboard and
+cross-agent workspace setup still need the CLI install above.
+
+```bash
+# Claude Code
+/plugin marketplace add constellation-works/orbit
+/plugin install orbit
+
+# Codex CLI
+codex plugin marketplace add constellation-works/orbit --ref agent-main
+codex plugin add orbit@orbit
+
+# Cursor (local plugin from a checkout)
+mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
+```
+
+Want to be walked through setup? Ask your agent to **set up Orbit for this
+repo**; the bundled `orbit-setup` skill takes it from there.
+
 ## Let your agent set it up
 
 :::tip[Recommended]
