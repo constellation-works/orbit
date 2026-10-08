@@ -24,11 +24,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
         let mut root = load_json_object(&target.mcp_path)?;
         let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
         mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
-        if target.scope == ScopeArg::Home {
-            write_json_object_atomic(&target.mcp_path, &root)
-        } else {
-            write_json_object(&target.mcp_path, &root)
-        }
+        write_json_object(&target.mcp_path, &root)
     };
     if target.scope == ScopeArg::Home {
         // Claude Code's proper-lockfile uses mkdir at `<mcp_path>.lock`,
@@ -66,7 +62,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
         if target.scope == ScopeArg::Home {
             if target.mcp_path.exists() {
-                write_json_object_atomic(&target.mcp_path, &root)?;
+                write_json_object(&target.mcp_path, &root)?;
             }
             Ok(())
         } else {
@@ -140,8 +136,8 @@ fn cleanup_legacy_mcp_path(target: &ConfigTarget, server_id: &str) -> Result<(),
 
 /// Remove `dir` if it exists and is now empty.
 ///
-/// `apply_claude_init` calls `write_json_object`, which `create_dir_all`s the
-/// settings file's parent on demand — for a workspace or home root with no
+/// `apply_claude_init` calls `write_json_object`, whose atomic helper creates
+/// the settings file's parent on demand — for a workspace or home root with no
 /// prior `.claude/`, that is this directory. A clean `remove` should leave the
 /// tree as it found it, so once the settings file this function owns is gone,
 /// an empty directory is one `remove` itself created and should go with it.

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::fs::io::atomic_write_text;
 
 use super::registry::LayoutMigration;
 use crate::contracts::{CompatibilityRecord, CompatibilityRefusal};
@@ -102,20 +102,14 @@ pub(super) fn read_marker(orbit_dir: &Path) -> Result<u32, OrbitError> {
     })
 }
 
-/// Advance the marker atomically (temp file + rename), so a crash mid-write
+/// Advance the marker with file and parent-directory fsync, so a crash
 /// leaves either the old or the new version, never a torn marker.
 pub(super) fn write_marker(orbit_dir: &Path, version: u32) -> Result<(), OrbitError> {
     let path = marker_path(orbit_dir);
-    let map_err = |op: &str, error: std::io::Error| {
+    atomic_write_text(&path, &format!("{version}\n")).map_err(|error| {
         OrbitError::Migration(format!(
-            "cannot {op} layout version marker '{}': {error}",
+            "cannot write layout version marker '{}': {error}",
             path.display()
         ))
-    };
-    if let Some(parent) = path.parent() {
-        create_private_dir_all(parent).map_err(|e| map_err("create directory for", e))?;
-    }
-    let tmp = path.with_extension("version.tmp");
-    std::fs::write(&tmp, format!("{version}\n")).map_err(|e| map_err("stage", e))?;
-    std::fs::rename(&tmp, &path).map_err(|e| map_err("commit", e))
+    })
 }

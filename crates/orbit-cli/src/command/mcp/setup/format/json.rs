@@ -62,24 +62,6 @@ pub(in crate::command::mcp::setup) fn write_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
 ) -> Result<(), OrbitError> {
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::InvalidInput(format!("path has no parent: {}", path.display()))
-    })?;
-    fs::create_dir_all(parent)
-        .map_err(|err| OrbitError::Io(format!("failed to create '{}': {err}", parent.display())))?;
-    let mut rendered =
-        serde_json::to_string_pretty(&JsonValue::Object(root.clone())).map_err(|err| {
-            OrbitError::Execution(format!("serialize JSON '{}': {err}", path.display()))
-        })?;
-    rendered.push('\n');
-    fs::write(path, rendered)
-        .map_err(|err| OrbitError::Io(format!("failed to write '{}': {err}", path.display())))
-}
-
-pub(in crate::command::mcp::setup) fn write_json_object_atomic(
-    path: &Path,
-    root: &JsonMap<String, JsonValue>,
-) -> Result<(), OrbitError> {
     let mut rendered =
         serde_json::to_string_pretty(&JsonValue::Object(root.clone())).map_err(|err| {
             OrbitError::Execution(format!("serialize JSON '{}': {err}", path.display()))

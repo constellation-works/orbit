@@ -17,6 +17,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::process::ancestry::{ProcessStartKey, process_start_key};
 
 /// The broker root, relative to the global root.
@@ -58,9 +59,9 @@ impl RunSocketDir {
             .map_err(|error| path_error("create plugin broker run directory", &dir, error))?;
         let created = Self { dir, socket };
         if let Some(owner) = process_start_key(std::process::id()) {
-            fs::write(
-                created.dir.join(OWNER_NAME),
-                format!("{} {}\n", owner.pid, owner.starttime),
+            atomic_write_text(
+                &created.dir.join(OWNER_NAME),
+                &format!("{} {}\n", owner.pid, owner.starttime),
             )
             .map_err(|error| {
                 let _ = created.remove();

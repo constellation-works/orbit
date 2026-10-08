@@ -63,8 +63,15 @@ impl Execute for PluginScaffoldArgs {
                     OrbitError::Io(format!("create {}: {error}", parent.display()))
                 })?;
             }
-            fs::write(&path, contents)
-                .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "generated source templates are not Orbit state; --force retains in-place overwrite behavior for user files"
+            )]
+            {
+                fs::write(&path, contents).map_err(|error| {
+                    OrbitError::Io(format!("write {}: {error}", path.display()))
+                })?;
+            }
             if *executable {
                 make_executable(&path)?;
             }

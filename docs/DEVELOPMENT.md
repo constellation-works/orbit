@@ -110,6 +110,25 @@ require a passing affected-test record. Distributed review contracts freeze
 the owner's list at admission; existing claims need a fresh admission after
 a policy change.
 
+## Filesystem writes
+
+Replace durable files through `orbit_common::fs::io::atomic_write_text` or
+`atomic_write_bytes`. These stage a private sibling file, sync its contents,
+rename it into place, and sync the parent directory. Existing file permissions
+are preserved. Use `StagedTextFile` when validation must run between staging
+and commit; dropping an uncommitted stage removes it.
+
+The production Clippy pass disallows `std::fs::write`, including `fs::write`
+aliases. Keep any exception scoped to the intentional write and name its
+reason in `#[allow(clippy::disallowed_methods, reason = "...")]`. Current
+exceptions preserve in-place edits of user TOML configs linked from dotfiles,
+artifact exports to user-selected paths (including symlinks and devices),
+and generated scaffold sources with their existing `--force` behavior. These
+writes do not promise crash-safe replacement. The explicitly non-atomic
+`write_text_with_parent` helper is for deliberate new-file or disposable writes; use
+`write_new_private_text` for exclusive creation of new private files. Test
+fixtures may use direct writes under the separate all-targets lint pass.
+
 ## Browser checks on a prepared host
 
 The website and dashboard browser checks below need Playwright, a Chromium

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_bytes;
 use orbit_exec::{
     BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest, BuildSandboxSpec,
     PLUGIN_BUILD_DIR_CAP_BYTES, probe_build_sandbox, run_build_phase,
@@ -169,6 +170,6 @@ fn write_log(path: &Path, log: &BuildLog) -> Result<(), OrbitError> {
         std::fs::create_dir_all(parent)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
     }
-    std::fs::write(path, log.render())
+    atomic_write_bytes(path, &log.render())
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))
 }

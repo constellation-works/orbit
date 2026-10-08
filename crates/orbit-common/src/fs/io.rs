@@ -376,6 +376,10 @@ pub fn remove_path_if_exists(path: &Path) -> io::Result<()> {
 
 /// Writes `content` to `path`, creating parent directories as needed. Not
 /// atomic — for crash-safe writes use [`atomic_write_text`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "this compatibility helper deliberately promises non-atomic writes; durable replacements use atomic_write_text"
+)]
 pub fn write_text_with_parent(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

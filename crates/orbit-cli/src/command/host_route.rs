@@ -565,6 +565,10 @@ fn artifact_output(value: Value, out: Option<PathBuf>, holder: &HostEntry) -> Co
     });
     doc["host"] = host_json(holder);
     if let Some(out) = out {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "remote artifact exports must match local exports to user-selected files, symlinks or devices"
+        )]
         std::fs::write(&out, content.as_bytes()).map_err(|error| {
             OrbitError::Io(format!("write artifact to '{}': {error}", out.display()))
         })?;

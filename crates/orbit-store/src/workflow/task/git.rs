@@ -12,13 +12,12 @@
 //! stalled transport is killed and reaped, and the caller receives
 //! [`OrbitError::ProcessTimeout`] instead of waiting forever.
 
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::create_private_dir_all;
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_common::process::run_bounded;
 use orbit_types::workspace::{git_remotes_equivalent, redact_git_remote};
 
@@ -195,7 +194,7 @@ fn isolate_git_dir(git_dir: &Path) -> Result<(), OrbitError> {
     let info = git_dir.join("info");
     create_private_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
     let path = info.join("attributes");
-    fs::write(&path, LITERAL_ATTRIBUTES)
+    atomic_write_text(&path, LITERAL_ATTRIBUTES)
         .map_err(|error| OrbitError::from_write_io(&path, error))?;
     Ok(())
 }

@@ -1,9 +1,10 @@
 # These are checked on production targets by make ci-lint and ci-guardrails.
 # The all-targets pass allows disallowed_methods because existing test-only
-# synchronization channels are outside the production bounded-channel rule.
+# synchronization channels and filesystem fixtures are outside production rules.
 disallowed-methods = [
     { path = "std::sync::mpsc::channel", reason = "production channels must have a bounded capacity" },
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "production channels must have a bounded capacity" },
+    { path = "std::fs::write", reason = "durable replacements must use orbit_common::fs::io atomic helpers; deliberate in-place writes need a reasoned exception" },
 ]
 
 # A file-lock guard must be released before suspension. ScopedEnv already
