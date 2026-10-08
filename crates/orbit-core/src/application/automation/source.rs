@@ -388,14 +388,44 @@ impl<'a> Source<'a> {
         self.revision(&format!("refs/heads/{branch}"))
     }
 
-    /// The local branch head. Member preparation and a direct-landing intent
-    /// are about the checkout's branch, so they must not fetch.
+    /// The local branch head, without fetching. Direct-landing intents and
+    /// read-only inspection must not depend on the network.
     pub(crate) fn local_head(
         &self,
         branch: &str,
     ) -> Result<(String, SourceRevision), AutomationError> {
         let head = self.verify_branch(branch)?;
         let repository = self.repository()?;
+        Ok((repository, head))
+    }
+
+    /// Select a state pilot's source without moving the primary checkout.
+    /// Fetch uses the delivery observer's shared lock, but unlike delivery
+    /// observation a failed fetch falls back to the local head captured first,
+    /// even if the fetch consumed the source deadline. A local branch already
+    /// ahead of origin stays current rather than preparing older material.
+    pub(crate) fn preparation_head(
+        &self,
+        branch: &str,
+    ) -> Result<(String, SourceRevision), AutomationError> {
+        let (repository, local) = self.local_head(branch)?;
+        let head = match self.fetched_head(branch) {
+            Ok(origin) => {
+                if origin == local
+                    || self
+                        .git(&["merge-base", "--is-ancestor", &origin.commit, &local.commit])
+                        .is_ok()
+                {
+                    local
+                } else {
+                    origin
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%branch, %error, "pilot source fetch unavailable; using local head");
+                local
+            }
+        };
         Ok((repository, head))
     }
 

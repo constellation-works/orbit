@@ -412,11 +412,17 @@ first attempt. A member whose input changed while it ran keeps its newer
 pending entry. One that is back at the frozen source leaves pending and is
 observed again.
 
-A state routine pins its local branch head, which moves only on an operator
-pull or deploy, rather than fetching `origin` at admission. A best-effort fetch
-would shrink jumps but tie every scheduling pass to the network. Preparation
-records instead `source_age` (`committed_at`, `age_seconds`) of the revision it
-pinned, and apply carries it, so a pilot that ran far behind shows how far.
+A preparation state routine best-effort fetches `origin/<branch>` under the
+shared `orbit-git-fetch` lock once per evaluation and pins that revision. A
+local branch already ahead of origin stays current. Fetch failure falls back
+to the local head captured before fetching, including when the fetch exhausts
+its deadline. Fetching never moves primary HEAD, the local branch, index or
+working files. Other local-head callers, including delivery intents and
+inspection, remain network-free. A local branch still behind the fetched pin
+does not supersede the pilot; local advances beyond it and rewritten histories
+retain the stale-claim checks above. Preparation records `source_age`
+(`committed_at`, `age_seconds`) of the pinned revision and apply carries it,
+including for a local fallback.
 
 Before supersession, a task stale this way failed, retried against the same
 source and was retired at its fingerprint, shelved until someone edited it.

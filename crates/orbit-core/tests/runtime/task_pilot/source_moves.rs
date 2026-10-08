@@ -111,6 +111,108 @@ fn pilot_applied(workspace: &Workspace, task: &Task) -> bool {
         .any(|entry| entry.event == "task_pilot_applied")
 }
 
+/// Publish changed task material to origin while leaving the primary branch
+/// behind. The initial tracking ref is absent, so selection must fetch it.
+fn origin_ahead(workspace: &Workspace) -> (String, String) {
+    let local = head(workspace);
+    workspace.commit_file("a.rs", "fn a() { supported() }\n", "support a");
+    let origin = head(workspace);
+    let remote = workspace.root.path().join("origin.git");
+    workspace.git(&["clone", "--bare", ".", remote.to_str().unwrap()]);
+    workspace.git(&["reset", "--hard", &local]);
+    workspace.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+    (local, origin)
+}
+
+#[test]
+fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::source_moves::a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let (task, _) = disjoint_tasks(&workspace);
+    let (local, origin) = origin_ahead(&workspace);
+    let primary_content = std::fs::read_to_string(workspace.repo.join("a.rs")).unwrap();
+    let primary_index = workspace.git(&["write-tree"]);
+    evaluate_routine(&workspace.runtime, &pilot_routine(), false, Utc::now()).unwrap();
+    let attempt = workspace.admitted(&task, 2);
+    assert_eq!(attempt.member.source.commit, origin);
+    assert_eq!(workspace.object("refs/remotes/origin/main"), origin);
+
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["source"]["source_revision"], origin);
+    assert_eq!(prepared["task_ids"], json!([task.id]));
+    assert_eq!(prepared["superseded_by_source"], json!([]));
+    // Stand in for the pilot by inspecting exactly the supplied pinned tree,
+    // then persist its finding through the real deterministic apply boundary.
+    let revision = prepared["source"]["source_revision"].as_str().unwrap();
+    let material = workspace.git(&["show", &format!("{revision}:a.rs")]);
+    assert_eq!(material, "fn a() { supported() }\n");
+    let mut input = apply_input(&workspace, &prepared);
+    let assessment = &mut input["results"][0]["tasks"][0];
+    assessment["context_files_after"] = json!(["file:a.rs"]);
+    assessment["assessment_rationale"] = json!(format!("At {revision}, a.rs has {material}"));
+    let output = claimed(&workspace, &attempt, "apply_task_pilot_results", input);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 1, "{output}");
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit = comments.last().unwrap().message.lines().nth(1).unwrap();
+    let audit: Value = serde_json::from_str(audit).unwrap();
+    assert_eq!(
+        audit["assessment"]["assessment_rationale"],
+        format!("At {origin}, a.rs has {material}")
+    );
+    assert_eq!(audit["assessment"]["adr_conflicts"], json!([]));
+    assert_eq!(head(&workspace), local);
+    assert_eq!(workspace.object("refs/heads/main"), local);
+    assert_eq!(workspace.git(&["write-tree"]), primary_index);
+    assert_eq!(
+        std::fs::read_to_string(workspace.repo.join("a.rs")).unwrap(),
+        primary_content
+    );
+}
+
+#[test]
+fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::source_moves::a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let (task, _) = disjoint_tasks(&workspace);
+    let (local, origin) = origin_ahead(&workspace);
+    workspace.git(&["fetch", "origin", "main"]);
+    workspace.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        workspace
+            .root
+            .path()
+            .join("missing-origin.git")
+            .to_str()
+            .unwrap(),
+    ]);
+    evaluate_routine(&workspace.runtime, &pilot_routine(), false, Utc::now()).unwrap();
+    let attempt = workspace.admitted(&task, 2);
+    assert_eq!(attempt.member.source.commit, local);
+    assert_eq!(workspace.object("refs/remotes/origin/main"), origin);
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["source"]["source_revision"], local);
+    assert_eq!(prepared["task_ids"], json!([task.id]));
+    assert_eq!(prepared["superseded_by_source"], json!([]));
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 1, "{output}");
+    assert!(pilot_applied(&workspace, &task));
+    assert_eq!(head(&workspace), local);
+}
+
 #[test]
 fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
     if !super::super::dispatch_admission::isolated(
