@@ -24,6 +24,7 @@ let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
 let frictionDuring = 'ORB-100';
 const runQueries = [];
+const runDetailRequests = [];
 const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'].map(state => ({
   run_id: `terminal-${state}`, job_id: 'fixture', state,
 }));
@@ -77,6 +78,10 @@ function fixture(url) {
         : terminalRuns;
       return list(runs);
     }
+    case '/api/runs/cross-workspace-run': return {
+      run: { run_id: 'cross-workspace-run', job_id: 'fixture', state: 'success' },
+      steps: [],
+    };
     case '/api/diagnostics/errors':
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
       return healthFixture ? [
@@ -133,6 +138,9 @@ function fixture(url) {
 }
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  if (/^\/api\/runs\/cross-workspace-run(?:\/|$)/.test(url.pathname)) {
+    runDetailRequests.push({ path: url.pathname, workspace: url.searchParams.get('workspace') });
+  }
   if (shipFixture && url.pathname === '/api/workflows/ship') {
     check(options.method === 'POST', 'Ship uses the dispatch endpoint');
     check(JSON.stringify(JSON.parse(options.body).task_ids) === JSON.stringify([shipFixture.id]), 'Ship dispatches only the selected task');
@@ -151,7 +159,7 @@ globalThis.fetch = async (path, options = {}) => {
 await import('./app.js');
 await settle();
 const { persistScopeToUrl, setWorkspace, setWindow } = await import('./js/common.js');
-const { setActiveTab } = await import('./js/router.js');
+const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
   if (button.listeners) button.listeners.click(); else button.click();
@@ -192,6 +200,22 @@ check(aggregateDrainIndicator.getAttribute('aria-label').includes('Select a work
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
 liveDrain = false;
+// The run exists in workspace two. Switching to All workspaces on its detail
+// page must replace the content with a scope prompt and issue no unscoped reads.
+navigateToRun('cross-workspace-run', 'two');
+await settle();
+check(text('run-detail-title') === 'Run cross-workspace-run', 'selected workspace loads the existing cross-workspace run');
+check(runDetailRequests.length === 3, 'selected workspace loads run details, events and logs');
+check(runDetailRequests.every(request => request.workspace === 'two'), 'selected-workspace run requests carry workspace scope');
+const scopedRunRequests = runDetailRequests.length;
+setWorkspace(null);
+persistScopeToUrl();
+refresh();
+await settle();
+check(text('run-detail-meta').includes('Select a workspace to view this run.'), 'aggregate run detail asks for a workspace');
+check(!text('run-detail-meta').includes('Run not found'), 'aggregate run detail does not report an existing run as missing');
+check(runDetailRequests.length === scopedRunRequests, 'aggregate run detail sends no run, events or logs requests');
+setActiveTab('tasks');
 setWorkspace('one');
 persistScopeToUrl();
 await settle();
