@@ -35,6 +35,12 @@ class Node {
   }
   get textContent() { return this.own + this.children.map(child => child.textContent ?? '').join(''); }
   get lastElementChild() { return this.children.at(-1) || null; }
+  replaceChildren(...children) {
+    this.children.forEach(child => { child.parentNode = null; });
+    this.children = [];
+    this.own = '';
+    children.forEach(child => this.append(child));
+  }
   append(child) {
     if (child == null) return;
     if (typeof child === 'string') { this.own += child; return; }
@@ -43,6 +49,10 @@ class Node {
     this.children.push(child);
   }
   appendChild(child) { this.append(child); return child; }
+  dispatch(type, extra = {}) {
+    const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
+    for (const fn of this.listeners[type] || []) fn(event);
+  }
   removeChild(child) {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);
@@ -142,17 +152,20 @@ const page = (offset, size, total, extra) => ({
 });
 
 let served = null;
+let currentTasks = [];
 const taskContext = {
   getActiveStatuses: () => new Set(['in-progress']),
   statusOrder: ['in-progress'],
   getSearchQuery: () => '',
   getTaskPagination: () => ({ canPrevious: Boolean(served && served.offset > 0), canNext: Boolean(served && served.next_cursor), loading: false }),
   getTasksMeta: () => served,
+  getTasks: () => currentTasks,
 };
 const rail = byId['rail-count-tasks'];
 const header = byId['tasks-count'];
 const paint = (payload, items = payload.items) => {
   served = payload;
+  currentTasks = items;
   renderTasks(items, taskContext);
 };
 
@@ -178,6 +191,25 @@ assert.equal(rail.textContent, '101', 'aggregate rail counts the matching total 
 assert.ok(header.textContent.endsWith(' of 101'), `aggregate header reports the same total: ${header.textContent}`);
 paint(aggregate(50, 50));
 assert.equal(rail.textContent, '101', 'aggregate rail keeps the total on the next page');
+
+// The expanded task detail paints transitions from the same history projection
+// the CLI reads, while older entries without statuses retain their event label.
+common.setWorkspace('ws_orbit');
+const historyTask = task(66, {
+  history: [
+    { event: 'status_changed', from_status: 'proposed', to_status: 'backlog', by: 'human:fixture', at: '2026-10-08T08:00:00Z' },
+    { event: 'started', from_status: 'backlog', to_status: 'in-progress', by: 'system', at: '2026-10-08T08:01:00Z' },
+    { event: 'status_changed', by: 'legacy', at: '2026-10-08T08:02:00Z' },
+  ],
+});
+paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [historyTask]);
+const historyTitle = byId['tasks-body'].querySelector('.row button.title');
+assert.ok(historyTitle, 'task title disclosure exists');
+historyTitle.parentNode.dispatch('click', { target: historyTitle });
+const historyLines = byId['tasks-body'].querySelectorAll('.history-line').map(line => line.textContent);
+assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes(': status_changed')), historyLines.join('\n'));
 
 // No pagination metadata: the rail falls back to the rows it was given.
 common.setWorkspace('ws_orbit');
