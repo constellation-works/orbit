@@ -211,8 +211,16 @@ The before-PR reviewer can hit the same red base with a check the workspace requ
 
 - every [built-in crew](#crewsname--which-provider-model-runs-the-task), with `enabled = true` on the crews of each detected provider CLI and `enabled = false` on the rest,
 - `default_crew` set to the default crew of the first detected family in preference order,
-- `system_crew` set to the first detected of `luna`, `sonnet`, `grok`, `antigravity`, `gemini`, `copilot`, `cursor`, `pi`, `opencode` (cheapest tier first),
-- all four pools as `[]`.
+- `system_crew` set to the first detected of `luna`, `haiku`, `grok`, `antigravity`, `gemini`, `copilot`, `cursor`, `pi`, `opencode` (cheapest tier first),
+- the four complexity pools, seeded from the detected families as bare lists in this order:
+
+  | Detected | `low` | `medium` | `hard` | `xhard` |
+  |---|---|---|---|---|
+  | codex + claude | `["haiku", "luna"]` | `["sol", "sonnet"]` | `["opus"]` | `["opus", "astra"]` |
+  | codex only | `["luna"]` | `["sol"]` | `["sol"]` | `["astra"]` |
+  | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
+
+  On top of any row, and alone when neither codex nor claude is detected, `grok` is appended to `medium` when grok is detected, and a Google CLI's crew is appended to `low`: `antigravity` when `agy` is detected, otherwise `gemini`. Other families (copilot, cursor, pi, opencode) leave the pools `[]`, and an empty pool routes to `default_crew`. Every pool entry names a crew the same file seeds enabled; init fails rather than write one that does not.
 
 Interactive init asks for both crews by name, offering only enabled crews, and skips the question when there is only one candidate. With no supported CLI detected, every crew is written with `enabled = false` and both keys stay unset: `default_crew` then resolves to the disabled `opus`, so dispatch refuses until you enable a crew rather than silently running one. Turning a provider on later is one command, `orbit config set crews.<name>.enabled true`. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
@@ -249,7 +257,7 @@ provider = "gemini"
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
-| `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `fable` (`fable`) | `opus` |
+| `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
 | `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) | `astra` |
 | `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`) | `antigravity` |
 | `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |

@@ -18,7 +18,7 @@
 //!
 //! ## Aliases vs. version pins
 //!
-//! The Claude CLI accepts the unversioned `opus`/`sonnet` aliases and resolves
+//! The Claude CLI accepts the unversioned `opus`/`sonnet`/`haiku` aliases and resolves
 //! them to the current flagship, so the CLI defaults never drift. The Anthropic
 //! **HTTP Messages API** rejects bare aliases and requires a fully-qualified
 //! model id, so [`ANTHROPIC_HTTP_DEFAULT_MODEL`] stays version pinned. codex,
@@ -30,6 +30,11 @@ pub const CLAUDE_DEFAULT_STRONG: &str = "opus";
 
 /// Default "weak" Claude model: the unversioned `sonnet` CLI alias.
 pub const CLAUDE_DEFAULT_WEAK: &str = "sonnet";
+
+/// Claude CLI alias used by the standard Haiku crew: the cheap tier, which
+/// resolves to the current Haiku release (Claude CLI 2.1.293 reports
+/// `claude-haiku-5-5`).
+pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 
 /// Claude CLI alias used by the standard Fable crew.
 pub const CLAUDE_FABLE_MODEL: &str = "fable";

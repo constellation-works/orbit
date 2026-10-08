@@ -115,6 +115,14 @@ With no supported agent CLI detected, every crew is seeded disabled and
 `default_crew` and `system_crew` stay unset, so nothing dispatches until you
 enable a crew.
 
+`orbit init` also seeds the four `workflow.*_complexity_crews` pools from the
+detected providers. Claude only: `haiku` / `sonnet` / `opus` / `opus`. Codex
+only: `luna` / `sol` / `sol` / `astra`. Both: `haiku, luna` / `sol, sonnet` /
+`opus` / `opus, astra`. Grok adds `grok` to `medium`; a Google CLI adds
+`antigravity` (when `agy` is present) or else `gemini` to `low`. Other
+providers leave the pools empty, which routes to `default_crew`. Init only
+seeds a new file; an existing config is not rewritten.
+
 ### Reasoning effort
 
 `effort` is unset by default, which keeps the provider's own default. A
@@ -155,7 +163,7 @@ budget within it.
 activities that Orbit creates at runtime, which have no job step to name a
 crew. The main one is step-failure recovery. `orbit init` points it at the
 cheapest enabled crew of the preferred detected family (`luna` when Codex is
-present, else `sonnet`, `grok`, …); interactive init offers those crews by
+present, else `haiku`, `grok`, …); interactive init offers those crews by
 name. Shipped job steps that name `crew: system` run on this crew unless you
 define a `[crews.system]` table. System work never inherits a failed task's
 crew or the workspace default.
