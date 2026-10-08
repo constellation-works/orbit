@@ -36,7 +36,36 @@ env:
   CARGO_BUILD_RUSTC_WRAPPER: ""
 
 jobs:
+  # Read live state before allocating build runners; the PR event can be stale.
+  pr-state:
+    name: Live PR state
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+    steps:
+      - name: Read live PR state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -er '
+            if .merged == true then "merged"
+            elif .state == "open" or .state == "closed" then .state
+            else error("Unexpected pull request state") end
+          ')"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUMBER} live state: $state"
+
   windows-check:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: Windows cargo check (x86_64-pc-windows-msvc)
     runs-on: windows-latest
     timeout-minutes: 30
