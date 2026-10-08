@@ -83,17 +83,15 @@
       <div class="main-col">
         <header class="topbar">
           <h1 class="crumb" id="topbar-crumb">Tasks</h1>
-          <!-- The four health metrics read as counts with plain labels, and each
-               one opens the view that explains it. Same ids for the values. -->
-          <div class="kpis" id="health-strip" role="group" aria-label="Windowed health and live host resources">
-            <button type="button" class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Opens Runs filtered to failures."><span class="v" id="tile-failed-value">-</span><span class="k">failed<span class="k-more"> runs</span></span></button>
-            <button type="button" class="kpi" id="tile-denials" title="Policy denials in the selected window. Opens Audit &gt; Policy."><span class="v" id="tile-denials-value">-</span><span class="k"><span class="k-more">policy </span>denials</span></button>
-            <button type="button" class="kpi" id="tile-active" title="Runs still going after longer than 95% of this window's finished runs took. Opens live runs."><span class="v" id="tile-active-value">-</span><span class="k"><span class="k-more">running </span>long</span></button>
-            <button type="button" class="kpi" id="tile-events" title="Audited events in the selected window. Opens Audit."><span class="v" id="tile-events-value">-</span><span class="k">events</span><svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg></button>
-            <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
-            <div class="host-resource-chips" id="host-resource-chips" role="group" aria-label="Live serving host resources" aria-live="polite">
-              <span class="kpi host-resource unknown" role="group" aria-label="Host resources unknown · sample unavailable · Throttle verdict: unknown"><span class="k">host</span><span class="v">-</span></span>
-            </div>
+          <!-- Live readings for the serving host: load relative to cores, memory
+               and disk. Each chip is sized for its widest usual reading, so a
+               new reading or a throttle verdict does not move the bar. The
+               windowed counts sit on the rail (failed runs on Runs, events on
+               Audit). -->
+          <div class="host-resource-chips" id="host-resource-chips" role="group" aria-label="Live serving host resources" aria-live="polite">
+            <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
+            <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
+            <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
           </div>
           <span class="topbar-spacer"></span>
           <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span></button>

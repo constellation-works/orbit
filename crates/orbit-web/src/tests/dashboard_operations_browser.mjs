@@ -728,21 +728,33 @@ try {
     await assertNoOverflow(`375x812 / ${destination}`);
     mobileEvidence.navigation.push({ destination, controls: selectors.length, subtabs: subtabs.length });
   }
-  const header = await page.evaluate(() => {
+  // The widest readings the chips are sized for, with one resource held.
+  const header = await page.evaluate(async () => {
+    const { renderHostResources } = await import('/js/host-resources.js');
+    renderHostResources({
+      cpu: { percent: 1234, severity: 'critical' }, memory: { percent: 100, severity: 'critical' },
+      disk: { path: '/workspace', percent: 100, severity: 'critical' }, sample_age_seconds: 1, max_age_seconds: 15,
+      stale: false, throttle: true, pressures: [{ resource: 'memory' }], reason: 'memory high', thresholds: { enabled: true },
+    });
     const workspace = document.getElementById('workspace-select').getBoundingClientRect();
     const brand = document.querySelector('.rail-brand').getBoundingClientRect();
     const drain = document.getElementById('global-drain-state').getBoundingClientRect();
     const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
-    const health = document.getElementById('health-strip');
-    const chips = [...health.querySelectorAll('.kpi')].map(node => node.getBoundingClientRect());
+    const strip = document.getElementById('host-resource-chips');
+    const row = strip.getBoundingClientRect();
+    const chips = [...strip.querySelectorAll('.host-resource')].map(node => (
+      { resource: node.dataset.resource, box: node.getBoundingClientRect().toJSON(), clipped: node.scrollWidth > node.clientWidth }));
     return {
       actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - workspace.top - workspace.height / 2) < 1),
-      healthSingleRow: chips.every(box => box.width > 0 && Math.abs(box.top - chips[0].top) < 1),
-      healthScrolls: health.scrollWidth > health.clientWidth,
+      chipsSingleRow: chips.length === 3 && chips.every(({ box }) => box.width > 0 && Math.abs(box.top - chips[0].box.top) < 1),
+      // All three readings are in view at 375px without scrolling the row.
+      chipsInView: chips.every(({ box, clipped }) => !clipped && box.left >= row.left - 0.5 && box.right <= Math.min(row.right, innerWidth) + 0.5),
+      chips,
     };
   });
-  if (!header.actionsInHeader || !header.healthSingleRow || !header.healthScrolls) throw new Error(`Phone header or health chips wrapped: ${JSON.stringify(header)}`);
-  for (const selector of ['#refresh-btn', '#global-drain-state', '#tile-failed', '#tile-denials', '#tile-active', '#tile-events', '#host-resource-chips .kpi']) {
+  if (!header.actionsInHeader || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
+  for (const selector of ['#refresh-btn', '#global-drain-state', ...['cpu', 'memory', 'disk'].map(resource => `#host-resource-chips [data-resource="${resource}"]`)]) {
     await page.locator(selector).focus();
     await page.locator(selector).scrollIntoViewIfNeeded();
     await page.locator(selector).click({ trial: true });

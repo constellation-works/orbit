@@ -17,7 +17,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 
-const retained = '.kpi:not(.host-resource), .rail-count, #global-drain-state';
+const retained = '.rail-count, #global-drain-state';
 const snapshots = [];
 const pageErrors = [];
 let browser;
@@ -97,7 +97,7 @@ try {
       return state;
     };
     const expectStale = state => {
-      assert(state.nodes.length >= 8, 'The health, rail count and drain surfaces must all be exercised');
+      assert(state.nodes.length >= 8, 'The rail count and drain surfaces must all be exercised');
       for (const node of state.nodes) {
         assert(node.stale && node.opacity < 1, `${node.id} must visibly dim retained data`);
         assert.match(node.title, /as of \d{2}:\d{2}/, `${node.id} must identify the last clean refresh`);
@@ -145,7 +145,7 @@ try {
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
     assert.match(partial.label, /Settings › Workspace file/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
-    assert.equal(partial.nodes.find(node => node.id === 'tile-events').text, '18.0kevents', 'Healthy panels must keep updating during a partial failure');
+    assert.equal(partial.nodes.find(node => node.id === 'rail-count-audit').text, '18.0k', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
     await page.screenshot({ path: path.join(evidence, `partial-${width}.png`) });
     await refresh();
@@ -154,7 +154,11 @@ try {
     await refresh();
     const recovered = await snapshot('clean-recovery');
     expectClean(recovered);
-    assert.equal(recovered.nodes.find(node => node.id === 'tile-failed').title, clean.nodes.find(node => node.id === 'tile-failed').title, 'Recovery must preserve the KPI navigation tooltip');
+    for (const id of ['rail-count-diag-runs', 'global-drain-state']) {
+      const title = state => state.nodes.find(node => node.id === id).title;
+      assert(title(clean), `${id} must carry its own tooltip`);
+      assert.equal(title(recovered), title(clean), `Recovery must preserve the ${id} tooltip`);
+    }
     await page.screenshot({ path: path.join(evidence, `recovered-${width}.png`) });
 
     // Run-detail reads render their own feedback, but must still report failed

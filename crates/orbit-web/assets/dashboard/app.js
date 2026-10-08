@@ -10,7 +10,7 @@ import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.j
 import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
-import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
@@ -1042,14 +1042,14 @@ function truncate(text, max) {
 
 // ORB-00039: in aggregate mode the per-workspace fetches are skipped, so the
 // panels they feed (audit summary, locked files) show an inline placeholder and
-// the health strip is neutralized rather than left displaying one workspace's
-// stale counts.
+// the summary's rail counts are cleared rather than left displaying one
+// workspace's stale counts.
 function renderAggregatePlaceholders() {
   renderPanelPlaceholder("audit-summary-body");
   renderPanelPlaceholder("locks-body");
   const locksCount = $("locks-count");
   if (locksCount) locksCount.textContent = "—";
-  resetHealthStrip();
+  resetSummaryCounts();
 }
 
 // Most Diagnostics panels are fed exclusively by per-workspace endpoints and
@@ -1076,22 +1076,13 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// The health strip is fed by the same per-workspace /api/audit/summary endpoint,
-// so in aggregate mode reset its tiles to a neutral dash rather than showing the
-// last-selected workspace's numbers as if they were machine-wide.
-function resetHealthStrip() {
-  for (const id of [
-    "tile-events-value",
-    "tile-denials-value",
-    "tile-failed-value",
-    "tile-active-value",
-  ]) {
-    const node = $(id);
-    if (node) node.textContent = "—";
-  }
-  const denials = $("tile-denials");
-  if (denials) denials.classList.remove("tile-alert");
-  renderSparkline([]);
+// The Runs and Audit rail counts are fed by the per-workspace
+// /api/audit/summary endpoint, so in aggregate mode and on a workspace switch
+// they are cleared rather than showing the last-selected workspace's numbers as
+// if they were machine-wide.
+function resetSummaryCounts() {
+  setRailCount("rail-count-diag-runs", null);
+  setRailCount("rail-count-audit", null);
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1525,7 +1516,7 @@ function fetchAndRenderSummary() {
   const since = effectiveAuditWindow() || "24h";
   return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
-    renderHealthStrip(data);
+    renderSummaryCounts(data);
     renderAuditSummary(data, auditContext());
   });
 }
@@ -1570,88 +1561,29 @@ function fetchAndRenderFrictions() {
 // blocked colour so a failure count is legible from any tab without opening
 // the tab it belongs to. Every value here comes from a fetch the dashboard
 // already makes — this adds no endpoint.
-function setRailCount(id, value, alert = false) {
+function setRailCount(id, value, alert = false, title = "") {
   const node = $(id);
   if (!node) return;
   const empty = value == null || value === 0;
   node.textContent = empty ? "" : formatBigInt(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
+  node.title = empty ? "" : title;
 }
 
-function renderHealthStrip(data) {
+// The windowed counts of /api/audit/summary ride on the rail: failed runs on
+// Runs, audited events on Audit. Their titles keep each count's definition.
+function renderSummaryCounts(data) {
   if (!data) return;
-  $("tile-events-value").textContent = formatBigInt(data.events);
-  $("tile-denials-value").textContent = formatBigInt(data.denials);
-  $("tile-failed-value").textContent = formatBigInt(data.failed_runs);
-  $("tile-active-value").textContent = formatBigInt(data.active_long_runs);
-  const tile = $("tile-denials");
-  const threshold = data.denial_threshold ?? 10;
-  if (data.denials > threshold) {
-    tile.classList.add("tile-alert");
-  } else {
-    tile.classList.remove("tile-alert");
-  }
   const windowLabel = data.window || getWindow();
-  const failed = $("tile-failed");
-  if (failed) {
-    failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Recent Runs' Failed filter uses the same outcomes with no time window. Errors lists step and event failures in the selected window. Opens those runs.`;
-  }
-  const windowTag = $("kpi-window");
-  if (windowTag) windowTag.textContent = windowLabel;
-
-  setRailCount("rail-count-audit", data.events);
-  setRailCount("rail-count-diag-runs", data.failed_runs, true);
-  renderSparkline(data.sparkline || []);
-}
-
-// Each health count opens the view that explains it.
-function wireHealthStrip() {
-  const go = (id, route, before) => {
-    const node = $(id);
-    if (!node) return;
-    node.addEventListener("click", () => {
-      if (before) before();
-      sAT(route);
-    });
-  };
-  go("tile-failed", "diagnostics/runs", () => setRunFilter("failed"));
-  go("tile-active", "diagnostics/runs", () => setRunFilter("active"));
-  go("tile-denials", "audit/policy");
-  go("tile-events", "audit/events");
+  setRailCount("rail-count-diag-runs", data.failed_runs, true,
+    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Runs' Failed filter lists the same outcomes with no time window.`);
+  setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
 }
 
 function formatBigInt(n) {
   if (n == null) return "-";
   if (n >= 10000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
-}
-
-function renderSparkline(buckets) {
-  const svg = $("tile-events-sparkline");
-  if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (buckets.length === 0) return;
-  const counts = buckets.map((b) => b.count || 0);
-  const max = Math.max(1, ...counts);
-  const w = 100;
-  const h = 22;
-  const stepX = buckets.length > 1 ? w / (buckets.length - 1) : 0;
-  const points = counts.map((c, i) => {
-    const x = i * stepX;
-    const y = h - (c / max) * (h - 2) - 1;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-  const baseline = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  baseline.setAttribute("x1", "0");
-  baseline.setAttribute("y1", String(h - 0.5));
-  baseline.setAttribute("x2", String(w));
-  baseline.setAttribute("y2", String(h - 0.5));
-  baseline.setAttribute("class", "baseline");
-  svg.appendChild(baseline);
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", `M${points.join(" L")}`);
-  svg.appendChild(path);
 }
 
 // The connection line names the destination the way the rail does, not by its
@@ -1667,7 +1599,7 @@ function markRefreshStale(stale) {
   const suffix = lastCleanRefresh
     ? `Stale · as of ${lastCleanRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
     : "Stale · no successful refresh yet";
-  for (const node of document.querySelectorAll(".kpi:not(.host-resource), .rail-count, #global-drain-state")) {
+  for (const node of document.querySelectorAll(".rail-count, #global-drain-state")) {
     const previous = node.dataset.refreshStaleSuffix;
     if (previous && node.title.endsWith(previous)) {
       node.title = node.title.slice(0, -previous.length).replace(/ · $/, "");
@@ -1724,7 +1656,7 @@ onWorkspaceChange(() => {
   for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
     if ($(id)) $(id).textContent = "—";
   }
-  resetHealthStrip();
+  resetSummaryCounts();
 });
 resetPanel("tasks-body", "tasks-count");
 resetPanel("runs-body", "diag-count");
@@ -1741,7 +1673,6 @@ buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
-wireHealthStrip();
 wireReliabilityWindowSelector();
 setScopeChangeListener(() => {
   persistScopeToUrl();

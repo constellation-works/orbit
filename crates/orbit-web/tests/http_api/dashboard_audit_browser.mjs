@@ -77,7 +77,6 @@ try {
     audit.setAuditSubtab('events');
     await audit.fetchAndRenderAudit(auditContext);
     audit.renderAuditSummary(summary, auditContext);
-    document.getElementById('tile-denials-value').textContent = '4';
   }, summary);
   await page.waitForLoadState('networkidle');
   // Return to desktop to check that the table layout restores after mobile cards.
@@ -147,7 +146,6 @@ try {
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
   assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 8);
-  assert.equal(await page.locator('#tile-denials-value').textContent(), '4');
   assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /^4\b.*3\b.*1\b/);
   assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^8\b.*4\b/);
   assert.equal(await page.locator('.policy-count-note').isVisible(), true);

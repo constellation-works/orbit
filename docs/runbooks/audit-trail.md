@@ -130,11 +130,12 @@ in Role split; hover the row label to read all values. Wider cards show those
 columns. Top duration ranks named tools only, excluding the synthetic
 `unknown` bucket and empty names before choosing the top eight.
 
-Audit > Policy shows the canonical policy-decision count used by the top bar,
-split into invocation and envelope decisions, alongside its retained evidence
-row count. Repeated invocation evidence and session, coordination, or protocol
-refusals can make the evidence count larger than the KPI. On an unfiltered,
-uncapped view the page also gives the number of additional evidence rows.
+Audit > Policy shows the canonical policy-decision count (`denials` in
+`/api/audit/summary`), split into invocation and envelope decisions, alongside
+its retained evidence row count. Repeated invocation evidence and session,
+coordination, or protocol refusals can make the evidence count larger than the
+canonical count. On an unfiltered, uncapped view the page also gives the
+number of additional evidence rows.
 Evidence filters do not change the canonical count. An independent Audit window
 is identified when it differs from the dashboard window. Recent Denials shows
 at most twelve rows; evidence scans are capped at 1,000 rows per source, while
