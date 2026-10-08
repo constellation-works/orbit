@@ -217,14 +217,41 @@ run before a large dispatch is still appropriate.
 The task-pilot pipeline never promotes tasks or dispatches them; promotion and
 shipping remain separate operator-authorized steps.
 
-Apply is isolated by partition. A stale task snapshot or malformed assessment
-leaves that whole partition untouched while independently valid partitions are
-still applied. The run then fails deliberately, and its durable apply output
-lists each partition as `applied`, `skipped_stale`, or `failed`, plus the exact
+Apply is isolated by partition, then by task. A partition whose assessments are
+malformed (duplicate, or not matching the prepared task IDs) fails as a whole
+and mutates none of its tasks. Within a valid partition each task settles on
+its own: a task that went stale at the write boundary is `stale` with a reason,
+and a task with an invalid assessment is `invalid`. Independently valid siblings
+and partitions still apply.
+
+Durable edits that race a pilot settle as `superseded`, not as failures. This
+covers a task whose fields, material, status or ownership changed after
+preparation, a task admitted to or claimed for execution, a task that became
+terminal, an operator rejection, and a task superseded by a source move under a
+routine claim. Each skipped task carries a `reason` (for example `task_edited`,
+`status_changed`, `execution_claim`, `workflow_admission`, or
+`superseded_by_source`) and is not written. Such a task needs no repair.
+
+Each partition in the durable apply output has one outcome:
+
+- `applied`: every task applied or was already applied.
+- `superseded`: every task applied, was already applied, or was superseded, and
+  at least one was superseded. The partition may still list applied siblings in
+  `applied_task_ids`, so read `task_outcomes`, not the partition label alone.
+- `skipped_stale`: no task applied and every task was stale.
+- `partial`: some tasks applied and others did not resolve.
+- `failed`: no task applied and at least one did not resolve, or the partition
+  was malformed.
+
+The run succeeds when every partition is `applied` or `superseded`. Any
+`failed`, `partial`, or `skipped_stale` partition fails the run. The durable
+apply output lists each partition's outcome, its task outcomes, and the exact
 task IDs actually applied. `orbit run show <run_id>` is therefore the recovery
 source of truth. Resuming the failed run reuses its successful prepare, pilot,
 and apply checkpoints (it does not rerun those agents); start a fresh zero-input
-pilot only for tasks that remain empty after reviewing the recorded outcomes.
+pilot only for tasks that remain empty after reviewing the recorded outcomes. A
+superseded task was not written, so a fresh pilot assesses it against current
+state if it still lacks selectors. Do not re-pilot the whole backlog for it.
 
 ## Keeping parallel runs off each other
 
