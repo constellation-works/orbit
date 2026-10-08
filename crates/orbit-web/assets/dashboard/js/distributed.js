@@ -120,7 +120,9 @@ export function buildExecutionProvenance(location) {
     class: known ? "exec-origin" : "exec-origin unknown",
     text: formatExecutionLocation(location),
     title: known
-      ? `Execution machine id: ${location.machine_id}`
+      ? (location.machine_name
+        ? `Execution machine: ${location.machine_name} (${location.machine_id})`
+        : `Execution machine id: ${location.machine_id}`)
       : "No execution machine was recorded for this row. Unknown is not the owner.",
   });
 }

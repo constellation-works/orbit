@@ -94,7 +94,8 @@ impl crate::OrbitRuntime {
     ) -> Result<TaskPullResponse, OrbitError> {
         ensure_distributed_mutation_available("orbit.task.pull")?;
         self.ensure_distributed_owner_workspace()?;
-        let identity = self.session_admission_identity(session)?;
+        let identity =
+            self.session_admission_identity(session, request.run_context.machine_name.as_deref())?;
         let boundary = self.admission_boundary()?;
         if matches!(
             boundary.lookup_admission(&identity, &request.request_id)?,
@@ -504,9 +505,10 @@ impl crate::OrbitRuntime {
     fn session_admission_identity(
         &self,
         session: &ToolSessionContext,
+        display_name: Option<&str>,
     ) -> Result<AdmissionIdentity, OrbitError> {
         let machine = self.session_caller_machine(session)?;
-        Ok(trusted_identity(&machine, session))
+        Ok(trusted_identity(&machine, session, display_name))
     }
 
     /// The claim a follower names, read from the journal. Absence is the

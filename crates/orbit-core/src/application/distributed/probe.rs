@@ -192,7 +192,7 @@ impl crate::OrbitRuntime {
                 requested.to_string()
             }
         };
-        let identity = trusted_identity(&machine_id, session);
+        let identity = trusted_identity(&machine_id, session, None);
         let lookup = self
             .stores()
             .tasks()

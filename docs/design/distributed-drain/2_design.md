@@ -898,6 +898,13 @@ Execution identity is required for claim fencing and handoff acceptance. The key
 and reads the legacy `host_id` spelling). Nothing is inferred from hostname, cwd, SSH target or
 audit label, and absent historical identity reads as *unknown*, never as "the owner".
 
+Registry composition supplies the configured `[machine] name` alongside the stable id for new
+local runs. A follower also sends that name in the pull request's `run_context.machine_name`,
+which the owner uses as a display-name fallback when the transport does not supply one.
+The machine id still comes from the session. The claim captures both fields, and its leaf run
+and task binding retain that location. Existing records keep their original provenance.
+Dashboard execution labels prefer the name; their tooltip includes the name and full machine id.
+
 | Record | Field | Set by | Notes |
 |---|---|---|---|
 | Job run | `executed_on` | the runtime that inserts the run | immutable; steps inherit; nullable |
