@@ -277,6 +277,11 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                             vars.contains(&("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")),
                             "Claude background task disable must reach subprocess (ORB-13664)"
                         );
+                        assert!(
+                            vars.contains(&("CLAUDE_CODE_DISABLE_CRON", "1")),
+                            "Claude cron disable must reach subprocess; without it a scheduled \
+                             wake-up turn emits a second result over the envelope (ORB-14815)"
+                        );
                     }
                     if let Some(model) = model {
                         assert!(

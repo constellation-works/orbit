@@ -997,6 +997,17 @@ process cannot re-enable it. It is emitted in code, not in `claude.yaml`, for
 the same no-second-copy reason as `--json-schema`; a `direct_agent` executor's
 `env:` is not applied to the provider child either.
 
+**Scheduled wake-ups are disabled.** A worker that arms a `/loop` wake-up with
+`ScheduleWakeup` while it waits on gates gets a second `result` turn after the
+envelope turn, and that prose result displaces the envelope [ORB-14815]. The
+claude runtime therefore also pins `CLAUDE_CODE_DISABLE_CRON=1` in
+`CLAUDE_CLI_FIXED_ENV`. Claude Code 2.1.294 reads it in its cron gate: the
+`CronCreate`, `CronDelete` and `CronList` tools are disabled, and the scheduler
+that fires queued wake-ups is killed. `ScheduleWakeup` has no gate of its own,
+but a wake-up it arms is never fired, so it never starts a turn. Checked against
+the installed binary, not a live loop. Envelope validation is unchanged, so exit
+0 without an envelope still fails.
+
 **What the schema cannot say.** The status/error correlation — `failed`
 requiring a non-empty `error.code` — is absent from the schema and stays in
 `parse_json_envelope`'s Rust checks. This is a constraint, not a preference:

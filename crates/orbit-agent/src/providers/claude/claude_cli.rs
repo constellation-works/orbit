@@ -25,8 +25,16 @@ fn claude_cli_model_arg(model: &str) -> String {
 /// It is an env var rather than a static arg for the same reason
 /// `--json-schema` is emitted here: the installed `claude.yaml` copy is edited
 /// independently of the packaged asset.
-pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] =
-    &[("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")];
+///
+/// [ORB-14815] `CLAUDE_CODE_DISABLE_CRON` (Claude Code 2.1.294, checked in the
+/// installed binary) disables the cron and loop scheduler, so a queued
+/// `ScheduleWakeup` never fires. Without it a worker that armed a loop while it
+/// waited on gates got a second `result` turn of prose after the envelope turn
+/// (`jrun-20261008-1237-c25`, `jrun-20261008-1421-c5`).
+pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+    ("CLAUDE_CODE_DISABLE_CRON", "1"),
+];
 
 pub(crate) struct ClaudeCliTransport {
     model: Option<String>,
