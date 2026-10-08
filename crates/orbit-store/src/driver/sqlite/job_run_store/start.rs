@@ -47,10 +47,7 @@ pub(super) fn mark_job_run_running(
             )));
         }
 
-        run.state = run
-            .state
-            .try_transition(RunEvent::Start)
-            .map_err(OrbitError::JobRunStateTransition)?;
+        run.state = run.state.try_transition(RunEvent::Start)?;
         run.started_at = Some(started_at);
         run.pid = Some(pid);
         run.pid_start_time = pid_start_time;

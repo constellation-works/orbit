@@ -7,6 +7,7 @@ use super::{
     NegativeControl, REVIEW_CONTRACT_VERSION, RetiredValidation, ReviewValidation, ReviewVerdict,
     ValidationOutcome, ValidationRole,
 };
+use crate::workflow::ReviewReportError;
 
 /// How a finding was closed, if at all.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,11 +71,15 @@ impl ReviewReport {
     /// a missing `schema_version`, `summary` or finding `severity`, and
     /// `null` lists. Anything else that does not match the contract is
     /// refused with the offending field's path named.
-    pub fn parse(content: &[u8]) -> Result<Self, String> {
-        let mut value: Value = serde_json::from_slice(content)
-            .map_err(|error| format!("review report is not JSON: {error}"))?;
+    pub fn parse(content: &[u8]) -> Result<Self, ReviewReportError> {
+        let mut value: Value =
+            serde_json::from_slice(content).map_err(|error| ReviewReportError::NotJson {
+                reason: error.to_string(),
+            })?;
         normalize_report(&mut value);
-        serde_json::from_value(value.clone()).map_err(|error| locate_report_error(&value, error))
+        serde_json::from_value(value.clone()).map_err(|error| ReviewReportError::Contract {
+            detail: locate_report_error(&value, error),
+        })
     }
 }
 

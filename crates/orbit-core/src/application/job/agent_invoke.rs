@@ -378,9 +378,7 @@ impl OrbitRuntime {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            Some(requested) => admit_provider_sandbox_mode(provider, requested)
-                .map(str::to_string)
-                .map_err(OrbitError::InvalidInput)?,
+            Some(requested) => admit_provider_sandbox_mode(provider, requested)?.to_string(),
             None => default_mode,
         };
         let label = format_provider_sandbox(provider, &mode);

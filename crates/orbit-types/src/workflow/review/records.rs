@@ -15,9 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    REVIEW_REPORT_ARTIFACT, ReviewReport, ReviewReportHistory, ReviewValidation, ValidationOutcome,
-    ValidationRole,
+    ReviewReport, ReviewReportHistory, ReviewValidation, ValidationOutcome, ValidationRole,
 };
+use crate::workflow::ReviewHistoryError;
 
 /// An earlier revision's required record that a report deliberately no
 /// longer carries.
@@ -136,7 +136,7 @@ impl ReviewReportHistory {
     /// reviewer still following id-less instructions can resubmit in one
     /// step. Stored reports without ids still parse and settle under the
     /// command-identity rules; this check applies at report attachment time.
-    pub fn check_required_record_ids(report: &ReviewReport) -> Result<(), String> {
+    pub fn check_required_record_ids(report: &ReviewReport) -> Result<(), ReviewHistoryError> {
         let used = report
             .validation
             .iter()
@@ -151,21 +151,10 @@ impl ReviewReportHistory {
             .filter(|record| {
                 record.role == ValidationRole::Required && record.record_id().is_none()
             })
-            .map(|record| {
-                format!(
-                    "`{}` -> `\"id\": \"{}\"`",
-                    one_line(&record.command),
-                    free.next().unwrap_or_default()
-                )
-            })
+            .map(|record| (one_line(&record.command), free.next().unwrap_or_default()))
             .collect::<Vec<_>>();
         if !missing.is_empty() {
-            return Err(format!(
-                "{REVIEW_REPORT_ARTIFACT}: every required validation record needs a stable, \
-                 non-empty `id` that later revisions carry forward; these have none: {}. Add \
-                 the ids and attach the report again",
-                missing.join(", ")
-            ));
+            return Err(ReviewHistoryError::RecordIdsMissing { missing });
         }
 
         let mut records_by_id: BTreeMap<&str, Vec<&ReviewValidation>> = BTreeMap::new();
@@ -187,14 +176,13 @@ impl ReviewReportHistory {
                     .count()
                     == 1;
             if records.len() > 1 && !is_superseded_pair {
-                let commands = records
-                    .iter()
-                    .map(|record| format!("`{}`", one_line(&record.command)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(format!(
-                    "{REVIEW_REPORT_ARTIFACT}: validation record id `{id}` is used by multiple records ({commands}); give each check a distinct id. Only one `superseded` attempt and its `required` replacement may share an id; correct the report and attach it again"
-                ));
+                return Err(ReviewHistoryError::RecordIdReused {
+                    id: id.to_string(),
+                    commands: records
+                        .iter()
+                        .map(|record| one_line(&record.command))
+                        .collect(),
+                });
             }
         }
         Ok(())
@@ -204,7 +192,7 @@ impl ReviewReportHistory {
     /// its attempt filed under an id, naming that record and how to fix the
     /// report. Records written without ids are left to settlement's
     /// command-identity rules.
-    pub fn check_record_continuity(&self, report: &ReviewReport) -> Result<(), String> {
+    pub fn check_record_continuity(&self, report: &ReviewReport) -> Result<(), ReviewHistoryError> {
         for revision in self.for_attempt(&report.attempt_id) {
             for earlier in &revision.validation {
                 let Some(id) = earlier
@@ -221,25 +209,13 @@ impl ReviewReportHistory {
                 ) else {
                     continue;
                 };
-                let retire = if earlier.outcome == ValidationOutcome::Failed {
-                    "; a failed record cannot be retired, so rerun it".to_string()
-                } else {
-                    format!(
-                        ", or list it in `retired_validation` as \
-                         {{\"id\": \"{id}\", \"reason\": \"<why it no longer applies>\"}}"
-                    )
-                };
-                return Err(format!(
-                    "{REVIEW_REPORT_ARTIFACT}: required validation record `{id}` (`{}`) was \
-                     recorded {} by an earlier revision of attempt {} and this report {}. Carry \
-                     `\"id\": \"{id}\"` forward on a `required` record (or a `superseded` one \
-                     with its passing replacement) holding the check's current command and \
-                     outcome{retire}; then attach the report again",
-                    one_line(&earlier.command),
-                    earlier.outcome.as_str(),
-                    report.attempt_id,
-                    gap.describe(),
-                ));
+                return Err(ReviewHistoryError::RecordDropped {
+                    id: id.to_string(),
+                    command: one_line(&earlier.command),
+                    outcome: earlier.outcome,
+                    attempt_id: report.attempt_id.clone(),
+                    gap,
+                });
             }
         }
         Ok(())

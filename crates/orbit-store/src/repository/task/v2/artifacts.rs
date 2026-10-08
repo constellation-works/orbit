@@ -42,8 +42,7 @@ pub(crate) fn review_report_history(
         return Ok(None);
     };
     if reviewer_can_correct {
-        ReviewReportHistory::check_required_record_ids(&parsed)
-            .map_err(OrbitError::InvalidInput)?;
+        ReviewReportHistory::check_required_record_ids(&parsed)?;
     }
     let mut history = match held.get(REVIEW_REPORT_HISTORY_ARTIFACT) {
         Some(file) => {
@@ -54,7 +53,7 @@ pub(crate) fn review_report_history(
                 ))
             })?;
             let content = fs::read(&path).map_err(|err| OrbitError::Io(err.to_string()))?;
-            ReviewReportHistory::parse(&content).map_err(OrbitError::Store)?
+            ReviewReportHistory::parse(&content)?
         }
         None => {
             // A report written before revision retention was introduced is
@@ -76,17 +75,15 @@ pub(crate) fn review_report_history(
                         "legacy {REVIEW_REPORT_ARTIFACT} is unreadable; refusing to replace evidence whose obligations cannot be established: {error}"
                     ))
                 })?;
-                history
-                    .record(ReviewReportRevision {
-                        attempt_id: legacy.attempt_id,
-                        sha256: sha256_hex(&content),
-                        observed_at: file.created_at,
-                        recorded_by: file.created_by.clone(),
-                        verdict: legacy.verdict,
-                        validation: legacy.validation,
-                        record_id_contract_checked: None,
-                    })
-                    .map_err(OrbitError::InvalidInput)?;
+                history.record(ReviewReportRevision {
+                    attempt_id: legacy.attempt_id,
+                    sha256: sha256_hex(&content),
+                    observed_at: file.created_at,
+                    recorded_by: file.created_by.clone(),
+                    verdict: legacy.verdict,
+                    validation: legacy.validation,
+                    record_id_contract_checked: None,
+                })?;
             }
             history
         }
@@ -94,21 +91,17 @@ pub(crate) fn review_report_history(
     // Name the dropped record while the reviewer can still correct it; at
     // settlement nobody could.
     if reviewer_can_correct {
-        history
-            .check_record_continuity(&parsed)
-            .map_err(OrbitError::InvalidInput)?;
+        history.check_record_continuity(&parsed)?;
     }
-    let recorded = history
-        .record(ReviewReportRevision {
-            attempt_id: parsed.attempt_id,
-            sha256: sha256_hex(&report.content),
-            observed_at: now,
-            recorded_by: actor.to_string(),
-            verdict: parsed.verdict,
-            validation: parsed.validation,
-            record_id_contract_checked: Some(reviewer_can_correct),
-        })
-        .map_err(OrbitError::InvalidInput)?;
+    let recorded = history.record(ReviewReportRevision {
+        attempt_id: parsed.attempt_id,
+        sha256: sha256_hex(&report.content),
+        observed_at: now,
+        recorded_by: actor.to_string(),
+        verdict: parsed.verdict,
+        validation: parsed.validation,
+        record_id_contract_checked: Some(reviewer_can_correct),
+    })?;
     if !recorded {
         return Ok(None);
     }

@@ -366,9 +366,7 @@ fn install_plugin_inner(
     let enabled =
         !grants_reset && (options.enable || existing.as_ref().is_some_and(|plugin| plugin.enabled));
     let grants = if options.enable {
-        orbit_types::plugin::parse_grants(&options.grants)
-            .map_err(OrbitError::InvalidInput)?
-            .to_recorded()
+        orbit_types::plugin::parse_grants(&options.grants)?.to_recorded()
     } else if grants_reset {
         Vec::new()
     } else {

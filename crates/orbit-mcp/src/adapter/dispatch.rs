@@ -443,7 +443,7 @@ impl OrbitToolServer {
                     .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
             binding
                 .validate()
-                .map_err(|error| McpError::invalid_params(error, None))?;
+                .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
             let mut session = self.session_context();
             if session.transport != Some(orbit_types::tool::McpTransport::SshMcp)
                 || session

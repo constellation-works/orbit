@@ -1,3 +1,4 @@
+use super::super::PluginGrantError;
 use super::super::grant::{PluginGrant, parse_grants, parse_stored_grants};
 
 /// A grant set `parse_grants` accepts must load back as the same set.
@@ -67,15 +68,21 @@ fn a_recorded_grant_set_loads_as_the_same_set() {
     // root. The `./` prefix is how an operator names a bare continuation in
     // one comma-separated value.
     let typo = parse_grants(&owned(&["fs=/srv/data,netwrok"])).expect_err("typo is not a root");
-    assert!(
-        typo.contains("netwrok"),
-        "a continuation that does not look like a path stays an unknown grant: {typo}"
+    assert_eq!(
+        typo,
+        PluginGrantError::Unknown {
+            names: vec!["netwrok".to_string()]
+        },
+        "a continuation that does not look like a path stays an unknown grant"
     );
     let bare_in_one_value =
         parse_grants(&owned(&["fs=data,cache"])).expect_err("bare continuation needs ./");
-    assert!(
-        bare_in_one_value.contains("cache"),
-        "one comma list still requires the continuation to look like a path: {bare_in_one_value}"
+    assert_eq!(
+        bare_in_one_value,
+        PluginGrantError::Unknown {
+            names: vec!["cache".to_string()]
+        },
+        "one comma list still requires the continuation to look like a path"
     );
 
     // `network` after a comma, with no path prefix, is the grant name. That

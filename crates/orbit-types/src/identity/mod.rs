@@ -7,7 +7,7 @@ mod artifact_ids;
 mod error;
 mod id;
 mod machine;
-pub use error::IdentityError;
+pub use error::{IdentityError, ProviderModelError};
 
 pub use actor::{
     ActorIdentity, agent_from_model, normalize_attribution_label,

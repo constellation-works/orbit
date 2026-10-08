@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentFamily, IdentityError};
+use super::{AgentFamily, IdentityError, ProviderModelError};
 
 /// A resolved (orchestrator, helper) duo for a given agent family.
 ///
@@ -81,15 +81,15 @@ impl ReasoningEffort {
         self,
         provider: &str,
         model: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProviderModelError> {
         match provider {
             "claude" | "codex" | "pi" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
             "opencode" => Self::validate_opencode_effort(self),
-            other => Err(format!(
-                "provider '{other}' does not support configured reasoning effort"
-            )),
+            other => Err(ProviderModelError::EffortUnsupportedByProvider {
+                provider: other.to_string(),
+            }),
         }
     }
 
@@ -102,16 +102,14 @@ impl ReasoningEffort {
     /// closed rather than being remapped onto `minimal`/`high`: a variant the
     /// underlying provider does not define is a configuration error, not
     /// something Orbit should guess at. [ORB-11295]
-    fn validate_opencode_effort(self) -> Result<(), String> {
+    fn validate_opencode_effort(self) -> Result<(), ProviderModelError> {
         match self {
             Self::High | Self::Max => Ok(()),
-            other => Err(format!(
-                "OpenCode CLI supports effort values high, max (`opencode run --variant`); '{other}' is unsupported. Values are not remapped; choose a supported effort or set a model whose provider defines the variant."
-            )),
+            effort => Err(ProviderModelError::OpenCodeEffort { effort }),
         }
     }
 
-    fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), String> {
+    fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), ProviderModelError> {
         let model = model.map(str::trim).filter(|model| !model.is_empty());
         match (model, self) {
             // https://docs.x.ai/developers/models/grok-4.7 documents exactly
@@ -119,31 +117,32 @@ impl ReasoningEffort {
             (Some("grok-4.7"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.6"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.5"), Self::Low | Self::Medium | Self::High) => Ok(()),
-            (Some("grok-4.7"), effort) => Err(format!(
-                "Grok model 'grok-4.7' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
-            )),
-            (Some("grok-4.6"), effort) => Err(format!(
-                "Grok model 'grok-4.6' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
-            )),
-            (Some("grok-4.5"), effort) => Err(format!(
-                "Grok model 'grok-4.5' supports effort values low, medium, high; '{effort}' is unsupported"
-            )),
-            (Some(model), _) => Err(format!(
-                "Grok effort support is verified only for models 'grok-4.5', 'grok-4.6', and 'grok-4.7'; model '{model}' is unsupported"
-            )),
-            (None, _) => Err(
-                "Grok effort requires an explicit model; supported models are 'grok-4.5', 'grok-4.6', and 'grok-4.7'"
-                    .to_string(),
-            ),
+            (Some("grok-4.7"), effort) => Err(ProviderModelError::GrokModelEffort {
+                model: "grok-4.7",
+                supported: "low, medium, high, xhigh",
+                effort,
+            }),
+            (Some("grok-4.6"), effort) => Err(ProviderModelError::GrokModelEffort {
+                model: "grok-4.6",
+                supported: "low, medium, high, xhigh",
+                effort,
+            }),
+            (Some("grok-4.5"), effort) => Err(ProviderModelError::GrokModelEffort {
+                model: "grok-4.5",
+                supported: "low, medium, high",
+                effort,
+            }),
+            (Some(model), _) => Err(ProviderModelError::GrokModelUnverified {
+                model: model.to_string(),
+            }),
+            (None, _) => Err(ProviderModelError::GrokModelMissing),
         }
     }
 
-    fn validate_antigravity_effort(self, model: Option<&str>) -> Result<(), String> {
+    fn validate_antigravity_effort(self, model: Option<&str>) -> Result<(), ProviderModelError> {
         match self {
             Self::Low | Self::Medium | Self::High => validate_antigravity_model(model),
-            other => Err(format!(
-                "Antigravity CLI supports effort values low, medium, high (`agy --effort`); '{other}' is unsupported. Migrate xhigh/max to high, or choose a *-high model slug from `agy models`. Values are not remapped."
-            )),
+            effort => Err(ProviderModelError::AntigravityEffort { effort }),
         }
     }
 }
@@ -154,14 +153,14 @@ impl ReasoningEffort {
 /// an effort suffix (`gemini-3.8-flash-high`). Bare ids such as
 /// `gemini-3.8-flash` fail at the CLI rather than falling back. Orbit fails
 /// the same way with migration text instead of rewriting the id. [ORB-11299]
-pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), String> {
+pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), ProviderModelError> {
     let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
         return Ok(());
     };
     if is_legacy_gemini_cli_model_id(model) {
-        return Err(format!(
-            "Antigravity CLI does not accept Gemini CLI model id '{model}'. Use a slug from `agy models` such as gemini-3.8-flash-high; ids are not remapped. Individual Gemini CLI accounts stopped on 2026-06-18, but enterprise Gemini Code Assist and API-key Gemini CLI remain available on the legacy `gemini` provider."
-        ));
+        return Err(ProviderModelError::LegacyGeminiModel {
+            model: model.to_string(),
+        });
     }
     Ok(())
 }

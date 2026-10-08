@@ -21,7 +21,7 @@ impl OrbitRuntime {
         invocation: WorkerInvocation,
         coordinator: Arc<dyn OwnerCoordinator>,
     ) -> Result<Self, OrbitError> {
-        invocation.validate().map_err(OrbitError::InvalidInput)?;
+        invocation.validate()?;
         if self
             .worker_invocation
             .as_deref()

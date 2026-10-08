@@ -95,7 +95,7 @@ pub fn sync_plugins(
 ) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
     // Kept as the parsed set, not a name list: a `--grant fs=<root>` consent
     // has to carry its roots through to the row each pin records.
-    let grants = parse_grants(grants).map_err(OrbitError::InvalidInput)?;
+    let grants = parse_grants(grants)?;
     let Some(pins) = read_pin_file(&runtime.shared_root())? else {
         return Ok(Vec::new());
     };

@@ -79,17 +79,15 @@ fn enable_plugin_checked(
     let record_grants: Option<Vec<String>> = if options.grants.is_empty() {
         None
     } else {
-        let resolved = resolve_grant_selection(&options.grants, &plugin.manifest)
-            .map_err(OrbitError::InvalidInput)?;
+        let resolved = resolve_grant_selection(&options.grants, &plugin.manifest)?;
         Some(resolved.to_recorded())
     };
     // Resolve once: a dashboard comparison must be against the paths this
     // very enable will record, not against a second PATH lookup after writes.
     let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
     if preserve_consent {
-        let requested = resolve_grant_selection(&["requested".to_string()], &plugin.manifest)
-            .map_err(OrbitError::InvalidInput)?
-            .to_recorded();
+        let requested =
+            resolve_grant_selection(&["requested".to_string()], &plugin.manifest)?.to_recorded();
         let witnessed = witnessed_program_paths(&runtime.global_root(), &installed);
         let requested_set: BTreeSet<_> = requested.iter().collect();
         let recorded_set: BTreeSet<_> = installed.grants.iter().collect();

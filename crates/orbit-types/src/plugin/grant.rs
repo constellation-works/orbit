@@ -10,6 +10,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
+use super::PluginGrantError;
 use super::manifest::{PluginManifest, PluginNetworkPermission, PluginSandbox};
 
 /// One grantable capability.
@@ -172,18 +173,25 @@ impl PluginGrantSet {
     /// back as the same set. A merged bare continuation is stored as
     /// `./<root>` and loaded as the bare root, so `--grant fs=data --grant
     /// fs=cache` keeps roots `data` and `cache` and never gains another grant.
-    pub fn from_entries(entries: Vec<PluginGrantEntry>) -> Result<Self, String> {
+    pub fn from_entries(entries: Vec<PluginGrantEntry>) -> Result<Self, PluginGrantError> {
         let set = Self::canonicalize(entries)?;
         let recorded = set.to_recorded();
         let listed = recorded.join(", ");
-        let parsed = parse_grant_entries(&recorded)
-            .map_err(|error| format!("grant set `{listed}` does not parse back: {error}"))?;
+        let parsed = match parse_grant_entries(&recorded) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Err(PluginGrantError::RecordedUnparseable {
+                    listed,
+                    reason: Box::new(error),
+                });
+            }
+        };
         let again = Self::canonicalize(parsed)?;
         if again != set {
-            return Err(format!(
-                "grant set `{listed}` loads back as `{}`",
-                again.to_recorded().join(", ")
-            ));
+            return Err(PluginGrantError::RecordedDrift {
+                listed,
+                loaded: again.to_recorded().join(", "),
+            });
         }
         Ok(set)
     }
@@ -191,7 +199,7 @@ impl PluginGrantSet {
     /// Order, merge, and spell roots the way [`Self::to_recorded`] will write
     /// them. Does not check the round-trip; [`Self::from_entries`] does, and
     /// calling this from that check must not recurse into it.
-    fn canonicalize(entries: Vec<PluginGrantEntry>) -> Result<Self, String> {
+    fn canonicalize(entries: Vec<PluginGrantEntry>) -> Result<Self, PluginGrantError> {
         let mut canonical = Vec::new();
         for grant in PluginGrant::ALL {
             let mut matching = entries
@@ -226,11 +234,7 @@ impl PluginGrantSet {
                 }
             }
             if saw_plain && saw_scoped {
-                return Err(format!(
-                    "grant `{grant}` was given both with and without roots; write \
-                     `{grant}=<root>[,<root>]` to scope it, or `{grant}` on its own to grant \
-                     every root the manifest requests"
-                ));
+                return Err(PluginGrantError::ScopedAndUnscoped { grant });
             }
             canonical.push(PluginGrantEntry {
                 grant,
@@ -335,7 +339,7 @@ fn canonical_continuation_root(root: &str) -> &str {
 ///
 /// Each value is split on commas, so `fs,network`, `--grant fs --grant
 /// network` and a stored `["fs=/a,/b", "network"]` row all parse the same way.
-pub fn parse_grant_entries(values: &[String]) -> Result<Vec<PluginGrantEntry>, String> {
+pub fn parse_grant_entries(values: &[String]) -> Result<Vec<PluginGrantEntry>, PluginGrantError> {
     let mut entries: Vec<PluginGrantEntry> = Vec::new();
     let mut unknown = Vec::new();
     // Index of the scoped entry still collecting roots: every following
@@ -353,16 +357,11 @@ pub fn parse_grant_entries(values: &[String]) -> Result<Vec<PluginGrantEntry>, S
                 continue;
             };
             if !grant.takes_roots() {
-                return Err(format!(
-                    "grant `{grant}` does not take roots; write `{grant}` on its own"
-                ));
+                return Err(PluginGrantError::RootsNotTaken { grant });
             }
             let first_root = first_root.trim();
             if first_root.is_empty() {
-                return Err(format!(
-                    "`{grant}=` needs at least one root; write `{grant}` on its own to grant \
-                     every root the manifest requests"
-                ));
+                return Err(PluginGrantError::RootMissing { grant });
             }
             entries.push(PluginGrantEntry {
                 grant,
@@ -383,23 +382,14 @@ pub fn parse_grant_entries(values: &[String]) -> Result<Vec<PluginGrantEntry>, S
         }
     }
     if !unknown.is_empty() {
-        return Err(format!(
-            "unknown grant{} {}; valid grants are {}",
-            if unknown.len() == 1 { "" } else { "s" },
-            unknown.join(", "),
-            PluginGrant::ALL
-                .iter()
-                .map(|grant| grant.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+        return Err(PluginGrantError::Unknown { names: unknown });
     }
     Ok(entries)
 }
 
 /// Validate a `--grant` list: every name must be one of [`PluginGrant::ALL`],
 /// and `fs` may carry the roots it is scoped to.
-pub fn parse_grants(names: &[String]) -> Result<PluginGrantSet, String> {
+pub fn parse_grants(names: &[String]) -> Result<PluginGrantSet, PluginGrantError> {
     PluginGrantSet::from_entries(parse_grant_entries(names)?)
 }
 
@@ -412,7 +402,7 @@ pub fn parse_grants(names: &[String]) -> Result<PluginGrantSet, String> {
 /// renamed or retired a grant this build does not know about. Dropping it
 /// silently would run the plugin under fewer grants than were authorized
 /// without saying so; the caller must refuse the row instead (design §4.1).
-pub fn parse_stored_grants(names: &[String]) -> Result<PluginGrantSet, String> {
+pub fn parse_stored_grants(names: &[String]) -> Result<PluginGrantSet, PluginGrantError> {
     parse_grants(names)
 }
 
@@ -429,7 +419,7 @@ pub fn parse_stored_grants(names: &[String]) -> Result<PluginGrantSet, String> {
 pub fn resolve_grant_selection(
     names: &[String],
     manifest: &PluginManifest,
-) -> Result<PluginGrantSet, String> {
+) -> Result<PluginGrantSet, PluginGrantError> {
     let selected = match names {
         [only] if only.trim() == "none" => Vec::new(),
         [only] if only.trim() == "all" => PluginGrant::ALL.to_vec(),

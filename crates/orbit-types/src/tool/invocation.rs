@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::WorkerBindingError;
 use crate::task::ExecutionLocation;
 
 /// Transportable attempt identity. Receiving adapters must accept this only from
@@ -21,7 +22,7 @@ pub struct WorkerInvocation {
 }
 
 impl WorkerInvocation {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), WorkerBindingError> {
         if [
             &self.owner_machine_id,
             &self.owner_workspace_id,
@@ -34,13 +35,16 @@ impl WorkerInvocation {
         .iter()
         .any(|value| value.trim().is_empty() || value.trim() != value.as_str())
         {
-            return Err("managed worker invocation has an incomplete binding".into());
+            return Err(WorkerBindingError::IncompleteBinding);
         }
         Ok(())
     }
 
     /// Explicit arguments may confirm a binding, but cannot replace it.
-    pub fn validate_arguments(&self, arguments: &serde_json::Value) -> Result<(), String> {
+    pub fn validate_arguments(
+        &self,
+        arguments: &serde_json::Value,
+    ) -> Result<(), WorkerBindingError> {
         self.validate()?;
         for (key, expected) in [
             ("task_id", &self.task_id),
@@ -51,9 +55,7 @@ impl WorkerInvocation {
             if let Some(value) = arguments.get(key)
                 && value.as_str() != Some(expected.as_str())
             {
-                return Err(format!(
-                    "managed worker argument `{key}` conflicts with its binding"
-                ));
+                return Err(WorkerBindingError::ArgumentConflict { key });
             }
         }
         Ok(())
@@ -70,19 +72,12 @@ impl WorkerInvocation {
         &self,
         arguments: &serde_json::Value,
         findings: bool,
-    ) -> Result<Vec<String>, String> {
-        const UNSPAWNED: &str = "a claimed worker's new task must be spawned_from its claimed task";
-        const OTHER_RELATION: &str = "a claimed worker's new task may relate only to its \
-            claimed task, as spawned_from; only a claimed review task's findings may also name \
-            regression_from";
-        const OTHER_FINDING_RELATION: &str = "a claimed review worker's new task may relate only \
-            to its claimed task, as spawned_from, and to the task that introduced its finding, \
-            as regression_from";
+    ) -> Result<Vec<String>, WorkerBindingError> {
         let relations = arguments
             .get("relations")
             .and_then(serde_json::Value::as_array)
             .filter(|relations| !relations.is_empty())
-            .ok_or(UNSPAWNED)?;
+            .ok_or(WorkerBindingError::NotSpawnedFromClaim)?;
         let mut spawned = false;
         let mut culprits = Vec::new();
         for relation in relations {
@@ -92,12 +87,12 @@ impl WorkerInvocation {
                 Some("regression_from") if findings && target.is_some() => {
                     culprits.extend(target.map(str::to_owned));
                 }
-                _ if findings => return Err(OTHER_FINDING_RELATION.into()),
-                _ => return Err(OTHER_RELATION.into()),
+                _ if findings => return Err(WorkerBindingError::ForeignFindingRelation),
+                _ => return Err(WorkerBindingError::ForeignRelation),
             }
         }
         if !spawned {
-            return Err(UNSPAWNED.into());
+            return Err(WorkerBindingError::NotSpawnedFromClaim);
         }
         Ok(culprits)
     }

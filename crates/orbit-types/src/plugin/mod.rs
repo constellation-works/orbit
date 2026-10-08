@@ -8,6 +8,7 @@
 
 mod build;
 mod conformance;
+mod error;
 mod grant;
 mod manifest;
 mod namespace;
@@ -31,6 +32,7 @@ pub use conformance::{
     FIXTURE_SECRET_VERSION, PluginTestCase, PluginTestErrorExpectation, PluginTestExpectation,
     PluginTestFile, TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,
 };
+pub use error::{ArchiveDigestError, PluginGrantError, PluginPinError};
 pub use grant::{
     PluginGrant, PluginGrantEntry, PluginGrantRequest, PluginGrantSet, parse_grant_entries,
     parse_grants, parse_stored_grants, resolve_grant_selection,

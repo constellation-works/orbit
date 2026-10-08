@@ -700,13 +700,21 @@ impl From<std::io::Error> for OrbitError {
     }
 }
 
-use orbit_types::identity::IdentityError;
+use orbit_types::identity::{IdentityError, ProviderModelError};
+use orbit_types::plugin::{ArchiveDigestError, PluginGrantError, PluginPinError};
 use orbit_types::policy::PolicyError;
 use orbit_types::record::RecordError;
 use orbit_types::resource::ResourceError;
 use orbit_types::task::TaskError;
-use orbit_types::tool::ToolError;
-use orbit_types::workflow::WorkflowError;
+use orbit_types::tool::{ToolError, WorkerBindingError};
+use orbit_types::workflow::{
+    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
+    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+};
+
+// Translators for `orbit-types` errors. The orphan rule puts each `From` impl
+// in this crate, beside `OrbitError`; `scripts/check-error-translation.sh`
+// registers them, and callers convert with `?` or `OrbitError::from`.
 
 impl From<IdentityError> for OrbitError {
     fn from(error: IdentityError) -> Self {
@@ -726,6 +734,9 @@ impl From<TaskError> for OrbitError {
             TaskError::Invalid(message) => Self::InvalidInput(message),
             TaskError::StatusTransition(message) => Self::TaskStatusTransition(message),
             TaskError::SystemIdentityTagDropped { tag } => Self::SystemIdentityTagDropped { tag },
+            unassessed @ TaskError::UnassessedComplexity => {
+                Self::InvalidInput(unassessed.to_string())
+            }
         }
     }
 }
@@ -764,5 +775,95 @@ impl From<RecordError> for OrbitError {
             RecordError::Invalid(message) => Self::InvalidInput(message),
             RecordError::InvalidTransition(message) => Self::AdrInvalidTransition(message),
         }
+    }
+}
+
+impl From<ProviderModelError> for OrbitError {
+    fn from(error: ProviderModelError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<PluginGrantError> for OrbitError {
+    fn from(error: PluginGrantError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<ArchiveDigestError> for OrbitError {
+    fn from(error: ArchiveDigestError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<PluginPinError> for OrbitError {
+    fn from(error: PluginPinError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+/// Binding defects are invalid input; a new task that strays outside the
+/// claimed task is a policy refusal.
+impl From<WorkerBindingError> for OrbitError {
+    fn from(error: WorkerBindingError) -> Self {
+        match error {
+            WorkerBindingError::IncompleteBinding | WorkerBindingError::ArgumentConflict { .. } => {
+                Self::InvalidInput(error.to_string())
+            }
+            WorkerBindingError::NotSpawnedFromClaim
+            | WorkerBindingError::ForeignRelation
+            | WorkerBindingError::ForeignFindingRelation => Self::PolicyDenied(error.to_string()),
+        }
+    }
+}
+
+impl From<JobRunStateError> for OrbitError {
+    fn from(error: JobRunStateError) -> Self {
+        Self::JobRunStateTransition(error.to_string())
+    }
+}
+
+impl From<ProviderSandboxError> for OrbitError {
+    fn from(error: ProviderSandboxError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<RetiredBackendError> for OrbitError {
+    fn from(error: RetiredBackendError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<FinalRecoveryError> for OrbitError {
+    fn from(error: FinalRecoveryError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<ReviewReportError> for OrbitError {
+    fn from(error: ReviewReportError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+/// A stored history that cannot be read is a store fault; a report revision
+/// the history refuses is the submitter's to correct.
+impl From<ReviewHistoryError> for OrbitError {
+    fn from(error: ReviewHistoryError) -> Self {
+        match error {
+            ReviewHistoryError::Unreadable { .. }
+            | ReviewHistoryError::UnsupportedVersion { .. } => Self::Store(error.to_string()),
+            ReviewHistoryError::AttemptFull { .. }
+            | ReviewHistoryError::RecordIdsMissing { .. }
+            | ReviewHistoryError::RecordIdReused { .. }
+            | ReviewHistoryError::RecordDropped { .. } => Self::InvalidInput(error.to_string()),
+        }
+    }
+}
+
+impl From<ReviewAdmissionError> for OrbitError {
+    fn from(error: ReviewAdmissionError) -> Self {
+        Self::InvalidInput(error.to_string())
     }
 }

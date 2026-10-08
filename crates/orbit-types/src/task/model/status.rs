@@ -334,15 +334,11 @@ impl TaskComplexity {
 
     /// Reject [`TaskComplexity::Unassessed`] on human/agent create and update
     /// surfaces.
-    pub fn require_assessed(self) -> Result<Self, String> {
+    pub fn require_assessed(self) -> Result<Self, TaskError> {
         if self.is_assessed() {
             Ok(self)
         } else {
-            Err(
-                "complexity must be an assessed value (low, medium, hard, or xhard); \
-                 unassessed is reserved for automated creation"
-                    .to_string(),
-            )
+            Err(TaskError::UnassessedComplexity)
         }
     }
 }

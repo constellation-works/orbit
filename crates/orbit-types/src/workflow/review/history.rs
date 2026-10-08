@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{ReviewValidation, ReviewVerdict};
+use crate::workflow::ReviewHistoryError;
 
 /// Task artifact the artifact store keeps beside [`REVIEW_REPORT_ARTIFACT`]:
 /// every accepted report revision's verdict and validation records. Only the
@@ -55,15 +56,15 @@ impl Default for ReviewReportHistory {
 impl ReviewReportHistory {
     /// Read a stored history; another version or malformed content is an
     /// error, never an empty history.
-    pub fn parse(content: &[u8]) -> Result<Self, String> {
-        let history: Self = serde_json::from_slice(content)
-            .map_err(|error| format!("{REVIEW_REPORT_HISTORY_ARTIFACT} is unreadable: {error}"))?;
+    pub fn parse(content: &[u8]) -> Result<Self, ReviewHistoryError> {
+        let history: Self =
+            serde_json::from_slice(content).map_err(|error| ReviewHistoryError::Unreadable {
+                reason: error.to_string(),
+            })?;
         if history.schema_version != REVIEW_REPORT_HISTORY_VERSION {
-            return Err(format!(
-                "{REVIEW_REPORT_HISTORY_ARTIFACT} has schema_version {}; this build reads \
-                 version {REVIEW_REPORT_HISTORY_VERSION}",
-                history.schema_version
-            ));
+            return Err(ReviewHistoryError::UnsupportedVersion {
+                found: history.schema_version,
+            });
         }
         Ok(history)
     }
@@ -73,7 +74,7 @@ impl ReviewReportHistory {
     /// after a lost response is idempotent. At the limit the oldest revision
     /// of another attempt makes room; a single attempt that fills the
     /// history is refused rather than losing its own obligations.
-    pub fn record(&mut self, revision: ReviewReportRevision) -> Result<bool, String> {
+    pub fn record(&mut self, revision: ReviewReportRevision) -> Result<bool, ReviewHistoryError> {
         if self
             .revisions
             .iter()
@@ -87,11 +88,9 @@ impl ReviewReportHistory {
                 .iter()
                 .position(|kept| kept.attempt_id != revision.attempt_id)
             else {
-                return Err(format!(
-                    "attempt {} already recorded {REVIEW_REPORT_HISTORY_LIMIT} report revisions; \
-                     settle it or admit a fresh review",
-                    revision.attempt_id
-                ));
+                return Err(ReviewHistoryError::AttemptFull {
+                    attempt_id: revision.attempt_id,
+                });
             };
             self.revisions.remove(oldest_other);
         }

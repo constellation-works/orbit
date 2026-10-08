@@ -16,7 +16,10 @@ mod routine;
 mod run;
 mod ship;
 mod skill;
-pub use error::WorkflowError;
+pub use error::{
+    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
+    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+};
 
 #[cfg(test)]
 mod tests;

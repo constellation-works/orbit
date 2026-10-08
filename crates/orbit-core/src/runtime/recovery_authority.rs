@@ -782,7 +782,7 @@ impl RecoveryAuthority {
         pid: u32,
         binding: &orbit_types::tool::WorkerInvocation,
     ) -> Result<(), OrbitError> {
-        binding.validate().map_err(OrbitError::InvalidInput)?;
+        binding.validate()?;
         let identity = orbit_common::process::identity::process_start_identity_token(pid)
             .ok_or_else(|| OrbitError::Execution("worker process identity unavailable".into()))?;
         self.connection
@@ -922,7 +922,7 @@ fn resolve_worker_binding(
         if let Some(value) = value {
             let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
-            binding.validate().map_err(OrbitError::InvalidInput)?;
+            binding.validate()?;
             return Ok(Some(binding));
         }
     }
@@ -946,7 +946,7 @@ fn resolve_worker_binding(
             if let Some(value) = value {
                 let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
                     .map_err(|error| OrbitError::Store(error.to_string()))?;
-                binding.validate().map_err(OrbitError::InvalidInput)?;
+                binding.validate()?;
                 return Ok(Some(binding));
             }
         }

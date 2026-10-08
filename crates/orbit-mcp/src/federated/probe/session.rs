@@ -179,7 +179,7 @@ impl DestinationSession {
         binding: Option<&orbit_types::tool::WorkerInvocation>,
     ) -> Result<(), OrbitError> {
         if let Some(binding) = binding {
-            binding.validate().map_err(OrbitError::InvalidInput)?;
+            binding.validate()?;
         }
         self.worker_invocation = binding.cloned();
         let response = self.request_probe(

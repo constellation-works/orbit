@@ -43,7 +43,7 @@ pub(crate) fn execute(
     let Some(binding) = &session.worker_invocation else {
         return Ok(None);
     };
-    binding.validate().map_err(OrbitError::InvalidInput)?;
+    binding.validate()?;
     let machine = session
         .process_machine_id
         .as_deref()
@@ -134,9 +134,7 @@ pub(crate) fn execute(
     let mut friction_tag_substitutions = Vec::new();
     let mutation = match action {
         OrbitBuiltinAction::TaskUpdate => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             // Artifact attachments can reach the mutation receipt path, which
             // intentionally reconciles a lost reply before rechecking claim
             // authority. Check the current claim first so a stale replay cannot
@@ -209,9 +207,7 @@ pub(crate) fn execute(
             })
         }
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             let (mut params, substitutions) =
                 super::friction_tools::add_params(input, model.map(str::to_owned))?;
             friction_tag_substitutions = substitutions;
@@ -234,9 +230,7 @@ pub(crate) fn execute(
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             return Ok(None);
         }
         // [ORB-14260] A claimed worker files follow-up work as ordinary
@@ -245,15 +239,11 @@ pub(crate) fn execute(
         // claimed review task's findings may also name the task in this
         // workspace that introduced each, as `regression_from`.
         OrbitBuiltinAction::TaskAdd => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             let findings = orbit_types::workflow::files_regression_findings(
                 &runtime.get_task(&binding.task_id)?.tags,
             );
-            let culprits = binding
-                .validate_spawned_relations(input, findings)
-                .map_err(OrbitError::PolicyDenied)?;
+            let culprits = binding.validate_spawned_relations(input, findings)?;
             for culprit in culprits {
                 match runtime.get_task(&culprit) {
                     Ok(_) => {}
