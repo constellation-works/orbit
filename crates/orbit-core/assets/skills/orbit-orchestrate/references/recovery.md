@@ -14,8 +14,8 @@ after the repair merged; the sweep holds such failures in
 `pending_supersession` rather than filing them, so read that list in the
 sweep's step output before filing by hand. A red run is held there for a newer
 push run still in flight at a descendant commit only while it is a lone
-failure: once the previous completed run failed the same job and step, the
-sweep files it (`reproduced_on`), and a hold older than
+failure: once the previous completed run failed the same job with the same
+normalized error signature, the sweep files it (`reproduced_on`), and a hold older than
 `pending_supersession_window_minutes` (default 30) is filed with the pending
 run named in the task (`held_past_window`). A failure that sits in
 `pending_supersession` across sweeps on a busy branch is therefore not

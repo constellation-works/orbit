@@ -244,14 +244,42 @@ fn held_red_run_is_released_once_it_has_waited_past_the_window() {
     );
 }
 
-/// Two consecutive completed red runs and a newer one still queued: agent-main
-/// on 2026-10-07, where a `cargo doc` failure reproduced on every completed
-/// run and the sweep held each one behind the next queued push for 50 minutes.
-fn consecutive_red_runs(second_failed_step: &str) -> FakeQueries {
+const CI_JOB: &str = "Check / Clippy / Test";
+const CI_STEP: &str = "Run CI guardrails";
+
+/// A failed-step log of Orbit's single CI guardrails step, as `gh run view
+/// --log-failed` prints it, failing with `diagnostic` at `location`.
+fn guardrails_log(at: &str, diagnostic: &str, location: &str) -> String {
+    [
+        "##[group]Run ./scripts/ci-guardrails.sh",
+        diagnostic,
+        location,
+        "##[error]Process completed with exit code 101.",
+    ]
+    .iter()
+    .map(|line| format!("{CI_JOB}\t{CI_STEP}\t{at} {line}\n"))
+    .collect()
+}
+
+/// A `cargo doc` broken intra-doc link.
+fn doc_link_log(at: &str, line: u32) -> String {
+    guardrails_log(
+        at,
+        "error: unresolved link to `Supersession::views`",
+        &format!("  --> crates/orbit-engine/src/executor/automation/ci/pending.rs:{line}:9"),
+    )
+}
+
+/// Two consecutive completed red runs of Orbit's CI, whose fmt, clippy, doc
+/// and tests all run in one job and step, and a newer one still queued:
+/// agent-main on 2026-10-07, where a `cargo doc` failure reproduced on every
+/// completed run and the sweep held each one behind the next queued push for
+/// 50 minutes. Each run's failed-step log is scripted.
+fn consecutive_red_runs(second_failed_step: &str, older_log: &str, newer_log: &str) -> FakeQueries {
     let failed_jobs = |job_id: u64, step: &str| {
         json!([{
             "job_id": job_id,
-            "name": "Docs",
+            "name": CI_JOB,
             "status": "completed",
             "conclusion": "failure",
             "failed_steps": [{"name": step, "conclusion": "failure"}],
@@ -287,13 +315,20 @@ fn consecutive_red_runs(second_failed_step: &str) -> FakeQueries {
         .with_ancestor(FAILING, REPAIRED)
         .with_ancestor(REPAIRED, LATER)
         .with_ancestor(FAILING, LATER)
-        .with_failed_jobs(200, failed_jobs(9200, "cargo doc"))
+        .with_failed_jobs(200, failed_jobs(9200, CI_STEP))
         .with_failed_jobs(201, failed_jobs(9201, second_failed_step))
+        .with_log(9200, older_log)
+        .with_log(9201, newer_log)
 }
 
 #[test]
 fn red_run_that_reproduced_on_the_previous_completed_run_is_not_held() {
-    let queries = consecutive_red_runs("cargo doc");
+    // The same broken link, moved down the file by the commit in between.
+    let queries = consecutive_red_runs(
+        CI_STEP,
+        &doc_link_log("2026-10-07T02:44:00.0000000Z", 52),
+        &doc_link_log("2026-10-07T02:54:00.0000000Z", 57),
+    );
 
     // One minute after the newest red run completed, well inside the window.
     let evidence = collect_as_of(&queries, &input(), "2026-10-07T02:56:00Z");
@@ -305,8 +340,12 @@ fn red_run_that_reproduced_on_the_previous_completed_run_is_not_held() {
     assert_eq!(reproduced["run_id"], json!(200));
     assert_eq!(reproduced["event_reported_head_sha"], json!(FAILING));
     assert_eq!(
-        reproduced["shared_failed_steps"],
-        json!([{"job": "Docs", "step": "cargo doc"}])
+        reproduced["shared_cause"],
+        json!({
+            "job": CI_JOB,
+            "steps": [CI_STEP],
+            "normalized_error_signature": "error: unresolved link to `supersession::views`",
+        })
     );
     assert_eq!(reproduced["pending_on"]["run_id"], json!(202));
     assert!(
@@ -314,25 +353,62 @@ fn red_run_that_reproduced_on_the_previous_completed_run_is_not_held() {
             .get("held_past_window")
             .is_none()
     );
-    // Only the newest red run's job is read; the older run is evidence.
+    // The older run's log is read once, for the comparison; it is evidence,
+    // not a failure to investigate.
     let reads = queries.log_reads.lock().expect("log reads").clone();
-    assert!(
-        !reads.is_empty() && reads.iter().all(|job| *job == 9201),
+    assert_eq!(
+        reads.iter().filter(|job| **job == 9200).count(),
+        1,
         "{reads:?}"
     );
+    assert!(reads.contains(&9201), "{reads:?}");
 }
 
 #[test]
-fn red_run_that_failed_differently_on_the_previous_completed_run_stays_held() {
-    let queries = consecutive_red_runs("cargo test");
+fn red_run_that_failed_the_same_step_for_another_cause_stays_held() {
+    let clippy = guardrails_log(
+        "2026-10-07T02:44:00.0000000Z",
+        "error: this `if` has identical blocks",
+        "  --> crates/orbit-engine/src/executor/automation/ci/pending.rs:120:5",
+    );
+    let doc_link = doc_link_log("2026-10-07T02:54:00.0000000Z", 52);
+    let no_diagnostic = guardrails_log("2026-10-07T02:54:00.0000000Z", "", "");
+    for (older, newer, case) in [
+        (clippy.as_str(), doc_link.as_str(), "different signatures"),
+        // A step-name fallback names no cause, so it proves nothing.
+        (
+            no_diagnostic.as_str(),
+            no_diagnostic.as_str(),
+            "no diagnostic in either log",
+        ),
+    ] {
+        let queries = consecutive_red_runs(CI_STEP, older, newer);
+
+        let evidence = collect_as_of(&queries, &input(), "2026-10-07T02:56:00Z");
+
+        assert!(run_ids(&evidence, "current_failures").is_empty(), "{case}");
+        assert_eq!(
+            evidence["outcome_hint"],
+            json!("no_current_failure"),
+            "{case}"
+        );
+        assert_eq!(run_ids(&evidence, "pending_supersession"), [201], "{case}");
+        assert_eq!(
+            evidence["pending_supersession"][0]["pending_on"]["run_id"],
+            json!(202),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn red_run_that_failed_a_different_step_stays_held_without_reading_logs() {
+    let doc_link = doc_link_log("2026-10-07T02:54:00.0000000Z", 52);
+    let queries = consecutive_red_runs("cargo test", &doc_link, &doc_link);
 
     let evidence = collect_as_of(&queries, &input(), "2026-10-07T02:56:00Z");
 
     assert!(run_ids(&evidence, "current_failures").is_empty());
     assert_eq!(run_ids(&evidence, "pending_supersession"), [201]);
-    assert_eq!(
-        evidence["pending_supersession"][0]["pending_on"]["run_id"],
-        json!(202)
-    );
     assert!(queries.log_reads.lock().expect("log reads").is_empty());
 }

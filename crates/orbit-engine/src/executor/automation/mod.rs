@@ -1,4 +1,4 @@
-mod ci;
+pub(crate) mod ci;
 mod dependabot;
 mod input;
 pub(crate) mod review;
