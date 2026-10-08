@@ -498,6 +498,18 @@ pub fn explain_workspace_auto_readiness(
         })
         .collect::<Vec<_>>();
 
+    // `total` describes the current view: the full backlog for the default
+    // bounded listing, or the number of explicitly selected tasks.
+    let total = if task_ids.is_empty() {
+        snapshot
+            .task_lookup
+            .values()
+            .filter(|task| task.status == TaskStatus::Backlog)
+            .count()
+    } else {
+        selected_ids.len()
+    };
+
     // [ORB-14117] The status drain's proposed-task approvals, when it was
     // started with `--approve-proposed`.
     let approvals = readiness_approvals(
@@ -567,6 +579,7 @@ pub fn explain_workspace_auto_readiness(
             "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
         },
         "approvals": approvals,
+        "total": total,
         "tasks": tasks,
     }))
 }

@@ -469,6 +469,76 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
 }
 
 #[test]
+fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
+    if !isolated_run_observation(
+        "run_observation::readiness_reports_total_and_notifies_only_when_backlog_is_truncated",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    for index in 0..3 {
+        runtime
+            .add_task(TaskAddParams {
+                title: format!("readiness candidate {index}"),
+                description: "Readiness total fixture".into(),
+                task_type: Some(TaskType::Feature),
+                complexity: TaskComplexity::Low,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    let limited_text = fixture
+        .orbit()
+        .args(["run", "readiness", "--limit", "2"])
+        .output()
+        .unwrap();
+    assert!(
+        limited_text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&limited_text.stderr)
+    );
+    let limited_text = String::from_utf8_lossy(&limited_text.stdout);
+    assert_eq!(
+        limited_text.lines().last(),
+        Some("showing 2 of 3 backlog tasks; use --limit N or name task ids"),
+        "the truncation notice must be the final text line: {limited_text}"
+    );
+
+    let limited_json = fixture.json(&["run", "readiness", "--limit", "2", "--json"]);
+    assert_eq!(limited_json["total"], 3);
+    assert_eq!(limited_json["tasks"].as_array().unwrap().len(), 2);
+
+    let complete_text = fixture
+        .orbit()
+        .args(["run", "readiness", "--limit", "3"])
+        .output()
+        .unwrap();
+    assert!(
+        complete_text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&complete_text.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&complete_text.stdout).contains("showing "),
+        "a complete view must not print a truncation notice"
+    );
+    let complete_json = fixture.json(&["run", "readiness", "--limit", "3", "--json"]);
+    assert_eq!(complete_json["total"], 3);
+    assert_eq!(
+        complete_json["total"].as_u64().unwrap() as usize,
+        complete_json["tasks"].as_array().unwrap().len()
+    );
+}
+
+#[test]
 fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
