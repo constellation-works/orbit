@@ -1593,8 +1593,8 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 
 ## A backstop recovers tasks blocked outside pipelines
 
-**Recorded:** 2026-10-04 · [ORB-13898]
-**Paths:** `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+**Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
 
@@ -1609,10 +1609,12 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
    - was written after the block by a change with no recorded actor: the task's `updated_at` is newer than its newest attributed write (history, comment or artifact). A field-only edit records no history, so the backstop cannot rule out a human and fails closed;
    - is older than 72 h, which also bounds the first tick after an upgrade.
 3. Each remaining episode gets one `blocked_task_recovery_pipeline` run, admitted under the episode key, with at most two live at once.
-   - `prepare_blocked_task_recovery` re-checks the episode against the revision the tick observed, gathers the failed run's step and error, and opens a detached linked worktree of the base. The declared worktree pair refuses the primary checkout.
+   - `prepare_blocked_task_recovery` re-checks the episode against the revision the tick observed, gathers the failed run's step and error, identifies the failed run's retained candidate, and opens a detached linked worktree of the base. The declared worktree pair refuses the primary checkout.
    - `final_recovery` runs there with a crew from `workflow.final_recovery_crews`.
    - `apply_blocked_task_recovery` calls `OrbitRuntime::apply_final_recovery` and removes the checkout. A verified `complete_no_diff` moves the task to `review`.
 4. The backstop never resumes. A blocked task has no live run, so `resume` is applied as `escalate`; `requeue` is how work restarts, and it shares the applier's requeue bound.
+   - The agent's contract says so. The shared `final_recovery` activity takes optional `decisions` and `lane_contract` inputs; the backstop sends `decisions` without `resume` and a `lane_contract` stating that its checkout is discarded, so implementing or validating the task there delivers nothing. It sends no `step_ids`. The in-pipeline lane sends neither field, so its agent may still repair its worktree and `resume`.
+   - The *retained candidate* is the failed run's own worktree, where unfinished work stays after the run ends [F2026-10-159]. Preparation locates it with the rule its setup used and lists up to 20 changed paths through `git status` with optional locks off. It never writes, copies or runs Git writes there. The agent input carries the path and paths, or `absent` with a reason: no failed run, a run executed on another machine, or a worktree already removed. Every escalation's `human_action` names it, including one converted from `resume` and one for a missing or malformed decision.
 5. A recovery run that ends without applying a decision — agent failure, timeout, a dead worker — is settled on a later tick as an `escalate` carrying that run's id. Every dispatched episode therefore ends with exactly one recorded decision.
 6. `orbit task show` prints the last final-recovery decision (JSON `final_recovery`). `orbit doctor` reports the `blocked-task-recovery` row: tasks still blocked after a decision, counts of pending, human-held and expired episodes, and the tasks held for an unattributed edit.
 
@@ -1725,5 +1727,6 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
+- [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

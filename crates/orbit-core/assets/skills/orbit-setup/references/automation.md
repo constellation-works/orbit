@@ -100,7 +100,9 @@ a failed gate or auto run, or a failed claim settlement left `blocked`. It
 dispatches one `blocked_task_recovery_pipeline` run per block, with at most
 two at a time. The `final_recovery` agent proposes `complete_no_diff`,
 `reject`, `archive`, `requeue` or `escalate`, and Orbit's deterministic
-applier acts on it. Each decision is a task comment with the run id.
+applier acts on it. Each decision is a task comment with the run id. An
+escalation names the failed run's worktree and its changed paths when it
+still exists, since that is where unfinished work stays.
 `orbit task show` prints the last one, and `orbit doctor` lists tasks still
 blocked after one in its `blocked-task-recovery` row.
 

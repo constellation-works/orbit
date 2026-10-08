@@ -93,7 +93,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     // in-scope failure instead of returning it.
     let mut reports = Vec::new();
     for run in runs {
-        match expected_paths(repo_root, run) {
+        match run_worktree_paths(repo_root, run) {
             Ok(paths) => {
                 for path in paths {
                     known_paths.entry(path).or_default().push(run);
@@ -573,7 +573,7 @@ fn collect_build_output(
 /// callers that sweep many finished runs and collect only those with
 /// something to reclaim.
 pub fn run_worktree_has_build_output(repo_root: &Path, run: &JobRun) -> bool {
-    expected_paths(repo_root, run).is_ok_and(|paths| {
+    run_worktree_paths(repo_root, run).is_ok_and(|paths| {
         paths.iter().any(|path| {
             fs::symlink_metadata(path.join(BUILD_OUTPUT_DIR))
                 .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
@@ -599,13 +599,13 @@ fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> WorktreeGcReport
     }
 }
 
-/// Every directory this run could have left behind.
+/// Every directory this run could have left behind, primary path first.
 ///
 /// The identity is re-derived with the same rule `setup_worktree` used
 /// (ORB-10427) — never re-spelled here. A run whose input names no task never
 /// reached `setup_worktree`; its worktree, if any, is the shared batch
 /// worktree keyed by run id.
-fn expected_paths(repo_root: &Path, run: &JobRun) -> Result<Vec<PathBuf>, OrbitError> {
+pub fn run_worktree_paths(repo_root: &Path, run: &JobRun) -> Result<Vec<PathBuf>, OrbitError> {
     let input = run.input.as_ref().unwrap_or(&Value::Null);
     let Ok(identity) = WorktreeIdentity::from_input(input, Some(&run.run_id)) else {
         return Ok(vec![resolve_shared_worktree_path(repo_root, &run.run_id)?]);

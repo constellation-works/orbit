@@ -40,6 +40,7 @@ pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_build_output,
+    run_worktree_paths,
 };
 
 pub(crate) fn run_private_operation(

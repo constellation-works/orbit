@@ -370,6 +370,11 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     assert_eq!(input["step_ids"], json!(["setup", "work", "deliver"]));
     assert_eq!(input["step_recovery_attempts"], json!([]));
     assert_eq!(input["log_tail"], "this run's failure log");
+    // The in-pipeline lane applies every decision, `resume` included, so its
+    // input carries none of the blocked-task backstop's lane restrictions.
+    for restriction in ["decisions", "lane_contract", "retained_candidate"] {
+        assert!(input.get(restriction).is_none(), "{restriction}: {input}");
+    }
 }
 
 #[test]

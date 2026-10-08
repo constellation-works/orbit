@@ -249,8 +249,12 @@ binding continue to resolve local run state. Task crew projections,
 activity attribution, incident diagnosis, completion checks, and CLI resume
 guidance apply the same machine check to task-derived run lookups.
 The agent can inspect additional owner-side task comments and artifacts for
-preserved candidate evidence. The backstop applies the typed decision under
-the recovery run's identity and removes its detached base checkout.
+preserved candidate evidence. When the failed run ran here, preparation also
+names its retained worktree and changed paths, read with optional Git locks
+off, and the backstop's input lists only the decisions it applies (no
+`resume`). The backstop applies the typed decision under the recovery run's
+identity, names the retained candidate in any escalation, and removes its
+detached base checkout.
 
 Recovery preparation creates an empty, ignored `.orbit/` directory in that
 checkout before launching the agent. Managed task worktrees already create
