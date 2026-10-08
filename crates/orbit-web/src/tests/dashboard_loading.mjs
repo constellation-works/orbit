@@ -92,7 +92,7 @@ function fixture(url) {
       // Retained logs reach back 30h: the whole 24h window, but not 7d.
       const coverage_since = selectedWindow === '7d' ? errorsRetentionStart : since;
       return { since, coverage_since, items: healthFixture ? [
-        { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished' },
+        { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished', recovered: true },
         { event_id: 'retry', message: 'error=apply_patch verification failed: Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'codex_core::tools::router' },
         { event_id: 'timeout', message: 'failed to refresh available models: request timed out', source: 'agent-stderr', target: 'codex_models_manager::manager' },
         { event_id: 'other', message: 'unexpected tool crash', source: 'agent-stderr', target: 'codex_core::tools::router' },
@@ -493,6 +493,7 @@ for (const selectedWindow of ['24h', '7d']) {
   check(text('diag-count').includes(coverageLabel) === (selectedWindow === '7d'),
     `errors header names its coverage start only when retention starts after the ${selectedWindow} window: ${text('diag-count')}`);
   check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
+  check(node('diag-body').querySelector('.c-recovered').textContent === 'recovered — run succeeded', 'historical step failure shows the later run recovery');
   const internal = node('diag-body').querySelector('details.agent-diagnostics');
   check(internal && (selectedWindow !== '24h' || !internal.open), 'recoverable agent diagnostics start collapsed');
   const mainRows = [...node('diag-body').querySelectorAll('.diagnostics-errors-main tbody > tr')]

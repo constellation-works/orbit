@@ -128,6 +128,7 @@ function getDiagErrorsColumns(ctx) {
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
     { key: "target", label: "target", num: false, render: (v) => v || "-" },
+    { key: "recovered", label: "recovery", num: false, render: (v) => v ? "recovered — run succeeded" : "-" },
     {
       key: "message",
       label: "message",

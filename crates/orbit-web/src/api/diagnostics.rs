@@ -12,7 +12,10 @@ use chrono::{DateTime, Utc};
 use orbit_cmd::DiagnosticsCommands;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
-use orbit_core::{InvocationQuery, InvocationRecord, OrbitRuntime, V2AuditEventFilter};
+use orbit_core::runtime::audit::run::RunAuditStep;
+use orbit_core::{
+    InvocationQuery, InvocationRecord, JobRunState, OrbitRuntime, V2AuditEventFilter,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -472,37 +475,43 @@ fn diagnostics_error_rows(
             scoped.push(row);
             continue;
         };
-        let (owned, steps) = runs.entry(run.clone()).or_insert_with(|| {
+        let (owned, steps, succeeded_at) = runs.entry(run.clone()).or_insert_with(|| {
             let steps = runtime
-                .collect_run_audit_steps(&run)
+                .collect_run_audit_step_attempts(&run)
                 .unwrap_or_else(|error| {
                     tracing::warn!(%run, %error, "diagnostics step join unavailable");
                     Vec::new()
                 });
-            let owned = !steps.is_empty()
-                || runtime.sqlite_store().is_ok_and(|store| {
-                    store
-                        .get_job_run_for_workspace(&workspace_id, &run)
-                        .is_ok_and(|found| found.is_some())
-                });
-            (owned, steps)
+            let record = runtime.sqlite_store().ok().and_then(|store| {
+                store
+                    .get_job_run_for_workspace(&workspace_id, &run)
+                    .ok()
+                    .flatten()
+            });
+            let owned = !steps.is_empty() || record.is_some();
+            let succeeded_at = record
+                .filter(|record| record.state == JobRunState::Success)
+                .and_then(|record| record.finished_at);
+            (owned, steps, succeeded_at)
         });
         if !*owned {
             continue;
         }
-        if row["target"] == "orbit.job.step_finished"
-            && let Some(step) = steps
-                .iter()
-                .rev()
-                .find(|step| Some(step.step_id.as_str()) == row["step"].as_str())
-        {
-            row["step_index"] = json!(step.step_index);
-            if let Some(message) = step
-                .error_message
-                .as_deref()
-                .filter(|message| !message.is_empty())
-            {
-                row["message"] = json!(redact_all(message));
+        if row["target"] == "orbit.job.step_finished" {
+            let timestamp = row_timestamp(&row);
+            row["recovered"] = json!(
+                succeeded_at.is_some_and(|finished| timestamp.is_some_and(|ts| finished > ts))
+            );
+            if let Some(step) = step_attempt_for_error(steps, &row) {
+                row["step_index"] = json!(step.step_index);
+                if let Some(message) = step
+                    .error_message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|message| !message.is_empty())
+                {
+                    row["message"] = json!(redact_all(message));
+                }
             }
         }
         scoped.push(row);
@@ -519,6 +528,30 @@ fn diagnostics_error_rows(
     });
     rows.truncate(limit);
     Ok((rows, process_coverage, stderr_coverage))
+}
+
+fn step_attempt_for_error<'a>(steps: &'a [RunAuditStep], row: &Value) -> Option<&'a RunAuditStep> {
+    let timestamp = row_timestamp(row)?;
+    let matches_step = |step: &&RunAuditStep| Some(step.step_id.as_str()) == row["step"].as_str();
+    // Job tracing precedes the audit write. A row within an attempt's interval
+    // joins its upcoming completion, even when that timestamp is slightly later.
+    // Older/imported logs written after the audit join the preceding completion.
+    let step = steps
+        .iter()
+        .filter(matches_step)
+        .filter(|step| {
+            step.started_at.is_some_and(|start| start <= timestamp)
+                && step.finished_at.is_some_and(|finish| finish >= timestamp)
+        })
+        .min_by_key(|step| step.finished_at)
+        .or_else(|| {
+            steps
+                .iter()
+                .filter(matches_step)
+                .filter(|step| step.finished_at.is_some_and(|finish| finish <= timestamp))
+                .max_by_key(|step| step.finished_at)
+        })?;
+    (!matches!(step.outcome.as_deref(), Some("success" | "held"))).then_some(step)
 }
 
 /// Process ERROR rows from the active log and every rotated segment that
@@ -572,7 +605,13 @@ fn process_error_row(event: &Value) -> Value {
         "ts": ts,
         "source": "process",
         "message": optional_log_field(fields, &["error_message", "error"])
-            .map(redact_all).unwrap_or_else(|| strip_htmlish(&format_message_html(target, fields))),
+            .map(redact_all).unwrap_or_else(|| {
+                if target == "orbit.job.step_finished" {
+                    "no failure detail recorded".to_string()
+                } else {
+                    strip_htmlish(&format_message_html(target, fields))
+                }
+            }),
         "event_id": optional_log_field(fields, &["event_id"]),
         "job_run": job_run,
         "step": optional_log_field(fields, &["step_id", "step", "activity_id"]),
