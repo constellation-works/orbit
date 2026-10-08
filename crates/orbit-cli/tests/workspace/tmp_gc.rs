@@ -379,3 +379,57 @@ fn symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses() {
         b"preserve target"
     );
 }
+
+#[test]
+fn a_checkout_without_orbit_directory_has_nothing_to_reclaim() {
+    // State lives in an explicit root, so the checkout never gets `.orbit/`.
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = temp.path().join("root");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).unwrap();
+    crate::git_repo::init(&work);
+    let fixture = Fixture {
+        _temp: temp,
+        home,
+        work,
+    };
+    let root = root.to_str().unwrap();
+    fixture
+        .orbit()
+        .args([
+            "--root",
+            root,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "qa",
+            "--task-prefix",
+            "QA",
+        ])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["--root", root, "workspace", "init", "--name", "scratch"])
+        .assert()
+        .success();
+    assert!(!fixture.work.join(".orbit").exists());
+    let rooted = |args: &[&str]| {
+        let mut all = vec!["--root", root];
+        all.extend_from_slice(args);
+        fixture.json(&all)
+    };
+    let preview = rooted(&["gc", "tmp", "--dry-run", "--json"]);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["entries_removed"], 0);
+    assert_eq!(preview["bytes_reclaimable"], 0);
+    assert_eq!(preview["reports"], serde_json::json!([]));
+    let removed = rooted(&["gc", "tmp", "--confirm", "--json"]);
+    assert_eq!(removed["dry_run"], false);
+    assert_eq!(removed["entries_removed"], 0);
+    assert!(
+        !fixture.work.join(".orbit").exists(),
+        "confirm must not create .orbit as a side effect of gc"
+    );
+}

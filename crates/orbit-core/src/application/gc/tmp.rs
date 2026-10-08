@@ -140,7 +140,13 @@ pub(super) mod filesystem {
         let root_name = CString::new(checkout.as_os_str().as_bytes())
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
         let root = open_directory(libc::AT_FDCWD, &root_name)?;
-        let orbit = open_directory(root.as_raw_fd(), c".orbit")?;
+        let orbit = match open_directory(root.as_raw_fd(), c".orbit") {
+            Ok(orbit) => orbit,
+            // No `.orbit` means no scratch to measure or remove, in either
+            // mode. Confirm must not create it as a side effect of GC.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
         let tmp = match open_directory(orbit.as_raw_fd(), c"tmp") {
             Ok(tmp) => tmp,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
