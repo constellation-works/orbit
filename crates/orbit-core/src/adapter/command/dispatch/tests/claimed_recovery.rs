@@ -752,6 +752,17 @@ fn a_claimed_worker_reads_the_delivery_of_its_own_leaf_only() {
             )
             .unwrap_err();
         assert!(combined.contains("cannot be combined"), "{combined}");
+        // The owner decodes a JSON-encoded array in a string, so this is the
+        // delivery view of another run, not a field this scope may forward.
+        refused_with(
+            fixture.forwarded(
+                &broker,
+                SHOW,
+                json!({"id": TASK, "fields": "[\"delivery\"]", "run_id": "jrun-elsewhere"}),
+            ),
+            "delivery_run_refused",
+            &format!("{activity} encoded delivery field"),
+        );
         let own = fixture.delivery(&broker, Some(&fixture.leaf)).unwrap();
         assert_eq!(own["run_id"], fixture.leaf.as_str(), "{activity}: {own}");
     }

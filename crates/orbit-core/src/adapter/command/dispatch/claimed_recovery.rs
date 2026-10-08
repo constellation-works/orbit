@@ -20,6 +20,7 @@
 //!   leaf only.
 
 use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{
@@ -131,19 +132,21 @@ pub(super) fn wants_delivery(object: &Map<String, Value>) -> bool {
         .any(|field| field == TASK_SHOW_DELIVERY_FIELD)
 }
 
+/// The fields the request names, read as the owner's `orbit.task.show` reads
+/// them: a JSON-encoded array in a string is decoded, so `"[\"delivery\"]"`
+/// is the delivery view here as it is there rather than a spelling this scope
+/// misses and forwards. Both keys are read, so a request cannot hide the
+/// delivery view behind the one the owner would ignore.
 fn requested_fields(object: &Map<String, Value>) -> Vec<String> {
+    let request = Value::Object(object.clone());
     ["fields", "field"]
         .iter()
-        .filter_map(|key| object.get(*key))
-        .flat_map(|value| match value {
-            Value::String(text) => text.split(',').map(str::to_string).collect(),
-            Value::Array(items) => items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect(),
-            _ => Vec::new(),
+        .filter_map(|key| {
+            optional_csv_or_string_list_alias(&request, &[key])
+                .ok()
+                .flatten()
         })
+        .flatten()
         .map(|field| field.trim().to_string())
         .filter(|field| !field.is_empty())
         .collect()
