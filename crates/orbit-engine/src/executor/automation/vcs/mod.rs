@@ -1,3 +1,4 @@
+pub(crate) mod absorbed;
 mod attribution;
 mod base_chase;
 mod base_obsolescence;

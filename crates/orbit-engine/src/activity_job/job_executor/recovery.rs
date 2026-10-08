@@ -9,6 +9,7 @@ use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
+use crate::executor::automation::vcs::absorbed::is_candidate_absorbed;
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
@@ -207,6 +208,11 @@ fn post_recovery_attempt(
                     .unwrap_or_else(|| "step completed with success=false".to_string()),
             ),
         ),
+        // [ORB-14668] The recovery worked: the base already held the
+        // candidate, which final recovery settles.
+        Err(error) if is_candidate_absorbed(&error.to_string()) => {
+            ("absorbed", Some(error.to_string()))
+        }
         Err(error) => ("error", Some(error.to_string())),
     };
     let error_message = error_message.map(|message| redacted_recovery_diagnostic(&message));

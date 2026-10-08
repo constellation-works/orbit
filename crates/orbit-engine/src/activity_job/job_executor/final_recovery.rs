@@ -14,6 +14,12 @@
 //! decision to the host again instead of dispatching. The host applies a
 //! decision idempotently, so a crash anywhere in the first application
 //! converges on the same outcome.
+//!
+//! A `sync_base` failure that reports an absorbed candidate (conflict
+//! recovery left the branch on its pinned base, which already carries the
+//! change) is admitted the same way, but the engine re-verifies the certified
+//! evidence and hands the host a `complete_no_diff` for the covering commit
+//! instead of dispatching the activity.
 
 use orbit_types::workflow::{
     FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, FinalRecoveryRepairCommit, PipelineState,
@@ -23,6 +29,9 @@ use super::*;
 use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied,
+};
+use crate::executor::automation::vcs::absorbed::{
+    AbsorbedCandidate, is_candidate_absorbed, verify_absorbed_candidate,
 };
 use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
@@ -170,6 +179,19 @@ pub(super) fn attempt_final_recovery(
         };
         return conclude(job, ctx, step, activity, &application, None);
     }
+    // [ORB-14668] A candidate conflict recovery found already on the pinned
+    // base is settled from the host-certified evidence, re-observed here,
+    // without dispatching an agent. A refusal leaves the agent its look, and
+    // tells it why.
+    let absorbed = is_candidate_absorbed(error_message).then(|| {
+        verify_absorbed_candidate(
+            ctx.host,
+            &ctx.run_id,
+            &step.id,
+            &task_id,
+            std::path::Path::new(&worktree.workspace_path),
+        )
+    });
     let request = FinalRecoveryAdmissionRequest {
         task_id: task_id.clone(),
         failed_step_id: step.id.clone(),
@@ -180,6 +202,23 @@ pub(super) fn attempt_final_recovery(
         Ok(FinalRecoveryAdmission::Skipped { reason }) => return skip(&reason),
         Err(error) => return skip(&format!("admission failed: {error}")),
     }
+    let absorbed_refusal = match absorbed {
+        Some(Ok(candidate)) => {
+            return settle_absorbed(job, ctx, step, activity, task_id, worktree, &candidate);
+        }
+        Some(Err(refusal)) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                failed_step_id = %step.id,
+                reason = refusal.reason.code(),
+                detail = %refusal.detail,
+                "absorbed candidate not settled without an agent"
+            );
+            Some(refusal)
+        }
+        None => None,
+    };
 
     // These observations belong to the engine, not the activity's response.
     // A worktree without a resolvable HEAD may still settle a task, but cannot
@@ -190,6 +229,12 @@ pub(super) fn attempt_final_recovery(
     )
     .ok();
     let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
+        .map(|mut input| {
+            if let Some(refusal) = &absorbed_refusal {
+                input["absorbed_refusal"] = refusal.evidence();
+            }
+            input
+        })
         .and_then(|input| dispatch_final_recovery(ctx, step, activity, &input));
     let decision = match dispatch {
         Ok(output) => FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
@@ -232,6 +277,37 @@ pub(super) fn attempt_final_recovery(
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
     conclude(job, ctx, step, activity, &application, resume_index)
+}
+
+/// Hand the host a `complete_no_diff` for a verified absorbed candidate's
+/// covering commit, as the decision no agent needed to make.
+fn settle_absorbed(
+    job: &JobV2,
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    activity: &ResolvedRecoveryActivity,
+    task_id: String,
+    worktree: RunWorktree,
+    candidate: &AbsorbedCandidate,
+) -> FinalRecoveryVerdict {
+    let application = FinalRecoveryApplication {
+        task_id,
+        failed_step_id: step.id.clone(),
+        decision: FinalRecoveryDecision::CompleteNoDiff {
+            evidence_commit: candidate.covering_commit.clone(),
+            rationale: format!(
+                "conflict recovery left the candidate on base {} with no commit of its own; \
+                 {} on '{}' already carries its change. Verified by the engine; no final \
+                 recovery agent was dispatched.",
+                candidate.base_sha, candidate.covering_commit, candidate.base_ref
+            ),
+        },
+        resume_step_index: None,
+        repair_commit: None,
+        workspace_path: worktree.workspace_path.into(),
+        completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+    };
+    conclude(job, ctx, step, activity, &application, None)
 }
 
 fn observe_repair_commit(

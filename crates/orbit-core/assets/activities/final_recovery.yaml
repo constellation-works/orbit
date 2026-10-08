@@ -87,6 +87,10 @@ spec:
       # with a `reason`. Evidence only.
       retained_candidate:
         type: object
+      # Why Orbit did not settle a conflict-recovered candidate its base
+      # already held: `reason` (a stable code) and `detail`. Evidence only.
+      absorbed_refusal:
+        type: object
       # Selects the crew from workflow.final_recovery_crews; the host draws it
       # once per run and reuses the draw on every later dispatch and resume.
       crew_config_key:
@@ -189,6 +193,12 @@ spec:
       stays after the run ends: its path and changed paths, or why it is
       absent. Inspect it read-only; never edit, copy from or run Git writes in
       it. Name it in an escalation when that work should continue.
+    - absorbed_refusal: present when conflict recovery left the branch on its
+      base with no candidate commit, as if the base already held the change,
+      but Orbit's own check refused to settle it: `reason` and `detail` name
+      what failed (for example the checkout moved, is dirty, or the task
+      changed). Treat the error_message's settlement claim as unverified and
+      judge from the worktree and the base.
     Fields other than task_id, run_id, the worktree pair, failed_step_id, and
     error_message may be absent. For missing evidence, use the evidence reads
     below and the worktree, and report any gaps instead of inventing run data.

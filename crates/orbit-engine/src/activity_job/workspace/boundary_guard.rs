@@ -268,8 +268,15 @@ impl WorktreeBoundaryGuard {
                 self.verify()?;
                 host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
             }
+            // Certified like a completion; the retry settles it [ORB-14668].
+            Some((step_id, RebaseContinuation::Absorbed(output))) => {
+                self.verify_checkouts(HostContinuation::Absorbed)?;
+                host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
+            }
             // Nothing is certified until a later round finishes the rebase.
-            Some((_, RebaseContinuation::StoppedAgain)) => self.verify_checkouts(true)?,
+            Some((_, RebaseContinuation::StoppedAgain)) => {
+                self.verify_checkouts(HostContinuation::StoppedAgain)?;
+            }
             None => {
                 self.verify()?;
                 self.widen_for_agent_changes(host, task_ids)?;
@@ -350,13 +357,14 @@ impl WorktreeBoundaryGuard {
     }
 
     pub(crate) fn verify(&self) -> Result<(), DispatchError> {
-        self.verify_checkouts(false)
+        self.verify_checkouts(HostContinuation::Finished)
     }
 
-    /// [`Self::verify`], where `continuation_stopped_again` also admits the
-    /// HEAD the host's own continuation of the admitted rebase left on a
-    /// later, conflicting pick of that same rebase.
-    fn verify_checkouts(&self, continuation_stopped_again: bool) -> Result<(), DispatchError> {
+    /// [`Self::verify`], where `continuation` also admits the HEAD the host's
+    /// own continuation of the admitted rebase left: a later, conflicting
+    /// pick of that same rebase, or the base itself for an absorbed
+    /// candidate.
+    fn verify_checkouts(&self, continuation: HostContinuation) -> Result<(), DispatchError> {
         let assigned_after = git_fingerprint(&self.assigned_root)?;
         let primary_after = git_fingerprint(&self.primary_root)?;
         let assigned_history_changed = assigned_after.head != self.assigned_before.head
@@ -377,10 +385,7 @@ impl WorktreeBoundaryGuard {
             .cloned()
             .collect::<Vec<_>>();
 
-        if assigned_history_changed
-            && !self.completed_authorized_rebase(&assigned_after)?
-            && !(continuation_stopped_again && self.stopped_authorized_rebase()?)
-        {
+        if assigned_history_changed && !self.host_moved_head(continuation, &assigned_after)? {
             // Only the checkpointed conflict-recovery leaf may finish a rebase.
             return Err(self.integrity_error(
                 "worktree_content_conflict",
@@ -504,6 +509,34 @@ impl WorktreeBoundaryGuard {
             diagnostic: diagnostic.to_string(),
         }
     }
+
+    /// Whether the assigned HEAD moved only as the host's own continuation of
+    /// the admitted rebase left it.
+    fn host_moved_head(
+        &self,
+        continuation: HostContinuation,
+        after: &GitWorktreeFingerprint,
+    ) -> Result<bool, DispatchError> {
+        if self.completed_authorized_rebase(after)? {
+            return Ok(true);
+        }
+        match continuation {
+            HostContinuation::Finished => Ok(false),
+            HostContinuation::StoppedAgain => self.stopped_authorized_rebase(),
+            HostContinuation::Absorbed => self.absorbed_authorized_rebase(after),
+        }
+    }
+}
+
+/// Which host continuation of an admitted rebase, if any, the checkout shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostContinuation {
+    /// None, or one that finished with a candidate commit.
+    Finished,
+    /// One stopped on a later conflicting pick.
+    StoppedAgain,
+    /// One that left the branch on its base with no candidate commit.
+    Absorbed,
 }
 
 /// The parts of a checkout fingerprint that identify it without enumerating it.
