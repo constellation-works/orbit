@@ -229,8 +229,8 @@ spec:
          positive evidence; a `passed` outcome contradicts the claim, and a
          control run on the candidate cannot share its check with a required
          pass. An unrelated failure is never a control.
-         A counterfactual lists the files it temporarily changed in
-         `mutation_target`, never in `sources`: for a test-only change that is
+         A counterfactual lists the files it temporarily changed, as
+         repository-relative paths, in `mutation_target`, never in `sources`: for a test-only change that is
          usually the production file the tests guard, outside the task's
          selectors. `sources` then names the candidate's checks that rejected
          the mutation. Restore every mutation target byte for byte (by

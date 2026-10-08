@@ -266,6 +266,34 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     Ok(paths)
 }
 
+/// [ORB-14632] Whether the repository-relative `path` differs between
+/// commits `from` and `to`: its content or mode changed, or it was added or
+/// deleted. Rename detection stays off, so a file moved away reads as deleted
+/// at `path`, and `path` is a literal pathspec, never a pattern.
+pub fn path_changed_between(
+    workspace_path: &Path,
+    from: &str,
+    to: &str,
+    path: &str,
+) -> Result<bool, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "--literal-pathspecs",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "--end-of-options",
+            from,
+            to,
+            "--",
+            path,
+        ],
+    )?;
+    Ok(raw.split('\0').any(|changed| !changed.is_empty()))
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {

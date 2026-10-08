@@ -319,61 +319,138 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
 /// `mutation_target` and left byte-identical, it settles `accept`; left
 /// modified, the review settles `incomplete` naming the file; and the
 /// control's checks (its `sources`) must still lie inside the scope.
+/// [ORB-14632] The repository compares the target between the reviewed and
+/// the final candidate, so a target the reviewer moved away (which the
+/// repair commit records as a rename) is caught at its original path, and a
+/// target spelled as an absolute or out-of-repository path is refused rather
+/// than passed beside a fix.
 #[test]
 fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration() {
+    enum Mutation {
+        None,
+        Modified,
+        MovedAway,
+    }
     struct Case {
         name: &'static str,
+        /// `accept_with_fixes` with a repair of `src.txt`, or `accept`.
+        fixed: bool,
         sources: &'static [&'static str],
-        left_modified: bool,
+        /// `{repo}` reads as the fixture checkout's absolute path.
+        targets: &'static [&'static str],
+        mutation: Mutation,
         escalation: Option<&'static str>,
     }
     for case in [
         Case {
             name: "restored byte-identical",
+            fixed: false,
             sources: &["src.txt"],
-            left_modified: false,
+            targets: &["README.md"],
+            mutation: Mutation::None,
+            escalation: None,
+        },
+        Case {
+            name: "restored beside a fix, spelled as a relative or file: path",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["./README.md", "file:README.md"],
+            mutation: Mutation::None,
             escalation: None,
         },
         Case {
             name: "left modified in the final candidate",
+            fixed: false,
             sources: &["src.txt"],
-            left_modified: true,
+            targets: &["README.md"],
+            mutation: Mutation::Modified,
             escalation: Some("control `make test-guard` mutated `README.md`"),
         },
         Case {
+            name: "moved away beside a fix",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::MovedAway,
+            escalation: Some("control `make test-guard` mutated `README.md`"),
+        },
+        Case {
+            name: "spelled as an absolute path and left modified beside a fix",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["{repo}/README.md"],
+            mutation: Mutation::Modified,
+            escalation: Some("README.md`, which is not a repository-relative path"),
+        },
+        Case {
+            name: "spelled outside the repository",
+            fixed: false,
+            sources: &["src.txt"],
+            targets: &["../README.md"],
+            mutation: Mutation::None,
+            escalation: Some(
+                "names mutation_target `../README.md`, which is not a repository-relative path",
+            ),
+        },
+        Case {
             name: "checks outside the scope",
+            fixed: false,
             sources: &["README.md"],
-            left_modified: false,
+            targets: &["README.md"],
+            mutation: Mutation::None,
             escalation: Some("negative control `make test-guard` names `README.md`, outside"),
         },
     ] {
         let gated = gated_fixture(BEFORE_PR);
         let admission = gated.admit().expect("admit");
         let attempt_id = admission["attempt_id"].as_str().expect("attempt");
-        if case.left_modified {
-            fs::write(
-                gated.fixture.repo.join("README.md"),
-                "fixture
-mutated
-",
-            )
-            .expect("mutate the guarded file");
+        let repo = &gated.fixture.repo;
+        match case.mutation {
+            Mutation::None => {}
+            Mutation::Modified => {
+                fs::write(repo.join("README.md"), "fixture\nmutated\n")
+                    .expect("mutate the guarded file");
+            }
+            Mutation::MovedAway => {
+                fs::create_dir_all(repo.join("docs")).expect("destination directory");
+                fs::rename(repo.join("README.md"), repo.join("docs/README.md"))
+                    .expect("move the guarded file away");
+            }
         }
-        let mut accepted = report(attempt_id, ReviewVerdict::Accept, false);
-        accepted
+        if case.fixed {
+            gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        }
+        let verdict = if case.fixed {
+            ReviewVerdict::AcceptWithFixes
+        } else {
+            ReviewVerdict::Accept
+        };
+        let mut reported = report(attempt_id, verdict, case.fixed);
+        let targets = case
+            .targets
+            .iter()
+            .map(|target| target.replace("{repo}", &repo.display().to_string()))
+            .collect::<Vec<_>>();
+        let targets = targets.iter().map(String::as_str).collect::<Vec<_>>();
+        reported
             .validation
-            .push(counterfactual(case.sources, &["README.md"]));
-        write_report(&gated.fixture.runtime, &gated.task_id, &accepted);
+            .push(counterfactual(case.sources, &targets));
+        write_report(&gated.fixture.runtime, &gated.task_id, &reported);
 
         let settled = gated.settle(&admission);
         let certificate = gated.certificate();
         match case.escalation {
             None => {
                 let settled = settled.unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                assert_eq!(settled["verdict"], "accept", "{}", case.name);
-                assert_eq!(certificate.verdict, ReviewVerdict::Accept, "{}", case.name);
+                assert_eq!(settled["verdict"], verdict.as_str(), "{}", case.name);
+                assert_eq!(certificate.verdict, verdict, "{}", case.name);
                 assert!(certificate.validation_complete, "{}", case.name);
-                assert_eq!(gated.log("HEAD", "%H"), gated.implementation_sha);
+                assert_eq!(
+                    gated.log("HEAD", "%H") == gated.implementation_sha,
+                    !case.fixed,
+                    "{}: only a fix adds a repair commit",
+                    case.name
+                );
             }
             Some(expected) => {
                 let error = settled.expect_err(case.name);
