@@ -16,7 +16,7 @@ pub enum EnforcementDecision {
 ///
 /// Usage: Build the inner sink (e.g. V2SqliteSink / InMemorySink), wrap it
 /// with an EnforcedAuditSink at construction, and pass the wrapper into
-/// AgentLoop::run via the audit parameter. The wrapper intercepts
+/// the event producer as its audit sink. The wrapper intercepts
 /// ToolCallRequested events, checks the name against the allowlist, and (on
 /// deny) substitutes a PolicyDenial event and signals the caller to
 /// terminate.
@@ -57,18 +57,9 @@ impl EnforcedAuditSink {
 
 impl AuditSink for EnforcedAuditSink {
     fn emit(&self, event: &LoopAuditEvent) {
-        // Two paths can trigger the denial:
-        //
-        // 1. `AgentLoop` enforces the allowlist internally BEFORE dispatching
-        //    a `ToolCallRequested` event and emits its own `PolicyDenial`.
-        //    When we see a `PolicyDenial`, we mirror it into a §7
-        //    `tool.denied` envelope event so the higher-level trail records
-        //    the policy outcome alongside the loop-level event.
-        //
-        // 2. A caller that bypasses the loop's own check could still emit a
-        //    `ToolCallRequested` for a tool we shouldn't allow — we catch
-        //    that here too and synthesize both a §7 `tool.denied` envelope
-        //    event and a loop-level `PolicyDenial`.
+        // Mirror explicit PolicyDenial events into the workflow envelope trail.
+        // Also reject ToolCallRequested events outside the allowlist, emitting
+        // both an envelope denial and a retained provider-level denial event.
         match event {
             LoopAuditEvent::PolicyDenial {
                 tool_name, reason, ..

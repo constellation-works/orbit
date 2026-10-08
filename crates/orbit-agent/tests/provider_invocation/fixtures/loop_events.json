@@ -1,0 +1,85 @@
+[
+  {
+    "event_kind": "session_spawn",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "provider": "claude",
+    "model": "fixture-model",
+    "task_id": null,
+    "audit_tag": "fixture"
+  },
+  {
+    "event_kind": "session_close",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "reason": "complete"
+  },
+  {
+    "event_kind": "http_request",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "provider": "claude",
+    "model": "fixture-model",
+    "endpoint": "/v1/messages",
+    "body_sha256": "request-hash"
+  },
+  {
+    "event_kind": "http_response",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "http_status": 200,
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 10,
+      "output_tokens": 3,
+      "cache_read_input_tokens": 4,
+      "cache_creation_input_tokens": 2
+    },
+    "body_sha256": "response-hash"
+  },
+  {
+    "event_kind": "tool_call_requested",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "tool_name": "fixture.echo",
+    "tool_use_id": "call-1",
+    "input_sha256": "input-hash"
+  },
+  {
+    "event_kind": "tool_call_result",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "tool_name": "fixture.echo",
+    "tool_use_id": "call-1",
+    "outcome": "success",
+    "output_sha256": "output-hash",
+    "duration_ms": 13
+  },
+  {
+    "event_kind": "iteration_boundary",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "continues": false
+  },
+  {
+    "event_kind": "policy_denial",
+    "ts": "2026-04-26T06:05:00Z",
+    "run_id": "fixture-run",
+    "session_id": "fixture-session",
+    "iteration": 1,
+    "tool_name": "fixture.denied",
+    "reason": "not allowed"
+  }
+]

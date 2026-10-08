@@ -17,7 +17,7 @@ sidebar:
 | `orbit-registry` | This machine's identity and the logical workspace catalog, with validation and atomic file persistence. |
 | `orbit-web` | HTTP API, embedded dashboard UI, dashboard mutations, and the SSH web connection, built on Core and Registry. |
 | `orbit-engine` | Activity and job execution, template rendering, and retry. Owns the CLI agent subprocess runner, which uses `orbit-agent::{Agent, AgentConfig}` directly. |
-| `orbit-agent` | One `AgentRuntime` per provider under `providers/<name>/<name>_runtime.rs` (claude, codex, copilot, cursor, gemini, antigravity, grok, ollama, opencode, pi, mock_agent), plus HTTP transports under `providers/{anthropic,gemini_http,openai_compat}/`. Also carries a standalone HTTP `LoopTransport` / `AgentLoop` SDK surface that job execution no longer uses. |
+| `orbit-agent` | Provider CLI runtimes under `providers/<name>/`, stdout projection and response helpers, and the audit types and redacted blob sinks persisted by `orbit-engine`. Depends only on `orbit-common` and `orbit-types`. |
 | `orbit-tools` | Generic tool registry, workspace-scoped builtins, filesystem tools, and policy-aware exec tools. |
 | `orbit-policy` | Filesystem-scoping policy engine: `FsProfile` resolution and `denyRead` / `denyModify` evaluation. |
 | `orbit-exec` | Process, sandbox, and supervision primitives for running shell commands under an `FsProfile`. |
@@ -56,13 +56,13 @@ flowchart LR
   Engine --> Store
   Engine --> Exec["orbit-exec"]
   Engine --> Tools
-  Agent --> Tools
   Tools --> Exec
   Tools --> Policy
   Exec --> Common["orbit-common"]
   Policy --> Common
   Store --> Common
   Agent --> Common
+  Agent --> Types
   Search --> Common
   MCP --> Common
   MCP --> Registry

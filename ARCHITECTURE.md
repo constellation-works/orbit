@@ -27,7 +27,7 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-store` | stable | common, types |
 | `orbit-registry` | internal | common, config, types |
 | `orbit-tools` | internal | common, exec, policy, types |
-| `orbit-agent` | internal | common, tools, types |
+| `orbit-agent` | internal | common, types |
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
@@ -68,7 +68,7 @@ in member manifests with `workspace = true`.
 - **orbit-registry** owns this machine's `[machine]` identity, the workspace catalog, checkout bindings, task-publication bindings, and the operator's registered remote hosts (`hosts.toml`), each persisted atomically. It has no shared database and no runtime execution.
 - **orbit-store** handles persistence. See [orbit-store internals](#orbit-store-internals) below.
 - **orbit-tools** holds the tool registry and the built-in fs, exec, and Orbit tool definitions. It resolves a plugin source to its plugin root (the source's `.orbit-plugin/` directory, the only tree installed) and loads and runs `plugin.yaml` v2 plugins through an `exec` backend (one confined process per call) or an `mcp` backend (a stdio server per caller context). Both backends run under the operator's granted sandbox profile. Plugin lifecycle (install, enable, grants, `.orbit/plugins.yaml`) belongs to Core. This crate is also the only owner of the `gh` CLI contract.
-- **orbit-agent** provides one `AgentRuntime` per provider CLI (claude, codex, copilot, cursor, gemini, antigravity, grok, pi, and others). It also contains a standalone HTTP agent-loop SDK, which Orbit's own job execution does not use.
+- **orbit-agent** provides one `AgentRuntime` per provider CLI (claude, codex, copilot, cursor, gemini, antigravity, grok, pi, and others). It retains the audit types and redacted blob sinks that the engine persists, including historical event variants.
 - **orbit-engine** executes activities and jobs: template rendering, retries, subprocess and tool-aware automation, and the CLI agent runner. It references `orbit-agent` directly, so Core stays free of agent types. It also owns candidate identity, reviewer repair commits, and the reviewed-head rechecks in `pr_open` and `pr_complete`. Host-side CI evidence collection lives here too, with the normalized CI error signature (`ci_log_signature`) that its reproduction check and Core's CI failure filing share.
 - **orbit-automation** is the scheduling domain for routines and auto-tasks. It covers definition validation, due evaluation, overlap and retry, coverage acceptance, and state-triggered consumers. Its `review` module owns the before-PR coverage rules. It never depends on Core or Engine and has no loop or store of its own. Store owns cursors, claims, and receipts.
 

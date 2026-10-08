@@ -35,7 +35,7 @@ allowed_internal_deps() {
       echo "orbit-common orbit-exec orbit-policy orbit-types"
       ;;
     orbit-agent)
-      echo "orbit-common orbit-tools orbit-types"
+      echo "orbit-common orbit-types"
       ;;
     orbit-engine)
       echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"

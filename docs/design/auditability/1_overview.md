@@ -53,13 +53,13 @@ row when it cannot be dispatched.
 
 The v2 activity/job runtime emits `V2AuditEvent` envelopes for run, step, activity, fan-out, loop, filesystem, denial, and CLI-backend lifecycle events into the `v2_audit_events` SQLite store. This layer is the workflow replay spine: it carries `run_id`, `event_id`, `parent_event_id`, `agent_identity`, and optional `workspace_path`. `orbit run events`, `orbit run trace`, `orbit run show -s`, and `orbit run logs -s` expose the same activity DAG `step.id` source of truth after [T20260426-0705] and [T20260426-0709].
 
-### 2.4 Agent-loop audit events preserve provider and tool detail
+### 2.4 Retained audit contracts preserve historical provider and tool detail
 
-The standalone `orbit-agent` HTTP loop emits `LoopAuditEvent` records for sessions, HTTP
-requests/responses, tool requests/results, iteration boundaries, and policy denials. Loop events
-are persisted in the same `v2_audit_events` SQLite store only when emitted; large request,
-response, input, and output bodies are stored as redacted content-addressed blobs under
-`.orbit/state/audit/blobs/`.
+`orbit-agent::loop_engine::audit` retains `LoopAuditEvent` records for sessions, HTTP
+requests/responses, tool requests/results, iteration boundaries, and policy denials so existing
+`v2_audit_events` rows remain readable. The runtime sink still accepts these events;
+provider execution uses CLI subprocesses. Payload bodies are stored as redacted
+content-addressed blobs under `.orbit/state/audit/blobs/`.
 
 ### 2.5 Invocation metrics are adjacent, not a replacement
 
