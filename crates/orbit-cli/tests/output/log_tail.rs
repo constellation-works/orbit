@@ -3,7 +3,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -35,6 +35,25 @@ fn append(path: &Path, bytes: &[u8]) {
 /// five seconds was exceeded by the CLI's own startup on a saturated host.
 const RECORD_WAIT: Duration = Duration::from_secs(60);
 
+/// `orbit log tail --path <path>` in an isolated home, with no streaming flags.
+fn tail_command(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Command {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_LOG_PATH")
+        .env("NO_COLOR", "1")
+        .args(["log", "tail"])
+        .arg("--path")
+        .arg(path);
+    command
+}
+
 struct Follower {
     child: Child,
     lines: Receiver<String>,
@@ -44,31 +63,10 @@ struct Follower {
 
 impl Follower {
     fn start(fixture: &crate::git_repo::WorkCheckout, path: &Path, json: bool) -> Self {
-        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
+        let mut command = tail_command(fixture, path);
         let stderr = tempfile::tempfile().unwrap();
         command
-            .current_dir(&fixture.work)
-            .env("HOME", &fixture.home)
-            .env("USERPROFILE", &fixture.home)
-            .env_remove("ORBIT_FORMAT")
-            .env_remove("ORBIT_LOG_PATH")
-            .env("NO_COLOR", "1")
-            .args([
-                "log",
-                "tail",
-                "-f",
-                "-n",
-                "1",
-                "--level",
-                "warn",
-                "--target",
-                "orbit.test",
-            ])
-            .arg("--path")
-            .arg(path)
+            .args(["-f", "-n", "1", "--level", "warn", "--target", "orbit.test"])
             .stdout(Stdio::piped())
             .stderr(stderr.try_clone().unwrap());
         if json {
@@ -204,6 +202,49 @@ fn follow_truncation_resets_offset_and_discards_the_previous_partial_record() {
         follower.expect_record("after-truncate", json);
         follower.expect_no_record();
     }
+}
+
+fn one_shot_tail(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Output {
+    tail_command(fixture, path)
+        .arg("--json")
+        .output()
+        .expect("log tail output")
+}
+
+#[test]
+fn one_shot_tail_with_neither_split_feed_fails_naming_the_operational_path() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let output = one_shot_tail(&fixture, &path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a missing log must not look like an empty one; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        stderr.contains(&format!("orbit log file not found: {}", path.display())),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn one_shot_tail_reads_the_agent_feed_when_the_operational_feed_is_absent() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    fs::write(
+        fixture.work.join("orbit-agent.jsonl"),
+        format!("{}\n", event("agent-only", "WARN", "orbit.test")),
+    )
+    .unwrap();
+    let output = one_shot_tail(&fixture, &path);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("agent-only"), "stdout: {stdout}");
 }
 
 #[test]

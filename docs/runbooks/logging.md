@@ -25,7 +25,9 @@ events to two global JSONL feeds with independent byte budgets:
 
 `orbit log tail` and the dashboard merge both active feeds. `orbit log tail` can
 read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
-`orbit.jsonl` read a single file. Relay targets and `RUST_LOG` filters retain
+`orbit.jsonl` read a single file. When neither global feed exists, a one-shot
+`orbit log tail` exits non-zero with `orbit log file not found`; `-f` waits for
+either feed to appear. Relay targets and `RUST_LOG` filters retain
 their existing behavior; the reserved `agent_output` tracing field routes
 stdout/stderr records to the independent feed.
 

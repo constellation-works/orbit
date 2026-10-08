@@ -111,10 +111,7 @@ fn run_tail<W: Write + ?Sized>(
         return run_split_tail(path, &agent_path, args, filters, use_color, writer);
     }
     if !path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("orbit log file not found: {}", path.display()),
-        ));
+        return Err(log_file_not_found(path));
     }
 
     let initial = print_initial_window(path, args, filters, use_color, writer)?;
@@ -170,10 +167,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
     control: FollowTestControl,
 ) -> io::Result<()> {
     if !path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("orbit log file not found: {}", path.display()),
-        ));
+        return Err(log_file_not_found(path));
     }
 
     let initial = print_initial_window_with_hook(path, args, filters, use_color, writer, || {
@@ -341,9 +335,11 @@ fn run_split_tail<W: Write + ?Sized>(
 ) -> io::Result<()> {
     let mut feeds = Vec::new();
     let mut history = Vec::new();
+    let mut opened = false;
     for path in [path, agent_path] {
         match read_initial_window(path, args, filters, || Ok(())) {
             Ok((initial, lines)) => {
+                opened = true;
                 history.extend(lines.into_iter().filter_map(|line| {
                     let event: Value = serde_json::from_str(&line).ok()?;
                     Some((event["timestamp"].as_str().unwrap_or("").to_owned(), line))
@@ -355,6 +351,11 @@ fn run_split_tail<W: Write + ?Sized>(
             }
             Err(error) => return Err(error),
         }
+    }
+    // A one-shot read with neither feed on disk is a missing log, not an empty
+    // one. Follow mode keeps waiting: either feed can appear on a fresh install.
+    if !opened && !args.follow {
+        return Err(log_file_not_found(path));
     }
     history.sort_by(|left, right| left.0.cmp(&right.0));
     for (_, line) in history
@@ -508,6 +509,13 @@ fn emit_line<W: Write + ?Sized>(
     };
     let formatted = format_event_line(&value, use_color);
     writeln!(writer, "{formatted}")
+}
+
+fn log_file_not_found(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("orbit log file not found: {}", path.display()),
+    )
 }
 
 fn io_to_orbit(err: io::Error) -> OrbitError {
