@@ -22,9 +22,9 @@ pub enum ExecutorType {
     /// re-serialized under the canonical `local_shell` name.
     #[serde(alias = "cli_command")]
     LocalShell,
-    /// Retired External Executor Protocol v1 (see
-    /// `docs/design/executors/specs/external-executor-protocol.md`). Still
-    /// deserializes so pre-existing defs load, but nothing dispatches it.
+    /// The former `external` transport was retired by the External Executor
+    /// Protocol retirement decision (ORB-10395). This variant remains so old
+    /// executor defs still deserialize, but no external transport is dispatched.
     External,
 }
 

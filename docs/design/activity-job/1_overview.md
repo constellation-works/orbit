@@ -13,7 +13,7 @@ tags: ["activity-job"]
 
 # Activity / Job — Overview
 
-Activity / Job is Orbit's execution substrate. Activities describe runnable units; jobs compose them sequentially, in parallel, across collections, or through bounded loops. Orbit's product story is moving toward goals, graphs, sessions, and locks, but this layer remains the runtime underneath. [2_design.md](./2_design.md) is the current contract; [3_vision.md](./3_vision.md) captures open questions. The planned opt-in durability contract for automatic task recovery is specified in [recoverable-auto-workflows.md](./specs/recoverable-auto-workflows.md).
+Activity / Job is Orbit's execution substrate. Activities describe runnable units; jobs compose them sequentially, in parallel, across collections, or through bounded loops. Orbit's product story is moving toward goals, graphs, sessions, and locks, but this layer remains the runtime underneath. [2_design.md](./2_design.md) is the current contract; [3_vision.md](./3_vision.md) captures open questions.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.
 
@@ -79,14 +79,12 @@ This layer also owns:
 
 `workspace_path` entered the envelope in [T20260419-0002], runtime/CLI `fsProfile` enforcement landed in [T20260419-0503], and init seeding landed in [T20260419-2347].
 
-### 2.6 Automatic recovery is explicit and evidence-gated
+### 2.6 Automatic recovery follows the delivery pipeline
 
-The planned `orbit run auto --recover` mode isolates task-local failures, invokes bounded
-task-scoped recovery, and keeps draining unrelated work. It does not trust an agent's claim that no
-work was needed: semantic search retrieves possible prior implementations, while a deterministic
-gate verifies delivered commits, current acceptance checks, and workspace policy before persisting
-an `already_satisfied` disposition. Unrecoverable tasks become `blocked`; systemic workflow
-failures still terminate the parent.
+Recovery applies within delivery workflows. Configured step-failure recovery can repair a failed
+step and resume from it; final recovery can make a deterministic decision after that mechanism is
+spent. The owner's blocked-task recovery pipeline can also process eligible blocked tasks. A
+workspace auto run still treats a required child workflow failure as a parent failure.
 
 ---
 
@@ -105,7 +103,6 @@ failures still terminate the parent.
 | CLI agent runtime path | `crates/orbit-engine/src/activity_job/cli_runner/mod.rs` | [T20260419-0104] |
 | `fsProfile` enforcement | `crates/orbit-policy`, `tool_context_for_activity`, CLI describe/get surfaces | [T20260419-0503] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
-| Recoverable automatic workflow contract | [`specs/recoverable-auto-workflows.md`](./specs/recoverable-auto-workflows.md) | planned |
 
 ---
 

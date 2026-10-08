@@ -665,7 +665,7 @@ an additional owner therefore creates an independent schedule on that host.
 - **Scheduled execution is a real capability escalation.** A routine source workspace is
   scheduled code execution on every host that trusts it. Targets are catalog-resolved (no
   inline commands) and run under existing activity/job policy, but note the sandbox caveat
-  recorded in [External Executor Protocol for dynamic out-of-process executor registration (retired)](../executors/4_decisions.md#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired): enforcement depends on which runtime path the target takes.
+  recorded in the External Executor Protocol retirement decision (ORB-10395): enforcement depends on which runtime path the target takes.
   Review of this checkout's definitions is part of the security boundary.
 - **Minute granularity, host-local time.** Cron is evaluated in host-local time; DST folds
   can skip or double a slot exactly as classic cron does. The idempotency key (name + slot)

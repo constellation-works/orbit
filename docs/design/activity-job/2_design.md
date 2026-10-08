@@ -1315,21 +1315,14 @@ Their shared scaffolding (`ScriptedHost`, `Action`, job/step builders) lives in
 `tests/mod.rs`. A new executor block is covered first by a boundary job in
 `v2_runtime.rs`. It gets a unit test only when it meets the admission criteria.
 
-### 8.13 Recoverable automatic workflows (planned)
+### 8.13 Automatic recovery
 
-The current executor can recover one configured step and retry it once. This includes the
-default conflict-only PR base-sync repair above, and both direct ship and auto reach it through
-the same `task_pr_pipeline`. Higher-level
-shipment parents still fail when a required child run fails. The planned
-[`orbit run auto --recover` contract](./specs/recoverable-auto-workflows.md) adds a separate
-task-scoped orchestration layer: preserve per-task child outcomes, run bounded recovery for failed
-tasks, persist an evidence-gated completion disposition, and continue draining unrelated work.
-
-This does not make agent output authoritative and does not generalize `pipeline_success_guard` into
-a prose interpreter. Semantic similarity only retrieves possible already-landed implementations;
-a deterministic gate rechecks delivered commits, the pinned base, and the current task's acceptance
-checks before `already_satisfied` can move a task to `done`. Without the explicit recover input,
-existing fail-fast job behavior remains unchanged.
+Recovery is scoped to delivery workflows. Configured step-failure recovery can repair a failed
+step and resume from it, including the conflict-only PR base-sync repair above. After step recovery
+is spent, `final_recovery_activity` can make a deterministic decision for an eligible task. The
+owner's blocked-task recovery pipeline can process eligible blocked tasks outside an active
+delivery run. Higher-level shipment parents, including workspace auto, still fail when a required
+child run fails.
 
 ---
 
@@ -1367,7 +1360,7 @@ This feature spans a migration, so the retained surfaces are explicit.
 | `TargetRef` authoring form | Kept at authoring/load time only | Human-friendly YAML surface; resolved away before execution since [T20260418-2019]. |
 | v1 `crate::job_runner` | Kept, condition grammar only | The older sequential/DAG runtime was removed in [ORB-10390]; the module now holds only `condition::evaluate_bool_expr`, consumed by the v2 executor's `when` and `break_when` evaluation (`job_executor/step.rs`, `job_executor/loop_block.rs`). |
 | v1 executor stack (`ActivityExecutor`, `ActivityExecutorRegistry`, `direct_agent` / `external` / `cli_command` executors, v1 `ExecutionContext`, v1 `Activity`) | Removed | Deleted in [ORB-10395]. v2 dispatch consults no executor registry; executor defs are read only for provider CLI/sandbox resolution and for the `local_shell` deterministic action ([ORB-11294], see [executors/specs/local-shell.md](../executors/specs/local-shell.md)). |
-| External Executor Protocol v1 (`executor_type: external`) | Removed | Never a supported surface; retired with the v1 stack in [ORB-10395]. `ExecutorType::External` still parses so pre-existing defs load, but nothing spawns them — see `docs/design/executors/4_decisions.md` §[External Executor Protocol for dynamic out-of-process executor registration (retired)](../executors/4_decisions.md#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired). |
+| External Executor Protocol v1 (`executor_type: external`) | Removed | Never a supported surface; retired with the v1 stack in ORB-10395. `ExecutorType::External` still parses so pre-existing defs load, but nothing spawns them; see the External Executor Protocol retirement decision in `docs/design/executors/4_decisions.md` (ORB-10395). |
 | Legacy `run_parallel_task_pipeline` | Removed | The legacy parallel-batch executor was removed as unused in [ORB-10332]; the live pipelines still dispatch and join children through `orbit.pipeline.invoke` / `orbit.pipeline.wait`. |
 | Seeded reference activities and jobs | Kept | They act as runnable contracts and examples, and were moved into init seeding in [T20260419-2347]. |
 

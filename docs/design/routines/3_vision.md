@@ -116,8 +116,8 @@ Orbit-internal:
   routines trigger into.
 - [../activity-job/4_decisions.md](../activity-job/4_decisions.md) — [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed), the
   removed-shell posture routines inherit.
-- [../executors/4_decisions.md](../executors/4_decisions.md) — [External Executor Protocol for dynamic out-of-process executor registration (retired)](../executors/4_decisions.md#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired), sandbox caveats
-  relevant to what scheduled targets may do.
+- External Executor Protocol retirement decision (ORB-10395) — sandbox caveats relevant to
+  what scheduled targets may do.
 
 External:
 - systemd.timer(5), launchd.plist(5) — monotonic restart and wake semantics.
