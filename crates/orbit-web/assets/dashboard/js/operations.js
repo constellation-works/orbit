@@ -303,21 +303,53 @@ function clockHm(value, { zone = true } = {}) {
 const CRON_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const TIMELINE_ROWS = 4;
 
+// The zone cron triggers are evaluated in (the host's, from the routines and
+// auto-tasks payloads). Unknown until a payload names it; a trigger is then
+// shown without a zone claim rather than with a wrong one.
+let hostCronZone = null;
+
+function noteCronZone(payload) {
+  if (payload?.cron_zone) hostCronZone = payload.cron_zone;
+}
+
+// "PDT" for an IANA host zone, else "UTC-07:00" from the offset.
+function cronZoneLabel(zone) {
+  if (!zone) return "";
+  if (zone.name) {
+    try {
+      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone.name, timeZoneName: "short" })
+        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
+      if (part?.value) return part.value;
+    } catch {
+      // Unknown to this browser: fall back to the offset.
+    }
+  }
+  const offset = Number(zone.offset_seconds);
+  if (!Number.isFinite(offset)) return "";
+  if (offset === 0) return "UTC";
+  const minutes = Math.abs(Math.round(offset / 60));
+  const pad = (v) => String(v).padStart(2, "0");
+  return `UTC${offset < 0 ? "-" : "+"}${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}
+
 // A readable cadence for the common cron shapes routines use; anything else
-// is shown verbatim so nothing is misdescribed.
+// is shown verbatim so nothing is misdescribed. Clock times are in the host
+// zone the scheduler evaluates cron in, not UTC.
 function cronText(cron) {
   const parts = String(cron || "").trim().split(/\s+/);
   if (parts.length !== 5) return cron || "—";
   const [minute, hour, dom, month, dow] = parts;
   const pad = (v) => String(v).padStart(2, "0");
+  const label = cronZoneLabel(hostCronZone);
+  const zone = label ? ` ${label}` : "";
   if (dom !== "*" || month !== "*") return cron;
   if (minute === "*" && hour === "*" && dow === "*") return "every minute";
   const every = /^\*\/(\d+)$/.exec(minute);
   if (every && hour === "*" && dow === "*") return `every ${every[1]} min`;
   if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)} UTC`;
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {
-    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)} UTC`;
+    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
   }
   return cron;
 }
@@ -613,6 +645,7 @@ function routineRow(payload, routine, workspaceId) {
 }
 
 function renderOperations(payload) {
+  noteCronZone(payload);
   lastOperations = payload;
   if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
   const workspace = selectedWorkspaceName();
@@ -995,6 +1028,7 @@ function syncAutoTaskSchedulerNote() {
 }
 
 function renderAutoTasks(payload) {
+  noteCronZone(payload);
   lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
@@ -1197,7 +1231,10 @@ function jobRow(job, workspace) {
 
 function renderJobs(payload) {
   lastJobs = payload;
-  if (payload.routines) lastOperations = payload.routines;
+  if (payload.routines) {
+    lastOperations = payload.routines;
+    noteCronZone(lastOperations);
+  }
   const body = $("jobs-body");
   if (!body) return;
   body.textContent = "";

@@ -386,6 +386,14 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
             let before = Utc::now();
             let auto = json_ok(server.get("/api/auto-tasks?workspace=ws_http_fixture"));
             let after = Utc::now();
+            // Cron is evaluated in host-local time, so both payloads name that
+            // zone for the dashboard to label triggers with.
+            let host_offset = chrono::Local::now().offset().local_minus_utc();
+            assert_eq!(auto["cron_zone"]["offset_seconds"], host_offset, "{auto}");
+            assert!(
+                auto["cron_zone"]["name"].is_string() || auto["cron_zone"]["name"].is_null(),
+                "{auto}"
+            );
             let definitions = auto["definitions"].as_array().unwrap();
             assert_eq!(definitions.len(), 4, "{auto}");
             for (name, state, hypothetical) in [
@@ -426,6 +434,7 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
             let before = Utc::now();
             let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
             let after = Utc::now();
+            assert_eq!(report["cron_zone"], auto["cron_zone"], "{report}");
             let rows = report["routines"].as_array().unwrap();
             assert_eq!(rows.len(), 3, "{report}");
             for (name, state, hypothetical) in [
