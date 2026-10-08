@@ -60,7 +60,9 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Traffic | When | Destination | What is sent |
 | --- | --- | --- | --- |
 | Release check and binary download | Only when you run `orbit update` | `api.github.com` / `github.com/constellation-works/orbit/releases` | A GitHub API request for the latest release; no identifiers, no payload. |
-| Direct HTTP model transports (Anthropic Messages, OpenAI-compatible, Gemini) | Never from the `orbit` CLI | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` by default | These transports live in the `orbit-agent` library crate for embedders and examples. Every `orbit` crew dispatches through a provider CLI; selecting an HTTP-only provider such as `openai_compat` fails structurally rather than making a request. |
+
+Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
+provider such as `openai_compat` fails structurally before making a request.
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
 and no "phone home" of any kind. There is no network call you cannot trace to a

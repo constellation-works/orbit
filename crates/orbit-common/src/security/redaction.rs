@@ -3,8 +3,7 @@
 //! Consolidates the three surfaces scattered across the workspace today:
 //! - env-value scrubbing previously reached through the old shared types
 //!   re-exports
-//! - `orbit_agent::loop_engine::audit::redaction::RedactionMiddleware` —
-//!   regex-based patterns for `Authorization` / `x-api-key` / `Bearer` in
+//! - [`PatternRedactor`] — regex-based patterns for `Authorization` / `x-api-key` / `Bearer` in
 //!   HTTP-shaped payloads (headers, JSON)
 //! - `orbit_engine::activity_job::cli_runner::ArgvRedactor` — the above plus a raw
 //!   `sk-…` pattern for argv that leaks provider keys

@@ -8,53 +8,17 @@
     rustdoc::invalid_html_tags,
     rustdoc::private_intra_doc_links
 )]
-//! Agent provider abstraction for Orbit. Two transport families coexist:
+//! Provider CLI runtimes and audit contracts for Orbit.
 //!
-//! - **CLI transports** — drive `claude`, `codex`, `gemini`, `grok`, `copilot`,
-//!   `cursor-agent`, `ollama`, `opencode`, `pi`, or `mock` as subprocesses
-//!   through
-//!   [`AgentRuntime`]. Each runtime builds an
-//!   [`AgentInvocationSpec`] (program, args, stdin envelope) that the engine
-//!   executes through `orbit-exec`; responses are parsed via
-//!   [`parse_and_validate_response`].
-//! - **HTTP transports** — drive providers directly through the
-//!   [`LoopTransport`](loop_engine::LoopTransport) sibling trait. The
-//!   provider-agnostic [`AgentLoop`](loop_engine::AgentLoop) runs the
-//!   send/parse/dispatch cycle, enforcing guardrails and tool-allowlist rules
-//!   and emitting the full structured audit trail via
-//!   [`AuditSink`](loop_engine::AuditSink).
+//! Provider adapters build command descriptors (program, arguments and stdin)
+//! that `orbit-engine` executes through `orbit-exec`. Response helpers project
+//! provider stdout into Orbit envelopes and diagnostics.
 //!
-//! The two trait shapes differ intentionally — one-shot command descriptor
-//! vs. iterative conversation driver — so they coexist instead of being
-//! forcibly unified.
-//!
-//! **Only the CLI path executes Orbit activities.** ORB-10801 retired the
-//! `backend: http | cli | auto` selector and the engine's HTTP agent-loop
-//! driver, so nothing in an activity asset, job asset, or `config.toml` can
-//! reach [`loop_engine`]. It stays as a standalone SDK surface with its own
-//! example consumers.
-//!
-//! # Role
-//! Depends on `orbit-types` (shared domain types) and `orbit-tools`
-//! (`ToolRegistry` dispatch for HTTP-loop tool calls). Consumed by
-//! `orbit-engine`.
-//!
-//! # Key exports
-//! - [`AgentRuntime`] trait and CLI [`Agent`] / [`AgentConfig`] wrappers
-//! - [`parse_and_validate_response`] for CLI response envelopes
-//! - [`loop_engine::AgentLoop`], [`loop_engine::Session`],
-//!   [`loop_engine::LoopTransport`], [`loop_engine::LoopAuditEvent`],
-//!   [`loop_engine::AuditSink`] for the standalone HTTP SDK path, which Orbit
-//!   activity/job execution does not use (ORB-10801)
-//! - [`providers::anthropic::AnthropicMessagesTransport`] — Anthropic HTTP
-//!   transport
-//! - [`providers::openai_compat::OpenAiCompatTransport`] — OpenAI-compatible
-//!   chat-completions HTTP transport for hosted and local endpoints
-//! - [`providers::gemini_http::GeminiHttpTransport`] — Google Gemini HTTP
-//!   transport with cachedContents caching
+//! [`loop_engine::audit`] retains the structured events and redacted blob sinks
+//! that the engine persists, including historical event variants.
 //!
 //! # Dependency direction
-//! `orbit-types` / `orbit-tools` → `orbit-agent` → `orbit-engine`
+//! `orbit-common` / `orbit-types` → `orbit-agent` → `orbit-engine`
 
 mod agent;
 pub mod loop_engine;

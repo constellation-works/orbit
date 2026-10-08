@@ -44,5 +44,3 @@ fn the_newest_assistant_message_is_read_from_each_output_shape() {
         );
     }
 }
-mod http_body;
-pub(crate) mod http_fixture;

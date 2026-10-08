@@ -1,20 +1,8 @@
-//! Concrete agent provider implementations.
+//! Provider CLI adapters and stdout projection helpers.
 //!
-//! Two families live here:
-//!
-//! - **CLI transports** (`claude`, `codex`, `copilot`, `cursor-agent`, `gemini`,
-//!   `agy`, `grok`, `ollama`, `opencode`, `pi`, `mock_agent`):
-//!   translate an [`AgentRequest`] into a CLI command invocation and stdin
-//!   envelope that the engine runs via `orbit-exec`.
-//! - **HTTP transports** (`anthropic`, `openai_compat`, `gemini_http`): implement the sibling
-//!   [`LoopTransport`](crate::loop_engine::LoopTransport) trait against a
-//!   provider's HTTP API. Used by [`AgentLoop`](crate::loop_engine::AgentLoop)
-//!   with explicit guardrails, allowlist enforcement, and audit wiring.
-//!
-//! The two families coexist: adding an HTTP transport does not remove the
-//! existing CLI path, and the shared `AgentRuntime` trait is unchanged.
+//! Adapters build command descriptors and stdin envelopes that the engine
+//! executes through `orbit-exec`.
 
-pub mod anthropic;
 pub(crate) mod antigravity;
 pub(crate) mod claude;
 pub(crate) mod codex;
@@ -22,12 +10,9 @@ mod common;
 pub(crate) mod copilot;
 pub(crate) mod cursor;
 pub(crate) mod gemini;
-pub mod gemini_http;
 pub(crate) mod grok;
-mod http_body;
 pub(crate) mod mock_agent;
 pub(crate) mod ollama;
-pub mod openai_compat;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 
