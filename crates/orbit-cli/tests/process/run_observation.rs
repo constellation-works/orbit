@@ -34,6 +34,7 @@ use rusqlite::{Connection, params};
 use serde_json::Value;
 
 mod replay_crew;
+mod run_show_display;
 
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";

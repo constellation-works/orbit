@@ -20,9 +20,12 @@ use super::steps::{
     step_summary_table,
 };
 
+/// `CatalogReferenceLayer::layer` for a definition this binary ships.
+const SHIPPED_CATALOG_LAYER: &str = "shipped";
+
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",\"stopped_descendants\":[...],\"blocked_on_stopped_descendant\":<descendant|null>,...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable` or `leaf_released`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped; `.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",\"stopped_descendants\":[...],\"blocked_on_stopped_descendant\":<descendant|null>,...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. The `#` column of the table is one-based and Duration is human-readable (`3h 39m 51s`); `.steps[].step_index` stays zero-based and every duration stays in milliseconds. A run whose record holds only a run-level step (an interrupted run's) shows its audit steps instead. The Catalog: lines name only layers other than `shipped` unless `--verbose` is given; `.catalog_layers` always lists every reference. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable` or `leaf_released`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped; `.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -41,6 +44,11 @@ pub struct RunShowArgs {
     /// releases its task reservations
     #[arg(long)]
     pub no_reconcile: bool,
+
+    /// Also list the catalog layer of every job and activity reference; by
+    /// default only references that did not resolve to a shipped definition
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 impl Execute for RunShowArgs {
@@ -50,6 +58,7 @@ impl Execute for RunShowArgs {
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             RunRead::from_no_reconcile(self.no_reconcile),
+            self.verbose,
         )
     }
 }
@@ -59,6 +68,7 @@ pub(crate) fn run_show_payload(
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
+    verbose: bool,
 ) -> CommandOut {
     let run = resolve_run(runtime, run_id, read)?;
     let state = runtime.read_run_state(&run.run_id)?;
@@ -203,7 +213,7 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&provenance_lines.join("\n"));
     }
-    header.push_str(&catalog_layer_lines(&catalog_layers));
+    header.push_str(&catalog_layer_lines(&catalog_layers, verbose));
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
     header.push_str(&super::security_summary::security_alert_sweep_lines(
@@ -264,7 +274,7 @@ pub(crate) fn run_show_payload(
     }
     if steps_source == StepSource::Audit && !steps.is_empty() {
         header.push_str(&format!(
-            "\n{} reconstructed from the run audit trail; the run record stores none",
+            "\n{} reconstructed from the run audit trail; the run record holds no per-step history",
             crate::output::color::bold("Steps:"),
         ));
     }
@@ -473,12 +483,14 @@ fn claimed_leaf_lines(
 
 /// One line per catalog reference, naming the layer that resolved it.
 ///
-/// Printed for every run, not only one that touches a plugin: "which file is
-/// this step actually running" is the question, and the answer is the same
-/// shape whether a plugin is involved or not.
-fn catalog_layer_lines(layers: &[CatalogReferenceLayer]) -> String {
+/// A `shipped` layer is the default answer and says nothing on a 20-activity
+/// pipeline, so it is listed only under `--verbose`. Any other layer — a
+/// workspace override, a plugin, an unresolved job — is what an operator asking
+/// "which file is this step actually running" needs, and always prints.
+fn catalog_layer_lines(layers: &[CatalogReferenceLayer], verbose: bool) -> String {
     layers
         .iter()
+        .filter(|layer| verbose || layer.layer != SHIPPED_CATALOG_LAYER)
         .map(|layer| {
             format!(
                 "\n{} {}",
