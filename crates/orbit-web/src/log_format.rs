@@ -716,18 +716,40 @@ fn format_agent_message(fields: &Value) -> String {
         .and_then(|event| event.get("type"))
         .and_then(Value::as_str)
         .filter(|kind| !kind.is_empty());
+    let item_kind = event
+        .as_ref()
+        .and_then(|event| event.get("item"))
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.is_empty());
     let stream = fields
         .get("stream")
         .and_then(Value::as_str)
         .unwrap_or("output");
-    // The kind and abbreviated run fit ahead of the raw relay and its context
-    // in the narrow dock. The complete run remains in the tooltip and fields.
+    // The kind and abbreviated run fit ahead of the context in the narrow dock
+    // and status bar. The complete run remains in the tooltip and fields.
     let mut summary = escape_html(&kind.map_or_else(|| format!("agent {stream}"), str::to_string));
     if let Some(run) = fields.get("job_run_id").and_then(Value::as_str) {
         summary.push_str(" · ");
         summary.push_str(&code_value(run.to_string()));
     }
-    let context = format_generic_fields(fields);
+    // After the run so the first 60 characters still carry kind and run.
+    if let Some(item_kind) = item_kind {
+        summary.push(' ');
+        summary.push_str(&escape_html(item_kind));
+    }
+    // A structured line is already summarised by its kind; echoing the raw
+    // payload would put provider JSON in the status bar. A line without a
+    // kind is the only record of what the agent said, so it stays.
+    let context = if kind.is_some() {
+        let mut fields = fields.clone();
+        if let Some(map) = fields.as_object_mut() {
+            map.remove("line");
+        }
+        format_generic_fields(&fields)
+    } else {
+        format_generic_fields(fields)
+    };
     if !context.is_empty() {
         summary.push(' ');
         summary.push_str(&context);

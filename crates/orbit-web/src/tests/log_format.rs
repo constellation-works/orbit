@@ -61,6 +61,17 @@ fn rendered_agent_relays_put_kind_and_run_in_first_60_characters() {
             !first.starts_with("cwd="),
             "relay context must follow its meaning: {first}"
         );
+        let text = visible_text(&rendered.message_html);
+        assert_eq!(
+            text.contains("command_execution"),
+            line.contains("command_execution"),
+            "the item kind is the only payload detail a structured relay keeps: {text}"
+        );
+        assert_eq!(
+            text.contains("line="),
+            kind.starts_with("agent "),
+            "a structured relay must not echo its provider JSON, and a line without a kind is its own summary: {text}"
+        );
         assert_eq!(rendered.agent_stdout, stream == "stdout");
         assert_eq!(rendered.source, "supervisor");
         assert_eq!(rendered.target, target);
