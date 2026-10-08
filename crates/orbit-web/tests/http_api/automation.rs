@@ -1,14 +1,17 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_core::AutoTaskAddParams;
+use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{
     MemberAssessment, MemberAttempt, MemberState, StateMember, StateTriggerKind,
 };
 use orbit_types::workflow::automation::{AutomationState, SourceRevision};
-use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use orbit_types::workflow::{
+    AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRunState, JobRunTrigger, PipelineState,
+};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -243,6 +246,101 @@ fn automation_lists_bound_inventories_and_full_state_is_explicit_and_scoped() {
                     .get("/api/automation/routine/missing/state?workspace=ws_http_fixture")
                     .status(),
                 404
+            );
+        },
+    );
+}
+
+/// A state-triggered routine fires through its automation, not the cron fire
+/// store, so the latest run it admitted is its last fire once that is newer
+/// than any cron fire recorded before the routine became state-triggered.
+#[test]
+fn routine_last_fire_reports_the_newer_state_triggered_run() {
+    isolated(
+        "automation::routine_last_fire_reports_the_newer_state_triggered_run",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("task_pilot_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(routines.join("pilot.yaml"), format!(
+                "schemaVersion: 1\nname: pilot\nenabled: false\ntarget: job:task_pilot_pipeline\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: {}\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 90\n",
+                fixture.runtime.automation_machine_identity().unwrap()
+            )).unwrap();
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let slot = "2026-09-20T23:00:00+00:00";
+            store
+                .routine_record_fire_intent(&RoutineFireIntentParams {
+                    routine_name: "pilot".into(),
+                    slot: slot.into(),
+                    attempt: 1,
+                    source_workspace: "fixture".into(),
+                })
+                .unwrap();
+            store
+                .routine_mark_fire_dispatched("pilot", slot, 1, "jrun-cron-fire")
+                .unwrap();
+            store
+                .routine_mark_fire_outcome("pilot", slot, 1, RoutineFireState::Succeeded, None)
+                .unwrap();
+            let server = fixture.server(false);
+            let last_fire = || {
+                json_ok(server.get("/api/routines?workspace=ws_http_fixture"))["routines"][0]["last_fire"].clone()
+            };
+            assert_eq!(last_fire()["run_id"], "jrun-cron-fire");
+
+            // The run is created after the cron fire, as a later state-triggered fire is.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            let mut run = fixture.seed_run(
+                "jrun-state-fire",
+                "task_pilot_pipeline",
+                JobRunState::Success,
+            );
+            run.created_at = Utc::now();
+            let mut pipeline =
+                PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+            pipeline.trigger = Some(JobRunTrigger::state_routine("pilot", "consumer-fixture"));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &run,
+                    Some(&pipeline),
+                )
+                .unwrap();
+            // An unrelated routine's run in the same job never becomes this routine's fire.
+            let other = fixture.seed_run(
+                "jrun-other-fire",
+                "task_pilot_pipeline",
+                JobRunState::Failed,
+            );
+            let mut other_pipeline =
+                PipelineState::new(other.run_id.clone(), other.job_id.clone(), json!({}));
+            other_pipeline.trigger = Some(JobRunTrigger::state_routine(
+                "someone-else",
+                "consumer-other",
+            ));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &other,
+                    Some(&other_pipeline),
+                )
+                .unwrap();
+
+            let fire = last_fire();
+            assert_eq!(fire["run_id"], "jrun-state-fire", "{fire}");
+            assert_eq!(fire["state"], "succeeded", "{fire}");
+            assert_eq!(
+                DateTime::parse_from_rfc3339(fire["started_at"].as_str().unwrap()).unwrap(),
+                run.created_at,
+                "the fire is timed by its run: {fire}"
             );
         },
     );

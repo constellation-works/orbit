@@ -9,8 +9,8 @@ use chrono::{DateTime, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_store::contracts::RoutineFireRecord;
-use orbit_types::workflow::RoutineTarget;
+use orbit_store::contracts::{JobRunQuery, RoutineFireRecord, RoutineFireState};
+use orbit_types::workflow::{JobRun, JobRunState, RoutineTarget};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
 use super::RoutineMachineIdentity;
@@ -70,7 +70,9 @@ pub struct RoutineStatus {
     pub last_evaluated_slot: Option<String>,
     /// Next scheduled slot (RFC 3339, host-local), when computable.
     pub next_due: Option<String>,
-    /// Most recent fire attempt recorded on this host.
+    /// Most recent fire recorded on this host, from whichever trigger fired
+    /// it: the cron fire store, or for a state- or delivery-triggered routine
+    /// the newest run that routine's automation admitted when that is newer.
     pub last_fire: Option<RoutineFireRecord>,
     pub automation: Option<serde_json::Value>,
 }
@@ -175,7 +177,7 @@ pub fn routine_statuses_with_providers(
     let mut statuses = Vec::with_capacity(collection.routines.len());
     for routine in collection.routines {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
-        let last_fire = store.routine_latest_fire(&routine.definition.name)?;
+        let cron_fire = store.routine_latest_fire(&routine.definition.name)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
         let paused_at = pauses
             .get(&routine.definition.name)
@@ -183,6 +185,7 @@ pub fn routine_statuses_with_providers(
         let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
             discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
         });
+        let last_fire = newest_fire(cron_fire, automation_fire(&discovered, &routine)?);
         statuses.push(RoutineStatus {
             routine,
             paused_at,
@@ -202,6 +205,83 @@ pub fn routine_statuses_with_providers(
         load_errors,
         owner_only: host.owner_only,
     })
+}
+
+/// The latest run a state- or delivery-triggered routine's automation admitted.
+///
+/// Those fires never touch the cron fire store: the run itself carries the
+/// routine as its trigger, so the run record is the fire record. A cron-only
+/// routine has no such runs and is not queried.
+fn automation_fire(
+    discovered: &DiscoveredWorkspaces,
+    routine: &LoadedRoutine,
+) -> Result<Option<RoutineFireRecord>, OrbitError> {
+    let trigger = &routine.definition.trigger;
+    if trigger.deliveries_landed.is_none() && trigger.state.is_none() {
+        return Ok(None);
+    }
+    let Some((_, runtime)) = discovered
+        .entries
+        .iter()
+        .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+    else {
+        return Ok(None);
+    };
+    let run = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(routine.definition.target.job_name().to_string()),
+            trigger_routine: Some(routine.definition.name.clone()),
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?
+        .into_iter()
+        .next();
+    Ok(run.map(|run| fire_from_run(&routine.definition.name, &routine.source_workspace, run)))
+}
+
+fn fire_from_run(name: &str, source_workspace: &str, run: JobRun) -> RoutineFireRecord {
+    let state = match run.state {
+        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying => {
+            RoutineFireState::Dispatched
+        }
+        JobRunState::Success | JobRunState::Held => RoutineFireState::Succeeded,
+        JobRunState::Skipped => RoutineFireState::Skipped,
+        JobRunState::Timeout => RoutineFireState::TimedOut,
+        JobRunState::Failed | JobRunState::Cancelled | JobRunState::Interrupted => {
+            RoutineFireState::Failed
+        }
+    };
+    let updated = run.finished_at.or(run.started_at).unwrap_or(run.created_at);
+    RoutineFireRecord {
+        routine_name: name.to_string(),
+        slot: run.created_at.to_rfc3339(),
+        attempt: run.attempt,
+        state,
+        run_id: Some(run.run_id),
+        source_workspace: source_workspace.to_string(),
+        detail: None,
+        created_at: run.created_at.to_rfc3339(),
+        updated_at: updated.to_rfc3339(),
+    }
+}
+
+/// The later of a cron fire and an automation-admitted run, by creation time.
+fn newest_fire(
+    cron: Option<RoutineFireRecord>,
+    automation: Option<RoutineFireRecord>,
+) -> Option<RoutineFireRecord> {
+    let (Some(cron_fire), Some(auto_fire)) = (&cron, &automation) else {
+        return cron.or(automation);
+    };
+    let at = |fire: &RoutineFireRecord| DateTime::parse_from_rfc3339(&fire.created_at).ok();
+    match (at(cron_fire), at(auto_fire)) {
+        (Some(cron_at), Some(auto_at)) if auto_at <= cron_at => cron,
+        (Some(_), Some(_)) => automation,
+        _ => cron,
+    }
 }
 
 /// A selected checkout is the entire discovery scope: never another store by
