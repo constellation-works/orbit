@@ -16,11 +16,6 @@ use super::callback::{
 };
 
 impl OrbitRuntime {
-    /// Preview admission using the ordinary CLI caller's process envelope.
-    pub fn run_tool_dry_run(&self, name: &str, input: &Value) -> Result<DryRunResult, OrbitError> {
-        self.run_tool_dry_run_with_session_context(name, input, ToolSessionContext::default())
-    }
-
     /// Preview the same capability, activity, active-tool and plugin-callback
     /// checks as CLI dispatch. Tool bodies and their input-specific validation
     /// are never invoked; capability decisions retain their ordinary audit.
@@ -30,11 +25,6 @@ impl OrbitRuntime {
         input: &Value,
         session_context: ToolSessionContext,
     ) -> Result<DryRunResult, OrbitError> {
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
-
         let admission = (|| {
             let callback = enforce_plugin_callback_allowlist(
                 &self.global_root(),
@@ -69,6 +59,10 @@ impl OrbitRuntime {
             }
             Err(error) => return Err(error),
         };
+        let schema = self
+            .tool_registry()
+            .get_schema(name)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
         let missing_params = schema
             .parameters
             .iter()

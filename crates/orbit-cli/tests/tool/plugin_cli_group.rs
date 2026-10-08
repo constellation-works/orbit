@@ -853,7 +853,7 @@ fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
 /// typed code instead of "unknown command".
 #[cfg(unix)]
 #[test]
-fn a_workspace_disable_is_reported_beside_the_host_state_and_refuses_the_derived_group() {
+fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
     let fixture = Fixture::new();
     let source = fixture.source("switch");
     write_status_plugin(&source, "switch", "");
@@ -932,6 +932,43 @@ fn a_workspace_disable_is_reported_beside_the_host_state_and_refuses_the_derived
         )
     });
     assert_eq!(error["code"], "plugin_disabled_in_workspace", "{error}");
+
+    let ordinary_run = fixture
+        .orbit_as_operator()
+        .args(["tool", "run", "switch.status", "--format", "json"])
+        .output()
+        .expect("run the disabled plugin tool");
+    assert!(!ordinary_run.status.success(), "{ordinary_run:?}");
+    let ordinary_error: Value =
+        serde_json::from_slice(&ordinary_run.stderr).unwrap_or_else(|parse_error| {
+            panic!(
+                "JSON error on stderr ({parse_error}): {}",
+                String::from_utf8_lossy(&ordinary_run.stderr)
+            )
+        });
+
+    let dry_run = fixture
+        .orbit_as_operator()
+        .args([
+            "tool",
+            "run",
+            "switch.status",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("preview the disabled plugin tool");
+    assert!(!dry_run.status.success(), "{dry_run:?}");
+    let dry_run_error: Value =
+        serde_json::from_slice(&dry_run.stderr).unwrap_or_else(|parse_error| {
+            panic!(
+                "JSON error on stderr ({parse_error}): {}",
+                String::from_utf8_lossy(&dry_run.stderr)
+            )
+        });
+    assert_eq!(ordinary_error["code"], "plugin_disabled_in_workspace");
+    assert_eq!(dry_run_error["code"], ordinary_error["code"]);
 
     // A host disable leaves nothing for a workspace enable to widen.
     fixture
