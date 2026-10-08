@@ -17,3 +17,11 @@ spec:
   sandbox: macos-sandbox-exec
   model_flag: "--model"
   env: {}
+  auth_probe:
+    args: ["-p", "--model", "haiku", "--output-format", "text", "--tools", "", "--disallowedTools", "mcp__*", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--max-turns", "1", "--no-session-persistence"]
+    stdin: "Reply with exactly ORBIT_AUTH_OK."
+    timeout_seconds: 60
+    success:
+      kind: stdout_contains
+      text: ORBIT_AUTH_OK
+    relogin_hint: "Run `claude auth login`, or renew `claude setup-token` and pass CLAUDE_CODE_OAUTH_TOKEN in [execution.env].pass."

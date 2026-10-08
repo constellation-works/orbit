@@ -14,7 +14,7 @@ use orbit_store::contracts::{
     AdmissionCrewCapability, ClaimMutation, LocalPullAdmission, LocalPullPhase,
 };
 use orbit_types::workflow::{
-    ClaimFailureClass, CrewExclusion, CrewExclusionSource, PullCrewPreflight,
+    ClaimFailureClass, CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
 use serde::Serialize;
 
@@ -344,8 +344,10 @@ pub struct PullCrewWindow {
     pub allowed: Option<Vec<String>>,
     /// The crew a task naming none runs as on this host.
     pub default_crew: Option<String>,
-    /// Crews excluded for the rest of the window, with why.
+    /// Currently excluded crews and reasons; auth exclusions may recover.
     pub excluded: Vec<CrewExclusion>,
+    /// Active provider auth failures and their delayed recovery schedule.
+    pub auth_exclusions: Vec<PullAuthExclusion>,
     /// Why this host claims nothing more for the rest of the window: a
     /// claimed leaf of this drain was released for a failure of the host
     /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
@@ -418,6 +420,7 @@ impl PullCrewWindow {
                 exclusion.crew, exclusion.reason
             )
         }));
+        lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
     }
 }
@@ -580,6 +583,11 @@ impl crate::OrbitRuntime {
             .as_ref()
             .map(|preflight| preflight.excluded.clone())
             .unwrap_or_default();
+        let stored_recovery = self
+            .read_run_state(drain_run_id)?
+            .map(|state| state.pull_auth_recovery)
+            .unwrap_or_default();
+        let mut auth_exclusions = Vec::new();
         let mut host_suppressed = None;
         let default_crew = match &preflight {
             Some(preflight) => preflight.default_crew.clone(),
@@ -622,6 +630,19 @@ impl crate::OrbitRuntime {
             // groups with `claude`.
             let authentication = evidence.provider_unavailable.is_some()
                 && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
+            if authentication
+                && let Some(incident) = self.pull_auth_incident(&record, &stored_recovery)?
+            {
+                if incident.recovered_at.is_some() {
+                    continue;
+                }
+                if !auth_exclusions
+                    .iter()
+                    .any(|entry: &PullAuthExclusion| entry.provider == incident.exclusion.provider)
+                {
+                    auth_exclusions.push(incident.exclusion);
+                }
+            }
             let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
             {
                 (Some(unavailable), _) => {
@@ -718,6 +739,7 @@ impl crate::OrbitRuntime {
             reviewable,
             default_crew,
             excluded,
+            auth_exclusions,
             host_suppressed,
         })
     }
@@ -725,7 +747,7 @@ impl crate::OrbitRuntime {
     /// Whether `leaf`'s recorded step failure is provider authentication,
     /// not model capacity. Capacity is also stored as `provider_unavailable`
     /// evidence; only the authentication marker widens the exclusion.
-    fn leaf_reported_authentication(&self, leaf: Option<&str>) -> bool {
+    pub(crate) fn leaf_reported_authentication(&self, leaf: Option<&str>) -> bool {
         let Some(leaf) = leaf else {
             return false;
         };

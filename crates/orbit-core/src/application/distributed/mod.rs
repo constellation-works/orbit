@@ -39,6 +39,7 @@
 //! [design §4.1]: ../../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../../docs/design/distributed-drain/specs/task-pull.md
 
+mod auth_recovery;
 mod contract;
 mod entry;
 mod final_recovery;

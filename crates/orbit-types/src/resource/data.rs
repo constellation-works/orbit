@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::FsProfile;
 use crate::resource::ResourceError;
-use crate::workflow::{ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat};
+use crate::workflow::{
+    AuthProbe, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
+};
 
 pub const EXECUTOR_RESOURCE_SCHEMA_VERSION: u32 = 2;
 pub const POLICY_RESOURCE_SCHEMA_VERSION: u32 = 2;
@@ -182,6 +184,8 @@ pub struct ExecutorResourceSpec {
     pub model_flag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_probe: Option<AuthProbe>,
     #[serde(default)]
     pub env: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

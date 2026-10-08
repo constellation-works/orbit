@@ -53,7 +53,8 @@ pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
 pub use executor_def::{
-    ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
+    AuthProbe, AuthProbeSuccess, ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride,
+    StdoutFormat,
 };
 pub use final_recovery::{
     FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
@@ -113,13 +114,13 @@ pub use run::{
     OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, PROVIDER_REFUSAL_ERROR_CODE,
     PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, ProviderFailureClass, ProviderFailureHold, PullCrewPreflight, PullSinglePass,
-    RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle,
-    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, TASK_BLOCKED_BY_AGENT_ERROR_CODE,
-    TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE,
-    TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, failed_provider,
-    is_baseline_red_failure, is_forge_unavailable, is_owner_route_unavailable,
+    PipelineState, ProviderFailureClass, ProviderFailureHold, PullAuthExclusion, PullAuthRecovery,
+    PullCrewPreflight, PullSinglePass, RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION,
+    ResourcePressure, ResourceThrottle, RunDeliveryObservation, RunDeliveryStatus, RunIdRole,
+    TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER,
+    TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output,
+    failed_provider, is_baseline_red_failure, is_forge_unavailable, is_owner_route_unavailable,
     is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
     is_provider_unavailable, is_task_blocked_by_agent, is_validation_environment_failure,
     provider_failure_text, run_id_candidate, run_id_minute_stem, run_id_role,

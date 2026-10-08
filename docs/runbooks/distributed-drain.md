@@ -460,8 +460,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   hands off `NoDiff` instead of opening a PR. Pin work that must stay on the
   owner with an `os:` tag or a crew. If no
   crew is runnable, the drain requests nothing and reports
-  `no_runnable_crew`. After you install a CLI or sign a provider in, start a
-  new drain to pick it up.
+  `no_runnable_crew`. After you install a missing CLI, start a new drain to pick it up.
+  Auth failures may recover in the same window through a declared probe (below).
 - Each iteration first carries earlier admissions forward — retries an
   unanswered request under the **same** ID, binds, launches, and delivers a
   finished leaf's settlement — then, while the window is open, tops free slots
@@ -618,9 +618,18 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   the task and error) or `leaf_released` (a claimed leaf was
   released for a `transient` failure other than a forge outage, with the
   task, class and reason). Each iteration's output carries
-  the same window as `crews`. To use an excluded crew again, fix the provider
-  on this host (for example, sign the CLI in) or wait for model capacity,
-  then start a new drain.
+  the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
+  re-login hint, credential source and next probe time (`auth_exclusions`).
+  Doctor warns about these on live drains; the dashboard shows the same data.
+  Follow the hint on the named host. A declared `auth_probe` first runs after
+  ten minutes, backs off to twenty then thirty minutes on failure, and
+  re-admits the provider's crews when it passes. Recovery is durable across
+  restart/resume; a later auth failure starts a new delay. Only active auth
+  exclusions are probed while the drain is admitting. Claude ships a minimal
+  Haiku probe; other providers currently need a new drain after re-login.
+  See [executor authentication recovery probes](../CONFIG.md#executor-authentication-recovery-probes)
+  for the declaration and credential-route details. Missing launchers,
+  capacity, refusal, crew and host exclusions retain their existing behavior.
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,

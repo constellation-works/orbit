@@ -45,9 +45,54 @@ pub struct CrewExclusion {
     pub reason: String,
 }
 
+/// Operator-visible authentication exclusion for one provider on this host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullAuthExclusion {
+    pub provider: String,
+    pub host: String,
+    pub excluded_at: DateTime<Utc>,
+    pub error_class: String,
+    pub relogin_hint: String,
+    pub credential_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_probe_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub attempts: u32,
+}
+
+impl PullAuthExclusion {
+    /// Shared human-readable warning for doctor and run show.
+    pub fn describe(&self) -> String {
+        format!(
+            "{} auth failed on {} at {} ({}; credentials: {}); {}; next probe: {}",
+            self.provider,
+            self.host,
+            self.excluded_at.to_rfc3339(),
+            self.error_class,
+            self.credential_source,
+            self.relogin_hint,
+            self.next_probe_at.map_or_else(
+                || "not declared; start a new drain after re-login".into(),
+                |at| at.to_rfc3339()
+            ),
+        )
+    }
+}
+
+/// Durable probe backoff and recovery for a released authentication incident.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullAuthRecovery {
+    pub exclusion: PullAuthExclusion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_source: Option<String>,
+}
+
 /// The crews a pull drain's window can run, from the provider preflight it
-/// took when the window opened [ORB-13941]. Cached for the window: a fixed
-/// credential or newly installed CLI takes effect with the next drain.
+/// took when the window opened [ORB-13941]. Cached for the window: a
+/// newly installed CLI takes effect with the next drain. Auth failures may
+/// recover within the window through a declared probe.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PullCrewPreflight {
     pub checked_at: DateTime<Utc>,

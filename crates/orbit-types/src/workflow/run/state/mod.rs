@@ -12,7 +12,8 @@ mod tests;
 pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionPass, DrainAdmissionsStop,
     DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWorkerLimit,
-    PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    PullAuthExclusion, PullAuthRecovery, PullCrewPreflight, PullSinglePass, ResourcePressure,
+    ResourceThrottle, TaskCancellationPolicy,
 };
 pub use failure::{
     ClaimFailureClass, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,

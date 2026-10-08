@@ -56,6 +56,8 @@ use tempfile::TempDir;
 
 mod admission;
 mod allow_crew;
+#[cfg(unix)]
+mod auth_recovery;
 mod before_pr;
 mod cancel;
 mod candidate_carry;
@@ -850,6 +852,7 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             model_pair_override: None,
             model_flag: None,
             timeout_seconds: None,
+            auth_probe: None,
             env: Default::default(),
             sandbox: None,
             allow_fallback: false,

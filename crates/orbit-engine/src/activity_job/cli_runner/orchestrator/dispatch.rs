@@ -843,7 +843,7 @@ fn output_blob_cite(stdout_blob_ref: &str, stderr_blob_ref: &str) -> String {
 /// bare Codex invocations, and Linux keep their existing environment surface.
 /// The macOS spawn layer supplies a public system bundle only when neither
 /// explicit value is present.
-fn provider_child_environment(
+pub(crate) fn provider_child_environment(
     host: &dyn RuntimeHost,
     provider: &str,
     sandbox: Option<&super::super::super::dispatcher::ResolvedSandbox>,

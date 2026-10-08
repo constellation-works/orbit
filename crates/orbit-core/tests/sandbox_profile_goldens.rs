@@ -288,6 +288,7 @@ fn seed_linux_executor(runtime: &OrbitRuntime, provider: &str) {
             model_pair_override: None,
             model_flag: None,
             timeout_seconds: None,
+            auth_probe: None,
             env: Default::default(),
             sandbox: Some(ExecutorSandboxKind::LinuxBwrap),
             allow_fallback: false,
