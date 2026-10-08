@@ -34,7 +34,10 @@ pub(crate) mod pi;
 #[cfg(test)]
 mod tests;
 
-pub use antigravity::{antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout};
+pub use antigravity::{
+    antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
+    apply_antigravity_print_timeout,
+};
 
 use std::borrow::Cow;
 

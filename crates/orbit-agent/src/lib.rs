@@ -64,8 +64,9 @@ mod types;
 
 pub use agent::{Agent, AgentConfig};
 pub use providers::{
-    antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
-    latest_assistant_message, normalize_cli_stdout, project_cli_response,
+    antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
+    apply_antigravity_print_timeout, latest_assistant_message, normalize_cli_stdout,
+    project_cli_response,
 };
 pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{
