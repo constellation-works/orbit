@@ -10,7 +10,7 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 
-import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -618,7 +618,7 @@ function cancelOnEscape(editor) {
 /// Writes are governed; a caller without the operator capability sees the
 /// rows read-only rather than an edit that 403s on save.
 function editable(payload) {
-  return payload?.config_set?.authorized !== false;
+  return payload?.config_set?.authorized !== false && !hostWriteRefusal();
 }
 
 function writeScope() {

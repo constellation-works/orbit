@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -112,10 +112,32 @@ export function formatExecutionLocation(location) {
   return `on ${label}`;
 }
 
+/// The dashboard address of run `runId` on registered host `hostName`.
+export function remoteRunHref(hostName, workspace, runId) {
+  const query = new URLSearchParams({ host: hostName });
+  if (workspace) query.set("workspace", workspace);
+  return `?${query}#runs?run_id=${encodeURIComponent(runId)}`;
+}
+
 /// The execution-provenance cell shared by the run meta grid and the task
-/// detail's run line.
-export function buildExecutionProvenance(location) {
+/// detail's run line. Given the run (`{runId, workspace}`) and an execution
+/// machine the serving host's host file registers, "on <machine>" links to
+/// that run on that host [ORB-14680]; an unregistered machine stays text.
+export function buildExecutionProvenance(location, run = null) {
   const known = !!(location && location.known === true && location.machine_id);
+  const host = known && run && run.runId
+    ? getRegisteredHosts().find((row) => row.machine_id === location.machine_id)
+    : null;
+  if (host) {
+    const link = el("a", {
+      class: "exec-origin remote-run-link",
+      text: formatExecutionLocation(location),
+      title: `Open run ${run.runId} on ${host.name}`,
+    });
+    link.href = remoteRunHref(host.name, run.workspace || getWorkspace(), run.runId);
+    link.addEventListener("click", (event) => event.stopPropagation());
+    return link;
+  }
   return el("span", {
     class: known ? "exec-origin" : "exec-origin unknown",
     text: formatExecutionLocation(location),
@@ -229,9 +251,12 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
     ]),
   );
 
-  panel.appendChild(line("execution", buildExecutionProvenance(claim.executed_on)));
-
   const run = claim.bound_run;
+  panel.appendChild(line("execution", buildExecutionProvenance(
+    claim.executed_on,
+    run && run.run_id ? { runId: run.run_id } : null,
+  )));
+
   if (run && run.run_id) {
     if (claim.bound_run_navigable) {
       const link = el("a", { class: "value", text: run.run_id });
@@ -398,6 +423,8 @@ function deliveryLabel(delivery) {
 // --- owner actions ----------------------------------------------------------
 
 function capabilityFor(capabilities, key) {
+  const refusal = hostWriteRefusal();
+  if (refusal) return { authorized: false, reason: refusal };
   const entry = capabilities && capabilities[key];
   return entry && typeof entry === "object" ? entry : { authorized: false, reason: "unavailable" };
 }

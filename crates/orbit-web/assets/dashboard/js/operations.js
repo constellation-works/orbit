@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
@@ -56,6 +56,8 @@ function selectedWorkspaceName() {
 }
 
 function workspaceReadOnlyReason() {
+  const hostRefusal = hostWriteRefusal();
+  if (hostRefusal) return hostRefusal;
   const selected = getWorkspace();
   if (!selected) return "All-workspace mode is read-only. Select one workspace; auto-task definitions are workspace-scoped.";
   const workspace = selectedWorkspace();

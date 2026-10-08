@@ -12,7 +12,7 @@
 // their first control, close on Escape as Cancel does unless a request is in
 // flight, and hand focus back to the button that opened them.
 
-import { captureFocus, el, fetchJson, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, getHost, requestJson, requestPanel } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -117,6 +117,14 @@ function view(payload) {
         class: "config-note",
         text: `This dashboard edits the host file of ${local ? local.name : "the serving host"}: ${payload.host_file || "hosts.toml"}.`,
       }),
+      // ORB-14680: these routes are never forwarded, so with another host
+      // selected the list is still the serving host's file, and says so.
+      getHost()
+        ? el("div", {
+            class: "config-note host-scope-selected",
+            text: `Showing ${getHost()} in the other views. This list is still ${local ? local.name : "the serving host"}'s host file, the one the host picker reads.`,
+          })
+        : null,
       payload.legacy
         ? el("div", {
             class: "config-warning",

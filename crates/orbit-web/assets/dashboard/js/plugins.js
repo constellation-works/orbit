@@ -8,7 +8,7 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -137,7 +137,7 @@ function pluginEnablement(plugin) {
     const row = el('div', { class: `plugin-scope plugin-scope-${scope}` });
     row.appendChild(el('span', { text: `${scope === 'host' ? 'Host' : 'Workspace'}: ${enabled ? 'enabled' : 'disabled'}${scope === 'workspace' && plugin.workspace_toggle == null ? ' (inherited)' : ''}` }));
     const action = enabled ? 'disable' : 'enable';
-    if (plugin.capabilities?.[action]?.authorized === true) {
+    if (plugin.capabilities?.[action]?.authorized === true && !hostWriteRefusal()) {
       const button = el('button', { class: 'plugin-toggle', text: `${action === 'enable' ? 'Enable' : 'Disable'} ${scope}` });
       button.type = 'button';
       button.disabled = pendingChanges.has(plugin.name);

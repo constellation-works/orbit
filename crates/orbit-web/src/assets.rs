@@ -67,6 +67,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/hosts.js"),
     ),
     (
+        "/static/js/host-switch.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/host-switch.js"),
+    ),
+    (
         "/static/js/markdown.js",
         JS,
         include_bytes!("../assets/dashboard/js/markdown.js"),

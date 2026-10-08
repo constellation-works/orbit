@@ -90,7 +90,7 @@ host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel'
 
 The forwarding client speaks HTTP/1.1 to the tunnel's loopback port, one connection per request, and streams both bodies. Unsafe methods need the operator session through the governed dashboard operation `host.forward`, and a spawned remote gets `--operator` only when that session has it. The router's origin guard, the authorization check, path refusals and host resolution all run before any SSH process starts.
 
-`GET /api/hosts/<host>/connection` reports the tunnel's state from that identity read.
+`GET /api/hosts/<host>/connection` reports the tunnel's state from that identity read, plus whether this session may forward writes. The dashboard's host picker reads it to show a host-level failure, version skew or a read-only host ([user-interface 2_design.md §6](../user-interface/2_design.md#6-top-level-navigation)).
 
 ## 4. Security
 

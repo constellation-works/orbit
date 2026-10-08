@@ -77,8 +77,9 @@ A forwarded request is bounded at 60 seconds, covering the response head and, ex
 | `binary_version`, `protocol_fingerprint` | As the identity read reported them |
 | `skew`, `skew_fields` | Version or protocol differs from the serving dashboard. Reported, never refused |
 | `error` | `{code, message}` when the host is unreachable |
+| `forward_writes` | `{authorized, reason}`: whether this session may forward unsafe methods (`host.forward`), with the refusal's reason when it may not |
 
-Every field comes from the identity read that opened the tunnel; this route never runs a second probe. An unreachable host is a 200 with `reachable: false` and the typed error.
+Every host field comes from the identity read that opened the tunnel; this route never runs a second probe. `forward_writes` is the serving dashboard's own session capability, so the dashboard can disable write controls instead of sending requests the forward refuses. An unreachable host is a 200 with `reachable: false` and the typed error.
 
 ## Authority
 

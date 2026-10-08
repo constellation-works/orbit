@@ -23,6 +23,114 @@ export function getWorkspace() {
   return currentWorkspace;
 }
 
+// ORB-14680: the dashboard can show another registered host through the
+// serving host's `/api/on/<host>/…` forward. `currentHost` is that host's
+// registered name, or null for the serving host. It is seeded from `?host=`
+// (host-switch.js resolves a remembered choice and the serving host's own
+// name), and every API path below is rewritten for it except the host-file
+// routes, which always answer for the serving host.
+let currentHost = params.get("host") || null;
+let servingHost = null;
+let registeredHosts = [];
+let hostWrites = null;
+
+export function getHost() {
+  return currentHost;
+}
+
+/// `{name, machine_id}` of the host serving this page, once `/api/hosts` named it.
+export function getServingHost() {
+  return servingHost;
+}
+
+/// The serving host first, then its host file's remotes, as `/api/hosts` lists them.
+export function setRegisteredHosts(rows) {
+  const hosts = Array.isArray(rows) ? rows.filter((row) => row && row.name) : [];
+  const local = hosts.find((row) => row.local);
+  servingHost = local ? { name: local.name, machine_id: local.machine_id } : null;
+  registeredHosts = hosts;
+}
+
+export function getRegisteredHosts() {
+  return registeredHosts;
+}
+
+/// The registered row a name or `machine_id` names, as the server resolves
+/// `:host` (names case-insensitively), or null.
+export function findRegisteredHost(selector) {
+  if (!selector) return null;
+  const wanted = String(selector);
+  return registeredHosts.find((row) => row.machine_id === wanted || row.name.toLowerCase() === wanted.toLowerCase()) || null;
+}
+
+/// The name the dashboard shows for the selected host.
+export function hostLabel() {
+  if (currentHost) return currentHost;
+  return servingHost ? servingHost.name : "this host";
+}
+
+/// "dk-server-1 (serving host)" or "hostb": the selected host as every label states it.
+export function hostDisplayName() {
+  return currentHost ? currentHost : `${hostLabel()} (serving host)`;
+}
+
+let hostUnavailable = false;
+
+/// Set while the selected host cannot be shown, so pollers stop asking it
+/// until a refresh finds it reachable again.
+export function setHostUnavailable(value) {
+  hostUnavailable = !!value;
+}
+
+export function isHostUnavailable() {
+  return hostUnavailable;
+}
+
+/// The serving session's authority to forward writes, `{authorized, reason}`,
+/// as the selected host's connection state reported it. Null on the serving host.
+export function setHostWrites(capability) {
+  hostWrites = capability && typeof capability === "object" ? capability : null;
+}
+
+/// Why a write to the selected host cannot be sent, or "" when it can. The
+/// forward refuses an unsafe method without the operator session; write
+/// controls show this reason instead of failing on click.
+export function hostWriteRefusal() {
+  if (!currentHost || !hostWrites || hostWrites.authorized !== false) return "";
+  return `Read-only on ${currentHost}: ${hostWrites.reason || "this dashboard session cannot forward writes"}`;
+}
+
+/// Switch the host every API call goes to; the serving host's own name or id
+/// selects the serving host (null). A different host is a new scope: workspace
+/// listeners reset panels and caches, and in-flight visits go stale. An
+/// unregistered name is kept, so the forward's `unknown_host` is what shows.
+export function setHost(name) {
+  const named = findRegisteredHost(name);
+  const next = !name || (named && named.local) ? null : named ? named.name : String(name);
+  if (next === currentHost) return false;
+  currentHost = next;
+  hostWrites = null;
+  hostUnavailable = false;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
+  return true;
+}
+
+// The host-file routes, `/api/hosts` and `/api/hosts/<host>/connection`,
+// always describe the serving host's own host file, and the forward refuses
+// them. Paths already addressed to a host are left as they are.
+function hostPath(path, host) {
+  if (!host || typeof path !== "string" || !path.startsWith("/api/")) return path;
+  if (path.startsWith("/api/on/") || /^\/api\/hosts(?:[/?]|$)/.test(path)) return path;
+  return `/api/on/${encodeURIComponent(host)}/${path.slice("/api/".length)}`;
+}
+
+/// An API path addressed to the selected host, for calls with no workspace
+/// scope (host resources, the log stream).
+export function withHost(path) {
+  return hostPath(path, currentHost);
+}
+
 let workspaceRevision = 0;
 const workspaceListeners = new Set();
 
@@ -30,17 +138,19 @@ export function getWorkspaceRevision() {
   return workspaceRevision;
 }
 
-// Mutations keep the workspace they started in across asynchronous admission
-// reads, responses and refreshes. Returning to the same workspace is a new
-// visit: an earlier result must not update that visit's UI or start a write.
+// Mutations keep the host and workspace they started in across asynchronous
+// admission reads, responses and refreshes. Returning to the same workspace is
+// a new visit: an earlier result must not update that visit's UI or start a write.
 export function captureWorkspaceVisit() {
   const workspace = currentWorkspace;
+  const host = currentHost;
   const revision = workspaceRevision;
   return {
     workspace,
+    host,
     revision,
     isCurrent: () => revision === workspaceRevision,
-    path: (path) => workspacePath(path, workspace),
+    path: (path) => hostPath(workspacePath(path, workspace), host),
   };
 }
 
@@ -129,6 +239,8 @@ export function notifyScopeChange() {
 // Hash routes still own view/filter history; this keeps reload-safe scope.
 export function persistScopeToUrl() {
   const url = new URL(window.location.href);
+  if (currentHost) url.searchParams.set("host", currentHost);
+  else url.searchParams.delete("host");
   if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
   else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
   else url.searchParams.delete("workspace");
@@ -341,9 +453,11 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
 }
 
 // Append the selected workspace to an API path, unless one is already present
-// (aggregate endpoints like /api/tasks/all are called with no workspace set).
+// (aggregate endpoints like /api/tasks/all are called with no workspace set),
+// and address it to the selected host. Every request, link and stream scopes
+// itself here or through `withHost`.
 export function withWorkspace(path) {
-  return workspacePath(path, currentWorkspace);
+  return hostPath(workspacePath(path, currentWorkspace), currentHost);
 }
 
 function workspacePath(path, workspace) {
@@ -605,12 +719,15 @@ export async function fetchJson(path) {
     if (!res.ok) {
       const text = await res.text();
       let message = `${path}: HTTP ${res.status}`;
+      let code = null;
       try {
         const body = JSON.parse(text);
         if (body && body.error) message = body.error;
+        if (body && typeof body.code === "string") code = body.code;
       } catch (_) {}
       const error = new Error(message);
       error.status = res.status;
+      if (code) error.code = code;
       throw error;
     }
     return await res.json();
@@ -645,7 +762,14 @@ export function requestJson(path, method, body) {
     headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  return fetch(withWorkspace(path), opts).then(async (res) => {
+  const target = withWorkspace(path);
+  const refusal = target.startsWith("/api/on/") && method !== "GET" ? hostWriteRefusal() : "";
+  if (refusal) {
+    const error = new Error(refusal);
+    error.code = "authorization_denied";
+    return Promise.reject(error);
+  }
+  return fetch(target, opts).then(async (res) => {
     const text = await res.text();
     let body = {};
     if (text) {
