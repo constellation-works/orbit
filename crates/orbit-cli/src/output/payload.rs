@@ -85,6 +85,15 @@ impl CommandOutput {
             Self::Payload(payload) => payload.exit_code(),
         }
     }
+
+    /// The message to record on the audit row of a nonzero exit, if the
+    /// command supplied one.
+    pub(crate) fn audit_message(&self) -> Option<&str> {
+        match self {
+            Self::Silent => None,
+            Self::Payload(payload) => payload.audit_message(),
+        }
+    }
 }
 
 /// A document and its human rendering.
@@ -99,6 +108,9 @@ pub struct Payload {
     records: Option<Vec<Value>>,
     /// The process exit code to use after the payload has been rendered.
     exit_code: i32,
+    /// Why a nonzero exit is recorded as it is in the audit row; `None` leaves
+    /// the row without a message.
+    audit_message: Option<String>,
 }
 
 /// One piece of a human view. A detail command is usually prose with a grid
@@ -159,6 +171,7 @@ impl Payload {
             view: View::Blocks(vec![Block::table(table)]),
             records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -171,6 +184,7 @@ impl Payload {
             view: View::Blocks(vec![Block::table(table)]),
             records: Some(records),
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -193,6 +207,7 @@ impl Payload {
             view: View::Blocks(blocks),
             records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -200,6 +215,14 @@ impl Payload {
     #[must_use]
     pub fn with_exit_code(mut self, exit_code: i32) -> Self {
         self.exit_code = exit_code;
+        self
+    }
+
+    /// Name the findings behind a nonzero exit so the audit row carries a
+    /// message instead of a bare exit code.
+    #[must_use]
+    pub fn with_audit_message(mut self, message: impl Into<String>) -> Self {
+        self.audit_message = Some(message.into());
         self
     }
 
@@ -211,6 +234,7 @@ impl Payload {
             view: View::Document,
             records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -224,6 +248,7 @@ impl Payload {
             view: View::Stream(stream),
             records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -241,5 +266,9 @@ impl Payload {
 
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
+    }
+
+    pub(crate) fn audit_message(&self) -> Option<&str> {
+        self.audit_message.as_deref()
     }
 }

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
+use orbit_core::DOCTOR_FINDINGS_MESSAGE_PREFIX;
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -43,11 +44,8 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .expect("diagnostic row")
 }
 
-#[test]
-fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
-    let fixture = WorkCheckout::new();
-    let initial = rows(&doctor(&fixture, &[]));
-    assert_eq!(row(&initial, "database")["status"], "ok");
+/// Corrupt an unrelated B-tree page, leaving the header/schema ledger readable.
+fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
     let database = fixture.home.join(".orbit/orbit.db");
     let offset = {
         let db = Connection::open(&database).expect("fixture DB");
@@ -65,7 +63,6 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
             .expect("page size");
         (page - 1) * page_size
     };
-    // Corrupt an unrelated B-tree page, leaving the header/schema ledger readable.
     let mut file = fs::OpenOptions::new()
         .write(true)
         .open(&database)
@@ -74,6 +71,14 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
         .expect("data page offset");
     file.write_all(&[0]).expect("invalid B-tree page type");
     drop(file);
+}
+
+#[test]
+fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
+    let fixture = WorkCheckout::new();
+    let initial = rows(&doctor(&fixture, &[]));
+    assert_eq!(row(&initial, "database")["status"], "ok");
+    corrupt_unrelated_data_page(&fixture);
     let cheap = rows(&doctor(&fixture, &[]));
     assert_eq!(
         row(&cheap, "database")["status"],
@@ -101,6 +106,36 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
             );
         }
     }
+}
+
+#[test]
+fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
+    let fixture = WorkCheckout::new();
+    assert_eq!(
+        row(&rows(&doctor(&fixture, &[])), "database")["status"],
+        "ok"
+    );
+    corrupt_unrelated_data_page(&fixture);
+    let deep = doctor(&fixture, &["--deep"]);
+    assert_eq!(deep.status.code(), Some(1), "{deep:?}");
+
+    let listed = command(&fixture)
+        .args(["audit", "list", "--limit", "50", "--json"])
+        .output()
+        .expect("audit list");
+    let events: Vec<Value> = serde_json::from_slice(&listed.stdout)
+        .unwrap_or_else(|error| panic!("audit JSON: {error}; {listed:?}"));
+    let failed = events
+        .iter()
+        .find(|event| event["command"] == "doctor" && event["exit_code"] == 1)
+        .unwrap_or_else(|| panic!("failed doctor audit row missing: {events:?}"));
+    let message = failed["error_message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "{DOCTOR_FINDINGS_MESSAGE_PREFIX}1 failure (database)"
+        )),
+        "the audit row must name the failing check: {failed}"
+    );
 }
 
 /// Manual performance fixture; setup writes a real 1 GiB SQLite table and 50k directories.

@@ -127,9 +127,9 @@ pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident, audit-summary, and scoreboard surfaces.
 pub use orbit_store::{
-    FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    is_failure_only_diagnostic_surface,
+    DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
+    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
+    PropagationLink, is_failure_only_diagnostic_surface,
 };
 // Routine fire records surfaced by the dashboard's routine-health JSON API.
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};

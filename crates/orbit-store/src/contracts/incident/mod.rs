@@ -49,7 +49,8 @@ pub use classify::{
 pub use grouping::{build_report, group_failure_incidents};
 pub use signature::{normalize_message, signature_for};
 pub use types::{
-    CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT, FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass,
-    FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
+    CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT, DOCTOR_FINDINGS_MESSAGE_PREFIX,
+    FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass, FailureIncident, FailureIncidentQuery,
+    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
+    PropagationLink,
 };

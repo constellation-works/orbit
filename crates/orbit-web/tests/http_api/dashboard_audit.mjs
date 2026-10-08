@@ -275,4 +275,26 @@ incidentRoute = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(incidentRoute.get('ids'), '9001', 'denied incident points to its stored failure row');
 assert.equal(incidentRoute.has('status'), false, 'denied classification does not rewrite the stored status');
 assert.equal(incidentRoute.has('tool'), false, 'exact incident rows are not narrowed by surface');
+incidentPayload = {
+  window: '24h', incident_count: 1, raw_failed_events: 7, total_events: 7,
+  incidents: [{
+    incident_id: 'doctor-no-message', class: 'unexpected', has_tool_identity: false,
+    signature: 'unexpected|role=human|surface=doctor|msg=exit=1',
+    surface: 'doctor', actor: 'human', event_count: 7, last_ts: '2026-10-07T09:00:00Z',
+    events: [{ id: 1, status: 'failure', tool: null, actor: 'human', ts: '2026-10-07T09:00:00Z' }],
+  }],
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+const listedMessage = () => findNode(diagnosticsBody, node => node.className === 'incident-message').textContent;
+assert.doesNotMatch(listedMessage(), /\|role=/, 'the grouping key is never the incident message');
+assert.match(listedMessage(), /doctor failed; no message recorded/, 'a message-less incident reads as such');
+findNode(diagnosticsBody, node => node.className === 'incident-head').listeners.get('click')();
+assert.match(
+  descendants(diagnosticsBody).map(node => node.textContent).join(' '),
+  /unexpected\|role=human\|surface=doctor/,
+  'the signature stays available in the expanded details',
+);
+incidentPayload.incidents[0].message = 'doctor reported findings: 1 failure (review), 0 warnings';
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.match(listedMessage(), /1 failure \(review\)/, 'a recorded message is shown as is');
 console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down and refresh passed');

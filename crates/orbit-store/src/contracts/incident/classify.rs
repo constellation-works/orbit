@@ -1,7 +1,9 @@
 //! Pass 1: classify a failed row as denied, expected, diagnostic or
 //! unexpected, and derive the surface it failed on.
 
-use super::types::{FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass};
+use super::types::{
+    DOCTOR_FINDINGS_MESSAGE_PREFIX, FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass,
+};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 
 /// Message fragments that mark a documented negative path. Each mirrors an
@@ -21,6 +23,9 @@ const EXPECTED_FAILURE_MARKERS: &[&str] = &[
     "artifact unavailable",
     "companion not installed",
 ];
+
+/// Reporting surface of a bare `orbit doctor` audit row (no tool name).
+const DOCTOR_SURFACE: &str = "doctor";
 
 /// Message fragments that mark a refusal rather than a failure. A refusal
 /// recorded with `status = failure` (some surfaces translate late) still
@@ -51,6 +56,13 @@ pub(crate) fn classify_failure(
     }
     if matches!(status, AuditEventStatus::Denied) {
         return FailureClass::Denied;
+    }
+    if surface == DOCTOR_SURFACE
+        && error_message.is_some_and(|message| message.starts_with(DOCTOR_FINDINGS_MESSAGE_PREFIX))
+    {
+        // A doctor that finished its checks and reported findings is a health
+        // verdict, not a fault; a crash records an `OrbitError` message instead.
+        return FailureClass::Expected;
     }
     let message = error_message.unwrap_or_default().to_lowercase();
     if message.is_empty() {
@@ -104,3 +116,7 @@ pub(super) fn surface_of(event: &AuditEvent) -> String {
         None => "unknown".to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/classify.rs"]
+mod tests;
