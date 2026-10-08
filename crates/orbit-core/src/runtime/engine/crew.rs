@@ -476,7 +476,8 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
-        if let Some(run_id) = task.job_run_id.as_deref()
+        if self.task_run_is_local(task)
+            && let Some(run_id) = task.job_run_id.as_deref()
             && let Some(run) = self.get_job_run_backend(run_id)?
             && let (Some(resolved_crew), Some(model)) = (run.resolved_crew, run.crew_model)
         {
@@ -600,6 +601,15 @@ impl OrbitRuntime {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        // An explicit evidence run may differ from the task's binding (for
+        // example, a recovery run). It still must not resolve a foreign task's
+        // own run ID against a colliding local record [ORB-14635].
+        if let Some(task) = &task
+            && !self.task_run_is_local(task)
+            && input_run_id.is_none_or(|run_id| task.job_run_id.as_deref() == Some(run_id))
+        {
+            return Ok((None, None));
+        }
         let task_run_id = task.as_ref().and_then(|task| task.job_run_id.as_deref());
         let Some(run_id) = input_run_id.or(task_run_id) else {
             return Ok((None, None));

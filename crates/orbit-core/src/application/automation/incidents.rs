@@ -24,7 +24,10 @@ pub(crate) fn failure_coupled(
     task: &Task,
     run_id: &str,
 ) -> Result<bool, AutomationError> {
-    if task.status != TaskStatus::Blocked || task.job_run_id.as_deref() != Some(run_id) {
+    if task.status != TaskStatus::Blocked
+        || !runtime.task_run_is_local(task)
+        || task.job_run_id.as_deref() != Some(run_id)
+    {
         return Ok(false);
     }
 
@@ -118,6 +121,10 @@ fn diagnose(
     session: &mut IncidentSession,
 ) -> Result<Diagnosis, AutomationError> {
     session.stats.observes += 1;
+
+    if !runtime.task_run_is_local(task) {
+        return Err(AutomationError::Deferred("foreign_run".into()));
+    }
 
     let run_id = task
         .job_run_id
