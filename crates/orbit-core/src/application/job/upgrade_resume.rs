@@ -6,11 +6,9 @@
 //! once — but only a run the *current* upgrade interrupted, and only while
 //! resuming it still means what it meant when it was interrupted.
 //!
-//! [ORB-14320] Every tick scans every interrupted run of the workspace, so
-//! without those bounds the first deploy replayed the whole history of
-//! upgrade interruptions: a drain whose window had closed weeks earlier
-//! admitted new leaves under its old flags, and a routine run re-read its
-//! long-dead child. A run is therefore skipped when:
+//! [ORB-14320] The 30-minute interruption window prevents replaying earlier
+//! upgrade history, while a recency-ordered page keeps each tick's scan
+//! bounded. A run is skipped when:
 //!
 //! - it was interrupted more than [`UPGRADE_RESUME_WINDOW`] ago, which an
 //!   interruption by the upgrade that just settled never is;
@@ -29,7 +27,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AuditEventFilter, JobRunQuery};
+use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -46,6 +44,12 @@ pub(crate) const UPGRADE_RESUME_AUDIT: &str = "pipeline.run.upgrade_resume";
 /// on the first tick after the generation settles, so an older interruption
 /// is from an earlier upgrade; `orbit job resume` still continues it by hand.
 const UPGRADE_RESUME_WINDOW: TimeDelta = TimeDelta::minutes(30);
+
+/// Interrupted rows (including their steps) loaded by one clock tick.
+const UPGRADE_RESUME_SCAN_LIMIT: usize = 256;
+
+/// Successful run submissions allowed during one clock tick.
+const UPGRADE_RESUME_TICK_LIMIT: usize = 32;
 
 /// Drain coordinators, and the ship wrapper whose window is its drain's.
 const DRAIN_JOBS: [&str; 3] = [
@@ -78,8 +82,8 @@ impl Skip {
 }
 
 impl OrbitRuntime {
-    /// Resume each run the current upgrade interrupted, once; audit and skip
-    /// the rest. Returns the ids of the resumed runs.
+    /// Resume current-upgrade interruptions once, up to the per-tick cap;
+    /// audit and skip eligible rows in the scanned page. Returns resumed ids.
     pub(crate) fn auto_resume_upgrade_interrupted_runs(
         &self,
         now: DateTime<Utc>,
@@ -89,6 +93,12 @@ impl OrbitRuntime {
         }
         let query = JobRunQuery {
             state: Some(JobRunState::Interrupted),
+            // Age eligibility is based on finished_at below. created_since
+            // filters created_at and could omit a long-running run interrupted
+            // during this upgrade, so keep current interruptions first with
+            // the store's indexed recency ordering instead.
+            order_by: JobRunOrder::Recency,
+            limit: Some(UPGRADE_RESUME_SCAN_LIMIT),
             include_steps: true,
             ..JobRunQuery::default()
         };
@@ -96,6 +106,9 @@ impl OrbitRuntime {
         let mut resumed = Vec::new();
 
         for run in interrupted {
+            if resumed.len() >= UPGRADE_RESUME_TICK_LIMIT {
+                break;
+            }
             if !upgrade_interrupted(&run)
                 || !self
                     .stores()
