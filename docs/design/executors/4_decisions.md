@@ -17,8 +17,8 @@ related_artifacts: [ORB-00384, ORB-00400, ORB-10395, ORB-11294]
 # Executors — Decisions
 
 Layout note: as of [ORB-00400], this folder is intentionally decisions+specs-only.
-[External Executor Protocol for dynamic out-of-process executor registration (retired)](#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired) and [specs/external-executor-protocol.md](./specs/external-executor-protocol.md)
-are the load-bearing docs for the retired External Executor Protocol; placeholder
+The External Executor Protocol retirement decision below (ORB-10395) records why that
+surface was removed; placeholder
 `1_overview.md`, `2_design.md`, and `3_vision.md` docs would imply a broader
 executor feature narrative that this work has not established. Add numbered docs
 only when a future executor-architecture task owns that narrative, and retire
@@ -91,7 +91,7 @@ shell step an injection surface.
 **Recorded:** 2026-06-14 00:40:41.791069Z · [ORB-00384], [ORB-10395]
 **Paths:** `crates/orbit-types/src/workflow/executor_def.rs`, `docs/design/executors/**`
 
-> **RETIRED 2026-07-26 — [ORB-10395].** The External Executor Protocol is not a supported Orbit surface. Retiring the v1 executor stack removed everything this decision stood up: `ExternalExecutor`, the shared `direct_agent` subprocess transport, `ActivityExecutorRegistry`, the `ActivityExecutor` trait, the v1 `ExecutionContext`, the `external.example.yaml` template, and the conformance fixture. v2 dispatch (`orbit-engine::activity_job`) is the only execution path and consults no executor registry, so an `executor_type: external` def is now inert — it deserializes and stores, but nothing spawns it. `ExecutorType::External` survives in the wire enum only so pre-existing defs keep parsing; dropping the variant is a separate release decision, tracked alongside the same call for `ExecutorType::AgentCli`. The Consequences below are history, not live obligations — in particular the wire protocol is **no longer** a backward-compatibility obligation. Any future out-of-process extension point must be decided afresh against the v2 dispatch path.
+> **RETIRED 2026-07-26 — ORB-10395.** The External Executor Protocol is not a supported Orbit surface. Retiring the v1 executor stack removed everything this decision stood up: `ExternalExecutor`, the shared `direct_agent` subprocess transport, `ActivityExecutorRegistry`, the `ActivityExecutor` trait, the v1 `ExecutionContext`, the `external.example.yaml` template, and the conformance fixture. v2 dispatch (`orbit-engine::activity_job`) is the only execution path and consults no executor registry, so an `executor_type: external` def is now inert — it deserializes and stores, but nothing spawns it. `ExecutorType::External` survives in the wire enum only so pre-existing defs keep parsing; dropping the variant is a separate release decision, tracked alongside the same call for `ExecutorType::AgentCli`. The Consequences below are history, not live obligations — in particular the wire protocol is **no longer** a backward-compatibility obligation. Any future out-of-process extension point must be decided afresh against the v2 dispatch path.
 
 **Context.** Orbit's `ExecutorType` is a sealed enum and `load_from_defs` is a closed `match`, so a homegrown executor can only be added by forking orbit-engine — an `internal`-tier crate with no downstream guarantees. Yet `DirectAgentExecutor` already implements an out-of-process transport (spawn `command`, write a prompt envelope to stdin, map a stdout result envelope to an outcome): the capability exists but is undocumented and coupled to the agent-family `direct_agent` path.
 
@@ -110,11 +110,11 @@ shell step an injection surface.
 
 ### Context
 
-The v1 runtime-host phase-out (knowledgebase/polaris/design/orbit-cleanup/phaseoutv1.md, Stage 3) deletes the v1 executor stack once planning duel is ported to v2 (ORB-10393). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point (docs/design/executors/specs/external-executor-protocol.md, [External Executor Protocol for dynamic out-of-process executor registration (retired)](#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired), assets/executors/external.example.yaml) — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
+The v1 runtime-host phase-out (knowledgebase/polaris/design/orbit-cleanup/phaseoutv1.md, Stage 3) deletes the v1 executor stack once planning duel is ported to v2 (ORB-10393). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point recorded in the retired protocol spec and the External Executor Protocol retirement decision (ORB-10395), alongside `assets/executors/external.example.yaml` — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
 
 ### Decision
 
-Daniel decided on 2026-07-25: the External Executor Protocol is not a supported surface and is retired. `ExternalExecutor` and the shared `direct_agent` transport are deleted with the rest of the v1 executor stack in Stage 3 (ORB-10395); nothing is rehomed. The protocol spec doc and example asset are marked retired/removed in the same change, and [External Executor Protocol for dynamic out-of-process executor registration (retired)](#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired) is superseded by this record.
+Daniel decided on 2026-07-25: the External Executor Protocol is not a supported surface and is retired. `ExternalExecutor` and the shared `direct_agent` transport are deleted with the rest of the v1 executor stack in Stage 3 (ORB-10395); nothing is rehomed. The protocol spec and example asset were retired or removed in the same change. This entry supersedes the original External Executor Protocol decision above.
 
 ### Consequences
 
