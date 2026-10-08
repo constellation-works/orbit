@@ -207,11 +207,23 @@ pub(super) fn all_job_runs_json(
         };
         match workspace_job_runs(&runtime, limit, state_filter) {
             Ok(runs) => {
+                let titles = match super::run_tasks::task_titles(&runtime, &runs) {
+                    Ok(titles) => titles,
+                    Err(error) => {
+                        unavailable.push(json!({
+                            "workspace_id": entry.id,
+                            "workspace_name": entry.name,
+                            "error": error.to_string(),
+                        }));
+                        continue;
+                    }
+                };
                 source_truncated |= runs.len() == limit;
-                candidates.extend(
-                    runs.into_iter()
-                        .map(|run| (run, entry.id.clone(), entry.name.clone())),
-                );
+                candidates.extend(runs.into_iter().map(|run| {
+                    let mut value = job_run_to_json(&run, None);
+                    super::run_tasks::add_tasks(&mut value, &run, &titles);
+                    (run, entry.id.clone(), entry.name.clone(), value)
+                }));
             }
             Err(error) => unavailable.push(json!({
                 "workspace_id": entry.id,
@@ -221,18 +233,19 @@ pub(super) fn all_job_runs_json(
         }
     }
 
-    candidates.sort_by(|(left, left_workspace, _), (right, right_workspace, _)| {
-        run_timestamp(right)
-            .cmp(&run_timestamp(left))
-            .then_with(|| left_workspace.cmp(right_workspace))
-            .then_with(|| left.run_id.cmp(&right.run_id))
-    });
+    candidates.sort_by(
+        |(left, left_workspace, _, _), (right, right_workspace, _, _)| {
+            run_timestamp(right)
+                .cmp(&run_timestamp(left))
+                .then_with(|| left_workspace.cmp(right_workspace))
+                .then_with(|| left.run_id.cmp(&right.run_id))
+        },
+    );
     let truncated = source_truncated || candidates.len() > limit;
     candidates.truncate(limit);
     let items = candidates
         .into_iter()
-        .map(|(run, workspace_id, workspace_name)| {
-            let mut value = job_run_to_json(&run, None);
+        .map(|(_, workspace_id, workspace_name, mut value)| {
             if let Value::Object(map) = &mut value {
                 map.insert("workspace_id".to_string(), json!(workspace_id));
                 map.insert("workspace_name".to_string(), json!(workspace_name));

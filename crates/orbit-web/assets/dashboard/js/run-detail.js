@@ -17,6 +17,7 @@
 
 import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock, elapsedDurationInfo } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
+import { runTaskLinks } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -246,6 +247,13 @@ export function renderRunDetailMeta() {
     grid.appendChild(cell);
   };
   addCell("job", run.job_id);
+  {
+    const cell = el("div", { class: "run-meta-task" }, [
+      el("div", { class: "label", text: "task" }),
+      runTaskLinks(run),
+    ]);
+    grid.appendChild(cell);
+  }
   {
     const cell = el("div");
     cell.appendChild(el("div", { class: "label", text: "state" }));
@@ -522,6 +530,7 @@ function buildChildDispatches(run) {
 
     const row = el("div", { class: "child-dispatch-row" }, [
       link,
+      runTaskLinks({ ...d, workspace_id: run.workspace_id }),
       el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
     ]);
     if (d.error) {

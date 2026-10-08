@@ -576,6 +576,40 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     })
     .collect::<Vec<_>>();
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
+    // Child dispatches persist lineage rather than task input. Resolve their
+    // runs first, then share one task-title lookup with the parent header.
+    let children = state
+        .iter()
+        .flat_map(|state| &state.child_dispatches)
+        .filter_map(|dispatch| {
+            runtime.show_job_run(&dispatch.child_run_id).map_or_else(
+                |error| {
+                    tracing::warn!(child_run_id = %dispatch.child_run_id, %error, "child run task labels unavailable");
+                    None
+                },
+                Some,
+            )
+        })
+        .collect::<Vec<_>>();
+    let titles = or_warn(
+        super::run_tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
+        run_id,
+        "task titles",
+    );
+    super::run_tasks::add_tasks(&mut full, run, &titles);
+    if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
+        for dispatch in dispatches {
+            if let Some(child) = children
+                .iter()
+                .find(|child| dispatch["child_run_id"] == child.run_id)
+            {
+                super::run_tasks::add_tasks(dispatch, child, &titles);
+            } else {
+                dispatch["task_ids"] = Value::Null;
+                dispatch["tasks"] = Value::Null;
+            }
+        }
+    }
     // Keep pass health visible after terminalization, independently of the
     // live waiting-state fields the shared run projection omits then.
     full["drain_last_pass"] = serde_json::to_value(

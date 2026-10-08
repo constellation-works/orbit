@@ -6,6 +6,7 @@ import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
+import { assertRunTaskLabels } from './dashboard_run_tasks_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -1127,6 +1128,7 @@ try {
   } else {
   await assertSkipLinkAndFocusRings(page);
   console.log('Dashboard skip link and keyboard focus checks passed.');
+  await assertRunTaskLabels(page, evidence);
   await assertRunDetailActions(page, evidence);
   if (process.argv[4] === '--run-detail') {
     await assertRunDetailPresentation(page, evidence);
