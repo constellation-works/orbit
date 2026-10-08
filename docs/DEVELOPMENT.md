@@ -616,6 +616,13 @@ fixture. Keep fixture outcomes independent of host load:
   the admissions it counts. A throttling test injects and drives its own probe.
 - Bound work, not elapsed time: measure a cost guard in CPU time where the
   platform allows, so scheduling delay cannot fail it.
+- A fixture that seeds thousands of tasks pays fsyncs for every one. Root it at
+  `tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())`, which
+  prefers a tmpfs over the managed scratch `TMPDIR` on Linux: on the checkout's
+  disk under a busy host, a fsync took over a second and a 4,000-task seed
+  stalled past its deadline. Report its phases with
+  `orbit_common::test_env::FixtureProgress`, so an overrun names the phase and
+  the items done instead of a bare `running 1 test`.
 - A fallback that production takes under load (an interactive login probe
   past its timeout, for example) may satisfy a fixture only when the result
   reports that fallback and its reason; a silent fallback still fails.

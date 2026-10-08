@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use orbit_common::test_env::{self, FixtureProgress};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime};
 use serde_json::json;
@@ -27,15 +28,18 @@ fn cold_search_hits_skip_artifact_payloads() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    // Seeding fsyncs every task; keep it off a disk-backed `TMPDIR`.
+    let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
 
+    let mut progress = FixtureProgress::start("cold search");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let scratch = workspace.join("tmp");
     std::fs::create_dir_all(&scratch).unwrap();
+    progress.phase("seed tasks", TASKS);
     for index in 0..TASKS {
         let matching = index < MATCHING;
         let title = if matching {
@@ -63,11 +67,13 @@ fn cold_search_hits_skip_artifact_payloads() {
                 )
                 .unwrap();
         }
+        progress.advance();
     }
     drop(runtime);
 
     // Same length, different bytes: a read that hashes the payloads against
     // their manifest refuses every matching bundle.
+    progress.phase("rewrite payloads", MATCHING);
     let payloads = find_payloads(root.path());
     assert_eq!(
         payloads.len(),
@@ -76,8 +82,10 @@ fn cold_search_hits_skip_artifact_payloads() {
     );
     for payload in &payloads {
         std::fs::write(payload, vec![b'b'; ARTIFACT_BYTES]).unwrap();
+        progress.advance();
     }
 
+    progress.phase("search", 1);
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let started = Instant::now();
     let work_before = work_clock();
@@ -91,6 +99,8 @@ fn cold_search_hits_skip_artifact_payloads() {
         .unwrap();
     let work = work_clock().saturating_sub(work_before);
     let elapsed = started.elapsed();
+    progress.advance();
+    progress.finish();
     let titles: Vec<_> = response
         .results
         .iter()

@@ -55,6 +55,58 @@ pub fn canonical_temp_dir() -> std::path::PathBuf {
     std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
+/// A parent for the root of a fixture that seeds thousands of durable writes.
+///
+/// Every task write fsyncs its files and their directory. On a tmpfs temp
+/// directory that costs nothing. A managed executor points `TMPDIR` at
+/// its scratch directory inside the checkout, though, and there a disk under a
+/// busy build host took over a second per fsync: a 4,000-task seed that runs
+/// in 10 s on tmpfs reached 185 tasks in 270 s (ORB-14818). On Linux this is
+/// the system temp directory when it is a tmpfs, else the first writable tmpfs
+/// of `/dev/shm` and `/tmp`, else the system temp directory. Create the root
+/// with `tempfile::tempdir_in(bulk_write_temp_dir())`.
+pub fn bulk_write_temp_dir() -> std::path::PathBuf {
+    let default = std::env::temp_dir();
+    #[cfg(target_os = "linux")]
+    {
+        let tmpfs = |dir: &std::path::Path| {
+            use std::os::unix::ffi::OsStrExt;
+            let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+                return false;
+            };
+            let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+            // Safety: `statfs` reads the NUL-terminated path and fills only
+            // the struct it is handed.
+            if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+                return false;
+            }
+            // Safety: a zero return means the kernel filled `stat`.
+            unsafe { stat.assume_init() }.f_type == libc::TMPFS_MAGIC
+        };
+        // A sandbox may mount a directory it does not let this process write.
+        let writable = |dir: &std::path::Path| {
+            static PROBES: AtomicUsize = AtomicUsize::new(0);
+            let probe = dir.join(format!(
+                ".orbit-bulk-write-probe-{}-{}",
+                std::process::id(),
+                PROBES.fetch_add(1, Ordering::Relaxed)
+            ));
+            let created = std::fs::create_dir(&probe).is_ok();
+            created && std::fs::remove_dir(&probe).is_ok()
+        };
+        if !tmpfs(&default) {
+            let candidates = ["/dev/shm", "/tmp"].map(std::path::PathBuf::from);
+            if let Some(dir) = candidates
+                .into_iter()
+                .find(|dir| tmpfs(dir) && writable(dir))
+            {
+                return dir;
+            }
+        }
+    }
+    default
+}
+
 /// The identity pair consulted when a command carries no explicit
 /// `--agent`/`--model` and no input attribution.
 pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL", "ORBIT_ACTOR"];
@@ -301,6 +353,113 @@ pub fn host_load() -> String {
         }
     }
     format!("host load average unavailable; {cpus} CPUs")
+}
+
+/// How long a [`FixtureProgress`] fixture may run before it fails naming the
+/// phase it was in.
+///
+/// Inside [`CHILD_TEST_DEADLINE`], so a fixture in an isolated child reports
+/// its own phase before the parent kills it, and inside nextest's ten-minute
+/// termination for a fixture that runs in process.
+pub const FIXTURE_PHASE_DEADLINE: std::time::Duration =
+    CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
+
+/// Phase progress for a large fixture, such as one that seeds thousands of
+/// tasks before it measures anything.
+///
+/// Without it, a stalled fixture prints only `running 1 test` before its
+/// deadline, so a slow seed cannot be told from a slow measured section
+/// (ORB-14818). Each phase is reported on stderr when it starts, at most every
+/// few seconds while it advances, and when it ends. An [`advance`] past the
+/// deadline panics with the phase, the items done, the elapsed time and the
+/// host load.
+///
+/// [`advance`]: FixtureProgress::advance
+pub struct FixtureProgress {
+    fixture: String,
+    deadline: std::time::Duration,
+    started: std::time::Instant,
+    phase: &'static str,
+    phase_started: std::time::Instant,
+    done: usize,
+    total: usize,
+    reported: std::time::Instant,
+}
+
+impl FixtureProgress {
+    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Track `fixture` under [`FIXTURE_PHASE_DEADLINE`].
+    pub fn start(fixture: &str) -> Self {
+        Self::with_deadline(fixture, FIXTURE_PHASE_DEADLINE)
+    }
+
+    /// Track `fixture` under `deadline`, measured from now.
+    pub fn with_deadline(fixture: &str, deadline: std::time::Duration) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            fixture: fixture.to_string(),
+            deadline,
+            started: now,
+            phase: "setup",
+            phase_started: now,
+            done: 0,
+            total: 0,
+            reported: now,
+        }
+    }
+
+    /// End the current phase and start `phase`, which will advance `total`
+    /// times.
+    pub fn phase(&mut self, phase: &'static str, total: usize) {
+        self.report("done");
+        let now = std::time::Instant::now();
+        (self.phase, self.phase_started, self.done, self.total) = (phase, now, 0, total);
+        self.report("started");
+    }
+
+    /// Count one item of the current phase; fail the fixture if it has run
+    /// past its deadline.
+    pub fn advance(&mut self) {
+        self.done += 1;
+        let elapsed = self.started.elapsed();
+        assert!(
+            elapsed <= self.deadline,
+            "fixture `{}` overran its {:?} deadline in phase `{}`: {}/{} done after {:.1?} \
+             in the phase, {:.1?} in total ({})",
+            self.fixture,
+            self.deadline,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            elapsed,
+            host_load()
+        );
+        if self.reported.elapsed() >= Self::REPORT_EVERY {
+            self.report("running");
+        }
+    }
+
+    /// End the last phase.
+    pub fn finish(mut self) {
+        self.report("done");
+    }
+
+    fn report(&mut self, state: &str) {
+        self.reported = std::time::Instant::now();
+        // Bypass libtest capture: an overrun's kill must not lose the line.
+        let _ = writeln!(
+            std::io::stderr(),
+            "fixture `{}`: phase `{}` {state}, {}/{} after {:.1?} ({:.1?} total)",
+            self.fixture,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            self.started.elapsed()
+        );
+    }
 }
 
 /// Verify the exact entry point before starting a child that will be killed or
