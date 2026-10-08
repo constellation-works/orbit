@@ -23,6 +23,11 @@ pub(super) fn remove_worktree(
     force: bool,
 ) -> Result<(), OrbitError> {
     if workspace_path.exists() {
+        // Git unregisters a worktree even when it cannot finish deleting the
+        // directory, so a read-only directory left inside would strand the
+        // rest unreclaimable. Repair before Git starts, so removal either
+        // completes or leaves the registration intact.
+        restore_owner_access(workspace_path);
         if force {
             git_success(
                 repo_root,
@@ -42,6 +47,72 @@ pub(super) fn remove_worktree(
         git_success(repo_root, &["branch", "-D", branch_name])?;
     }
     Ok(())
+}
+
+/// Give the owner read, write and search access to every directory under
+/// `root`, so a read-only directory a test fixture left behind cannot make
+/// the delete fail midway.
+///
+/// Directories only: unlinking a file needs write access to its parent, not
+/// to the file. Nothing is followed — a symlink is skipped, never
+/// dereferenced, and the walk starts from `root` itself only when it is a real
+/// directory, so no path outside `root` is ever touched. Best effort: a
+/// directory that cannot be repaired is logged and left for the delete to
+/// report.
+#[cfg(unix)]
+pub(super) fn restore_owner_access(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    const OWNER_RWX: u32 = 0o700;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let metadata = match fs::symlink_metadata(&dir) {
+            Ok(metadata) if metadata.is_dir() => metadata,
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(path = %dir.display(), %error, "could not inspect a directory while restoring owner access");
+                continue;
+            }
+        };
+        let mode = metadata.permissions().mode();
+        if mode & OWNER_RWX != OWNER_RWX
+            && let Err(error) =
+                fs::set_permissions(&dir, fs::Permissions::from_mode(mode | OWNER_RWX))
+        {
+            tracing::warn!(path = %dir.display(), %error, "could not restore owner access to a directory before removal");
+            continue;
+        }
+        match fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                        pending.push(entry.path());
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(path = %dir.display(), %error, "could not list a directory while restoring owner access");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn restore_owner_access(_root: &Path) {}
+
+/// Delete a directory Git no longer registers as a worktree: what an earlier
+/// removal left behind when it failed partway. Git is not involved — it would
+/// resolve the enclosing checkout — so the caller owns every safety gate.
+pub(super) fn remove_unregistered_directory(path: &Path) -> Result<(), OrbitError> {
+    restore_owner_access(path);
+    // `remove_dir_all` unlinks symlinks inside the tree rather than following
+    // them, so nothing outside `path` is reachable from here.
+    fs::remove_dir_all(path).map_err(|error| {
+        OrbitError::Execution(format!(
+            "failed to remove leftover directory '{}': {error}",
+            path.display()
+        ))
+    })
 }
 
 /// Remove a worktree Git has not been told to force through.

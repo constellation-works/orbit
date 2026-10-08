@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::git::{git_command_success, git_output, git_success};
-use super::cleanup::remove_worktree;
+use super::cleanup::{remove_unregistered_directory, remove_worktree};
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
 };
@@ -66,10 +66,14 @@ pub struct WorktreeGcReport {
 }
 
 /// What an operator can do about a directory Git does not list as a
-/// worktree of this checkout. GC never removes one.
+/// worktree of this checkout and that GC cannot show to be the remains of a
+/// failed removal. GC never removes one.
 const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
      checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
      re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
+
+const LEFTOVER_DETAIL: &str = "Git no longer listed this directory as a worktree: an earlier \
+     removal failed partway. Removed the remains of the terminal run's worktree.";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorktreeGcResult {
@@ -365,7 +369,12 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:not_a_real_directory".to_string();
         return Ok(report);
     }
-    if !path_is_registered(registered, path) {
+    // Git unregisters a worktree before it finishes deleting the directory,
+    // so a removal that failed partway leaves a mapped, unregistered
+    // directory. That leftover is reclaimed below through the same task
+    // gates; any other unregistered directory may be a moved worktree.
+    let registered_here = path_is_registered(registered, path);
+    if !registered_here && (options.target_only || !is_failed_removal_leftover(path)) {
         report.action = "skipped:not_registered_worktree".to_string();
         report.detail = Some(NOT_REGISTERED_REMEDY.to_string());
         return Ok(report);
@@ -438,6 +447,10 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         return Ok(report);
     }
 
+    if !registered_here {
+        return reclaim_failed_removal_leftover(path, run, options, report);
+    }
+
     // Reported safety net, not a deletion gate: a task can be settled with
     // uncommitted content still sitting in the worktree.
     if !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?
@@ -487,6 +500,73 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     Ok(report)
 }
 
+/// Whether a directory is what a failed `git worktree remove` leaves: Git
+/// has dropped its administrative entry, so the `.git` link is gone or names
+/// a directory that no longer exists. A link that still resolves means the
+/// worktree was moved and `git worktree repair` can bring it back, and an
+/// unreadable or unexpected `.git` is not something GC can vouch for.
+fn is_failed_removal_leftover(path: &Path) -> bool {
+    let link = path.join(".git");
+    match fs::symlink_metadata(&link) {
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        Ok(metadata) if metadata.is_file() => fs::read_to_string(&link)
+            .ok()
+            .and_then(|content| {
+                content
+                    .lines()
+                    .find_map(|line| line.strip_prefix("gitdir:"))
+                    .map(|target| PathBuf::from(target.trim()))
+            })
+            .is_some_and(|admin_dir| {
+                matches!(
+                    fs::symlink_metadata(&admin_dir),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            }),
+        Ok(_) => false,
+    }
+}
+
+/// A terminal run record can precede its worker's actual exit. A recorded
+/// worker that is alive, or whose liveness cannot be decided, keeps its files.
+fn worker_may_be_alive(run: &JobRun) -> bool {
+    run.pid.is_some_and(|pid| {
+        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
+    })
+}
+
+/// Reclaim the directory a failed removal left behind. The run is terminal
+/// and its tasks are settled by the time this runs; Git cannot be asked
+/// about the tree (its registration is gone), so the dirty-tree check and the
+/// branch are not consulted — Git passed its own checks before it started
+/// deleting.
+fn reclaim_failed_removal_leftover(
+    path: &Path,
+    run: &JobRun,
+    options: &WorktreeGcOptions,
+    mut report: WorktreeGcReport,
+) -> Result<WorktreeGcReport, OrbitError> {
+    if worker_may_be_alive(run) {
+        report.action = "skipped:worker_alive".to_string();
+        return Ok(report);
+    }
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
+    report.bytes_reclaimed = estimated_bytes;
+    if !options.delete {
+        report.action = "would_remove".to_string();
+        report.detail = Some(LEFTOVER_DETAIL.to_string());
+        return Ok(report);
+    }
+    remove_unregistered_directory(path)?;
+    report.action = "removed".to_string();
+    report.detail = Some(LEFTOVER_DETAIL.to_string());
+    Ok(report)
+}
+
 /// Target-only collection: reclaim `<worktree>/target` and nothing else.
 ///
 /// The checkout — committed, uncommitted and untracked work alike — stays, so
@@ -502,9 +582,7 @@ fn collect_build_output(
     // A terminal run record can precede its worker's actual exit (a cancelled
     // agent still finishing a build). A recorded worker that is alive, or
     // whose liveness cannot be decided, keeps its build output.
-    if run.pid.is_some_and(|pid| {
-        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
-    }) {
+    if worker_may_be_alive(run) {
         report.action = "skipped:worker_alive".to_string();
         return Ok(report);
     }
