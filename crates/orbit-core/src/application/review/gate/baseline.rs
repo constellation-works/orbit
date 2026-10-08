@@ -37,8 +37,8 @@ use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, verify_base_failure};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    BaselineRedHold, FindingDisposition, ReviewBaselineClaim, ReviewValidation, ValidationOutcome,
-    ValidationRole,
+    BaselineRedHold, FindingDisposition, REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim,
+    ReviewValidation, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
@@ -46,9 +46,6 @@ use crate::OrbitRuntime;
 
 use super::context::GateContext;
 use super::judgement::{Judgement, write_artifact};
-
-/// The task artifact holding the host's runs for each checked claim.
-pub(super) const REVIEW_BASELINE_ARTIFACT: &str = "review-baseline.json";
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the

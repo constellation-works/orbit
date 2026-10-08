@@ -5,6 +5,7 @@ tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed_recovery.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
   - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
   - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"
@@ -115,6 +116,17 @@ If the report PUT is refused, the reviewer cannot persist an authoritative
 `incomplete` report. Keep its refusal as diagnostic evidence and let the gate
 fail closed on the missing or invalid report. A response envelope or a
 manually attached artifact does not replace the report artifact.
+
+A claimed leaf's final recovery reads the same gate evidence through the
+coordinator, read-only: `review-manifest.json`, `review-report.json`,
+`review-report-history.json`, `review-gate.json` and `review-baseline.json`,
+named exactly, plus the leaf's own delivery view, which the follower answers
+from its record of the leaf. Its refusals carry `review_write_refused`,
+`review_read_refused`, `not_claimed_leaf`, `claim_unbound`, `claim_not_live`,
+`final_recovery_stale` or `delivery_run_refused`. The recovery agent treats a
+refused read as a gap in its evidence, so a refusal alone is no reason for its
+escalation; inspect the leaf's admission phase and run state before trusting a
+decision made with the gap.
 
 ## 3. Smoke procedure
 

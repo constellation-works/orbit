@@ -164,19 +164,36 @@ spec:
     - base_ref, base_sha: the base branch and the head the run was cut from.
     - log_tail: a bounded tail of this run's worker log; empty if no log exists.
     Fields other than task_id, run_id, the worktree pair, failed_step_id, and
-    error_message may be absent. For missing evidence, use the task's delivery
-    view and the worktree, and report any gaps instead of inventing run data.
+    error_message may be absent. For missing evidence, use the evidence reads
+    below and the worktree, and report any gaps instead of inventing run data.
+
+    Evidence reads. These are the reads this activity can make, including on
+    a claimed run whose task lives on another machine:
+    - `orbit.task.show` with the task_id: the task record.
+    - `orbit.task.show` with the task_id, `field: "delivery"` and `run_id` set
+      to the input run_id: this run's commit and landing evidence.
+    - `orbit.task.artifact.get` with the task_id and exactly one of
+      `review-manifest.json`, `review-report.json`,
+      `review-report-history.json`, `review-gate.json` or
+      `review-baseline.json`, spelled exactly: the before-PR review's
+      evidence, when the run reached review. List artifacts first with
+      `orbit.task.show` and `field: "artifacts"`; read only those listed.
+    Every evidence read is optional context. An absent artifact, a not-found
+    answer, or a refused read (a policy, scope or bridge refusal) is a gap to
+    name in your decision, never a reason to stop, retry the read another
+    way, or escalate on its own. Decide from the evidence you have.
 
     Procedure:
 
-    1. Read the task with `orbit.task.show`: description, acceptance criteria,
-       plan, execution summary, every comment in order, and history. Later
-       authorized comments refine earlier ones. Read the run's injected input,
-       including step_recovery_attempts, step_outputs and log_tail, and the
-       task's delivery evidence with `orbit.task.show` and `field: "delivery"`.
-       Inspect the worktree (`git status`, `git diff`, `git log <base_ref>..HEAD`)
-       and the current base head. Establish the task/run/worktree association
-       before changing anything.
+    1. Read the task: description, acceptance criteria, plan, execution
+       summary, every comment in order, and history. Later authorized
+       comments refine earlier ones. Read the run's injected input, including
+       step_recovery_attempts, step_outputs and log_tail, then this run's
+       delivery evidence and, when the failure is in or after review, its
+       review evidence, through the evidence reads above. Inspect the worktree
+       (`git status`, `git diff`, `git log <base_ref>..HEAD`) and the current
+       base head. Establish the task/run/worktree association before changing
+       anything.
 
     2. Classify the failure from that evidence:
        - Incomplete or failing implementation, or a validation gap: you may

@@ -20,7 +20,10 @@
 //! - `orbit.friction.add` is recorded during the claimed task.
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
-//! ([`super::claimed_review`]). The broker never opens a path the agent named:
+//! ([`super::claimed_review`]), except the named ones a claimed leaf's final
+//! recovery reads, and the claimed task's delivery view is answered from the
+//! leaf's own record ([`super::claimed_recovery`]): the owner has none of it.
+//! The broker never opens a path the agent named:
 //! the nested `orbit` reads an artifact source inside the sandbox, no-follow,
 //! under the workspace confinement `orbit.task.artifact.put` already applies,
 //! and sends the bytes.
@@ -42,7 +45,7 @@ use crate::OrbitRuntime;
 
 pub(super) const GET: &str = "orbit.task.artifact.get";
 pub(super) const PUT: &str = "orbit.task.artifact.put";
-const TASK_SHOW: &str = "orbit.task.show";
+pub(super) const TASK_SHOW: &str = "orbit.task.show";
 const TASK_ADD: &str = "orbit.task.add";
 const FRICTION_ADD: &str = "orbit.friction.add";
 
@@ -411,6 +414,11 @@ pub(super) fn execute_brokered(
         _ => String::new(),
     };
     if matches!(tool, GET | PUT) && super::claimed_review::is_review_artifact(&path) {
+        if super::claimed_recovery::is_final_recovery(run) {
+            return super::claimed_recovery::execute_review_read(
+                runtime, run, binding, tool, object, &path, session,
+            );
+        }
         return super::claimed_review::execute_brokered(
             runtime, run, binding, tool, object, &path, session,
         );
@@ -419,6 +427,9 @@ pub(super) fn execute_brokered(
         TASK_SHOW => {
             accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
             require_claimed_task(object, binding)?;
+            if super::claimed_recovery::wants_delivery(object) {
+                return super::claimed_recovery::delivery(runtime, run, binding, object, session);
+            }
             input.clone()
         }
         GET => {
