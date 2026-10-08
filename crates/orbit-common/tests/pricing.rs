@@ -82,3 +82,33 @@ fn sonnet_5_5_prices_exclusive_token_buckets_from_launch_onward() {
         }
     }
 }
+
+#[test]
+fn haiku_5_5_prices_short_prompt_rates_from_launch_onward() {
+    let launch: DateTime<Utc> = "2026-10-07T00:00:00Z".parse().unwrap();
+    // A real `claude -p --model claude-haiku-5-5` invocation on 2026-10-08
+    // reported total_cost_usd 0.00268461 for these splits.
+    let observed = TokenUsage {
+        input: 2,
+        cache_read: 10_481,
+        cache_create: 0,
+        cache_create_1h: 12_873,
+        output: 10,
+    };
+    assert_eq!(
+        derive_cost_usd(
+            "claude-haiku-5-5",
+            launch - chrono::Duration::seconds(1),
+            &observed
+        ),
+        None,
+        "launch pricing must not backdate costs"
+    );
+    let at: DateTime<Utc> = "2026-10-08T02:15:00Z".parse().unwrap();
+    let actual = derive_cost_usd("claude-haiku-5-5", at, &observed)
+        .expect("Haiku 5.5 runs the system crew and task pilot, so it must be priced");
+    assert!(
+        (actual - 0.002_684_61).abs() < 1e-12,
+        "Haiku 5.5 cost must match the provider-reported total: got {actual}"
+    );
+}
