@@ -101,7 +101,7 @@ fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched
         ),
         (&["host", "add", "twin"][..], "task_prefix_conflict"),
         (&["host", "add", "myself"][..], "host_is_local"),
-        (&["host", "add", "echo"][..], "host_is_local"),
+        (&["host", "add", "echo"][..], "task_prefix_conflict"),
         (&["host", "add", "nowhere"][..], "unreachable_destination"),
         (&["host", "add", "beta-old"][..], "host_too_old"),
         (
@@ -118,6 +118,16 @@ fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched
             "{args:?} must leave hosts.toml byte-identical"
         );
     }
+
+    // A different machine minting this machine's prefix is a clash, not
+    // this machine; a name clash on add points at the flag add takes.
+    let (_, message) = fleet.refused(&["host", "add", "echo"]);
+    assert!(
+        message.contains(&local_prefix.machine_id) && message.contains("different machine"),
+        "{message}"
+    );
+    let (_, message) = fleet.refused(&["host", "add", "beta", "--name", "ALPHA"]);
+    assert!(message.contains("--name"), "{message}");
 
     let beta_added = fleet.json(&["host", "add", "beta", "--name", "build-box", "--json"]);
     assert_eq!(beta_added["entry"]["name"], "build-box", "{beta_added}");
@@ -155,13 +165,33 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     assert_eq!(alpha_row["protocol_fingerprint"], local_protocol);
     assert_eq!(alpha_row["skew"], false);
     assert_eq!(alpha_row["workspaces"][0]["role"], "owner", "{alpha_row}");
-    let human =
-        String::from_utf8_lossy(&fleet.orbit_ok(&fleet.local.home, &["host", "list"]).stdout)
-            .into_owned();
+    let human = fleet.text(&["host", "list"]);
     assert!(
         human.contains("local-box [local]") && human.contains(&alpha.machine_id),
         "human list marks the local host and shows every entry: {human}"
     );
+
+    // `--format table` and `ndjson` are honoured, not folded into the text.
+    let table = fleet.text(&["host", "list", "--no-probe", "--format", "table"]);
+    let header = table.lines().next().unwrap_or_default();
+    assert!(
+        header.contains("NAME") && header.contains("MACHINE_ID") && header.contains("REACHABLE"),
+        "a table has a header row: {table}"
+    );
+    assert_eq!(
+        table.lines().count(),
+        4,
+        "header and one line per host: {table}"
+    );
+    let ndjson = fleet.text(&["host", "list", "--no-probe", "--format", "ndjson"]);
+    let names = ndjson
+        .lines()
+        .map(|line| {
+            let record: Value = serde_json::from_str(line).expect("each line is one host");
+            record["name"].as_str().unwrap_or_default().to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["local-box", "alpha", "beta"], "{ndjson}");
 
     // Unreachable hosts keep their cached row; a different identity behind
     // the same target fails closed with a remove-and-re-add hint; a version
@@ -174,10 +204,39 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     assert_eq!(beta_row["error"]["code"], "unreachable_destination");
     assert_eq!(beta_row["machine_id"], beta.machine_id.as_str());
     assert_eq!(beta_row["task_prefix"], "BE");
+    let beta_error = beta_row["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        beta_error.starts_with("beta: ")
+            && beta_error.contains("Could not resolve hostname beta")
+            && !beta_error.contains(&beta.machine_id),
+        "an unreachable row names its SSH target and carries ssh's reason: {beta_error}"
+    );
     let alpha_row = host_row(&list, "alpha");
     assert_eq!(
         alpha_row["error"]["code"], "host_identity_mismatch",
         "{alpha_row}"
+    );
+    // The host answered, with the wrong identity: reachable in every
+    // rendering, with the code said once.
+    assert_eq!(alpha_row["reachable"], true, "{alpha_row}");
+    let human = fleet.text(&["host", "list"]);
+    let alpha_line = human
+        .lines()
+        .find(|line| line.starts_with("alpha\t"))
+        .unwrap_or_else(|| panic!("alpha row: {human}"));
+    let fields = alpha_line.split('\t').collect::<Vec<_>>();
+    assert_eq!(fields[4], "yes", "REACHABLE matches the JSON: {alpha_line}");
+    assert_eq!(
+        alpha_line.matches("host_identity_mismatch").count(),
+        1,
+        "{alpha_line}"
+    );
+    let shown = fleet.text(&["host", "show", "alpha"]);
+    assert!(shown.contains("  reachable:   yes\n"), "{shown}");
+    assert_eq!(
+        shown.matches("host_identity_mismatch").count(),
+        1,
+        "{shown}"
     );
     assert!(
         alpha_row["error"]["message"]
@@ -224,8 +283,12 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
 
     let renamed = fleet.json(&["host", "rename", "alpha", "primary", "--json"]);
     assert_eq!(renamed["entry"]["name"], "primary", "{renamed}");
-    let (code, _) = fleet.refused(&["host", "rename", "primary", "BETA"]);
+    let (code, message) = fleet.refused(&["host", "rename", "primary", "BETA"]);
     assert_eq!(code, "host_name_conflict");
+    assert!(
+        !message.contains("--name") && message.contains("choose another new name"),
+        "rename takes the new name as an argument: {message}"
+    );
     let (code, message) = fleet.refused(&["host", "rename", "local-box", "other"]);
     assert_eq!(code, "host_is_local");
     assert!(message.contains("machine.name"), "{message}");
@@ -425,8 +488,36 @@ fn legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused() {
         message.contains("hosts.toml") && message.contains("mcp-destinations.toml"),
         "both paths are named: {message}"
     );
+    assert!(
+        message.contains("already in the host file") && !message.contains("orbit host list"),
+        "the check is done for the operator, since every host command refuses: {message}"
+    );
     let doctor = fleet.doctor_hosts_row();
     assert_eq!(doctor["status"], "error", "{doctor}");
+    assert!(
+        !doctor["remediation"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("orbit host list"),
+        "{doctor}"
+    );
+    // A legacy route the host file lacks is named with the command that
+    // registers it once the legacy file is gone.
+    fs::write(
+        fleet.legacy_file(),
+        format!(
+            "{legacy}\n[[destinations]]\nssh = \"gamma\"\nmachine_id = \"hm_00000000000000dd\"\n"
+        ),
+    )
+    .expect("write legacy file with a missing row");
+    let (code, message) = fleet.refused(&["host", "list", "--no-probe"]);
+    assert_eq!(code, "host_file_conflict");
+    assert!(
+        message.contains("hm_00000000000000dd")
+            && message.contains("`orbit host add gamma`")
+            && !message.contains(&alpha.machine_id),
+        "only the missing row is listed: {message}"
+    );
     fs::remove_file(fleet.legacy_file()).expect("remove legacy file");
 
     // Hand edits go through the same validation on load.

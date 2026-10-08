@@ -1,7 +1,7 @@
 //! Bounded MCP session I/O, request deadlines, and lost-answer classification.
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::Child;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStderr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
@@ -36,6 +36,20 @@ const MAX_TOOL_RESULT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 /// once; this only bounds a transport whose pipe some other process still
 /// holds open.
 const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(1);
+
+/// Bytes of the session's stderr kept for a failure message. The stream is
+/// drained to its end so the destination never blocks on a full pipe, but
+/// only this much of its end is held.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// Lines of that tail a failure message quotes, and their total length.
+const STDERR_TAIL_LINES: usize = 3;
+const STDERR_TAIL_CHARS: usize = 400;
+
+/// How long a session whose output ended waits for its stderr to close too.
+/// ssh writes its reason and exits, so this only bounds a stream some other
+/// process still holds open.
+const STDERR_SETTLE_GRACE: Duration = Duration::from_millis(500);
 
 /// The MCP protocol revision this client negotiates. Pinned to the revision
 /// Orbit's own server answers with, so a probe fails loudly on a real protocol
@@ -93,6 +107,7 @@ pub(in crate::federated) struct DestinationSession {
     deadline: Instant,
     next_id: i64,
     pub(super) worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
+    stderr: StderrTail,
 }
 
 impl DestinationSession {
@@ -109,6 +124,7 @@ impl DestinationSession {
             .stdout
             .take()
             .ok_or_else(|| unreachable(&destination, "SSH session has no stdout".to_string()))?;
+        let stderr = StderrTail::spawn(child.stderr.take());
         let writer = RequestWriter::spawn(stdin);
         // A reader thread is what makes the deadline real: a blocking read on
         // an unresponsive host cannot otherwise be abandoned, and the thread
@@ -143,6 +159,7 @@ impl DestinationSession {
             deadline: Instant::now() + timeout,
             next_id: 0,
             worker_invocation: None,
+            stderr,
         })
     }
 
@@ -345,10 +362,8 @@ impl DestinationSession {
             )
         })?;
         if writer.outbox.send(line).is_err() {
-            return Err(unreachable(
-                &self.destination,
-                "write failed: session input closed".to_string(),
-            ));
+            let reason = self.ended("write failed: session input closed".to_string());
+            return Err(unreachable(&self.destination, reason));
         }
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         match writer.acks.recv_timeout(remaining) {
@@ -356,14 +371,14 @@ impl DestinationSession {
                 self.writer = Some(writer);
                 Ok(())
             }
-            Ok(Err(error)) => Err(unreachable(
-                &self.destination,
-                format!("write failed: {error}"),
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(unreachable(
-                &self.destination,
-                "write failed: session input closed".to_string(),
-            )),
+            Ok(Err(error)) => {
+                let reason = self.ended(format!("write failed: {error}"));
+                Err(unreachable(&self.destination, reason))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let reason = self.ended("write failed: session input closed".to_string());
+                Err(unreachable(&self.destination, reason))
+            }
             Err(RecvTimeoutError::Timeout) => {
                 // Killing the child closes its end of the pipe, which is the
                 // only way to end a write the destination is not draining.
@@ -427,11 +442,8 @@ impl DestinationSession {
                     ));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(lost.classify(
-                        &self.destination,
-                        id,
-                        format!("session ended before answering '{method}'"),
-                    ));
+                    let reason = self.ended(format!("session ended before answering '{method}'"));
+                    return Err(lost.classify(&self.destination, id, reason));
                 }
             };
             if line.trim().is_empty() {
@@ -484,6 +496,15 @@ impl DestinationSession {
                 }
                 return Ok(message);
             }
+        }
+    }
+
+    /// `reason` for a session that ended, with the tail of its stderr when it
+    /// left one: ssh's own diagnostic, such as an unresolvable hostname.
+    fn ended(&mut self, reason: String) -> String {
+        match self.stderr.settled() {
+            "" => reason,
+            tail => format!("{reason}; ssh stderr: {tail}"),
         }
     }
 
@@ -558,6 +579,77 @@ pub(super) fn read_bounded_line(
     String::from_utf8(line)
         .map(BoundedLine::Line)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// The end of the session's stderr, drained by a thread so the destination
+/// never blocks writing it, and read only once the session has ended.
+struct StderrTail {
+    /// The kept bytes, delivered once the stream closes.
+    pending: Option<Receiver<Vec<u8>>>,
+    tail: String,
+}
+
+impl StderrTail {
+    fn spawn(stderr: Option<ChildStderr>) -> Self {
+        let Some(mut stderr) = stderr else {
+            return Self {
+                pending: None,
+                tail: String::new(),
+            };
+        };
+        let (sender, pending) = sync_channel(1);
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                match stderr.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        kept.extend_from_slice(&chunk[..read]);
+                        let excess = kept.len().saturating_sub(STDERR_TAIL_BYTES);
+                        kept.drain(..excess);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = sender.send(kept);
+        });
+        Self {
+            pending: Some(pending),
+            tail: String::new(),
+        }
+    }
+
+    /// The last lines the stream carried, waiting briefly for it to close;
+    /// empty when there were none or it stayed open. Control characters are
+    /// dropped, because the text came from another host and ends up on a
+    /// terminal.
+    fn settled(&mut self) -> &str {
+        if let Some(pending) = self.pending.take()
+            && let Ok(bytes) = pending.recv_timeout(STDERR_SETTLE_GRACE)
+        {
+            self.tail = quote_tail(&bytes);
+        }
+        &self.tail
+    }
+}
+
+fn quote_tail(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines = text
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|character| !character.is_control())
+                .collect::<String>()
+        })
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let quoted = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join(" | ");
+    let skip = quoted.chars().count().saturating_sub(STDERR_TAIL_CHARS);
+    quoted.chars().skip(skip).collect()
 }
 
 /// The session's stdin, owned by a thread so a write the destination never

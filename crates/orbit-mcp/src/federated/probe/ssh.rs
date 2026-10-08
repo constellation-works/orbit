@@ -277,8 +277,10 @@ fn spawn_destination_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // The destination's logs are its own; folding them into this process's
-        // stderr would interleave many hosts' output with no attribution.
-        .stderr(Stdio::null())
+        // stderr would interleave many hosts' output with no attribution. The
+        // session keeps only their tail, so a host that never answered is
+        // reported with ssh's own reason.
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| unreachable(destination, format!("could not start SSH: {error}")))
 }

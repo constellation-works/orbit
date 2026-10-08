@@ -113,10 +113,14 @@ Rules:
 - If a probe returns a `machine_id` or `task_prefix` that differs from the entry, the call
   fails with `host_identity_mismatch`, naming both values. The entry is never rewritten from
   a probe. A reinstalled or replaced host is removed and added again.
+- A host that does not answer is reported as `unreachable_destination`, named by its SSH
+  target, with the last lines ssh wrote to stderr (for example `Could not resolve
+  hostname`) when the session ended before answering. Control characters in them are
+  dropped.
 
 ## Commands
 
-Every command takes `--json`. `<host>` resolves by exact host name (case-insensitive) or
+Every command takes `--json`, an alias of `--format json`. `<host>` resolves by exact host name (case-insensitive) or
 exact `machine_id`. Anything else is `unknown_host`, and there is no prefix or fuzzy
 matching.
 
@@ -129,10 +133,10 @@ writes nothing, when:
 | Condition | Error |
 |---|---|
 | target does not answer within the probe budget | `unreachable_destination` |
-| probe reports the local machine id or local prefix | `host_is_local` |
+| probe reports the local machine id | `host_is_local` |
 | `machine_id` already registered in `hosts.toml` | `host_exists` (names the entry) |
-| name already used by an entry or the local host | `host_name_conflict` |
-| prefix already used by an entry or the local host | `task_prefix_conflict` |
+| name already used by an entry or the local host | `host_name_conflict` (points at `--name`) |
+| prefix already used by an entry, or by the local host on a different machine | `task_prefix_conflict` |
 | envelope lacks `task_prefix` | `host_too_old` |
 
 Adding a host writes nothing on that host. Registration is one-directional: a follower needs
@@ -154,6 +158,13 @@ protocol_fingerprint, a skew flag, and workspaces with their role on that host (
 - The skew flag is set when `binary_version` or `protocol_fingerprint` differs from the local
   host's.
 - `--no-probe` prints cached fields only and opens no session.
+- The human form is a table, one host per row: name (with its `local`, `legacy` and `SKEW`
+  marks), machine_id, ssh, prefix, reachable, version, protocol, workspaces and error.
+  `--format json` and `--json` print the object `{host_file, legacy, hosts}`, and
+  `--format ndjson` prints one host per line. A while-legacy notice goes to stderr.
+- `reachable` is whether the host answered, in every form. A host that answers with another
+  identity is reachable and carries `host_identity_mismatch` as its error. `error.message`
+  does not repeat `error.code`.
 - Exit status is 0 when the file loads, whatever the hosts' reachability, because the
   command is a report. `orbit doctor` is the gate.
 
@@ -165,8 +176,9 @@ is the host. For the local host, it shows `[machine]` and the local workspaces.
 
 ### `orbit host rename <host> <new-name>`
 
-Renames a remote entry. The new name must satisfy invariant 2. Renaming the local host is
-refused with a pointer to `orbit config set --global machine.name <value>`.
+Renames a remote entry. The new name must satisfy invariant 2; a name in use is
+`host_name_conflict`, asking for another new name. Renaming the local host is refused with a
+pointer to `orbit config set --global machine.name <value>`.
 
 ### `orbit host remove <host> [--force]`
 
@@ -295,7 +307,11 @@ One release of compatibility:
    Doctor's legacy warning names `orbit host add <existing-ssh-target>` with a target from
    the file; running it migrates the file when all retained hosts answer and clears the warning.
 3. **Both files exist.** Every consumer refuses with `host_file_conflict`, naming both paths.
-   Orbit doesn't pick one, because they are two answers to the same question.
+   Orbit doesn't pick one, because they are two answers to the same question. Every
+   `orbit host` command refuses too, so the error does the comparison itself. It lists each
+   legacy row whose `machine_id` has no host-file entry, with the `orbit host add <ssh>` that
+   registers it once the legacy file is deleted, or says that every row is already there.
+   Doctor's action points at that list.
 4. The next release drops the legacy reader and keeps the `host_file_conflict` check one
    release longer.
 

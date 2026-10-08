@@ -46,8 +46,8 @@ file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
 retained row must answer; `remove` never contacts the row it drops) and deletes
 it, and `orbit host add <ssh-target of a listed host>` is the direct way to
 migrate. If both files exist every consumer refuses with
-`host_file_conflict`; once `orbit host list` shows every legacy row, delete the
-legacy file.
+`host_file_conflict`, naming each legacy row the host file lacks; delete the
+legacy file, then run the `orbit host add` the error names for each of them.
 
 ```bash
 orbit mcp init --federated --client codex

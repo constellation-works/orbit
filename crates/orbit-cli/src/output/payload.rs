@@ -47,6 +47,7 @@ impl std::fmt::Debug for Payload {
         f.debug_struct("Payload")
             .field("doc", &self.doc)
             .field("view", &self.view)
+            .field("records", &self.records)
             .finish()
     }
 }
@@ -93,6 +94,9 @@ pub struct Payload {
     doc: Value,
     /// How `table` and plain mode render the same records.
     view: View,
+    /// The `ndjson` records of a list whose document is an object rather
+    /// than the bare array; `None` derives them from `doc`.
+    records: Option<Vec<Value>>,
     /// The process exit code to use after the payload has been rendered.
     exit_code: i32,
 }
@@ -153,6 +157,19 @@ impl Payload {
         Self {
             doc: Value::Array(records),
             view: View::Blocks(vec![Block::table(table)]),
+            records: None,
+            exit_code: 0,
+        }
+    }
+
+    /// A list whose document is an object carrying `records` beside
+    /// list-level fields (`orbit host list`). `json` renders the object;
+    /// `ndjson` writes one record per line and `table` tabulates them.
+    pub fn enveloped_list(doc: Value, records: Vec<Value>, table: Table) -> Self {
+        Self {
+            doc,
+            view: View::Blocks(vec![Block::table(table)]),
+            records: Some(records),
             exit_code: 0,
         }
     }
@@ -174,6 +191,7 @@ impl Payload {
         Self {
             doc,
             view: View::Blocks(blocks),
+            records: None,
             exit_code: 0,
         }
     }
@@ -191,6 +209,7 @@ impl Payload {
         Self {
             doc,
             view: View::Document,
+            records: None,
             exit_code: 0,
         }
     }
@@ -203,13 +222,21 @@ impl Payload {
         Self {
             doc,
             view: View::Stream(stream),
+            records: None,
             exit_code: 0,
         }
     }
 
-    /// The human rendering, consumed by the renderer.
+    /// The document and human rendering, for tests that inspect a payload.
+    #[cfg(test)]
     pub(crate) fn into_view(self) -> (Value, View) {
         (self.doc, self.view)
+    }
+
+    /// The document, the `ndjson` records when they are not the document's
+    /// own, and the human rendering, consumed by the renderer.
+    pub(crate) fn into_parts(self) -> (Value, Option<Vec<Value>>, View) {
+        (self.doc, self.records, self.view)
     }
 
     pub(crate) fn exit_code(&self) -> i32 {

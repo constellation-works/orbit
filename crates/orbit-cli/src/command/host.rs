@@ -9,11 +9,12 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
-use orbit_cmd::hosts::{self, HostChange, HostDetail, HostList, HostRow};
+use orbit_cmd::hosts::{self, HostChange, HostDetail, HostList, HostRow, HostWorkspace};
 use orbit_core::OrbitError;
 use serde_json::Value;
 
 use crate::command::{CommandOut, Payload};
+use crate::output::table::{Column, Table};
 
 #[derive(Args)]
 #[command(
@@ -144,21 +145,63 @@ fn to_json(value: &impl serde::Serialize) -> Result<Value, OrbitError> {
         .map_err(|error| OrbitError::Execution(format!("serialize host report: {error}")))
 }
 
+/// A table of the hosts; `orbit host show` has each one's full detail.
 fn list_payload(list: HostList) -> CommandOut {
-    let mut text = String::new();
-    if list.legacy {
-        let _ = writeln!(
-            text,
-            "Read from the legacy mcp-destinations.toml; the next `orbit host add`, `rename` or \
-             `remove` migrates it to {}.\n",
-            list.host_file.display()
-        );
-    }
+    let mut table = Table::new(vec![
+        Column::new("NAME"),
+        Column::new("MACHINE_ID").fixed(),
+        Column::new("SSH"),
+        Column::new("PREFIX").fixed(),
+        Column::new("REACHABLE").fixed(),
+        Column::new("VERSION").fixed(),
+        Column::new("PROTOCOL").path(),
+        Column::new("WORKSPACES"),
+        Column::new("ERROR"),
+    ]);
     for host in &list.hosts {
-        text.push_str(&host_block(host));
-        text.push('\n');
+        let workspaces = host
+            .workspaces
+            .iter()
+            .map(|workspace| format!("{} ({})", workspace.name, workspace_role(workspace)))
+            .collect::<Vec<_>>();
+        table.add_row(vec![
+            marked_name(host),
+            host.machine_id.clone(),
+            host.ssh.clone().unwrap_or_else(|| "-".to_string()),
+            host.task_prefix
+                .clone()
+                .unwrap_or_else(|| UNKNOWN.to_string()),
+            reachability(host).to_string(),
+            host.binary_version
+                .clone()
+                .unwrap_or_else(|| UNKNOWN.to_string()),
+            host.protocol_fingerprint
+                .clone()
+                .unwrap_or_else(|| UNKNOWN.to_string()),
+            if workspaces.is_empty() {
+                "-".to_string()
+            } else {
+                workspaces.join(", ")
+            },
+            host.error.as_ref().map_or_else(
+                || "-".to_string(),
+                |error| format!("{}: {}", error.code, error.message),
+            ),
+        ]);
     }
-    Ok(Payload::detail(to_json(&list)?, text).into())
+    if list.legacy {
+        table = table.trailing_notice(format!(
+            "Read from the legacy mcp-destinations.toml; the next `orbit host add`, `rename` or \
+             `remove` migrates it to {}.",
+            list.host_file.display()
+        ));
+    }
+    let records = list
+        .hosts
+        .iter()
+        .map(to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Payload::enveloped_list(to_json(&list)?, records, table).into())
 }
 
 fn show_payload(detail: HostDetail) -> CommandOut {
@@ -221,7 +264,10 @@ fn change_payload(change: HostChange) -> CommandOut {
     Ok(Payload::detail(to_json(&change)?, text).into())
 }
 
-fn host_block(host: &HostRow) -> String {
+const UNKNOWN: &str = "unknown";
+
+/// The host name with its `local`, `legacy` and `SKEW` marks.
+fn marked_name(host: &HostRow) -> String {
     let mut marks = Vec::new();
     if host.local {
         marks.push("local");
@@ -232,12 +278,32 @@ fn host_block(host: &HostRow) -> String {
     if host.skew {
         marks.push("SKEW");
     }
-    let mut text = if marks.is_empty() {
-        format!("{}\n", host.name)
+    if marks.is_empty() {
+        host.name.clone()
     } else {
-        format!("{} [{}]\n", host.name, marks.join(", "))
-    };
-    let unknown = "unknown";
+        format!("{} [{}]", host.name, marks.join(", "))
+    }
+}
+
+/// `reachable` exactly as the JSON reports it. A host that answered with the
+/// wrong identity is reachable; its error is shown beside it, not folded in.
+fn reachability(host: &HostRow) -> &'static str {
+    match host.reachable {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "not probed",
+    }
+}
+
+fn workspace_role(workspace: &HostWorkspace) -> String {
+    match (workspace.role, workspace.owner_machine_id.as_deref()) {
+        ("replica", Some(owner)) => format!("replica of {owner}"),
+        (role, _) => role.to_string(),
+    }
+}
+
+fn host_block(host: &HostRow) -> String {
+    let mut text = format!("{}\n", marked_name(host));
     let _ = writeln!(text, "  machine_id:  {}", host.machine_id);
     let _ = writeln!(
         text,
@@ -247,25 +313,22 @@ fn host_block(host: &HostRow) -> String {
     let _ = writeln!(
         text,
         "  task_prefix: {}",
-        host.task_prefix.as_deref().unwrap_or(unknown)
+        host.task_prefix.as_deref().unwrap_or(UNKNOWN)
     );
-    let reachable = match (host.reachable, &host.error) {
-        (_, Some(error)) => format!("no ({}): {}", error.code, error.message),
-        (Some(true), None) => "yes".to_string(),
-        (Some(false), None) => "no".to_string(),
-        (None, None) => "not probed".to_string(),
-    };
-    let _ = writeln!(text, "  reachable:   {reachable}");
+    let _ = writeln!(text, "  reachable:   {}", reachability(host));
+    if let Some(error) = &host.error {
+        let _ = writeln!(text, "  error:       {}: {}", error.code, error.message);
+    }
     let _ = writeln!(
         text,
         "  version:     {}{}",
-        host.binary_version.as_deref().unwrap_or(unknown),
+        host.binary_version.as_deref().unwrap_or(UNKNOWN),
         skew_note(host, "binary_version")
     );
     let _ = writeln!(
         text,
         "  protocol:    {}{}",
-        host.protocol_fingerprint.as_deref().unwrap_or(unknown),
+        host.protocol_fingerprint.as_deref().unwrap_or(UNKNOWN),
         skew_note(host, "protocol_fingerprint")
     );
     if host.workspaces.is_empty() {
@@ -273,11 +336,13 @@ fn host_block(host: &HostRow) -> String {
     } else {
         let _ = writeln!(text, "  workspaces:");
         for workspace in &host.workspaces {
-            let role = match (workspace.role, workspace.owner_machine_id.as_deref()) {
-                ("replica", Some(owner)) => format!("replica of {owner}"),
-                (role, _) => role.to_string(),
-            };
-            let _ = writeln!(text, "    {} ({}) {role}", workspace.name, workspace.id);
+            let _ = writeln!(
+                text,
+                "    {} ({}) {}",
+                workspace.name,
+                workspace.id,
+                workspace_role(workspace)
+            );
         }
     }
     text
