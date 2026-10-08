@@ -195,7 +195,7 @@ review: <first line of the reviewer summary> [<task ids>]
 | `accept` | No defects; every required check passed; nothing changed | none | PR opens on the implementation head |
 | `accept_with_fixes` | Every finding fixed; required checks passed on the fixed tree | one | `review_validate` reruns owner validation, then the PR opens on the reviewer commit |
 | `reject` | A substantive finding stays open (unfixable, out of intent, a non-release `CHANGELOG.md` edit) | kept if made | Substantive findings block; named external checks alone hold for evidence. Both commits stay preserved, no PR |
-| `incomplete` | The review could not establish the candidate | kept if made | Named external checks enter an awaiting-evidence hold; a wall-clock timeout requeues a continuation; other escalations block |
+| `incomplete` | The review could not establish the candidate | kept if made | Named external checks enter an awaiting-evidence hold; a wall-clock timeout permits one automatic requeue per task/candidate tree, then blocks; other escalations block |
 
 Settlement posts one comment on every task in the bundle:
 
@@ -504,12 +504,19 @@ no verdict yet (§5), commits leftover reviewer work under the reviewer
 identity (`partial_repair_commit`), leaves the implementation and reviewer
 commits as they are, pushes the candidate branch, and opens no PR.
 Substantive failures block with `review_gate_escalation`. A reviewer wall-clock
-failure records `review_timeout_incomplete` and requeues the task; it does not
-retry the reviewer within the failing step. The partial report stays attached,
-and admission resumes the latest released attempt for the same candidate and
-task meaning. A newly admitted candidate receives the earlier report in the
-manifest's `previous_report`, as advisory context requiring revalidation.
-Finalization preserves the timeout requeue rather than adding a generic block.
+failure permits one automatic requeue per task and preserved candidate tree,
+recording `review_timeout_incomplete` and `candidate_tree` in durable task
+history. Another timeout on that tree blocks with
+`review_timeout_requeue_exhausted` and the exhausted bound in its reason. The
+bound has no time window and survives fresh run lineages, rewritten commits,
+and changing then restoring the tree. A repaired tree has its own allowance.
+The handoff does not retry the reviewer within the failing step. The partial
+report stays attached. Within the same lineage, admission resumes the latest
+released attempt for the same candidate and task meaning with the remaining
+budget; a fresh drain run starts a new lineage with its captured budget. A
+newly admitted candidate receives the earlier report in the manifest's
+`previous_report`, as advisory context requiring revalidation. Finalization
+preserves the timeout requeue or exhausted-bound block.
 
 For a single-task delivery, an otherwise complete nonpassing report may name
 `external_evidence`: a list

@@ -12,7 +12,8 @@ last_validated: 2026-10-07
 
 Use this runbook when `review.before_pr = true` and you need to read what a
 review did to a delivery, or a task is `blocked` with a `review_gate_escalation`
-event or `in-progress` while awaiting named external evidence.
+or `review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
+or `in-progress` while awaiting named external evidence.
 
 ## 1. What the gate does
 
@@ -38,13 +39,21 @@ merge request; waiting never extends the review certificate to another head.
 | --- | --- | --- |
 | `accept` | the implementation commit(s) only | the PR opens on that head |
 | `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
-| `reject` (or `incomplete`) | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
+| `reject` or other substantive `incomplete` | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
+| Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's candidate tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
 | Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
 | Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished; a claimed leaf also pushes it to `orbit-evidence/<branch>` on `origin` | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
 
 The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
 records `accept_with_fixes`.
+
+The timeout bound permits one automatic requeue per task and preserved Git
+tree, recorded in task history without a time window. A fresh run starts a new
+review lineage with its captured minute budget; resuming the same lineage uses
+its remaining budget. A new commit containing the same tree does not renew the
+requeue allowance, and changing the tree then restoring it does not erase its
+earlier requeue. A repaired tree has its own allowance.
 
 Final recovery may repair a rejected candidate once. If it appends a commit,
 the engine records the exact HEAD advance around that invocation and resumes
@@ -190,6 +199,11 @@ result, as for any other evidence.
 
 Identify the failed step from `orbit run show`, then act:
 
+- **`review` timed out**: read the retained partial report and timeout
+  handoff. The first timeout requeues automatically. If
+  `review_timeout_requeue_exhausted` blocked the task, repair the candidate or
+  record an operator decision before continuing. Requeueing the same tree
+  does not renew its automatic timeout allowance.
 - **`review_gate_settle` refused with `review_gate_blocked`**: the reviewer
   left an open finding (`reject`) or could not finish (`incomplete`). Read the
   open findings and the `Escalation:` line in the comment. Fix or re-scope the
