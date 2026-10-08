@@ -513,9 +513,10 @@ orbit gc tmp --workspace my-workspace --confirm
 ```
 
 Confirmed collection requires operator or runner authority, as worktree
-collection does. It refuses while any job run in that workspace is `pending`
-or `running`, naming the run IDs; it never reconciles stale owners as part of
-collection. Finish, cancel, or explicitly reconcile those runs first. Other
+collection does. It refuses while any job run in that workspace is `pending`,
+`running`, or `retrying` (sleeping between attempts), naming the run IDs; it
+never reconciles stale owners as part of collection. Finish, cancel, or
+explicitly reconcile those runs first. Other
 workspace checkouts and job worktrees' scratch are outside this command's scope.
 
 Reports include `entries_removed` (top-level entries), per-entry and total
