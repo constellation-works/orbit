@@ -14,10 +14,15 @@ fn scp_credentials_are_rejected_and_never_exposed_by_diagnostics_or_identity() {
         "deploy:hunter2@github.com:example/tasks.git",
         "deploy:hunter2:extra@github.com:example/tasks.git",
         "deploy:@github.com:example/tasks.git",
+        "deploy:p/ss@github.com:example/tasks.git",
     ] {
         assert_eq!(
             redact_git_remote(remote),
             "***@github.com:example/tasks.git"
+        );
+        assert_eq!(
+            redact_git_remote(&redact_git_remote(remote)),
+            redact_git_remote(remote)
         );
         assert_eq!(
             git_remote_identity(remote).expect("host/path identity"),
@@ -34,6 +39,8 @@ fn scp_credentials_are_rejected_and_never_exposed_by_diagnostics_or_identity() {
             );
             assert!(!diagnostic.contains("deploy"), "{diagnostic}");
             assert!(!diagnostic.contains("hunter2"), "{diagnostic}");
+            assert!(!diagnostic.contains("p/ss"), "{diagnostic}");
+            assert!(!diagnostic.contains("ss"), "{diagnostic}");
         }
     }
 }
@@ -42,6 +49,7 @@ fn scp_credentials_are_rejected_and_never_exposed_by_diagnostics_or_identity() {
 fn malformed_scp_credentials_are_redacted_even_when_parsing_fails() {
     for (remote, redacted) in [
         ("deploy:hunter2@github.com:", "***@github.com:"),
+        ("deploy:p/ss@github.com:", "***@github.com:"),
         (
             "deploy:hunter2@:example/tasks.git",
             "***@:example/tasks.git",
@@ -58,6 +66,14 @@ fn malformed_scp_credentials_are_redacted_even_when_parsing_fails() {
             "deploy:p@ss@@github.com:example/tasks.git",
             "***@github.com:example/tasks.git",
         ),
+        (
+            "deploy:p/ss@word@github.com:example/tasks@v1:archive.git",
+            "***@github.com:example/tasks@v1:archive.git",
+        ),
+        (
+            "deploy:p@ss/word@github.com:example/tasks.git",
+            "***@github.com:example/tasks.git",
+        ),
     ] {
         assert_eq!(redact_git_remote(remote), redacted);
         assert_eq!(redact_git_remote(redacted), redacted);
@@ -71,6 +87,7 @@ fn malformed_scp_credentials_are_redacted_even_when_parsing_fails() {
             assert!(!diagnostic.contains("deploy"), "{diagnostic}");
             assert!(!diagnostic.contains("hunter2"), "{diagnostic}");
             assert!(!diagnostic.contains("ss"), "{diagnostic}");
+            assert!(!diagnostic.contains("word"), "{diagnostic}");
         }
     }
 }
@@ -89,6 +106,26 @@ fn ambiguous_scp_credentials_are_fully_redacted() {
         assert!(!diagnostic.contains("deploy"), "{diagnostic}");
         assert!(!diagnostic.contains("ss"), "{diagnostic}");
         assert!(!diagnostic.contains("word"), "{diagnostic}");
+    }
+}
+
+#[test]
+fn ambiguous_scp_repository_paths_fail_closed_as_credentials() {
+    // A path with ':' and '/' before '@' cannot be distinguished from a
+    // slash-bearing password. Credential safety takes precedence.
+    let remote = "github.com:example/tasks@v1:archive.git";
+    let redacted = "***@v1:archive.git";
+
+    assert_eq!(redact_git_remote(remote), redacted);
+    assert_eq!(redact_git_remote(redacted), redacted);
+    for result in [
+        validate_publication_remote(remote),
+        validate_source_repository_fingerprint(remote),
+    ] {
+        let diagnostic = result.expect_err("ambiguous scp credentials").to_string();
+        assert!(diagnostic.contains(redacted), "{diagnostic}");
+        assert!(!diagnostic.contains("github.com"), "{diagnostic}");
+        assert!(!diagnostic.contains("example/tasks"), "{diagnostic}");
     }
 }
 

@@ -208,6 +208,7 @@ pub fn git_remotes_equivalent(left: &str, right: &str) -> Result<bool, Workspace
 }
 
 /// Replace credential userinfo with `***`. Local paths become `<local-path>`.
+/// Ambiguous scp-style prefixes containing `:` and `/` are treated as userinfo.
 pub fn redact_git_remote(remote: &str) -> String {
     if looks_like_local_path(remote) {
         return "<local-path>".to_string();
@@ -277,9 +278,12 @@ fn parse_url_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
 
 fn parse_scp_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
     // Userinfo can contain a password separator. Find the host/path separator
-    // after it, while leaving at-signs in repository paths alone.
+    // after it. A slash may be part of a password, so a colon-bearing prefix
+    // fails closed as userinfo even if it could also be a repository path.
     let (username, host_path) = match remote.split_once('@') {
-        Some((username, host_path)) if !username.contains('/') && host_path.contains(':') => {
+        Some((username, host_path))
+            if (!username.contains('/') || username.contains(':')) && host_path.contains(':') =>
+        {
             (username, host_path)
         }
         _ => ("", remote),
@@ -401,7 +405,7 @@ fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
     let (username, host_path) = remote.split_once('@')?;
     let (host, path) = host_path.split_once(':')?;
-    if username.contains('/') || (!username.contains(':') && username != "***") {
+    if !username.contains(':') && username != "***" {
         return None;
     }
     // Passwords may contain at-signs even when parsing rejects the remote.

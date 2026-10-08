@@ -80,6 +80,11 @@ configuration.
 Both URL-form and scp-style remotes reject embedded passwords. A remote such as
 `user:password@host:owner/repo.git` is credential-bearing; diagnostics mask its
 userinfo as `***@host:owner/repo.git`. Ordinary SSH usernames remain supported.
+Passwords containing `/` are also rejected and masked. When a scp remote has
+both `:` and `/` before `@` and a host/path separator after it, that prefix is
+treated as credentials even if it could be a repository path. Validation
+rejects this ambiguous form, and diagnostics redact it rather than risk
+exposing a password. Use an SSH URL or an ordinary SSH username for such paths.
 
 `source_repository_fingerprint` uses the registry's portable remote identity,
 not a local path. The fingerprint may need an explicit rebind when the source
