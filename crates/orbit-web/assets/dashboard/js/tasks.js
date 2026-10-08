@@ -730,8 +730,10 @@ function readinessOf(task) {
   return readiness && typeof readiness === "object" ? readiness : null;
 }
 
+// Blocking gaps first. The sort is stable, so server order holds within a severity.
 function readinessGaps(readiness) {
-  return Array.isArray(readiness.gaps) ? readiness.gaps.filter((gap) => gap && gap.code) : [];
+  const gaps = Array.isArray(readiness.gaps) ? readiness.gaps.filter((gap) => gap && gap.code) : [];
+  return gaps.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }
 
 function isNotReady(task) {
@@ -785,12 +787,12 @@ function buildReadinessBlock(readiness) {
   }
   for (const gap of gaps) {
     const severity = gap.severity === "blocking" ? "blocking" : "advisory";
-    wrap.appendChild(el("div", { class: `readiness-gap readiness-gap-${severity}` }, [
-      el("div", { class: "readiness-gap-head" }, [
-        el("span", { class: "readiness-severity mono", text: severity }),
-        el("span", { class: "readiness-message", text: gap.message || gap.code }),
+    wrap.appendChild(el("div", { class: "readiness-gap" }, [
+      el("span", { class: `readiness-badge readiness-${severity} mono`, text: severity }),
+      el("div", { class: "readiness-gap-body" }, [
+        el("div", { class: "readiness-message", text: gap.message || gap.code }),
+        ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
       ]),
-      ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
     ]));
   }
   return wrap;
