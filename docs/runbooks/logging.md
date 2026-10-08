@@ -65,7 +65,10 @@ archive after the follower has switched to the replacement are not followed.
 The dashboard log snapshot (`/api/log`) and Errors tab
 (`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
 to show valid records on either side. File access and read errors still fail the
-request.
+request. The snapshot reads only the active file. The Errors tab also reads
+rotated archives that reach into its window. When retention has already pruned
+the start of the window, its header shows "covers since" with the oldest
+retained instant.
 
 The Tasks dock's Log mode and the bottom status bar put the message before
 structured context. Agent relays show the provider event kind (or the stream

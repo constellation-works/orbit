@@ -29,6 +29,7 @@ const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'
   run_id: `terminal-${state}`, job_id: 'fixture', state,
 }));
 const pendingReads = [];
+const errorsRetentionStart = new Date(Date.now() - 30 * 3600000).toISOString();
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
 function fixture(url) {
   const workspace = url.searchParams.get('workspace');
@@ -82,14 +83,19 @@ function fixture(url) {
       run: { run_id: 'cross-workspace-run', job_id: 'fixture', state: 'success' },
       steps: [],
     };
-    case '/api/diagnostics/errors':
-      healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
-      return healthFixture ? [
+    case '/api/diagnostics/errors': {
+      const selectedWindow = url.searchParams.get('since');
+      healthQueries.push({ path: url.pathname, window: selectedWindow });
+      const since = new Date(Date.now() - (selectedWindow === '7d' ? 7 * 24 : 24) * 3600000).toISOString();
+      // Retained logs reach back 30h: the whole 24h window, but not 7d.
+      const coverage_since = selectedWindow === '7d' ? errorsRetentionStart : since;
+      return { since, coverage_since, items: healthFixture ? [
         { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished' },
         { event_id: 'retry', message: 'error=apply_patch verification failed: Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'codex_core::tools::router' },
         { event_id: 'timeout', message: 'failed to refresh available models: request timed out', source: 'agent-stderr', target: 'codex_models_manager::manager' },
         { event_id: 'other', message: 'unexpected tool crash', source: 'agent-stderr', target: 'codex_core::tools::router' },
-      ] : [{ message: marker, source: 'fixture' }];
+      ] : [{ message: marker, source: 'fixture' }] };
+    }
     case '/api/diagnostics/metrics':
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
       return healthFixture ? [{ ts: new Date().toISOString(), actor_identity: 'fixture', token_usage: 1379713 }] : [];
@@ -158,7 +164,7 @@ globalThis.fetch = async (path, options = {}) => {
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace, setWindow } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow, formatDateTime } = await import('./js/common.js');
 const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -225,7 +231,7 @@ await settle();
 const surfaces = [
   { route: 'tasks', body: 'tasks-body', path: '/api/tasks', empty: list([]), emptyText: 'No tasks' },
   { route: 'diagnostics/runs', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
-  { route: 'diagnostics/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: [], emptyText: 'No error events' },
+  { route: 'diagnostics/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
 for (const surface of surfaces) {
@@ -436,6 +442,9 @@ for (const selectedWindow of ['24h', '7d']) {
     check(healthQueries.at(-1).window === selectedWindow, `${subtab} requests selected window ${selectedWindow}`);
     check(text('diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
   }
+  const coverageLabel = `covers since ${formatDateTime(errorsRetentionStart)}`;
+  check(text('diag-count').includes(coverageLabel) === (selectedWindow === '7d'),
+    `errors header names its coverage start only when retention starts after the ${selectedWindow} window: ${text('diag-count')}`);
   check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
   const internal = node('diag-body').querySelector('details.agent-diagnostics');
   check(internal && (selectedWindow !== '24h' || !internal.open), 'recoverable agent diagnostics start collapsed');

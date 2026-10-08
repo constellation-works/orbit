@@ -172,6 +172,137 @@ pub(crate) fn read_recent_matching_events(
     read_recent_matching_events_from(file, filters, limit, TAIL_READ_BLOCK)
 }
 
+/// Newest matching events across the active log and its rotated archives,
+/// oldest first, plus the instant the scan's coverage starts when that is
+/// later than the filter's `since` (or when there is no `since`).
+#[derive(Debug, Default)]
+pub(crate) struct SegmentedEvents {
+    pub events: Vec<Value>,
+    pub coverage_since: Option<DateTime<Utc>>,
+}
+
+/// [`read_recent_matching_events`] over `active` and then its rotated
+/// archives, newest segment first, stopping once `limit` events are in hand or
+/// a segment starts at or before the filter's `since`.
+///
+/// Coverage is bounded by retention (the oldest retained segment starts after
+/// `since`) or by `limit` (the scan stopped at the oldest event it kept).
+pub(crate) fn read_recent_matching_events_across_segments(
+    active: &Path,
+    filters: &Filters,
+    limit: usize,
+) -> io::Result<SegmentedEvents> {
+    if limit == 0 {
+        return Ok(SegmentedEvents::default());
+    }
+    let mut newest_first = Vec::new();
+    let mut coverage_since = None;
+    for segment in log_segments_newest_first(active)? {
+        let remaining = limit - newest_first.len();
+        let events = read_recent_matching_events(&segment, filters, remaining)?;
+        let full = events.len() == remaining;
+        newest_first.extend(events.into_iter().rev());
+        if full {
+            coverage_since = newest_first.last().and_then(event_timestamp);
+            break;
+        }
+        let Some(start) = first_event_timestamp(&segment)? else {
+            continue;
+        };
+        if filters.since.is_some_and(|since| start <= since) {
+            coverage_since = None;
+            break;
+        }
+        coverage_since = Some(start);
+    }
+    newest_first.reverse();
+    Ok(SegmentedEvents {
+        events: newest_first,
+        coverage_since,
+    })
+}
+
+/// The active log followed by its rotated archives, newest first. Archives are
+/// the active file's siblings named `<active>.<UTC stamp>` by
+/// `orbit_common::observability::log_rotation`; other siblings are ignored.
+fn log_segments_newest_first(active: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut segments = vec![active.to_path_buf()];
+    let (Some(dir), Some(name)) = (
+        active.parent(),
+        active.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Ok(segments);
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let prefix = format!("{name}.");
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(segments),
+        Err(err) => return Err(err),
+    };
+    let mut archives = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(stamp) = file_name
+            .to_str()
+            .and_then(|file_name| file_name.strip_prefix(&prefix))
+        else {
+            continue;
+        };
+        if let Ok(rotated_at) = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%3fZ") {
+            archives.push((rotated_at, entry.path()));
+        }
+    }
+    archives.sort_by_key(|(rotated_at, _)| std::cmp::Reverse(*rotated_at));
+    segments.extend(archives.into_iter().map(|(_, path)| path));
+    Ok(segments)
+}
+
+/// Lines a segment's start is looked for in before it counts as unknown.
+const SEGMENT_START_LINES: usize = 64;
+
+/// Timestamp of the first timestamped record in a segment, read forward with a
+/// bounded budget; `None` for a missing, empty or unreadable-start segment.
+fn first_event_timestamp(path: &Path) -> io::Result<Option<DateTime<Utc>>> {
+    use std::io::BufRead;
+
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let budget = (MAX_LOG_RECORD_BYTES as u64).saturating_mul(4);
+    let mut reader = io::BufReader::new(file.take(budget));
+    let mut line = Vec::new();
+    for _ in 0..SEGMENT_START_LINES {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if let Some(ts) = serde_json::from_slice::<Value>(&line)
+            .ok()
+            .as_ref()
+            .and_then(event_timestamp)
+        {
+            return Ok(Some(ts));
+        }
+    }
+    Ok(None)
+}
+
+fn event_timestamp(event: &Value) -> Option<DateTime<Utc>> {
+    event
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|ts| ts.with_timezone(&Utc))
+}
+
 /// Newest matching JSONL events from a seekable reader, scanning backwards.
 ///
 /// Malformed JSON and non-UTF-8 lines are skipped; I/O errors propagate.
@@ -359,6 +490,16 @@ impl<R: Read + Seek> Seek for Prefix<R> {
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {
+    // An ERROR record names its level, so an error-only scan of rotated
+    // segments skips parsing every line that never mentions it.
+    if filters.min_level == Some(LevelFilter::Error)
+        && !raw
+            .as_bytes()
+            .windows(5)
+            .any(|window| window.eq_ignore_ascii_case(b"error"))
+    {
+        return None;
+    }
     let value = serde_json::from_str::<Value>(raw).ok()?;
     filters.matches(&value).then_some(value)
 }
