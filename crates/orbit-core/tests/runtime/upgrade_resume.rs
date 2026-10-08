@@ -7,7 +7,8 @@
 //! reasons, claimed follower leaves, and live workers are untouched.
 //! [ORB-14320] Only the current upgrade's interruptions are resumed: an
 //! earlier upgrade's, an elapsed or stopped drain, and a superseded routine
-//! run are skipped, and every decision is audited once.
+//! run are skipped, and every decision is audited once. A run whose claim
+//! cannot be read is deferred without a decision, so a later tick decides it.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -718,4 +719,71 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");
         assert_eq!(ctx.jobs.job_run_retries(run_id, 10).unwrap().len(), 1);
     }
+}
+
+#[test]
+fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable() {
+    let test_name = "upgrade_resume::clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker; a resumed run's
+    // substitute exits at once, so submission itself succeeds.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let ctx = setup_context();
+    let run_id = upgrade_interrupted_run(&ctx, "test_pipeline", Utc::now(), |_| {});
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    let tick = || {
+        let sweep = run_sweep_at_with_providers(
+            &ctx.global,
+            SweepOptions::default(),
+            machine.clone(),
+            &provider,
+        )
+        .expect("sweep runs");
+        assert!(!sweep.lock_busy);
+    };
+
+    // An undecodable claim row makes claim resolution fail, so whether this
+    // run is a claimed execution cannot be known.
+    let coordination_row = |sql: &str| {
+        ctx.runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(sql, rusqlite::params![ctx.runtime.workspace_id().unwrap()])
+            .unwrap()
+    };
+    coordination_row(
+        "INSERT INTO task_coordination_rows (workspace_id, kind, row_id, payload_json, journal_id, created_at)
+         VALUES (?1, 'distributed-execution-claim-v1', 'corrupt-claim', 'not-json', 'sql-only', '2026-10-08T00:00:00Z')",
+    );
+
+    tick();
+    assert!(
+        ctx.jobs.job_run_retries(&run_id, 1).unwrap().is_empty(),
+        "a run whose claim cannot be read must not be resumed as unclaimed"
+    );
+    assert!(
+        decisions(&ctx, &run_id).is_empty(),
+        "a deferred run is not a decision: {:?}",
+        decisions(&ctx, &run_id)
+    );
+
+    // Once the claim store reads again, the next tick decides the run.
+    coordination_row(
+        "DELETE FROM task_coordination_rows WHERE workspace_id = ?1 AND row_id = 'corrupt-claim'",
+    );
+    tick();
+    let decided = decisions(&ctx, &run_id);
+    assert_eq!(decided.len(), 1, "{decided:?}");
+    assert_eq!(decided[0]["decision"], "resumed", "{decided:?}");
+    assert_eq!(ctx.jobs.job_run_retries(&run_id, 10).unwrap().len(), 1);
 }

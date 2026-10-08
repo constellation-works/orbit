@@ -76,12 +76,25 @@ impl OrbitRuntime {
                 .job_run_retries(&run.run_id, 1)?
                 .is_empty()
                 || run_owner_liveness(&run) == RunOwnerLiveness::Alive
-                // A claimed leaf retried inside its claim's push window and
-                // released the claim naming its head [ORB-14634]; the next
-                // claim continues that candidate.
-                || self.is_claimed_execution(&run.run_id)?
             {
                 continue;
+            }
+            // A claimed leaf retried inside its claim's push window and
+            // released the claim naming its head [ORB-14634]; the next
+            // claim continues that candidate. An unreadable claim defers only
+            // this run, so the other held runs of this pass still resume.
+            match self.is_claimed_execution(&run.run_id) {
+                Ok(false) => {}
+                Ok(true) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        run_id = %run.run_id,
+                        error = %error,
+                        "could not read a held run's claim; deferred to the next tick",
+                    );
+                    continue;
+                }
             }
             if now.signed_duration_since(hold.held_since) > FORGE_HOLD_RETRY_WINDOW {
                 // One run's failed expiry stays unacknowledged for the next
