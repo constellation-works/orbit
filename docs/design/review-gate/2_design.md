@@ -534,10 +534,11 @@ meaning drift never enter this hold.
 
 Settlement retains its nonpassing certificate and writes
 `review-evidence-hold.json`, pinning the attempt, candidate revision, task
-meaning, and requirements. The failure handoff records
-`review_awaiting_evidence`, keeps the task in progress and its candidate
-recoverable, and holds publication. Run finalization preserves this decision.
-Admission refuses to continue while the matching hold has missing evidence.
+meaning, and requirements. Settlement records `review_awaiting_evidence` and
+ends the run `held`; no failure handoff runs. Run finalization preserves this
+decision. Admission refuses to continue while the matching hold has missing
+evidence; that refusal reaches the failure handoff, which keeps the task in
+progress and its candidate recoverable, and holds publication.
 For each requirement, an accepted writer (below) attaches its result at its
 named artifact path, plus the separately referenced nonempty log artifact. An
 operator attaches both with `orbit task artifact put`:

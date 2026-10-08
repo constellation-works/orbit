@@ -82,31 +82,23 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         workspace_path,
     )?;
 
+    // Only admission reaches this handoff with a held-evidence refusal:
+    // settlement ends the run as a held outcome before any failure handoff.
     // Admission refuses before it reserves an attempt, and a requeued task is
     // admitted by a later run. Its refusal already proved that the held
     // candidate's tree and task meaning still match and that the evidence has
     // not arrived, so the admission path checks only the candidate commit.
     let evidence_hold = task.status == TaskStatus::InProgress
-        && matches!(failed_step_id, "review_gate_settle" | "review_gate_admit")
+        && failed_step_id == "review_gate_admit"
         && error_message.contains("review_awaiting_evidence:")
         && host.get_task_artifacts(&task.id)?.iter().any(|artifact| {
-            let admitted = input
-                .get("pipeline")
-                .and_then(|pipeline| pipeline.get("review_gate_admit"));
-            let attempt_id = admitted.and_then(|admit| input_string_field(admit, "attempt_id"));
-            let lineage_key = admitted.and_then(|admit| input_string_field(admit, "lineage_key"));
             artifact.path == orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT
                 && artifact.created_by.as_deref() == Some("system")
                 && serde_json::from_slice::<orbit_types::workflow::ReviewEvidenceHold>(
                     &artifact.content,
                 )
                 .is_ok_and(|hold| {
-                    !hold.requirements.is_empty()
-                        && hold.candidate.commit == head_sha
-                        && (failed_step_id == "review_gate_admit"
-                            || (attempt_id.as_deref() == Some(hold.attempt_id.as_str())
-                                && lineage_key.as_deref() == Some(hold.lineage_key.as_str())
-                                && hold.run_id == run_id))
+                    !hold.requirements.is_empty() && hold.candidate.commit == head_sha
                 })
         });
     let timed_out = task.status == TaskStatus::InProgress
