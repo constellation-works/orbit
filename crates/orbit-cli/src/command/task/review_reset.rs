@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 /// Renew one selected review budget, retaining attempts and the operator decision.
 #[derive(Args)]
 pub struct TaskReviewResetArgs {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     /// Task belonging to the selected lineage
     pub id: String,
     /// Exact lineage key from the refusal or review manifest

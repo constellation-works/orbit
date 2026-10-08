@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 /// complete from. Operator-only.
 #[derive(Args)]
 pub struct TaskReconcileReviewCommand {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     #[command(subcommand)]
     pub command: TaskReconcileReviewSubcommand,
 }

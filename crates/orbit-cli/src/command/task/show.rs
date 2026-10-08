@@ -16,6 +16,8 @@ use super::output::{
 
 #[derive(Args)]
 pub struct TaskShowArgs {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     /// Task ID
     pub id: String,
     /// Output as JSON

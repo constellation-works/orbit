@@ -13,6 +13,8 @@ use super::output::task_to_json_for_runtime;
 #[derive(Args)]
 #[command(about = "Manage task artifact files")]
 pub struct TaskArtifactCommand {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     #[command(subcommand)]
     pub command: TaskArtifactSubcommand,
 }
