@@ -151,6 +151,98 @@ fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
     );
 }
 
+/// An unanswered request from before both hosts upgraded must not fail the
+/// current drain after its probe matches; receipt lookup releases the old slot.
+#[test]
+fn obsolete_persisted_request_skew_does_not_fail_a_matching_drain() {
+    if !isolated(
+        module_path!(),
+        "obsolete_persisted_request_skew_does_not_fail_a_matching_drain",
+    ) {
+        return;
+    }
+    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    for (old_fingerprint, schema) in [
+        (
+            Some("older-request-shape"),
+            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        ),
+        (None, 1),
+        (Some(current), 1),
+    ] {
+        let pair = Pair::new(0);
+        let previous = pair.run_drain();
+        let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+        assert_eq!(probe["protocol_fingerprint"], current);
+        let destination = serde_json::from_value(pair.destination.clone()).unwrap();
+        let request = serde_json::from_value(json!({
+            "request_id": "unanswered-before-upgrade", "caller_version": probe["binary_version"],
+            "caller_schema": schema,
+            "caller_fingerprint": old_fingerprint,
+            "caller_before_pr": false, "review_gate": true, "ship": probe["ship"],
+            "run_context": {"run_id": previous, "job_name": "workspace_pull_pipeline"},
+        }))
+        .unwrap();
+        let persisted = pair
+            .follower_jobs
+            .allocate_pull_request(&destination, &request, 1)
+            .unwrap()
+            .expect("persist the old unanswered request before sending it");
+        assert_eq!(persisted.phase, LocalPullPhase::Requested);
+        pair.follower_jobs
+            .finalize_job_run(&previous, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+
+        let drain = pair.run_drain();
+        if old_fingerprint == Some(current) {
+            let failure = pair
+                .follower
+                .run_deterministic(
+                    "pull_refill",
+                    &json!({}),
+                    &json!({"run_id": drain, "destination": pair.destination, "window_expired": false}),
+                    ToolContext::default(),
+                )
+                .expect_err("skew on a current-build fingerprint remains fatal");
+            assert!(
+                matches!(failure, orbit_engine::DispatchError::ProtocolSkew(_)),
+                "{failure}"
+            );
+            assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1);
+            continue;
+        }
+        let pass = pair.pass(&drain);
+        assert!(pass["error"].is_null(), "{old_fingerprint:?}: {pass}");
+        assert_eq!(pass["degraded"], false, "{pass}");
+        assert_eq!(pass["done"], false, "{pass}");
+        assert_eq!(pair.run_state(&drain), JobRunState::Running);
+        let records = pair.follower_jobs.local_pull_admissions().unwrap();
+        let closed = records
+            .iter()
+            .find(|record| record.request.request_id == request.request_id)
+            .unwrap();
+        assert_eq!(closed.phase, LocalPullPhase::Refused);
+        assert_eq!(
+            closed.request, request,
+            "the persisted request remains immutable"
+        );
+        assert!(closed.refusal.is_some());
+        assert!(closed.receipt.is_none());
+        assert!(!closed.holds_capacity());
+        assert_eq!(pair.wire.calls("orbit.drain.receipt.lookup").len(), 1);
+        let pulls = pair.wire.calls("orbit.task.pull");
+        assert_eq!(pulls.len(), 2, "the same pass can send a fresh request");
+        assert_eq!(pulls[0]["request_id"], request.request_id);
+        assert_eq!(pulls[1]["caller_fingerprint"], current);
+        assert_ne!(pulls[1]["request_id"], request.request_id);
+        assert!(records.iter().any(|record| {
+            record.request.run_context.run_id == drain && record.phase == LocalPullPhase::Idle
+        }));
+        assert!(pair.owner_claims().is_empty());
+        assert!(pair.leaf_runs().is_empty());
+    }
+}
+
 /// Owner admission hands selector-free implementation work to a follower on
 /// its first pass with an empty lock footprint; tagged no-diff work is
 /// claimable by the follower too [ORB-14474].
