@@ -262,7 +262,8 @@ pub(in super::super) fn apply(
     // Tasks whose material the branch changed since preparation settle
     // superseded, whatever their pilot returned, so their members are claimed
     // afresh at the head; disjoint siblings still apply [ORB-14476]. Prepare
-    // already set aside the tasks it found stale; apply carries them.
+    // already set aside the tasks it found stale, and those another writer
+    // changed between selection and hydration; apply carries them.
     let source_superseded_tasks = match &claim {
         Some(claim) => crate::application::automation::members::stale_tasks(
             runtime,
@@ -275,9 +276,9 @@ pub(in super::super) fn apply(
         .map_err(|error| action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
-    if let Some(set_aside) = prepared
-        .get("superseded_by_source")
-        .and_then(Value::as_array)
+    for set_aside in ["superseded_by_source", "superseded_during_preparation"]
+        .into_iter()
+        .filter_map(|field| prepared.get(field).and_then(Value::as_array))
     {
         carried_task_outcomes.extend(set_aside.iter().cloned());
     }
