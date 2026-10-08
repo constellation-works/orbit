@@ -7,9 +7,9 @@ use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, plugin_store_sqlite, review_store, tool_store_sqlite,
-    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, plugin_store_sqlite, provider_limit_store_from_store, review_store,
+    tool_store_sqlite, v2_audit_store_from_store, workspace_coordinated_backends,
+    workspace_job_run_store, workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -151,6 +151,7 @@ pub(crate) fn build_context_from_roots(
             review: Arc::new(store.clone()),
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
+            provider_limit: provider_limit_store_from_store(store.clone()),
         }
     } else {
         OrbitHostStore {
@@ -159,6 +160,7 @@ pub(crate) fn build_context_from_roots(
             review: review_store(store.clone())?,
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
+            provider_limit: provider_limit_store_from_store(store.clone()),
         }
     };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());

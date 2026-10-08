@@ -27,7 +27,7 @@ pub use forge_hold::{
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use provider_hold::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,
-    ProviderFailureHold, failed_provider, provider_failure_text,
+    ProviderFailureHold, ProviderLimitFailure, failed_provider, provider_failure_text,
 };
 pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, ClaimFailureClass, CrewExclusion,
@@ -36,11 +36,12 @@ pub use state::{
     FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
     FinalRecoveryObservedTask, FinalRecoveryRepairCommit, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
     OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,
-    PROVIDER_REFUSAL_ERROR_CODE, PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE,
-    PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullAuthExclusion, PullAuthRecovery,
-    PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle,
-    TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy,
-    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, is_owner_route_unavailable,
-    is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
-    is_provider_unavailable, is_validation_environment_failure,
+    PROVIDER_LIMIT_ERROR_CODE, PROVIDER_LIMIT_MARKER, PROVIDER_REFUSAL_ERROR_CODE,
+    PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
+    PipelineState, PullAuthExclusion, PullAuthRecovery, PullCrewPreflight, PullSinglePass,
+    ResourcePressure, ResourceThrottle, TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER,
+    TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
+    is_provider_limit, is_provider_refusal, is_provider_unavailable,
+    is_validation_environment_failure,
 };

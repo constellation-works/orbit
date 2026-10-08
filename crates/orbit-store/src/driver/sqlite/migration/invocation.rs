@@ -125,3 +125,31 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
     )
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
+
+/// v40 `provider_limit_observations` [ORB-14695]: the host's provider usage
+/// limits, beside the invocation ledger in the host-global database, since a
+/// limit belongs to the provider login on this host.
+///
+/// One row per provider, model scope and window; the empty string stands for
+/// an account-wide scope or an unlabelled window so the key stays unique.
+/// Purely additive: an older binary never reads the table.
+pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS provider_limit_observations (
+                provider TEXT NOT NULL,
+                model_scope TEXT NOT NULL DEFAULT '',
+                window_label TEXT NOT NULL DEFAULT '',
+                exhausted INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                resets_at TEXT,
+                observed_at TEXT NOT NULL,
+                run_id TEXT,
+                crew TEXT,
+                detail TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (provider, model_scope, window_label)
+            );
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}

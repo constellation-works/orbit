@@ -16,6 +16,7 @@ orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-tools = { path = "../orbit-tools" }
 chrono = { workspace = true }
+chrono-tz.workspace = true
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -12,7 +12,7 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState, PipelineState};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -537,6 +537,15 @@ pub trait RuntimeHost: Send + Sync {
         _query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
         Ok(Vec::new())
+    }
+    /// [ORB-14695] Record a provider usage limit a run observed in this
+    /// host's provider-limit store. The latest observation per provider,
+    /// model scope and window stands; an older one never replaces it.
+    fn record_provider_limit(
+        &self,
+        _observation: &ProviderLimitObservation,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("record_provider_limit"))
     }
     fn activity_implementer_identity(
         &self,

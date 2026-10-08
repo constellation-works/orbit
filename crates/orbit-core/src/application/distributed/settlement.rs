@@ -625,9 +625,10 @@ impl crate::OrbitRuntime {
             // released failure whose class blames this host excludes the crew
             // too. [ORB-14262] Authentication is the provider's login, not the
             // crew's model, so every configured crew of that provider is
-            // excluded. Capacity stays on the named crew: another model may
-            // still have room. Provider labels are parsed, so `anthropic`
-            // groups with `claude`.
+            // excluded, and so is a usage limit, which is the provider
+            // account's [ORB-14695]. Capacity stays on the named crew: another
+            // model may still have room. Provider labels are parsed, so
+            // `anthropic` groups with `claude`.
             let authentication = evidence.provider_unavailable.is_some()
                 && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
             if authentication
@@ -645,9 +646,12 @@ impl crate::OrbitRuntime {
             }
             let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
             {
-                (Some(unavailable), _) => {
+                (Some(unavailable), failure) => {
+                    let limit = failure
+                        .as_ref()
+                        .is_some_and(|failure| failure.provider_limit);
                     let crews = match unavailable.crew.as_deref() {
-                        Some(crew) if authentication => self.crews_sharing_provider(crew),
+                        Some(crew) if authentication || limit => self.crews_sharing_provider(crew),
                         Some(crew) => vec![crew.to_string()],
                         None => Vec::new(),
                     };

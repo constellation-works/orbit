@@ -31,5 +31,6 @@ tracing.workspace = true
 wait-timeout.workspace = true
 
 [dev-dependencies]
+chrono-tz.workspace = true
 jsonschema.workspace = true
 tracing-subscriber.workspace = true

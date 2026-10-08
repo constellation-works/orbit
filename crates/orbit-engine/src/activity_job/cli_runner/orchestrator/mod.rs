@@ -2,6 +2,7 @@
 
 mod completion;
 mod dispatch;
+mod limit;
 mod policy;
 mod prepare;
 

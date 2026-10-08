@@ -1,7 +1,8 @@
 //! A task held back from the provider that just failed it [ORB-14266].
 //!
 //! A local run that fails because its provider was at capacity, unusable on
-//! the host, or refused the task's content did not judge the work. Its task
+//! the host, out of its account's usage limit [ORB-14695], or refused the
+//! task's content did not judge the work. Its task
 //! goes back to the `backlog` under a [`PROVIDER_FAILURE_HOLD_EVENT`] whose
 //! note carries a typed [`ProviderFailureHold`]: the crews it excludes and the
 //! time they may run the task again. Until then admission draws the task's
@@ -16,8 +17,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::state::{
-    PROVIDER_CAPACITY_MARKER, PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_MARKER,
-    is_provider_capacity_exhausted, is_provider_refusal, is_provider_unavailable,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_REFUSAL_MARKER,
+    PROVIDER_UNAVAILABLE_MARKER, is_provider_capacity_exhausted, is_provider_limit,
+    is_provider_refusal, is_provider_unavailable,
 };
 
 /// Task history event that moves a task to `backlog` under a
@@ -41,15 +43,20 @@ pub enum ProviderFailureClass {
     Unavailable,
     /// The provider's content policy refused the task.
     Refusal,
+    /// The provider account hit a usage limit [ORB-14695].
+    Limit,
 }
 
 impl ProviderFailureClass {
-    /// The class a step failure's code or message carries, if any. Capacity
-    /// is checked before unavailability, which it is a kind of.
+    /// The class a step failure's code or message carries, if any: refusal,
+    /// then usage limit, then capacity, then unavailability. A limit and
+    /// capacity are checked before unavailability, which they are kinds of.
     #[must_use]
     pub fn of(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         if is_provider_refusal(error_code, message) {
             Some(Self::Refusal)
+        } else if is_provider_limit(error_code, message) {
+            Some(Self::Limit)
         } else if is_provider_capacity_exhausted(error_code, message) {
             Some(Self::Capacity)
         } else if is_provider_unavailable(error_code, message) {
@@ -66,6 +73,7 @@ impl ProviderFailureClass {
             Self::Capacity => PROVIDER_CAPACITY_MARKER,
             Self::Unavailable => PROVIDER_UNAVAILABLE_MARKER,
             Self::Refusal => PROVIDER_REFUSAL_MARKER,
+            Self::Limit => PROVIDER_LIMIT_MARKER,
         }
     }
 
@@ -75,6 +83,7 @@ impl ProviderFailureClass {
             Self::Capacity => "provider_capacity",
             Self::Unavailable => "provider_unavailable",
             Self::Refusal => "provider_refusal",
+            Self::Limit => "provider_limit",
         }
     }
 }
@@ -98,6 +107,95 @@ pub fn failed_provider(message: &str) -> Option<&str> {
     let name = rest.trim_start().strip_prefix(PROVIDER_TOKEN)?;
     let name = name.split(|c: char| c.is_whitespace() || c == ':').next()?;
     (!name.is_empty()).then_some(name)
+}
+
+/// The tokens a usage-limit failure carries after its provider.
+const LIMIT_MODEL_TOKEN: &str = "model=";
+const LIMIT_WINDOW_TOKEN: &str = "window=";
+const LIMIT_RESETS_AT_TOKEN: &str = "resets_at=";
+
+/// What a provider said about the usage limit it hit [ORB-14695]: the model
+/// the limit is scoped to, the limit's window, and when it resets. Each is
+/// set only when the provider's own text said so; Orbit never invents one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderLimitFailure {
+    /// The model or model family the limit covers (`opus`, `gpt-5-codex`),
+    /// when the provider named one; otherwise the whole account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The limit's window as the provider labels it (`five_hour`,
+    /// `seven_day_opus`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    /// When the provider said the limit resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
+impl ProviderLimitFailure {
+    /// `[provider_limit] provider=<p> [model=<m>] [window=<w>]
+    /// [resets_at=<rfc3339>] <detail>`: the step failure text of a limit.
+    #[must_use]
+    pub fn text(&self, provider: &str, detail: &str) -> String {
+        let mut tokens = String::new();
+        let single = |value: &str| value.split_whitespace().collect::<Vec<_>>().join("_");
+        if let Some(model) = self
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+        {
+            tokens.push_str(&format!("{LIMIT_MODEL_TOKEN}{} ", single(model)));
+        }
+        if let Some(window) = self
+            .window
+            .as_deref()
+            .filter(|window| !window.trim().is_empty())
+        {
+            tokens.push_str(&format!("{LIMIT_WINDOW_TOKEN}{} ", single(window)));
+        }
+        if let Some(resets_at) = self.resets_at {
+            tokens.push_str(&format!(
+                "{LIMIT_RESETS_AT_TOKEN}{} ",
+                resets_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            ));
+        }
+        provider_failure_text(
+            ProviderFailureClass::Limit,
+            provider,
+            &format!("{tokens}{}", detail.trim()),
+        )
+    }
+
+    /// The limit a step failure carries, if it is a usage-limit failure.
+    #[must_use]
+    pub fn from_text(message: &str) -> Option<Self> {
+        if ProviderFailureClass::of(None, Some(message)) != Some(ProviderFailureClass::Limit) {
+            return None;
+        }
+        let (_, rest) = message.split_once(PROVIDER_LIMIT_MARKER)?;
+        let mut tokens = rest.split_whitespace();
+        let mut limit = Self::default();
+        if !tokens
+            .next()
+            .is_some_and(|token| token.starts_with(PROVIDER_TOKEN))
+        {
+            return Some(limit);
+        }
+        for token in tokens {
+            if let Some(model) = token.strip_prefix(LIMIT_MODEL_TOKEN) {
+                limit.model = Some(model.to_string());
+            } else if let Some(window) = token.strip_prefix(LIMIT_WINDOW_TOKEN) {
+                limit.window = Some(window.to_string());
+            } else if let Some(resets_at) = token.strip_prefix(LIMIT_RESETS_AT_TOKEN) {
+                limit.resets_at = DateTime::parse_from_rfc3339(resets_at)
+                    .ok()
+                    .map(|at| at.with_timezone(&Utc));
+            } else {
+                break;
+            }
+        }
+        Some(limit)
+    }
 }
 
 /// The crews a task may not run as until `not_before`, and why.

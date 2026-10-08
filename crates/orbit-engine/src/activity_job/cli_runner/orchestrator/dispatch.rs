@@ -710,6 +710,7 @@ pub(crate) fn run_cli_backend_for_step(
         host,
         spec,
         input,
+        run_id,
         provider,
         model,
         task_ids: &task_ids,

@@ -520,11 +520,12 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 
 ### Provider failure holds
 
-Sometimes a local run fails because of its provider rather than the work. The step's error text then carries one of three typed markers, each followed by `provider=<name>`:
+Sometimes a local run fails because of its provider rather than the work. The step's error text then carries one of four typed markers, each followed by `provider=<name>`:
 
 - `[provider_capacity]`: the selected model was at capacity.
 - `[provider_unavailable]`: the provider could not be used on this host, for example because authentication failed.
 - `[provider_refusal]`: the provider's content policy refused the task. This covers a Codex content-filter `error` or `turn.failed` frame (`This content was flagged for possible …`) and a Claude `result` with `stop_reason: "refusal"`. Only text the failing provider CLI wrote counts. The agent's transcript, tool output and Orbit envelopes never set the marker.
+- `[provider_limit]`: the provider account hit a usage limit. Recognized texts include Antigravity's `Individual quota reached … Resets in 1h37m37s`, Gemini's `TerminalQuotaError`, Codex's `You've hit your usage limit … try again at <time>` (an `error` and `turn.failed` frame pair), a Claude `result` with `is_error: true` that starts `You've hit your` or `You've reached your` (or a `rate_limit_event` whose status is `rejected`), and grok's `Too Many Requests (429)`. As with refusals, only the provider's own stderr, terminal error or failure frames count: an agent reporting a GitHub rate limit in its envelope is not the provider's limit. After the provider, the marker carries what the provider said, when it said it: `model=<model>`, `window=<window>` and `resets_at=<RFC 3339 time>`. A relative reset is read from the failure time, and a Codex `try again at` time is read in the host's local time zone.
 
 Step recovery and final recovery skip these failures. On the PR pipeline, the failure handoff returns `held_provider_failure`. It commits the candidate on the run's branch, but pushes nothing and opens no `[BLOCKED]` PR.
 
@@ -534,9 +535,14 @@ Run finalization then moves the task to `backlog` under a `provider_failure_hold
 
 - A capacity or unavailability failure excludes the crew the run used. If the failing step ran on another provider (a reviewer, say), it excludes every crew of that provider instead.
 - A refusal excludes every crew of the refusing provider, because the same content would be refused again.
+- A usage limit belongs to the provider account, so it excludes every crew of that provider. Provider labels are parsed first, so an alias counts as the same provider. If the limit names a model that some of those crews run (compared case-insensitively, by substring of the crew's model), only those crews are excluded.
 - If an earlier hold still stands, its excluded crews stay excluded.
 
 **How long the hold lasts:** the base backoff is 15 minutes for capacity, 30 minutes for unavailability and 24 hours for a refusal. It doubles for each other hold the task got in the last 24 hours, up to 24 hours.
+
+A usage limit is held until the reset the provider reported, clamped to between 5 minutes and 7 days after the failure. If the provider reported no reset that Orbit could read, the backoff starts at 30 minutes and doubles for each earlier usage-limit hold on the same provider in the last 24 hours, up to 6 hours.
+
+**The host's limit record:** a usage-limit failure also records an observation in the global store (`~/.orbit/orbit.db`, table `provider_limit_observations`). It keeps one row per provider, model and window, holding the reset, the run, the crew and the provider's text. A newer observation replaces the row; an older one never does. Recording is advisory: if it fails, the run logs a warning and the failure is still typed and held.
 
 **Admission during the hold:** until `not_before`, the task's crew is drawn from the crews the hold does not exclude. The draw tries, in order:
 
@@ -548,7 +554,7 @@ Run finalization then moves the task to `backlog` under a `provider_failure_hold
 
 Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
 
-Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider. A declared executor `auth_probe` can re-admit them in the same drain window after credentials recover. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room.
+Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider. A declared executor `auth_probe` can re-admit them in the same drain window after credentials recover. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room. A usage limit releases the claim with failure class `provider`. Its settlement sets `provider_limit: true`, and that release does not count against the task's release budget. The drain also excludes every crew of that provider for the rest of its window.
 
 ### Final recovery pool
 

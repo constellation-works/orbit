@@ -39,6 +39,8 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_tools::ToolContext;
 #[cfg(unix)]
+use orbit_types::telemetry::ProviderLimitObservation;
+#[cfg(unix)]
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, OnDenial, Provider,
 };
@@ -93,14 +95,14 @@ const CONTENT_FILTER: &str = "This content was flagged for possible cybersecurit
      seems wrong, try rephrasing your request. To get authorized for security work, join the \
      Trusted Access for Cyber program: https://chatgpt.com/cyber";
 
-struct Fixture {
+pub(super) struct Fixture {
     _root: TempDir,
-    runtime: OrbitRuntime,
-    repo: PathBuf,
+    pub(super) runtime: OrbitRuntime,
+    pub(super) repo: PathBuf,
     jobs: Arc<dyn JobRunStoreBackend>,
 }
 
-fn fixture(config: &str) -> Fixture {
+pub(super) fn fixture(config: &str) -> Fixture {
     let root = TempDir::new().unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
@@ -122,7 +124,7 @@ fn fixture(config: &str) -> Fixture {
 
 impl Fixture {
     /// An admissible backlog task that runs as `crew`.
-    fn task(&self, crew: &str) -> String {
+    pub(super) fn task(&self, crew: &str) -> String {
         self.task_with_crew(Some(crew))
     }
 
@@ -147,7 +149,7 @@ impl Fixture {
     }
 
     /// A running local pipeline that admitted `task` on `crew`.
-    fn admit(&self, task: &str, crew: &str) -> String {
+    pub(super) fn admit(&self, task: &str, crew: &str) -> String {
         self.admit_with_input(task, json!({ "task_ids": [task], "crew": crew }))
     }
 
@@ -187,7 +189,7 @@ impl Fixture {
 
     /// Record the run's failed step and finalize it as `failed`, as its
     /// worker does.
-    fn fail(&self, run: &str, message: &str) {
+    pub(super) fn fail(&self, run: &str, message: &str) {
         let now = Utc::now();
         self.runtime
             .complete_job_run_step(
@@ -212,13 +214,13 @@ impl Fixture {
             .unwrap();
     }
 
-    fn status(&self, task: &str) -> TaskStatus {
+    pub(super) fn status(&self, task: &str) -> TaskStatus {
         self.runtime.get_task(task).unwrap().status
     }
 
     /// The hold the task's last history entry records, with that entry's
     /// event and status.
-    fn last_hold(&self, task: &str) -> ProviderFailureHold {
+    pub(super) fn last_hold(&self, task: &str) -> ProviderFailureHold {
         let history = self.runtime.get_task_history(task).unwrap();
         let entry = history.last().expect("history");
         assert_eq!(entry.event, PROVIDER_FAILURE_HOLD_EVENT, "{entry:?}");
@@ -238,7 +240,7 @@ impl Fixture {
             .unwrap()
     }
 
-    fn admitted(&self, task: &str, allowed_crews: &[&str]) -> bool {
+    pub(super) fn admitted(&self, task: &str, allowed_crews: &[&str]) -> bool {
         self.backlog(allowed_crews)["task_ids"]
             .as_array()
             .unwrap()
@@ -246,7 +248,7 @@ impl Fixture {
             .any(|id| id == task)
     }
 
-    fn exclusion(&self, task: &str, allowed_crews: &[&str]) -> Value {
+    pub(super) fn exclusion(&self, task: &str, allowed_crews: &[&str]) -> Value {
         self.backlog(allowed_crews)["excluded"]
             .as_array()
             .unwrap()
@@ -507,11 +509,7 @@ fn a_content_filter_refusal_moves_the_next_admission_to_another_provider() {
     let task = fx.task("sol");
     let run = fx.admit(&task, "sol");
     let codex = FakeCodex::new(&fx.repo, &content_filter_frames());
-    let host = Pipeline {
-        fixture: &fx,
-        codex: codex.path.clone(),
-        final_recovery_admissions: Mutex::new(0),
-    };
+    let host = Pipeline::new(&fx, codex.path.clone());
     let audit = V2AuditWriter::with_disk_sinks(
         &fx.repo.join("audit"),
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
@@ -522,7 +520,7 @@ fn a_content_filter_refusal_moves_the_next_admission_to_another_provider() {
     )
     .unwrap();
     let outcome = execute_job_with_resume(
-        &implementation_job(),
+        &implementation_job(Provider::Codex),
         json!({ "prompt": "implement", "task_ids": [task] }),
         &run,
         audit,
@@ -569,16 +567,21 @@ fn content_filter_frames() -> String {
     )
 }
 
-/// A fake `codex` that prints `stdout` and exits 1.
+/// A fake provider CLI that prints `stdout` and exits 1.
 #[cfg(unix)]
-struct FakeCodex {
-    path: PathBuf,
+pub(super) struct FakeCodex {
+    pub(super) path: PathBuf,
 }
 
 #[cfg(unix)]
 impl FakeCodex {
     fn new(dir: &Path, stdout: &str) -> Self {
-        let path = dir.join("codex");
+        Self::named(dir, "codex", stdout)
+    }
+
+    /// A fake `binary` in `dir`.
+    pub(super) fn named(dir: &Path, binary: &str, stdout: &str) -> Self {
+        let path = dir.join(binary);
         std::fs::write(
             &path,
             format!("#!/bin/sh\ncat > /dev/null\ncat <<'STDOUT'\n{stdout}\nSTDOUT\nexit 1\n"),
@@ -589,13 +592,29 @@ impl FakeCodex {
     }
 }
 
-/// Scripts the deterministic steps and the provider launcher; everything
-/// else is the engine's default host behaviour.
+/// Scripts the deterministic steps and the provider launcher, and records
+/// provider limits in the fixture's runtime; everything else is the engine's
+/// default host behaviour.
 #[cfg(unix)]
-struct Pipeline<'a> {
+pub(super) struct Pipeline<'a> {
     fixture: &'a Fixture,
     codex: PathBuf,
-    final_recovery_admissions: Mutex<usize>,
+    pub(super) final_recovery_admissions: Mutex<usize>,
+    /// The deterministic actions run, in order.
+    pub(super) actions: Mutex<Vec<String>>,
+}
+
+#[cfg(unix)]
+impl<'a> Pipeline<'a> {
+    /// A host whose provider launcher runs the fake CLI at `provider`.
+    pub(super) fn new(fixture: &'a Fixture, provider: PathBuf) -> Self {
+        Self {
+            fixture,
+            codex: provider,
+            final_recovery_admissions: Mutex::new(0),
+            actions: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -607,6 +626,7 @@ impl RuntimeHost for Pipeline<'_> {
         _input: &Value,
         _context: ToolContext,
     ) -> Result<Value, DispatchError> {
+        self.actions.lock().unwrap().push(action.to_string());
         Ok(match action {
             "setup" => json!({ "workspace_path": self.fixture.repo, "base_ref": "main" }),
             _ => json!({ "action": action }),
@@ -642,6 +662,16 @@ impl RuntimeHost for Pipeline<'_> {
         *self.final_recovery_admissions.lock().unwrap() += 1;
         Ok(FinalRecoveryAdmission::Admitted)
     }
+
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<(), OrbitError> {
+        self.fixture
+            .runtime
+            .record_provider_limit(observation)
+            .map(|_| ())
+    }
 }
 
 #[cfg(unix)]
@@ -655,10 +685,10 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
     load_activity_asset(&asset.to_string()).unwrap().spec
 }
 
-/// `setup → implement_one` on Codex, with step and final recovery and a
+/// `setup → implement_one` on `provider`, with step and final recovery and a
 /// failure handoff, so a skipped recovery is the executor's own decision.
 #[cfg(unix)]
-fn implementation_job() -> JobV2 {
+pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     let spec = AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
@@ -668,7 +698,7 @@ fn implementation_job() -> JobV2 {
         reasoning_effort: None,
         max_iterations: 1,
         backend: None,
-        provider: Provider::Codex,
+        provider,
         wall_clock_timeout_seconds: 30,
         require_response_envelope: false,
         require_completion_envelope: true,

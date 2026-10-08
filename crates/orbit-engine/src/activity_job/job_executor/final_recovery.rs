@@ -137,6 +137,13 @@ pub(super) fn attempt_final_recovery(
             "the provider reported the selected model at capacity; the candidate was not judged",
         );
     }
+    // [ORB-14695] Nor outlasts the provider account's usage limit; run
+    // finalization holds the task until the reset the provider reported.
+    if orbit_types::workflow::is_provider_limit(None, Some(error_message)) {
+        return skip(
+            "the provider reported its account's usage limit reached; the candidate was not judged",
+        );
+    }
     // [ORB-14266] Nor makes an unusable provider usable, or gets past its
     // content policy. Run finalization holds the task in the backlog with
     // that provider's crews excluded for a while instead.

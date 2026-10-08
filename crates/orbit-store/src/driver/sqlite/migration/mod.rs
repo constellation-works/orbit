@@ -37,7 +37,7 @@ use host_registry::{
 use introspect::table_exists;
 use invocation::{
     apply_invocation_telemetry_columns, apply_invocation_workspace_scope,
-    apply_invocations_ts_index,
+    apply_invocations_ts_index, apply_provider_limit_observations,
 };
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,

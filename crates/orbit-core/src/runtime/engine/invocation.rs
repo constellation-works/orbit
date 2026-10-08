@@ -10,7 +10,7 @@ use orbit_store::contracts::{
     InvocationStoreBackend, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
-use orbit_types::telemetry::TokenUsage;
+use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
@@ -272,6 +272,26 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         open_invocation_store(self)?
             .insert_invocation_trace_record(self.stores().jobs().workspace_id(), params)
+    }
+
+    /// [ORB-14695] Records a provider usage limit in this host's store,
+    /// unless a newer observation for its provider, scope and window stands.
+    /// Returns whether it was stored.
+    pub fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<bool, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .record_provider_limit(observation)
+    }
+
+    /// [ORB-14695] The latest provider usage limit per provider, scope and
+    /// window this host observed, newest first.
+    pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
+        self.context.stores().host.provider_limit.provider_limits()
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.

@@ -26,6 +26,7 @@ use orbit_engine::{
     execute_job_with_resume,
 };
 use orbit_store::Store;
+use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, OnDenial,
     Provider, V2AuditEvent, V2AuditEventKind,
@@ -66,17 +67,24 @@ fn codex_content_filter_frames() -> String {
     )
 }
 
-const SUCCESS_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+pub(super) const SUCCESS_ENVELOPE: &str =
+    r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
 
 /// A fake provider binary named for the provider it stands in for. Each
 /// invocation appends a line to `invocations`.
-struct FakeProvider {
+pub(super) struct FakeProvider {
     dir: TempDir,
-    path: PathBuf,
+    pub(super) path: PathBuf,
 }
 
 impl FakeProvider {
-    fn new(binary: &str, stdout: &str, stderr: &str, exit_code: i32, before: &str) -> Self {
+    pub(super) fn new(
+        binary: &str,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        before: &str,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(binary);
         let invocations = dir.path().join("invocations");
@@ -94,14 +102,14 @@ impl FakeProvider {
         Self { dir, path }
     }
 
-    fn invocations(&self) -> usize {
+    pub(super) fn invocations(&self) -> usize {
         fs::read_to_string(self.dir.path().join("invocations"))
             .map(|text| text.lines().count())
             .unwrap_or(0)
     }
 }
 
-fn agent_spec(provider: Provider) -> AgentLoopSpec {
+pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
@@ -121,7 +129,7 @@ fn agent_spec(provider: Provider) -> AgentLoopSpec {
     }
 }
 
-fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
+pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
     let audit = root.join("audit");
     fs::create_dir_all(&audit).unwrap();
     V2AuditWriter::with_disk_sinks(
@@ -137,24 +145,27 @@ fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
 
 /// Stands in for Core: resolves the fake provider, records deterministic
 /// actions, and admits final recovery so a skip is the executor's own.
-struct CapacityHost {
+pub(super) struct CapacityHost {
     cli: PathBuf,
     worktree: PathBuf,
     actions: Mutex<Vec<(String, Value)>>,
-    final_recovery_admissions: Mutex<usize>,
+    pub(super) final_recovery_admissions: Mutex<usize>,
+    /// [ORB-14695] The provider limits the runs recorded.
+    pub(super) limits: Mutex<Vec<ProviderLimitObservation>>,
 }
 
 impl CapacityHost {
-    fn new(cli: &Path, worktree: &Path) -> Self {
+    pub(super) fn new(cli: &Path, worktree: &Path) -> Self {
         Self {
             cli: cli.to_path_buf(),
             worktree: worktree.to_path_buf(),
             actions: Mutex::new(Vec::new()),
             final_recovery_admissions: Mutex::new(0),
+            limits: Mutex::new(Vec::new()),
         }
     }
 
-    fn calls(&self, action: &str) -> Vec<Value> {
+    pub(super) fn calls(&self, action: &str) -> Vec<Value> {
         self.actions
             .lock()
             .unwrap()
@@ -231,6 +242,14 @@ impl RuntimeHost for CapacityHost {
         *self.final_recovery_admissions.lock().unwrap() += 1;
         Ok(FinalRecoveryAdmission::Admitted)
     }
+
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<(), OrbitError> {
+        self.limits.lock().unwrap().push(observation.clone());
+        Ok(())
+    }
 }
 
 fn deterministic_activity(name: &str) -> ActivityV2 {
@@ -246,7 +265,7 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 /// `setup → implement_one`, the implementation step with `step_fix` as its
 /// recovery, and the job's `decide` final recovery and `handoff` failure
 /// activity.
-fn implementation_job(spec: AgentLoopSpec) -> JobV2 {
+pub(super) fn implementation_job(spec: AgentLoopSpec) -> JobV2 {
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",
@@ -270,12 +289,12 @@ fn implementation_job(spec: AgentLoopSpec) -> JobV2 {
     job
 }
 
-struct JobRun {
-    outcome: Result<JobOutcome, DispatchError>,
-    events: Vec<V2AuditEvent>,
+pub(super) struct JobRun {
+    pub(super) outcome: Result<JobOutcome, DispatchError>,
+    pub(super) events: Vec<V2AuditEvent>,
 }
 
-fn run_job(job: &JobV2, host: &CapacityHost, run_id: &str) -> JobRun {
+pub(super) fn run_job(job: &JobV2, host: &CapacityHost, run_id: &str) -> JobRun {
     let audit = tempfile::tempdir().unwrap();
     let writer = writer(audit.path(), run_id);
     let outcome = execute_job_with_resume(
@@ -292,11 +311,11 @@ fn run_job(job: &JobV2, host: &CapacityHost, run_id: &str) -> JobRun {
     }
 }
 
-fn count(events: &[V2AuditEvent], matches: impl Fn(&V2AuditEventKind) -> bool) -> usize {
+pub(super) fn count(events: &[V2AuditEvent], matches: impl Fn(&V2AuditEventKind) -> bool) -> usize {
     events.iter().filter(|event| matches(&event.kind)).count()
 }
 
-fn failure_message(outcome: &Result<JobOutcome, DispatchError>) -> String {
+pub(super) fn failure_message(outcome: &Result<JobOutcome, DispatchError>) -> String {
     match outcome {
         Ok(outcome) => {
             assert!(!outcome.success, "the run must fail: {outcome:?}");

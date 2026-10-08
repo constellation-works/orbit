@@ -21,7 +21,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState};
 use serde_json::Value;
 
@@ -606,6 +606,13 @@ impl RuntimeHost for OrbitRuntime {
         query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
         OrbitRuntime::invocation_records(self, query)
+    }
+
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::record_provider_limit(self, observation).map(|_| ())
     }
 
     fn activity_implementer_identity(
