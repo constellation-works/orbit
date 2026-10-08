@@ -503,6 +503,12 @@ impl OrbitRuntime {
         let task = self.get_task(id)?;
         if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress) {
             match self.pilot_admission_hold(id)? {
+                Some(super::PilotAdmissionHold::HostOperational(hold)) => {
+                    if task.status == TaskStatus::Backlog {
+                        self.record_host_operational_hold(id, &hold)?;
+                    }
+                    return Err(OrbitError::InvalidInput(hold.detail()));
+                }
                 Some(super::PilotAdmissionHold::OperatorValidation(hold)) => {
                     if task.status == TaskStatus::Backlog {
                         self.record_operator_validation_hold(id, &hold)?;

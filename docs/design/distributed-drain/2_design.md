@@ -111,7 +111,12 @@ old assessment as `superseded` without an ordinary write to the claimed task.
 
 **Applied pilot holds.** The latest applied assessment's typed holds are read on
 every admission path from its atomic audit (`OrbitRuntime::pilot_admission_hold`).
-An operator-validation hold defers the task from every executor. A
+Operator-validation and `host_operational` holds defer the task from every
+executor. The latter seals the assessed material and pilot evidence in
+`host_operational_hold`; older receipts are backfilled at admission. Both
+require an evidenced decision through the trusted human update path, a re-scope,
+or a newer assessment to release them. Backlog approval and `no-diff-expected`
+do not exempt host-operational work, and a decision grants no tools. A
 `native_os_hold` (a criterion needing native evidence from an OS the task's `os:`
 tags do not name) is judged against the requesting executor's
 `AdmissionRequest::os`, so pull defers it only from a follower of another OS,

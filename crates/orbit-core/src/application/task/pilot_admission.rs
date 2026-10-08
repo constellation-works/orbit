@@ -18,6 +18,7 @@ use crate::OrbitRuntime;
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
+const HOST_OPERATIONAL_RESOLVED: &str = "host_operational_resolved";
 const NATIVE_OS_RESOLVED: &str = "native_os_requirement_resolved";
 
 /// A finding in the latest applied assessment that requires an operator decision.
@@ -25,10 +26,66 @@ pub(crate) enum PilotAdmissionHold {
     Duplicate,
     AlreadyLanded,
     OperatorValidation(OperatorValidationHold),
+    HostOperational(HostOperationalHold),
     /// Reported only while the task's `os:` tags miss a required OS. It holds
     /// a host by [`NativeOsHold::wait_on`], so a host of that OS may still
     /// start the task.
     NativeOs(NativeOsHold),
+}
+
+/// Operator-side work that no managed lane can perform, scoped to the material
+/// the pilot assessed. Lifecycle approval does not satisfy this finding.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HostOperationalHold {
+    material: String,
+    evidence: String,
+}
+
+impl HostOperationalHold {
+    pub(crate) fn new(task: &Task, evidence: String) -> Self {
+        Self {
+            material: validation_material(task),
+            evidence,
+        }
+    }
+
+    pub(crate) fn detail(&self) -> String {
+        format!(
+            "Operator handoff: the latest task-pilot disposition is `host_operational`. Pilot evidence: {}. Re-scope the work, or record an operator decision with evidence using `task-pilot-admission: evaluated`, `clear`, or `approve-anyway` as the comment's first line. A newer assessment supersedes the decision. This decision does not grant tools.",
+            self.evidence
+        )
+    }
+
+    pub(crate) fn history(&self, operation_id: &str) -> TaskHistoryEntry {
+        TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: "task-pilot".into(),
+            event: "host_operational_held".into(),
+            note: Some(
+                json!({
+                    "operation_id": operation_id, "disposition": "host_operational", "hold": self,
+                })
+                .to_string(),
+            ),
+            from_status: None,
+            to_status: None,
+        }
+    }
+}
+
+impl PilotAdmissionHold {
+    fn operator_handoff(&self, operation_id: &str) -> Option<(TaskHistoryEntry, &'static str)> {
+        match self {
+            Self::OperatorValidation(hold) => {
+                Some((hold.history(operation_id), "operator-validation-handoff"))
+            }
+            Self::HostOperational(hold) => {
+                Some((hold.history(operation_id), "host-operational-handoff"))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A typed requirement that the implementing Agent capability cannot satisfy.
@@ -304,6 +361,61 @@ impl OrbitRuntime {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
             let operation_id = header.strip_prefix("operation_id=").unwrap_or_default();
+            if assessment["disposition"] == "host_operational" {
+                // New receipts seal the assessed material. Older receipts have
+                // no snapshot: hold conservatively until admission or a trusted
+                // operator decision records one. A generic `updated` event
+                // cannot distinguish a re-scope from unrelated metadata edits.
+                let task_history = history()?;
+                let recorded = audit
+                    .get("host_operational_hold")
+                    .filter(|hold| !hold.is_null())
+                    .cloned()
+                    .or_else(|| {
+                        task_history.iter().rev().find_map(|entry| {
+                            let trusted = match entry.event.as_str() {
+                                "host_operational_held" => {
+                                    matches!(entry.by.as_str(), "system" | "task-pilot")
+                                }
+                                HOST_OPERATIONAL_RESOLVED => {
+                                    !entry.by.trim().is_empty() && !is_automation_actor(&entry.by)
+                                }
+                                _ => false,
+                            };
+                            if !trusted {
+                                return None;
+                            }
+                            let record: Value =
+                                serde_json::from_str(entry.note.as_deref()?).ok()?;
+                            (record["operation_id"] == operation_id).then(|| record["hold"].clone())
+                        })
+                    });
+                let hold = match recorded {
+                    Some(hold) => Some(
+                        serde_json::from_value::<HostOperationalHold>(hold).map_err(|error| {
+                            OrbitError::Execution(format!("decode host operational hold: {error}"))
+                        })?,
+                    ),
+                    None => Some(HostOperationalHold::new(
+                        task,
+                        assessment["evidence"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    )),
+                };
+                if let Some(hold) = hold
+                    && hold.material == material
+                    && !operator_resolved(
+                        &task_history,
+                        HOST_OPERATIONAL_RESOLVED,
+                        operation_id,
+                        ("material", &material),
+                    )
+                {
+                    return Ok(Some(PilotAdmissionHold::HostOperational(hold)));
+                }
+            }
             let operator_decision = operator_resolved(
                 &history()?,
                 OPERATOR_VALIDATION_RESOLVED,
@@ -387,17 +499,34 @@ impl OrbitRuntime {
         task_id: &str,
         hold: &OperatorValidationHold,
     ) -> Result<(), OrbitError> {
+        self.record_pilot_operator_handoff(
+            task_id,
+            &PilotAdmissionHold::OperatorValidation(hold.clone()),
+        )
+    }
+
+    pub(crate) fn record_host_operational_hold(
+        &self,
+        task_id: &str,
+        hold: &HostOperationalHold,
+    ) -> Result<(), OrbitError> {
+        self.record_pilot_operator_handoff(
+            task_id,
+            &PilotAdmissionHold::HostOperational(hold.clone()),
+        )
+    }
+
+    fn record_pilot_operator_handoff(
+        &self,
+        task_id: &str,
+        hold: &PilotAdmissionHold,
+    ) -> Result<(), OrbitError> {
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
-                let Some(PilotAdmissionHold::OperatorValidation(current)) =
-                    self.pilot_admission_hold(task_id)?
-                else {
+                let Some(current) = self.pilot_admission_hold(task_id)? else {
                     return Ok(());
                 };
-                if current.material != hold.material {
-                    return Ok(());
-                }
                 let comments = self.get_task_comments(task_id)?;
                 let operation_id = comments
                     .iter()
@@ -411,11 +540,17 @@ impl OrbitRuntime {
                             .strip_prefix("operation_id=")
                     })
                     .ok_or_else(|| {
-                        OrbitError::Execution(
-                            "operator validation hold has no pilot receipt".into(),
-                        )
+                        OrbitError::Execution("operator handoff has no pilot receipt".into())
                     })?;
-                let mut event = hold.history(operation_id);
+                let Some((mut event, header)) = hold.operator_handoff(operation_id) else {
+                    return Ok(());
+                };
+                let Some((current_event, _)) = current.operator_handoff(operation_id) else {
+                    return Ok(());
+                };
+                if event.event != current_event.event || event.note != current_event.note {
+                    return Ok(());
+                }
                 if self
                     .get_task_history(task_id)?
                     .iter()
@@ -433,7 +568,7 @@ impl OrbitRuntime {
                             at: event.at,
                             by: event.by.clone(),
                             message: format!(
-                                "operator-validation-handoff\n{}",
+                                "{header}\n{}",
                                 event.note.as_deref().unwrap_or_default()
                             ),
                         }],
@@ -445,14 +580,16 @@ impl OrbitRuntime {
             })
     }
 
-    pub(crate) fn record_backlog_operator_validation_holds(&self) -> Result<(), OrbitError> {
+    pub(crate) fn record_backlog_pilot_operator_handoffs(&self) -> Result<(), OrbitError> {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
         {
-            if let Some(PilotAdmissionHold::OperatorValidation(hold)) =
-                self.pilot_admission_hold(&task.id)?
+            if let Some(
+                hold @ (PilotAdmissionHold::OperatorValidation(_)
+                | PilotAdmissionHold::HostOperational(_)),
+            ) = self.pilot_admission_hold(&task.id)?
             {
-                self.record_operator_validation_hold(&task.id, &hold)?;
+                self.record_pilot_operator_handoff(&task.id, &hold)?;
             }
         }
         Ok(())
@@ -460,7 +597,7 @@ impl OrbitRuntime {
 
     /// Only the trusted human update path calls this. Agent-authored comment
     /// text cannot mint a resolution event or satisfy an operator handoff.
-    /// An operator-validation or native-OS hold each records its own event;
+    /// Each typed hold records its own resolution event;
     /// one decision resolves the hold admission currently reports.
     pub(super) fn pilot_hold_resolution(
         &self,
@@ -473,6 +610,9 @@ impl OrbitRuntime {
                 (OPERATOR_VALIDATION_RESOLVED, json!(hold))
             }
             Some(PilotAdmissionHold::NativeOs(hold)) => (NATIVE_OS_RESOLVED, json!(hold)),
+            Some(PilotAdmissionHold::HostOperational(hold)) => {
+                (HOST_OPERATIONAL_RESOLVED, json!(hold))
+            }
             _ => return Ok(None),
         };
         let rescoped = params

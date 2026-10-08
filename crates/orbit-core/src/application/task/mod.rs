@@ -55,8 +55,8 @@ pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
 pub(crate) use pilot_admission::{
-    NativeOsHold, NativeOsRequirement, OperatorValidationHold, OperatorValidationRequirement,
-    PilotAdmissionHold, operator_validation_requirements,
+    HostOperationalHold, NativeOsHold, NativeOsRequirement, OperatorValidationHold,
+    OperatorValidationRequirement, PilotAdmissionHold, operator_validation_requirements,
 };
 pub(crate) use validation_tools::positive_validation_tools;
 

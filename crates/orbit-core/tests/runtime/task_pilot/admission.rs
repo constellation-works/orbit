@@ -9,6 +9,10 @@ use super::Workspace;
 use crate::dispatch_admission::isolated;
 
 fn backlog_task(workspace: &Workspace) -> Task {
+    task_at_status(workspace, TaskStatus::Backlog)
+}
+
+fn task_at_status(workspace: &Workspace, status: TaskStatus) -> Task {
     workspace
         .runtime
         .add_task(TaskAddParams {
@@ -16,7 +20,7 @@ fn backlog_task(workspace: &Workspace) -> Task {
             description: "Repair the README fixture.".into(),
             acceptance_criteria: vec!["The fixture repair is observable.".into()],
             plan: "Inspect README.md.".into(),
-            status: Some(TaskStatus::Backlog),
+            status: Some(status),
             complexity: TaskComplexity::Low,
             context_files: vec!["file:README.md".into()],
             ..Default::default()
@@ -27,6 +31,15 @@ fn backlog_task(workspace: &Workspace) -> Task {
 /// Drive the same default, non-promoting prepare/apply actions that routine
 /// task-pilot uses, rather than seeding an admission-only representation.
 fn assess(workspace: &Workspace, task: &Task, finding: Option<&str>) {
+    assess_disposition(workspace, task, finding, "selectors");
+}
+
+fn assess_disposition(
+    workspace: &Workspace,
+    task: &Task,
+    finding: Option<&str>,
+    disposition: &str,
+) {
     let prepared = workspace.prepare(&[&task.id]);
     let current = workspace.runtime.get_task(&task.id).unwrap();
     let mut assessment = json!({
@@ -41,6 +54,12 @@ fn assess(workspace: &Workspace, task: &Task, finding: Option<&str>) {
         "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
         "duplicate_of": null, "already_landed": null,
     });
+    assessment["disposition"] = json!(disposition);
+    if disposition != "selectors" {
+        assessment["context_files_after"] = json!([]);
+        assessment["evidence"] =
+            json!("The deliverable requires an owner-side operation outside every managed lane.");
+    }
     if let Some(field) = finding {
         assessment[field] = if field.ends_with("_warnings") {
             json!(["The operator should review the proposed approach."])
@@ -63,8 +82,327 @@ fn assess(workspace: &Workspace, task: &Task, finding: Option<&str>) {
     assert_eq!(applied["tasks"][0]["task_id"], task.id, "{applied}");
     assert_eq!(
         workspace.runtime.get_task(&task.id).unwrap().status,
-        TaskStatus::Backlog
+        current.status
     );
+}
+
+#[test]
+fn host_operational_holds_human_approved_work_until_a_current_operator_decision() {
+    if !isolated(
+        "task_pilot::admission::host_operational_holds_human_approved_work_until_a_current_operator_decision",
+    ) {
+        return;
+    }
+    for decision in ["approve-anyway", "clear", "evaluated"] {
+        let workspace = Workspace::new();
+        let task = task_at_status(&workspace, TaskStatus::Proposed);
+        // Even a no-diff task needs an operator decision for this disposition.
+        workspace.runtime.update_task_as_human(&task.id, TaskUpdateParams {
+            tags: Some(vec!["no-diff-expected".into()]),
+            comment: Some(format!("task-pilot-admission: {decision}\nA prior decision cannot release a future assessment.")),
+            ..Default::default()
+        }, "human:fixture".into()).unwrap();
+        assess_disposition(&workspace, &task, None, "host_operational");
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        assert_admission(&workspace, &task, Some("host_operational_handoff"));
+        let history = workspace.runtime.get_task_history(&task.id).unwrap();
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry.from_status == Some(TaskStatus::Proposed)
+                    && entry.to_status == Some(TaskStatus::Backlog)
+                    && entry.by == "human:fixture")
+        );
+        let records = history
+            .iter()
+            .filter(|entry| entry.event == "host_operational_held")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            1,
+            "repeated admission must not duplicate the handoff"
+        );
+        let record: serde_json::Value =
+            serde_json::from_str(records[0].note.as_deref().unwrap()).unwrap();
+        assert_eq!(record["disposition"], "host_operational");
+        let evidence = record["hold"]["evidence"].as_str().unwrap();
+        assert!(!evidence.is_empty());
+        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+        let audit: serde_json::Value =
+            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
+                .unwrap();
+        assert_eq!(audit["host_operational_hold"], record["hold"]);
+        assert_eq!(audit["assessment"]["evidence"], evidence);
+        let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
+            &workspace.runtime,
+            &task.id,
+            "worktree_setup",
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("host_operational")
+                && refused.to_string().contains(evidence),
+            "{refused}"
+        );
+        assert_eq!(
+            workspace.runtime.get_task(&task.id).unwrap().status,
+            TaskStatus::Backlog
+        );
+
+        let comment = format!(
+            "task-pilot-admission: {decision}\nThe operator accepts the owner-side repair; see operator-evaluation.json."
+        );
+        workspace
+            .runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    comment: Some(comment.clone()),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                Some("gpt-6.1-sol".into()),
+            )
+            .unwrap();
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    priority: Some(orbit_core::TaskPriority::High),
+                    comment: Some("The operator is still reviewing this finding.".into()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    comment: Some(format!("task-pilot-admission: {decision}")),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap_err();
+        if decision == "evaluated" {
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(comment.clone()),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap_err();
+        }
+        assert_admission(&workspace, &task, Some("host_operational_handoff"));
+        assert!(
+            !workspace
+                .runtime
+                .get_task_history(&task.id)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event == "host_operational_resolved")
+        );
+        workspace
+            .runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    comment: Some(comment),
+                    upsert_artifacts: if decision == "evaluated" {
+                        vec![orbit_types::task::TaskArtifact::from_text(
+                            "operator-evaluation.json",
+                            "Owner-side repair verified.",
+                        )]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        assert_admission(&workspace, &task, None);
+        assert!(
+            workspace
+                .runtime
+                .get_task_history(&task.id)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event == "host_operational_resolved"
+                    && entry.by == "human:fixture")
+        );
+        // A new finding is not covered by the previous operator decision.
+        assess_disposition(&workspace, &task, None, "host_operational");
+        assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    }
+}
+
+#[test]
+fn host_operational_material_and_newer_dispositions_control_admission() {
+    if !isolated(
+        "task_pilot::admission::host_operational_material_and_newer_dispositions_control_admission",
+    ) {
+        return;
+    }
+    for release in ["selectors", "verified_no_diff", "rescope"] {
+        let workspace = Workspace::new();
+        let task =
+            human_approved_validation_task(&workspace, "The owner-side repair is observable.");
+        assess_disposition(&workspace, &task, None, "host_operational");
+        assert_admission(&workspace, &task, Some("host_operational_handoff"));
+        if release == "rescope" {
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        acceptance_criteria: Some(vec![
+                            "The repository fixture repair is observable.".into(),
+                        ]),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        } else {
+            assess_disposition(&workspace, &task, None, release);
+        }
+        assert_admission(&workspace, &task, None);
+        assert_eq!(
+            orbit_engine::RuntimeHost::admit_task_for_workflow(
+                &workspace.runtime,
+                &task.id,
+                "worktree_setup"
+            )
+            .unwrap()
+            .status,
+            TaskStatus::InProgress
+        );
+    }
+}
+
+#[test]
+fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() {
+    if !isolated(
+        "task_pilot::admission::legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = human_approved_validation_task(&workspace, "The owner-side repair is observable.");
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task;
+    let at = chrono::Utc::now();
+    let audit = json!({"assessment": {
+        "disposition": "host_operational", "evidence": "The operator must repair the owner-side definition.",
+        "duplicate_of": null, "already_landed": null,
+    }});
+    backends
+        .history
+        .update_task_history(
+            &task.id,
+            orbit_store::contracts::TaskHistoryUpdateParams {
+                actor: "task-pilot".into(),
+                append_comments: vec![orbit_types::task::TaskComment {
+                    at,
+                    by: "task-pilot".into(),
+                    message: format!("operation_id=legacy-host-pilot\n{audit}"),
+                }],
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at,
+                    by: "task-pilot".into(),
+                    event: "task_pilot_applied".into(),
+                    note: Some("host_operational (operation_id=legacy-host-pilot)".into()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // Old receipts must not mistake metadata edits before the first admission
+    // for a re-scope of the host-operational work.
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                priority: Some(orbit_core::TaskPriority::High),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    let records = workspace
+        .runtime
+        .get_task_history(&task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.event == "host_operational_held")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let (header, record) = comments.last().unwrap().message.split_once('\n').unwrap();
+    assert_eq!(header, "host-operational-handoff");
+    let record: serde_json::Value = serde_json::from_str(record).unwrap();
+    assert_eq!(record["disposition"], "host_operational");
+    assert_eq!(record["hold"]["evidence"], audit["assessment"]["evidence"]);
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                priority: Some(orbit_core::TaskPriority::High),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                acceptance_criteria: Some(vec![
+                    "The repository fixture repair is observable.".into(),
+                ]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert_admission(&workspace, &task, None);
 }
 
 fn assert_admission(workspace: &Workspace, task: &Task, reason: Option<&str>) {

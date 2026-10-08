@@ -156,6 +156,26 @@ owner accepts its handoff without validation logs. Every other handoff check
 (footprint, protected paths, candidate and base integrity) still applies.
 `orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
+The latest applied task-pilot disposition `host_operational` identifies work
+that requires an operator-side action no managed lane can perform. Human
+approval to backlog does not clear that finding: local drain and ship
+selection report `host_operational_handoff`, workflow admission refuses it,
+and owner pull admission defers it without a claim. The pilot's audit and
+`host_operational_held` history event retain the disposition and its evidence.
+Admission backfills older receipts once. The hold is scoped to the assessed
+material; status, priority and unrelated comments do not clear it. Older
+receipts without a snapshot hold conservatively until admission or a trusted
+operator decision records one; a generic update event cannot prove a re-scope.
+
+An operator can release the hold through the trusted human task-update path
+with `task-pilot-admission: evaluated`, `clear`, or `approve-anyway` as the
+comment's first line and evidence below it (`evaluated` must reference a
+non-empty attached evaluation artifact). This records `host_operational_resolved`.
+A newer assessment supersedes the decision; a `selectors` or `verified_no_diff`
+assessment without another hold admits as before. `no-diff-expected` does not
+exempt host-operational work, even if an auto-task lane grants relevant tools.
+An operator decision releases admission only; task prose never grants tools.
+
 Task-pilot checks acceptance criteria for native OS evidence requirements.
 It records each one as a typed `required_os` finding (the one-based criterion
 and the OS), committed with the applied assessment as `native_os_hold`. When the
