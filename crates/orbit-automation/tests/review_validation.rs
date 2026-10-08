@@ -80,6 +80,20 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
             ],
         },
         Case {
+            name: "ORB-14745: the attempt's explicit identity overrides an identical command",
+            records: vec![
+                superseded(ATTEMPT, Some("orbit-core-tests")),
+                required(ATTEMPT, None, true),
+            ],
+        },
+        Case {
+            name: "ORB-14745: the replacement's explicit identity overrides an identical command",
+            records: vec![
+                superseded(ATTEMPT, None),
+                required(ATTEMPT, Some("orbit-core-tests"), true),
+            ],
+        },
+        Case {
             name: "missing: an explicit identity names a different command",
             records: vec![
                 superseded(ATTEMPT, None),
