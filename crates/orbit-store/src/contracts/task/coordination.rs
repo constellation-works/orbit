@@ -212,6 +212,13 @@ pub struct AdmissionReviewContract {
     /// contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The owner's `review.baseline_commands` captured at claim admission
+    /// [ORB-14684]. The leaf's settlement reruns only these and the required
+    /// commands on the base, and refuses a failure of either filed as a
+    /// `diagnostic`; the certificate must carry the same list. Absent on
+    /// contracts captured before the snapshot: no trusted baseline commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_commands: Vec<String>,
     /// The owner's `review.host_evidence` rules: checks the leaf's host owes
     /// for the paths its candidate changed, which the leaf's review gate
     /// synthesizes as requirements whatever its reviewer reports.

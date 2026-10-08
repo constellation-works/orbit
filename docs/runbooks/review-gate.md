@@ -144,8 +144,10 @@ share, with `sources` outside the candidate's scope. Settlement reruns the
 check on the host, on the final candidate and on the base. It shares the base
 result cache with required validation, and the runs land in the
 `review-baseline.json` task artifact. Only a `workflow.required_validation_commands`
-or `review.baseline_commands` entry is rerun, as configured, never the
-reviewer's own command text. A claim holds the task only when the base fails
+or `review.baseline_commands` entry captured when the run was admitted is
+rerun, never the reviewer's own command text. A failure of one of those
+commands cannot be filed as a `diagnostic` instead: the review settles
+`incomplete` naming the command. A claim holds the task only when the base fails
 with the same exit status, every claimed failure appears in the base output,
 and the candidate adds no failing test or lint location. A candidate that
 fails beyond the base keeps its verdict (`reject`, escalated

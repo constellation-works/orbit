@@ -375,3 +375,102 @@ fn a_failure_the_base_does_not_explain_is_never_held() {
         );
     }
 }
+
+/// An accepting report that files a failed `command` as a diagnostic, its
+/// sources outside the candidate's scope.
+fn diagnostic_report(fixture: &Fixture, command: &str, sources: &[&str]) -> Value {
+    json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept",
+        "summary": "The candidate is sound; a wider check failed elsewhere.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {
+                "command": command, "outcome": "failed", "role": "diagnostic",
+                "note": "Fails only in files the candidate does not touch.",
+                "sources": sources,
+            },
+        ],
+    })
+}
+
+/// [ORB-14684] The incident shape through the real settlement: a check the
+/// owner lists in `review.baseline_commands`, filed as a failed diagnostic on
+/// the reviewer's own out-of-scope sources, never settles as a pass. It
+/// needs a passing record or a baseline claim settlement reproduces, and the
+/// certificate records the trusted list its consumers judge it by. An
+/// unlisted command's failure stays an honest diagnostic.
+#[test]
+fn a_listed_check_filed_as_a_failed_diagnostic_settles_incomplete() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_listed_check_filed_as_a_failed_diagnostic_settles_incomplete",
+    ) {
+        return;
+    }
+    let mut listed = fixture(RED, "after\n");
+    listed.admit();
+    listed.put_report(&diagnostic_report(&listed, CHECK, &["check.sh"]));
+    let failure = listed
+        .settle()
+        .expect_err("a trusted gate's failure is never a pass")
+        .to_string();
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&listed);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(!settled.validation_complete);
+    assert_eq!(settled.baseline_commands, vec![CHECK.to_string()]);
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains(&format!("`{CHECK}`"))
+            && escalation.contains("cannot be recorded as diagnostic")
+            && escalation.contains("passing record or a baseline claim"),
+        "the reason names the command and what a trusted gate needs: {escalation}"
+    );
+
+    let mut unlisted = fixture(RED, "after\n");
+    unlisted.admit();
+    unlisted.put_report(&diagnostic_report(
+        &unlisted,
+        "sh untrusted.sh",
+        &["untrusted.sh"],
+    ));
+    let passed = unlisted.settle().unwrap();
+    assert_eq!(passed["gate"], "passed", "{passed}");
+    assert!(certificate(&unlisted).validation_complete);
+}
+
+/// [ORB-14684] A baseline claim naming a base other than the one the review
+/// pinned is refused before anything runs, and the review settles
+/// `incomplete`.
+#[test]
+fn a_baseline_claim_on_another_base_is_refused() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_baseline_claim_on_another_base_is_refused",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(RED, "after\n");
+    fixture.admit();
+    let mut report = claim_report(&fixture, CHECK, &["check.sh"]);
+    report["validation"][0]["baseline"]["base_commit"] =
+        json!("0000000000000000000000000000000000000000");
+    fixture.put_report(&report);
+    let failure = fixture
+        .settle()
+        .expect_err("a failed required check never passes")
+        .to_string();
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(settled.baseline_red.is_empty());
+    assert!(
+        settled.escalation.as_deref().is_some_and(|reason| {
+            reason.contains("baseline_claim_refused")
+                && reason.contains("but the review pinned base")
+        }),
+        "{:?}",
+        settled.escalation
+    );
+}

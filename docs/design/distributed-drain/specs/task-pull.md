@@ -259,7 +259,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`) |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -518,6 +518,14 @@ command needs a required passing review record. Review settlement uses this owne
 snapshot, never a later config value or the follower's own list. An explicit `[]` is a known
 no-check contract; an absent legacy field cannot establish the validation contract and requires
 a fresh claim under the current protocol.
+
+Admission also freezes the owner's `review.baseline_commands` in
+`ship.review.baseline_commands` [ORB-14684], omitted when empty. The leaf's settlement reruns only
+these and the required commands to check a red-base claim, and refuses a failure of either filed as
+a `diagnostic`. The certificate records the list, and acceptance refuses a certificate whose list
+differs from the captured one as `review_contract_mismatch`. A missing field reads as no baseline
+commands, so an older contract or certificate means what it meant when it was written; a leaf
+that does not carry the list cannot deliver a before-PR claim from an owner that lists any.
 
 The separate deterministic candidate validation still reads the executor's current
 `workflow.required_validation_commands`, and the owner verifies its exact-run, exact-head logs

@@ -26,6 +26,12 @@
 //! (the checks that rejected the mutation) stay bound to the scope, and
 //! settlement confirms each mutation target came back byte-identical.
 //!
+//! A failed check the owner trusts is never a diagnostic [ORB-14684]: a
+//! `workflow.required_validation_commands` or `review.baseline_commands`
+//! entry passes, or carries a baseline claim settlement reproduces on the
+//! pinned base. The reviewer's own sources cannot excuse it, so choosing the
+//! `diagnostic` role does not avoid the base rerun.
+//!
 //! An earlier record that carries an id is accounted for by that id alone
 //! [ORB-14370]: the final report carries it forward, whatever its command now
 //! reads, or retires it with a reason. Records written without ids keep the
@@ -86,6 +92,11 @@ pub enum ValidationDefect {
     /// A failed diagnostic judged with no recorded scope, so nothing shows
     /// its failures are unrelated.
     ScopeUnknown { command: String },
+    /// [ORB-14684] A failed diagnostic of a command the owner trusts (a
+    /// required command or a `review.baseline_commands` entry): such a
+    /// check needs a passing record or a baseline claim settlement
+    /// reproduced, never the reviewer's own sources.
+    TrustedCheckDiagnostic { command: String },
     /// A record failing on the final candidate shares its check with a
     /// required record that passed there: one check cannot do both.
     CheckContradicted {
@@ -206,6 +217,12 @@ impl ValidationDefect {
                 "validation_incomplete: failed diagnostic `{command}` has no recorded candidate \
                  scope to show its failures are unrelated"
             ),
+            ValidationDefect::TrustedCheckDiagnostic { command } => format!(
+                "validation_incomplete: `{command}` is a trusted gate (a \
+                 `workflow.required_validation_commands` or `review.baseline_commands` entry) \
+                 and failed, so it cannot be recorded as diagnostic; a trusted gate needs a \
+                 passing record or a baseline claim settlement reproduced on the pinned base"
+            ),
             ValidationDefect::CheckContradicted { command, role } => format!(
                 "validation_contradicted: `{command}` is recorded as a failing {} and as a \
                  required check that passed on the same final candidate",
@@ -257,6 +274,10 @@ pub struct ValidationContext<'a> {
     /// admission. `None` is a legacy/ambiguous contract; `Some([])` is an
     /// explicit empty host contract.
     pub required_validation_commands: Option<&'a [String]>,
+    /// The owner's `review.baseline_commands` captured with the run. With
+    /// the required commands, these are the checks a failed diagnostic may
+    /// not name [ORB-14684]. Empty for a snapshot written before the field.
+    pub baseline_commands: &'a [String],
 }
 
 impl Default for ValidationContext<'_> {
@@ -266,6 +287,7 @@ impl Default for ValidationContext<'_> {
             obligations: &[],
             retired: &[],
             required_validation_commands: Some(&[]),
+            baseline_commands: &[],
         }
     }
 }
@@ -281,8 +303,9 @@ impl Default for ValidationContext<'_> {
 /// the report that replaced it — the same effective identity: a non-empty `check`,
 /// otherwise the command with whitespace and leading `NAME=value`
 /// assignments normalized; a diagnostic must be an
-/// observation that ran, and a failed one must name sources all outside the
-/// scope and not share its check with a required pass. Every classification
+/// observation that ran, and a failed one must not be a check the owner
+/// trusts, must name sources all outside the scope and must not share its
+/// check with a required pass. Every classification
 /// other than `required` must explain itself, so an unexplained
 /// reclassification is refused rather than trusted. Every retained
 /// obligation must still be accounted for by a record of the same check that
@@ -484,9 +507,10 @@ fn negative_control(
     Ok(())
 }
 
-/// A diagnostic is an observation that ran. A failed one names where its
-/// failures lie, every place outside the candidate's scope, and does not
-/// share its check with a required pass on the same candidate.
+/// A diagnostic is an observation that ran. A failed one is no check the
+/// owner trusts, names where its failures lie, every place outside the
+/// candidate's scope, and does not share its check with a required pass on
+/// the same candidate.
 fn diagnostic(
     record: &ReviewValidation,
     records: &[ReviewValidation],
@@ -495,6 +519,11 @@ fn diagnostic(
     match record.outcome {
         ValidationOutcome::Passed => Ok(()),
         ValidationOutcome::Failed => {
+            if trusted(record, context) {
+                return Err(ValidationDefect::TrustedCheckDiagnostic {
+                    command: record.command.clone(),
+                });
+            }
             let sources = sources(record);
             if sources.is_empty() {
                 return Err(unevidenced(record, "sources"));
@@ -523,6 +552,17 @@ fn diagnostic(
         }
         ValidationOutcome::Denied | ValidationOutcome::NotRun => Err(contradiction(record)),
     }
+}
+
+/// Whether `record` is a check the owner trusts: a captured required command
+/// or `review.baseline_commands` entry, by the host-command identity rule.
+fn trusted(record: &ReviewValidation, context: &ValidationContext<'_>) -> bool {
+    context
+        .required_validation_commands
+        .unwrap_or_default()
+        .iter()
+        .chain(context.baseline_commands)
+        .any(|command| same_host_command(record, command))
 }
 
 /// Whether the final records still account for a retained required check:

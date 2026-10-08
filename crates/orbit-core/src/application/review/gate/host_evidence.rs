@@ -90,6 +90,7 @@ impl Judgement {
                 obligations: &self.retained_obligations,
                 retired: &self.retired_validation,
                 required_validation_commands: self.required_validation_commands.as_deref(),
+                baseline_commands: &self.baseline_commands,
             },
         )
         .is_err()

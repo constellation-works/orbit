@@ -17,7 +17,9 @@
 //! is rerun: a `workflow.required_validation_commands` entry or a
 //! `review.baseline_commands` entry, matched by the same identity rule as
 //! the host-required checks, and the trusted text runs, never the
-//! reviewer's.
+//! reviewer's. Both lists are the owner's, captured with the run's admission
+//! and recorded on the certificate, so the commands settlement reruns are
+//! the commands a failed diagnostic may not name [ORB-14684].
 //!
 //! - A confirmed claim on every failed required check, with no open finding,
 //!   no pending external evidence and every other record consistent, holds
@@ -77,7 +79,7 @@ impl Judgement {
             .required_validation_commands
             .iter()
             .flatten()
-            .chain(runtime.review_baseline_commands())
+            .chain(&self.baseline_commands)
             .cloned()
             .collect::<Vec<_>>();
         let mut holds = Vec::new();
@@ -206,6 +208,7 @@ impl Judgement {
                 obligations: &self.retained_obligations,
                 retired: &self.retired_validation,
                 required_validation_commands: self.required_validation_commands.as_deref(),
+                baseline_commands: &self.baseline_commands,
             },
         ) {
             Ok(()) => true,

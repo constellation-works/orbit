@@ -352,6 +352,7 @@ fn admit(
         task_ids: context.task_ids.clone(),
         task_digests: task_digests.clone(),
         required_validation_commands: Some(required_validation_commands.clone()),
+        baseline_commands: admission.baseline_commands.clone(),
         task_meaning_digest: task_meaning_digest.clone(),
         repository: context.repository.clone(),
         base: candidate.base.clone(),

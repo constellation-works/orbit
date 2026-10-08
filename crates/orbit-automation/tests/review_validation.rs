@@ -358,6 +358,7 @@ fn certificate_with(
         findings: Vec::new(),
         validation,
         required_validation_commands: Some(vec![]),
+        baseline_commands: Vec::new(),
         validation_complete: true,
         retained_obligations,
         retired_validation: Vec::new(),
@@ -791,6 +792,7 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
         obligations: &[],
         retired: &[],
         required_validation_commands: Some(&[]),
+        baseline_commands: &[],
     };
     assert_eq!(validation_evidence(&records, &context), Ok(()));
 
@@ -871,6 +873,7 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
         obligations: &[],
         retired: &[],
         required_validation_commands: Some(&[]),
+        baseline_commands: &[],
     };
 
     let restored = mutation(&["crates/orbit-review/tests/fix.rs"], &[production]);
@@ -1152,6 +1155,7 @@ fn relabeling_or_dropping_a_required_check_never_completes_validation() {
             obligations: &obligations,
             retired: &[],
             required_validation_commands: Some(&[]),
+            baseline_commands: &[],
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -1272,6 +1276,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
             obligations: &obligations,
             retired: &[],
             required_validation_commands: Some(&[]),
+            baseline_commands: &[],
         };
         assert_eq!(validation_evidence(&records, &context), Ok(()), "{name}");
         assert_eq!(
@@ -1340,6 +1345,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
             obligations: &[],
             retired: &[],
             required_validation_commands: Some(&[]),
+            baseline_commands: &[],
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -1364,6 +1370,7 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
         obligations: &[],
         retired: &[],
         required_validation_commands: Some(&host_required),
+        baseline_commands: &[],
     };
     let cases = [
         (
@@ -1420,7 +1427,7 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
                 ));
                 records
             },
-            ValidationDefect::HostCheckNotEstablished {
+            ValidationDefect::TrustedCheckDiagnostic {
                 command: command.into(),
             },
         ),
@@ -1486,6 +1493,180 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
     );
 }
 
+/// The incident shape [ORB-14684]: the reviewer filed a failed
+/// `make ci-test-affected` run, which the owner lists in
+/// `review.baseline_commands`, as a `diagnostic` whose self-reported sources
+/// all lie outside the candidate. The owner trusts that gate, so the
+/// reviewer's sources cannot excuse it: it passes, or carries a baseline
+/// claim settlement reproduced on the pinned base.
+const AFFECTED: &str = "make ci-test-affected";
+
+fn incident_records() -> Vec<ReviewValidation> {
+    let mut records = scoped_passes();
+    records.push(diagnostic(
+        &format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}"),
+        ValidationOutcome::Failed,
+        &[UNRELATED_FIXTURE],
+    ));
+    records
+}
+
+#[test]
+fn a_failed_trusted_gate_filed_as_diagnostic_is_never_coverage() {
+    let task_scope = scope();
+    let baseline = vec![AFFECTED.to_string()];
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        retired: &[],
+        required_validation_commands: Some(&[]),
+        baseline_commands: &baseline,
+    };
+    let defect = validation_evidence(&incident_records(), &context)
+        .expect_err("a listed gate's failure is not the reviewer's to excuse");
+    assert_eq!(
+        defect,
+        ValidationDefect::TrustedCheckDiagnostic {
+            command: format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}"),
+        }
+    );
+    let reason = defect.reason();
+    assert!(
+        reason.starts_with("validation_incomplete:")
+            && reason.contains(AFFECTED)
+            && reason.contains("passing record or a baseline claim"),
+        "the reason names the command and what a trusted gate needs: {reason}"
+    );
+    assert!(
+        !defect.correctable(),
+        "relabeling cannot fix it without a base rerun"
+    );
+
+    // A `check` identity naming the listed command is the same gate.
+    let mut wrapped = scoped_passes();
+    let mut record = diagnostic(
+        "set -o pipefail; make ci-test-affected | tee log",
+        ValidationOutcome::Failed,
+        &[UNRELATED_FIXTURE],
+    );
+    record.check = Some(AFFECTED.into());
+    wrapped.push(record);
+    assert!(matches!(
+        validation_evidence(&wrapped, &context),
+        Err(ValidationDefect::TrustedCheckDiagnostic { .. })
+    ));
+
+    // The certificate's own snapshot applies the same rule to its consumer.
+    let mut certificate = certificate(incident_records());
+    certificate.baseline_commands = baseline.clone();
+    assert_eq!(
+        certificate_acceptable(&certificate),
+        Err(ReviewInvalidation::ValidationIncomplete)
+    );
+    assert!(exclusion(&exact_delivery(), &certificate, &facts()).is_err());
+}
+
+/// The neighbouring outcomes the trusted-gate rule leaves as they were
+/// [ORB-14684].
+#[test]
+fn the_trusted_gate_rule_leaves_unlisted_diagnostics_and_required_records_alone() {
+    let task_scope = scope();
+    let baseline = vec![AFFECTED.to_string()];
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        retired: &[],
+        required_validation_commands: Some(&[]),
+        baseline_commands: &baseline,
+    };
+
+    // An ad hoc observation the owner does not list keeps ORB-14192's
+    // semantics: its out-of-scope failure is an honest diagnostic.
+    let mut unlisted = scoped_passes();
+    unlisted.push(diagnostic(
+        WORKSPACE,
+        ValidationOutcome::Failed,
+        &[UNRELATED_FIXTURE],
+    ));
+    assert_eq!(validation_evidence(&unlisted, &context), Ok(()));
+    let mut certificate_unlisted = certificate(unlisted);
+    certificate_unlisted.baseline_commands = baseline.clone();
+    assert_eq!(certificate_acceptable(&certificate_unlisted), Ok(()));
+
+    // A failed required record of the listed gate with no baseline claim
+    // still blocks as a required failure.
+    let mut failed = scoped_passes();
+    failed.push(required(AFFECTED, None, false));
+    assert_eq!(
+        validation_evidence(&failed, &context),
+        Err(ValidationDefect::RequiredNotPassed {
+            command: AFFECTED.into(),
+            outcome: ValidationOutcome::Failed,
+        })
+    );
+
+    // A passing record of the listed gate is unaffected, as `required` or
+    // as a passing diagnostic.
+    let mut passed = scoped_passes();
+    passed.push(required(AFFECTED, None, true));
+    assert_eq!(validation_evidence(&passed, &context), Ok(()));
+    let mut observed = scoped_passes();
+    observed.push(diagnostic(AFFECTED, ValidationOutcome::Passed, &[]));
+    assert_eq!(validation_evidence(&observed, &context), Ok(()));
+    let mut certificate_passed = certificate(passed);
+    certificate_passed.baseline_commands = baseline;
+    assert_eq!(certificate_acceptable(&certificate_passed), Ok(()));
+}
+
+/// A certificate issued before the snapshot carries no `baseline_commands`
+/// [ORB-14684]. It stays readable, and the missing field means "no trusted
+/// baseline commands": it never turns a refused record set into coverage,
+/// and a missing required-check list is still no contract at all.
+#[test]
+fn a_certificate_without_the_baseline_snapshot_stays_readable_and_gains_no_pass() {
+    let legacy = |certificate: &ReviewCertificate| -> ReviewCertificate {
+        let mut value = serde_json::to_value(certificate).unwrap();
+        let fields = value.as_object_mut().unwrap();
+        assert!(
+            !fields.contains_key("baseline_commands"),
+            "an empty snapshot is not written, as before the field existed"
+        );
+        fields.remove("baseline_commands");
+        serde_json::from_value(value).expect("a pre-snapshot certificate is readable")
+    };
+
+    let read = legacy(&certificate(incident_records()));
+    assert!(read.baseline_commands.is_empty());
+    assert_eq!(
+        certificate_acceptable(&read),
+        Ok(()),
+        "judged exactly as when it was issued"
+    );
+
+    // A failed diagnostic of a captured required command is refused with
+    // or without the baseline snapshot.
+    let mut host_diagnostic = scoped_passes();
+    host_diagnostic.push(required(AFFECTED, None, true));
+    host_diagnostic.push(diagnostic(
+        "make ci-fast",
+        ValidationOutcome::Failed,
+        &[UNRELATED_FIXTURE],
+    ));
+    let mut issued = certificate(host_diagnostic);
+    issued.required_validation_commands = Some(vec!["make ci-fast".into()]);
+    assert_eq!(
+        certificate_acceptable(&legacy(&issued)),
+        Err(ReviewInvalidation::ValidationIncomplete)
+    );
+
+    let mut contractless = certificate(incident_records());
+    contractless.required_validation_commands = None;
+    assert_eq!(
+        certificate_acceptable(&legacy(&contractless)),
+        Err(ReviewInvalidation::ValidationContractMissing)
+    );
+}
+
 /// ORB-14302: reviewers prefix `TMPDIR` because a nested temp directory is
 /// not hermetic. That required pass is the host command. A different
 /// command is not, including one that only grows the name or changes the
@@ -1500,6 +1681,7 @@ fn a_leading_env_assignment_satisfies_the_host_required_command() {
         obligations: &[],
         retired: &[],
         required_validation_commands: Some(&host_required),
+        baseline_commands: &[],
     };
     let satisfied = [
         r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
@@ -1568,6 +1750,7 @@ fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
         obligations: &[],
         retired: &[],
         required_validation_commands: Some(&required_commands),
+        baseline_commands: &[],
     };
     let mut records = vec![
         record(
@@ -1598,6 +1781,7 @@ fn missing_host_snapshot_is_not_an_empty_requirement_list() {
         obligations: &[],
         retired: &[],
         required_validation_commands: None,
+        baseline_commands: &[],
     };
     assert_eq!(
         validation_evidence(&scoped_passes(), &context),

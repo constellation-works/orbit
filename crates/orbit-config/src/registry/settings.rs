@@ -230,7 +230,7 @@ define_config_settings! {
     },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",
-        description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it; a claim about any other command cannot be confirmed and settles the review incomplete. Default empty.",
+        description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it; a claim about any other command cannot be confirmed and settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. Captured when a delivery or claim is admitted. Default empty.",
         section: ConfigSection::Review, order: 30,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default().into_iter().map(|command| command.trim().to_string()).filter(|command| !command.is_empty()).collect::<Vec<_>>()),
     },

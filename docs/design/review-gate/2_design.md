@@ -87,8 +87,9 @@ submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the configured
-reviewer crew and its source, the lineage budget, the policy version, and the
-owner's `workflow.required_validation_commands` list. A
+reviewer crew and its source, the lineage budget, the policy version, the
+owner's `workflow.required_validation_commands` list, and its
+`review.baseline_commands` list (§4). A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
 workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
@@ -125,8 +126,10 @@ candidate and task meaning within the same minutes; a different
 candidate, or an attempt another run of the lineage left open, is released
 as `incomplete` first (§5). The manifest also carries the owner's
 `workflow.required_validation_commands` captured when the delivery was
-admitted. Each command must appear as a required passing record in the review;
-settlement never consults a later mutable config value. A legacy admission
+admitted, and its `review.baseline_commands` (empty when the admission
+predates that snapshot). Each required command must appear as a required
+passing record in the review; settlement never consults a later mutable
+config value. A legacy admission
 without this snapshot fails closed and directs the operator to dispatch a
 fresh delivery run.
 
@@ -273,7 +276,7 @@ legacy certificates without it cannot be spent as coverage.
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
 | `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty, trimmed `check`, otherwise its `command` with whitespace and leading `NAME=value` assignments normalized. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
-| `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. It supplies no coverage and creates no requirement |
+| `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. A failed check the owner trusts — a captured `workflow.required_validation_commands` or `review.baseline_commands` entry, by the host-command identity rule — is never a diagnostic [ORB-14684]. It supplies no coverage and creates no requirement |
 
 Required passes describe the final candidate, so replacement does not depend on
 array position [ORB-14322]. Reviewers should still list superseded attempts
@@ -439,6 +442,22 @@ verdict stays what the reviewer reported and is never coverage. A candidate
 that adds failures keeps its verdict (`baseline_exceeded`), and a claim the
 host contradicts or cannot check settles `incomplete`
 (`baseline_claim_refused`). Both block as before.
+
+Listing a command in `review.baseline_commands` also makes it binding
+[ORB-14684]. A failed record of a trusted command (a captured
+`workflow.required_validation_commands` or `review.baseline_commands`
+entry, matched like the host-required checks) can no longer be filed as a
+`diagnostic` on the reviewer's own sources: it passes, or it stays a failed
+`required` record whose baseline claim settlement reproduces on the pinned
+base, or the review settles `incomplete` with a reason naming the command.
+A command the owner does not list stays a legitimate diagnostic. Both lists
+come from the run's admission snapshot (§2), the claim contract for a
+claimed leaf, so the commands settlement reruns are exactly the commands a
+failed diagnostic may not name. The certificate records the baseline list
+in `baseline_commands`, coverage re-derives the rule from it, and an owner
+accepts a claimed handoff only when that list equals the one the claim
+captured. A certificate or admission written before the snapshot reads as
+an empty list, so it is judged exactly as when it was issued.
 
 The contract version stays 1: a record carrying no role decides exactly as it
 did before, so older role-less evidence is not reinterpreted. A superseded
@@ -939,5 +958,6 @@ so for a `codeql` hold on its next tick.
 - [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
+- [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

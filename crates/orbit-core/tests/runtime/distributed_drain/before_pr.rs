@@ -129,6 +129,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             crew: Some("reviewer".into()),
             budget: ReviewBudget::default(),
             required_validation_commands: Some(vec![]),
+            baseline_commands: Vec::new(),
             host_evidence: Vec::new(),
         }),
     };
@@ -234,6 +235,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             baseline: None,
         }],
         required_validation_commands: Some(vec![]),
+        baseline_commands: Vec::new(),
         validation_complete: true,
         reviewer: ReviewerIdentity {
             crew: "reviewer".into(),

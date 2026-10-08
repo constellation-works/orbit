@@ -141,6 +141,7 @@ impl crate::OrbitRuntime {
                 required_validation_commands: Some(
                     self.workflow_required_validation_commands().to_vec(),
                 ),
+                baseline_commands: self.review_baseline_commands().to_vec(),
                 host_evidence: policy.review_host_evidence.value.clone(),
             }),
         }

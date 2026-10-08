@@ -99,7 +99,7 @@ orbit config show        # the Review lines report both switches and their sourc
 ```
 
 The owner's `review.before_pr` is captured on each claim with its review crew,
-minutes, and `workflow.required_validation_commands`; the follower's own
+minutes, `workflow.required_validation_commands` and `review.baseline_commands`; the follower's own
 setting does not define review requirements. With it on, each
 claimed PR leaf runs the before-PR review between base synchronization and
 push: one reviewer with the captured crew fixes what it finds as the
