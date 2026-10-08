@@ -501,14 +501,25 @@ impl OrbitRuntime {
         workflow: &str,
     ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
-        if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress)
-            && let Some(super::PilotAdmissionHold::OperatorValidation(hold)) =
-                self.pilot_admission_hold(id)?
-        {
-            if task.status == TaskStatus::Backlog {
-                self.record_operator_validation_hold(id, &hold)?;
+        if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress) {
+            match self.pilot_admission_hold(id)? {
+                Some(super::PilotAdmissionHold::OperatorValidation(hold)) => {
+                    if task.status == TaskStatus::Backlog {
+                        self.record_operator_validation_hold(id, &hold)?;
+                    }
+                    return Err(OrbitError::InvalidInput(hold.detail()));
+                }
+                // Only a backlog task is judged against this host: a claimed
+                // `in-progress` one was admitted to its executor's OS.
+                Some(super::PilotAdmissionHold::NativeOs(hold))
+                    if task.status == TaskStatus::Backlog =>
+                {
+                    if let Some(wait) = hold.wait_on(&task, self.host_os()) {
+                        return Err(OrbitError::InvalidInput(wait));
+                    }
+                }
+                _ => {}
             }
-            return Err(OrbitError::InvalidInput(hold.detail()));
         }
         if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);

@@ -27,6 +27,7 @@ mod admission;
 mod ci_sweep_races;
 mod creation;
 mod crew_selection;
+mod native_os;
 mod races;
 mod source_moves;
 

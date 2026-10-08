@@ -127,13 +127,17 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
-            // A host-OS wait names the host. A local-route before-PR hold
-            // names the remedy. Other long repair instructions stay in JSON.
-            let host = matches!(reason, "host_os_mismatch" | "local_route_before_pr")
-                .then(|| task["detail"].as_str())
-                .flatten()
-                .map(|detail| format!(": {detail}"))
-                .unwrap_or_default();
+            // A host-OS wait names the host, and a native-OS requirement the
+            // tag to add. A local-route before-PR hold names the remedy.
+            // Other long repair instructions stay in JSON.
+            let host = matches!(
+                reason,
+                "host_os_mismatch" | "native_os_required" | "local_route_before_pr"
+            )
+            .then(|| task["detail"].as_str())
+            .flatten()
+            .map(|detail| format!(": {detail}"))
+            .unwrap_or_default();
             // [ORB-14624] Which tasks a CPU-only throttle still admits, and
             // which jump the queue before their frozen batch expires.
             let light = if task["cpu_light"].as_bool() == Some(true) {

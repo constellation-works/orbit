@@ -374,13 +374,15 @@ function buildCrewWindow(window) {
 
 // Reason codes whose `detail` is the sentence that names what clears the wait.
 const WAITING_DETAIL_REASONS = new Set([
-  "host_os_mismatch", "local_route_before_pr", "crew_unavailable", "owner_hold", "invalid_candidate",
+  "host_os_mismatch", "native_os_required", "local_route_before_pr", "crew_unavailable", "owner_hold",
+  "invalid_candidate",
 ]);
 
 const KEPT_OFF_CAUSES = {
   context_lock_conflict: "footprint holds",
   dependency_not_done: "unmet dependencies",
   host_os_mismatch: "for another OS",
+  native_os_required: "needing native evidence from another OS",
   crew_unavailable: "needing a crew this host cannot run",
   owner_hold: "held on the owner",
   invalid_candidate: "invalid",

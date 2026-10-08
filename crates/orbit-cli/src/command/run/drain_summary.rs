@@ -290,6 +290,7 @@ fn kept_off_cause(reason: &str) -> &str {
         "context_lock_conflict" => "footprint holds",
         "dependency_not_done" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
+        "native_os_required" => "needing native evidence from another OS",
         "crew_unavailable" => "needing a crew this host cannot run",
         "owner_hold" => "held on the owner",
         "invalid_candidate" => "invalid",
@@ -377,13 +378,14 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     if !task.blocked_by.is_empty() {
         line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
     }
-    // A host-OS wait names the host it waits for. A local-route before-PR
-    // hold names the remedy. Other details (long repair instructions) stay
-    // in `--json`.
+    // A host-OS wait names the host it waits for, and a native-OS
+    // requirement the tag to add. A local-route before-PR hold names the
+    // remedy. Other details (long repair instructions) stay in `--json`.
     if matches!(
         task.reason.as_deref(),
         Some(
             "host_os_mismatch"
+                | "native_os_required"
                 | "local_route_before_pr"
                 | "crew_unavailable"
                 | "owner_hold"

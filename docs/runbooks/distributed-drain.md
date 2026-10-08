@@ -157,14 +157,28 @@ owner accepts its handoff without validation logs. Every other handoff check
 `orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
 Task-pilot checks acceptance criteria for native OS evidence requirements.
-When a criterion requires a particular native host and its matching tag is
-missing, the pilot reports a `utility_warnings` finding citing the criterion
-and naming `os:macos`, `os:linux` or `os:windows` to add before dispatch. The
-pilot recommends the tag; it does not retag the task. A matching tag already
-present needs no warning, even when the pilot runs on another OS. Platform
-mentions, cross-compilation, mocked checks and negative admission tests alone
-do not require a native host. If evidence is required on every named OS, use
-separate host-scoped validation tasks: multiple tags allow any one OS.
+It records each one as a typed `required_os` finding (the one-based criterion
+and the OS), committed with the applied assessment as `native_os_hold`. When the
+matching tag is missing, the pilot also reports a `utility_warnings` finding
+citing the criterion and naming `os:macos`, `os:linux` or `os:windows` to add
+before dispatch. The pilot recommends the tag; it does not retag the task. A
+matching tag already present needs no warning, even when the pilot runs on
+another OS. Platform mentions, cross-compilation, mocked checks and negative
+admission tests alone do not require a native host. If evidence is required on
+every named OS, use separate host-scoped validation tasks: multiple tags allow
+any one OS.
+
+Admission honours the finding while the task's `os:` tags do not name the
+required OS. A local drain, ship discovery or `orbit run ship` on a host of
+another OS leaves the task in `backlog` as `native_os_required`, and the owner
+defers a pull from a follower of another OS (`deferred_conflicts`, shown as an
+`owner_hold`). Readiness, `orbit run show` and the Drain card name the criterion
+and the tag to add. A host or follower of the required OS may still take the
+task, and a task whose own `os:` tags exclude a host keeps `host_os_mismatch`.
+The wait clears when the tag is added, the acceptance criteria are re-scoped, a
+newer assessment carries no finding, or an operator records an evidenced
+`task-pilot-admission: clear` or `approve-anyway` decision through
+`orbit.task.update` (history event `native_os_requirement_resolved`).
 
 Per-host compiler capacity is independent. Keep the shared build-budget
 defaults (two heavy slots, four Cargo jobs) unless you deliberately raise them;

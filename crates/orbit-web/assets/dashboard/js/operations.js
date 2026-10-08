@@ -2119,11 +2119,14 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
 }
 
 // A task whose `os:` tags this host's OS does not satisfy waits for a host of
-// its own (a pull-drain follower on that OS, say). Readiness names the wait,
-// and the card lists it so an idle drain does not read as an empty backlog.
+// its own (a pull-drain follower on that OS, say), and one a pilot found needs
+// native evidence from another OS waits for the `os:` tag readiness names.
+// The card lists both so an idle drain does not read as an empty backlog.
+const AUTO_DRAIN_HOST_WAIT_REASONS = new Set(["host_os_mismatch", "native_os_required"]);
+
 function autoDrainHostWaits(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "host_os_mismatch");
+  return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_HOST_WAIT_REASONS.has(autoDrainReason(task)));
 }
 
 function autoDrainHostWaitList(tasks, workspace) {

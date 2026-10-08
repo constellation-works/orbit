@@ -402,13 +402,23 @@ impl crate::OrbitRuntime {
         // bundle it read, so one applied after this read is still honoured.
         let backlog =
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?;
+        // A native-OS finding holds only an executor whose OS cannot produce
+        // the evidence, so it is judged against the requesting executor.
         for task in &backlog {
             let comments = self.get_task_comments(&task.id)?;
-            if let Some(PilotAdmissionHold::OperatorValidation(hold)) =
-                self.pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
+            match self
+                .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
             {
-                self.record_operator_validation_hold(&task.id, &hold)?;
-                admission_holds.insert(task.id.clone(), hold.detail());
+                Some(PilotAdmissionHold::OperatorValidation(hold)) => {
+                    self.record_operator_validation_hold(&task.id, &hold)?;
+                    admission_holds.insert(task.id.clone(), hold.detail());
+                }
+                Some(PilotAdmissionHold::NativeOs(hold)) => {
+                    if let Some(wait) = hold.wait_on(task, request.os) {
+                        admission_holds.insert(task.id.clone(), wait);
+                    }
+                }
+                _ => {}
             }
         }
         boundary.admit_task(
@@ -425,6 +435,7 @@ impl crate::OrbitRuntime {
                 &|| Ok(history.to_vec()),
             )? {
                 Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
+                Some(PilotAdmissionHold::NativeOs(hold)) => Ok(hold.wait_on(task, request.os)),
                 _ => Ok(None),
             },
         )

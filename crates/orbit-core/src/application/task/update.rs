@@ -413,7 +413,7 @@ impl OrbitRuntime {
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
         if operator_write
             && let Some(resolution) =
-                self.operator_validation_resolution(&task, &params, &effective_label)?
+                self.pilot_hold_resolution(&task, &params, &effective_label)?
         {
             append_history.push(resolution);
         }
