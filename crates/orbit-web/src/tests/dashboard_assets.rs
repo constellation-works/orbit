@@ -145,3 +145,21 @@ fn dashboard_clock_renders_local_times_with_zone_and_reliability_range_in_utc() 
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_tasks_rail.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard tasks rail count behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
