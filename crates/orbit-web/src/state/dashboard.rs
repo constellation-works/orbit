@@ -30,6 +30,8 @@ pub(super) struct StateInner {
     snapshot: Mutex<Arc<Snapshot>>,
     /// The serving host's host file, swapped by the same rule [ORB-14451].
     hosts: HostFileState,
+    /// SSH tunnels to registered hosts behind `/api/on/<host>/…` [ORB-14679].
+    host_tunnels: Arc<HostTunnels>,
     /// Lazily-built, cached runtimes keyed by workspace id.
     runtimes: Mutex<HashMap<String, CachedRuntime>>,
     /// Registry to reload from on refresh; `None` disables refresh (single /
@@ -387,6 +389,7 @@ impl DashboardState {
         Self {
             inner: Arc::new(StateInner {
                 hosts: HostFileState::new(global_root.clone()),
+                host_tunnels: Arc::new(HostTunnels::new(TunnelConfig::default())),
                 global_root,
                 host_resources: Mutex::new(None),
                 host_disk_paths,
@@ -463,6 +466,12 @@ impl DashboardState {
     /// May read files and must be called through `blocking`.
     pub(crate) fn hosts(&self) -> PinnedHosts {
         self.inner.hosts.pin()
+    }
+
+    /// The tunnels this dashboard owns to registered hosts. `run_server`
+    /// stops them on shutdown and before a handover exec.
+    pub(crate) fn host_tunnels(&self) -> &Arc<HostTunnels> {
+        &self.inner.host_tunnels
     }
 
     /// Process-local `/api/audit/summary` memo for this server instance.

@@ -2113,6 +2113,8 @@ dependencies = [
  "clap",
  "flate2",
  "futures-core",
+ "hyper",
+ "hyper-util",
  "libc",
  "orbit-cmd",
  "orbit-common",

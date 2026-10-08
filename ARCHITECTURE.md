@@ -82,7 +82,7 @@ in member manifests with `workspace = true`.
   - `search` keeps its public contracts and exports at the module root. `runtime` coordinates workspace queries, `candidates` owns filtered task retrieval and BM25 paging, `friction` builds friction results, and `merge` combines branches. Conversion, filters, federation and path matching keep their existing modules.
 - **orbit-cmd** composes the application for the CLI and web. It joins Core to Registry and holds command groups, runtime assembly, routines, and managed-worker transports. Its `hosts` group backs `orbit host` and the doctor `hosts` row, joining the Registry's host file to the MCP crate's federated identity probe. `update` is the one group that composes outward: it handles release download, integrity checks, binary replacement, and post-install convergence.
 - **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors to the registered hosts and fails closed. Core owns validation and auditing.
-- **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel.
+- **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel and `/api/on/<host>`, which forwards to a registered host's own dashboard over an on-demand SSH tunnel.
 - **orbit-cli** is the clap entry point and client configuration. It assembles MCP, Registry, Web, and Core. The accepting machine always resolves its own state and dispatches through Core.
 
 ## orbit-store internals

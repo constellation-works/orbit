@@ -16,6 +16,7 @@ mod assets;
 mod connect;
 mod health;
 mod heap;
+mod host_tunnels;
 mod log_format;
 mod parse;
 mod projections;

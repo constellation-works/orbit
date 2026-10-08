@@ -24,6 +24,18 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
                 .patch(host::rename_host)
                 .delete(host::remove_host),
         )
+        // Another registered host's dashboard API through this one, over an
+        // on-demand SSH forward [ORB-14679]. Methods are listed, not `any`,
+        // so OPTIONS and the rest stay a local 405.
+        .route("/hosts/:host/connection", get(forward::connection))
+        .route(
+            "/on/:host/*rest",
+            get(forward::forward)
+                .post(forward::forward)
+                .put(forward::forward)
+                .patch(forward::forward)
+                .delete(forward::forward),
+        )
         .route("/search", get(search::search))
         .route(
             "/tasks",

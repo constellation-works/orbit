@@ -214,7 +214,7 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
     }
 }
 
-fn status_for(code: &str) -> StatusCode {
+pub(super) fn status_for(code: &str) -> StatusCode {
     match code {
         "invalid_input" => StatusCode::BAD_REQUEST,
         "unknown_host" => StatusCode::NOT_FOUND,

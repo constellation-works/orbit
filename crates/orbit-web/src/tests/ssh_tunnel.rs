@@ -125,6 +125,7 @@ fn delayed_forward_bind_attaches_without_a_second_ssh() {
         // reaches the healthy server and returns Spawned instead of hanging.
         ready_timeout: Duration::from_secs(8),
         ssh_program: stub.display().to_string(),
+        unattended: None,
     };
 
     let (tx, rx) = mpsc::sync_channel(1);

@@ -13,6 +13,9 @@ mod diagnostics_errors;
 mod guards;
 #[path = "http_api/host.rs"]
 mod host;
+#[path = "http_api/host_forward.rs"]
+#[cfg(unix)]
+mod host_forward;
 #[path = "http_api/log.rs"]
 mod log;
 #[path = "http_api/pagination.rs"]

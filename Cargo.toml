@@ -72,6 +72,10 @@ fs2 = "0.4"
 futures-core = "0.3"
 getrandom = { version = "0.3", features = ["std"] }
 hostname = "0.4"
+# The dashboard's host forward speaks HTTP/1.1 to another host's dashboard
+# over a loopback SSH forward, streaming both bodies [ORB-14679].
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
@@ -102,3 +106,4 @@ wait-timeout = "0.2"
 proptest = "1"
 predicates = "3"
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

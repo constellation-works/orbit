@@ -52,6 +52,7 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::json;
 
+use crate::host_tunnels::{HostTunnels, TunnelConfig};
 use crate::runtime_memo::RuntimeMemo;
 
 mod dashboard;

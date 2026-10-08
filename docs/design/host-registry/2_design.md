@@ -3,8 +3,8 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: host-registry
 doc_role: design
@@ -146,6 +146,8 @@ Before any runtime opens, the CLI routes a call that addresses one task by id (`
 ### Web
 
 The Settings › Hosts view and `/api/hosts` routes manage the serving host's host file through the same orbit-cmd operations as `orbit host`, and answer with its JSON and error codes ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]). The list reads a host-file snapshot under the rule below: it reloads when the host file, the legacy destinations file or `config.toml` changes, and a file that fails to load is reported beside the last valid snapshot. Mutations load the file themselves, as the CLI does, and need the operator capability (the governed dashboard operation `host.edit`).
+
+`/api/on/<host>/<path>` resolves `<host>` against the same snapshot, by name or `machine_id`, and forwards the request to that host's own dashboard over an on-demand SSH forward ([remote-access specs/host-forward.md](../remote-access/specs/host-forward.md)). Each new tunnel checks the remote's own `machine_id` against the entry and refuses a mismatch. `GET /api/hosts/<host>/connection` reports reachability, attach or spawn, version, protocol and skew from that check. The host file gains no fields; tunnel state is held in memory and never persisted.
 
 Orbit Web loads local workspaces from orbit-registry, derives checkout-path health, and opens active runtimes lazily through orbit-cmd. Each request pins one immutable registry generation. A successful refresh swaps the complete snapshot and evicts incompatible cached runtimes; a failed refresh retains the last valid snapshot. An invalid initial load fails startup.
 

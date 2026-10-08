@@ -275,6 +275,8 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
     let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let handover_target = Arc::clone(&handover);
+    let host_tunnels = Arc::clone(state.host_tunnels());
+    let close_host_streams = Arc::clone(&host_tunnels);
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -326,9 +328,11 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
                 }
             }
             // Ask cooperating long-lived connections (the `/api/log/stream`
-            // SSE handler) to close now, before the bounded drain deadline
-            // below is reached.
+            // SSE handler, and streams forwarded from another host) to close
+            // now, before the bounded drain deadline below is reached. New
+            // host tunnels are refused from here on.
             api::request_shutdown();
+            close_host_streams.begin_shutdown();
             notify_on_signal.notify_one();
         };
         let app = heap::trim_after_requests(app);
@@ -338,6 +342,10 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
 
         drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
     });
+    // Both exits below — returning, and the handover exec, which keeps this
+    // process's children running unreaped under the new image — need every
+    // host tunnel child stopped first. Requests have drained, so none is in use.
+    host_tunnels.shutdown_all();
     teardown_runtime(tokio_runtime);
     serve_result?;
     let target = handover.lock().ok().and_then(|mut slot| slot.take());

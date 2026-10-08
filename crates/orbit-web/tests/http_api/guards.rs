@@ -196,7 +196,8 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                     .replace(":panel", "missing")
                     .replace(":kind", "routine")
                     .replace(":batch", "missing")
-                    .replace("*path", "missing");
+                    .replace("*path", "missing")
+                    .replace("*rest", "tasks");
                 let uri = format!("/api{concrete}?workspace=ws_http_fixture");
                 let discovery = operator.request("OPTIONS", &uri).send().unwrap();
                 assert_eq!(discovery.status().as_u16(), 405, "route discovery: {path}");
