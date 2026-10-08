@@ -77,6 +77,9 @@ pub enum ValidationDefect {
     /// final candidate does not carry byte-identical to the reviewed
     /// candidate: the mutation was left in place.
     MutationTargetChanged { command: String, target: String },
+    /// [ORB-14632] A file a control says it temporarily mutated, named so
+    /// that it is not a repository-relative path settlement could compare.
+    MutationTargetInvalid { command: String, target: String },
     /// A failed diagnostic whose source lies inside the candidate's scope:
     /// that failure is the task's own and blocks like a required check.
     DiagnosticInScope { command: String, source: String },
@@ -117,7 +120,8 @@ impl ValidationDefect {
     /// than in what the checks observed: a missing note, control kind or
     /// sources, or a source outside the scope (such as a counterfactual
     /// naming the file it mutated in `sources` instead of
-    /// `mutation_target`). The reviewer can correct such a report without
+    /// `mutation_target`), or a mutation target that is not a
+    /// repository-relative path. The reviewer can correct such a report without
     /// rerunning anything, so it is returned to the reviewer once before the
     /// verdict settles.
     pub fn correctable(&self) -> bool {
@@ -126,6 +130,7 @@ impl ValidationDefect {
             ValidationDefect::ClassificationUnexplained { .. }
                 | ValidationDefect::ClassificationUnevidenced { .. }
                 | ValidationDefect::ControlOutOfScope { .. }
+                | ValidationDefect::MutationTargetInvalid { .. }
         )
     }
 
@@ -187,6 +192,11 @@ impl ValidationDefect {
                 "validation_contradicted: control `{command}` mutated `{target}`, which the \
                  final candidate does not carry byte-identical to the reviewed candidate; the \
                  mutation was not restored"
+            ),
+            ValidationDefect::MutationTargetInvalid { command, target } => format!(
+                "validation_unevidenced: control `{command}` names mutation_target `{target}`, \
+                 which is not a repository-relative path, so its restoration cannot be checked; \
+                 list each file the control temporarily mutated relative to the repository root"
             ),
             ValidationDefect::DiagnosticInScope { command, source } => format!(
                 "validation_incomplete: diagnostic `{command}` failed in `{source}`, inside the \
@@ -377,42 +387,70 @@ pub fn validation_evidence(
     }
 }
 
-/// [ORB-14616] Whether every file a record says it temporarily mutated came
-/// back byte-identical: `review_changed` holds the paths the review changed
-/// on the reviewed candidate (its repair commit, or its uncommitted edits
-/// before settlement commits them), and no mutation target may be among
-/// them. Settlement checks this beside [`validation_evidence`] because only
-/// the repository can tell; a target is judged like a source, a bare path
-/// reading as its `file:` selector.
-pub fn mutation_targets_restored(
+/// [ORB-14616] Every file a record says it temporarily mutated, as the
+/// repository-relative path settlement compares between the reviewed and the
+/// final candidate, paired with the record's command. Only the repository can
+/// tell whether a target came back byte-identical, so settlement makes that
+/// comparison itself; this only reads the targets. [ORB-14632] A target that
+/// is not a repository-relative file path (absolute, home-relative, climbing
+/// out of the repository or another selector kind) could never be compared,
+/// so it is refused as [`ValidationDefect::MutationTargetInvalid`] rather than
+/// passed. A `file:` selector reads as its path; `dir:` and `symbol:` are no
+/// file and are refused.
+pub fn mutation_targets(
     records: &[ReviewValidation],
-    review_changed: &[String],
-) -> Result<(), ValidationDefect> {
-    let changed = review_changed
-        .iter()
-        .map(|path| format!("file:{}", path.trim().trim_start_matches("./")))
-        .collect::<Vec<_>>();
+) -> Result<Vec<(&str, String)>, ValidationDefect> {
+    let mut targets = Vec::new();
     for record in records {
-        if let Some(target) = record
+        for target in record
             .mutation_target
             .iter()
             .map(|target| target.trim())
-            .find(|target| !target.is_empty() && in_scope(target, &changed))
+            .filter(|target| !target.is_empty())
         {
-            return Err(ValidationDefect::MutationTargetChanged {
-                command: record.command.clone(),
-                target: target.to_string(),
-            });
+            let path =
+                repository_path(target).ok_or_else(|| ValidationDefect::MutationTargetInvalid {
+                    command: record.command.clone(),
+                    target: target.to_string(),
+                })?;
+            targets.push((record.command.as_str(), path));
         }
     }
-    Ok(())
+    Ok(targets)
+}
+
+/// `target` as a normalized repository-relative path, or `None` when it
+/// names nothing a candidate's tree could hold.
+fn repository_path(target: &str) -> Option<String> {
+    let path = target.strip_prefix("file:").unwrap_or(target);
+    let drive = matches!(path.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
+    if drive
+        || ["dir:", "symbol:"]
+            .iter()
+            .any(|kind| path.starts_with(kind))
+        || path.starts_with(['/', '~'])
+        || path.contains(['\\', '\0'])
+    {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            // Git's own store is no file of the candidate.
+            part if part.eq_ignore_ascii_case(".git") => return None,
+            part => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// A negative control: it failed, names its kind and the code it exercises,
 /// that code is the candidate's own, and a control run on the candidate does
 /// not share its check with a required pass there. A counterfactual's
-/// `mutation_target` is not a source: it may lie anywhere, and
-/// [`mutation_targets_restored`] judges it.
+/// `mutation_target` is not a source: it may lie anywhere in the
+/// repository, and settlement judges its restoration ([`mutation_targets`]).
 fn negative_control(
     record: &ReviewValidation,
     records: &[ReviewValidation],

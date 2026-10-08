@@ -75,6 +75,36 @@ fn an_old_shape_counterfactual_is_corrected_and_settles_in_the_same_attempt() {
     assert_eq!(gated.certificate().attempt_id, attempt_id);
 }
 
+/// [ORB-14632] A mutation target spelled as an absolute path into the review
+/// worktree cannot be compared against the repository. It is a shape defect
+/// the reviewer corrects to the repository-relative path before settlement.
+#[test]
+fn an_absolute_mutation_target_is_returned_for_correction() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    let absolute = gated.fixture.repo.join("README.md").display().to_string();
+    let mut absolute_target = report(attempt_id, ReviewVerdict::Accept, false);
+    absolute_target
+        .validation
+        .push(counterfactual(&["src.txt"], &[absolute.as_str()]));
+    write_report(&gated.fixture.runtime, &gated.task_id, &absolute_target);
+
+    let defect = correction(&gated, &admission).expect("a shape defect is returned");
+    assert!(
+        defect.contains(&format!("mutation_target `{absolute}`"))
+            && defect.contains("not a repository-relative path"),
+        "{defect}"
+    );
+
+    let mut corrected = report(attempt_id, ReviewVerdict::Accept, false);
+    corrected
+        .validation
+        .push(counterfactual(&["src.txt"], &["README.md"]));
+    write_report(&gated.fixture.runtime, &gated.task_id, &corrected);
+    assert_eq!(correction(&gated, &admission), None);
+}
+
 /// A failed required check is what the reviewer observed, not a shape it can
 /// correct: the report goes to settlement as it stands.
 #[test]

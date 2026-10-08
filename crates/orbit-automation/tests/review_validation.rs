@@ -15,7 +15,7 @@
 use chrono::{TimeZone, Utc};
 use orbit_automation::review::{
     LandingFacts, ValidationContext, ValidationDefect, certificate_acceptable, exclusion,
-    mutation_targets_restored, validation_evidence, validation_limitations,
+    mutation_targets, validation_evidence, validation_limitations,
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
@@ -881,27 +881,13 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
         "an out-of-scope mutation target is not a source when the certificate is spent"
     );
     assert_eq!(
-        mutation_targets_restored(&restored, &[]),
-        Ok(()),
-        "a review that changed nothing restored every target"
+        mutation_targets(&restored),
+        Ok(vec![(
+            "cargo test -p orbit-review --test fix guards_read_only",
+            production.to_string()
+        )]),
+        "settlement compares the target at its repository-relative path"
     );
-    assert_eq!(
-        mutation_targets_restored(&restored, &["crates/orbit-review/src/fix.rs".to_string()]),
-        Ok(()),
-        "a repair elsewhere does not touch the target"
-    );
-
-    for changed in [production.to_string(), format!("./{production}")] {
-        assert_eq!(
-            mutation_targets_restored(&restored, &[changed]),
-            Err(ValidationDefect::MutationTargetChanged {
-                command: "cargo test -p orbit-review --test fix guards_read_only".into(),
-                target: production.into(),
-            }),
-            "a target the final candidate does not carry unchanged names the file"
-        );
-    }
-
     let old_shape = mutation(&["crates/orbit-review/tests/fix.rs", production], &[]);
     let defect = validation_evidence(&old_shape, &context).expect_err("old shape is refused");
     assert_eq!(
@@ -946,6 +932,69 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
             !observed.correctable(),
             "a defect in what the checks observed is never returned for correction: {observed:?}"
         );
+    }
+}
+
+/// [ORB-14632] Settlement compares each mutation target against the
+/// repository, so a target must name a path a candidate's tree can hold.
+/// Spellings of a repository-relative path read as that path; an absolute,
+/// home-relative or out-of-repository path, Git's own store, and a selector
+/// naming no single file are refused as a shape defect naming the target,
+/// never passed for want of a match.
+#[test]
+fn a_mutation_target_must_be_a_repository_relative_path() {
+    const COMMAND: &str = "cargo test -p orbit-review --test fix guards_read_only";
+    let targets = |target: &str| {
+        let mut record = control(
+            COMMAND,
+            Some(NegativeControl::Counterfactual),
+            ValidationOutcome::Failed,
+            &["crates/orbit-review/tests/fix.rs"],
+        );
+        record.mutation_target = vec![target.to_string(), " ".to_string()];
+        mutation_targets(std::slice::from_ref(&record)).map(|targets| {
+            targets
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    for spelled in [
+        "crates/orbit-engine/src/converge.rs",
+        "./crates/orbit-engine/src/converge.rs",
+        " file:crates/orbit-engine/src/converge.rs ",
+        "crates//orbit-engine/./src/converge.rs",
+    ] {
+        assert_eq!(
+            targets(spelled),
+            Ok(vec!["crates/orbit-engine/src/converge.rs".to_string()]),
+            "{spelled}"
+        );
+    }
+
+    for refused in [
+        "/home/reviewer/wt/crates/orbit-engine/src/converge.rs",
+        "~/wt/crates/orbit-engine/src/converge.rs",
+        "C:/wt/crates/orbit-engine/src/converge.rs",
+        "crates\\orbit-engine\\src\\converge.rs",
+        "../other/crates/orbit-engine/src/converge.rs",
+        "crates/../../converge.rs",
+        ".git/config",
+        "dir:crates/orbit-engine",
+        "symbol:crates/orbit-engine/src/converge.rs::converge",
+        "./",
+    ] {
+        let defect = targets(refused).expect_err(refused);
+        assert_eq!(
+            defect,
+            ValidationDefect::MutationTargetInvalid {
+                command: COMMAND.into(),
+                target: refused.into(),
+            }
+        );
+        assert!(defect.correctable(), "{}", defect.reason());
+        assert!(defect.reason().contains(refused), "{}", defect.reason());
     }
 }
 

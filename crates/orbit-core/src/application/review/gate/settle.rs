@@ -328,12 +328,6 @@ fn settle(
     };
 
     let validation_scope = validation_scope(context, &reviewed.commits, repair.as_ref(), &[])?;
-    // [ORB-14616] What the review changed on the reviewed candidate: a file a
-    // control mutated must not be among it.
-    let review_changed = match &repair {
-        Some(commit) => committed_paths(&context.workspace_path, &commit.commit)?,
-        None => Vec::new(),
-    };
     let final_candidate = match &repair {
         Some(commit) => SourceRevision {
             commit: commit.commit.clone(),
@@ -386,7 +380,14 @@ fn settle(
         &context.base_ref(),
         &validation_scope,
     )?;
-    judgement.reconcile_verdict(repair.as_ref(), &validation_scope, &review_changed);
+    // [ORB-14616] Every file a control mutated must come back byte-identical
+    // in the final candidate.
+    let unrestored = judgement.unrestored_mutation(
+        &context.workspace_path,
+        &reviewed.head.commit,
+        &final_candidate.commit,
+    )?;
+    judgement.reconcile_verdict(repair.as_ref(), &validation_scope, unrestored.as_ref());
     let now = Utc::now();
 
     let settled = match recorded {

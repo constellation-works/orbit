@@ -4,14 +4,14 @@
 use std::collections::BTreeMap;
 
 use orbit_automation::review::{
-    ValidationContext, ValidationDefect, combined_task_meaning_digest, mutation_targets_restored,
+    ValidationContext, ValidationDefect, combined_task_meaning_digest, mutation_targets,
     task_meaning_digest, validation_evidence, validation_limitations, validation_role_counts,
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::review_gate::{
-    REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
+    REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, path_changed_between, uncommitted_paths,
 };
 use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
 use orbit_types::workflow::automation::SourceRevision;
@@ -468,18 +468,45 @@ impl Judgement {
         Ok(())
     }
 
+    /// [ORB-14616] What keeps a file a control says it temporarily mutated
+    /// from being restored, if anything: the final candidate must carry each
+    /// target byte-identical to the `reviewed` candidate. [ORB-14632] The
+    /// repository compares each target's blob between the two commits, with
+    /// no rename detection, so a target left modified, deleted or moved away
+    /// is caught however the review's commit records it; a target that is not
+    /// a repository-relative path cannot be compared and is refused.
+    pub(super) fn unrestored_mutation(
+        &self,
+        workspace_path: &std::path::Path,
+        reviewed: &str,
+        final_candidate: &str,
+    ) -> Result<Option<ValidationDefect>, OrbitError> {
+        let targets = match mutation_targets(&self.validation) {
+            Ok(targets) => targets,
+            Err(defect) => return Ok(Some(defect)),
+        };
+        for (command, path) in targets {
+            if path_changed_between(workspace_path, reviewed, final_candidate, &path)? {
+                return Ok(Some(ValidationDefect::MutationTargetChanged {
+                    command: command.to_string(),
+                    target: path,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     /// Cross-check the claimed verdict against what actually happened.
     /// `scope` is what validation sources are judged against: every task
-    /// selector plus the candidate's changed paths. `review_changed` is what
-    /// the reviewer's commit changed, where no file a control mutated may
-    /// remain changed [ORB-14616].
+    /// selector plus the candidate's changed paths. `unrestored` is what
+    /// [`Self::unrestored_mutation`] found against the repository.
     pub(super) fn reconcile_verdict(
         &mut self,
         repair: Option<&CommitIdentity>,
         scope: &[String],
-        review_changed: &[String],
+        unrestored: Option<&ValidationDefect>,
     ) {
-        if let Err(defect) = mutation_targets_restored(&self.validation, review_changed) {
+        if let Some(defect) = unrestored {
             self.downgrade(&defect.reason());
         }
         let open_findings = open_findings(&self.findings).count();
@@ -535,7 +562,9 @@ impl Judgement {
         if !self.verdict.passed() {
             return None;
         }
-        self.validation_defect(scope)
+        mutation_targets(&self.validation)
+            .err()
+            .or_else(|| self.validation_defect(scope))
             .filter(ValidationDefect::correctable)
     }
 
