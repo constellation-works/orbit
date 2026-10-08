@@ -874,6 +874,29 @@ export function isHttpUrl(url) {
 }
 
 // ---------------------------------------------------------------------------
+// Durations use one compact format across dashboard views.
+
+export function fmtDuration(value) {
+  if (value == null || value === "") return "-";
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0) return "-";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+  return `${Math.floor(ms / 86400000)}d ${Math.floor((ms % 86400000) / 3600000)}h`;
+}
+
+// Running records without a final duration show elapsed time at each refresh.
+// Completed records and records with unreadable start times keep stored values.
+export function elapsedDurationInfo(record, durationMs = record?.duration_ms, now = Date.now()) {
+  if ((durationMs == null || durationMs <= 0) && record?.state === "running" && record.started_at) {
+    const started = new Date(record.started_at).getTime();
+    if (Number.isFinite(started)) return { durationMs: Math.max(0, now - started), isLive: true };
+  }
+  return { durationMs, isLive: false };
+}
+
 // Timestamps. The dashboard reads one clock: an absolute instant renders as
 // 24-hour local time with the zone abbreviation, a relative age carries that
 // absolute instant in its title, and UTC appears only for values defined in

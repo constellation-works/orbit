@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock, elapsedDurationInfo } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -49,6 +49,12 @@ function fmtTimestamp(v) {
 
 function fmtDuration(v) {
   return hasCtx("fmtDuration") ? _runDetailCtx.fmtDuration(v) : (v == null ? "-" : String(v));
+}
+
+function recordDurationText(record) {
+  const { durationMs, isLive } = elapsedDurationInfo(record);
+  const text = fmtDuration(durationMs);
+  return isLive && text !== "-" ? `${text} ↻` : text;
 }
 
 function fmtAbsTime(v) {
@@ -236,7 +242,7 @@ export function renderRunDetailMeta() {
   const addCell = (label, value) => {
     const cell = el("div");
     cell.appendChild(el("div", { class: "label", text: label }));
-    cell.appendChild(el("div", { class: "value", text: value == null ? "-" : String(value) }));
+    cell.appendChild(el("div", { class: label === "duration" ? "value duration" : "value", text: value == null ? "-" : String(value) }));
     grid.appendChild(cell);
   };
   addCell("job", run.job_id);
@@ -249,7 +255,7 @@ export function renderRunDetailMeta() {
   addCell("attempt", run.attempt);
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
-  addCell("duration", run.duration_ms != null ? fmtDuration(run.duration_ms) : "-");
+  addCell("duration", recordDurationText(run));
   // ORB-12516: with more than one execution host, a run id alone no longer says
   // where it ran. The store field is the truth; a row without one is *unknown*,
   // never assumed to be this machine.
@@ -548,18 +554,19 @@ export function renderRunSteps() {
   for (const step of steps) {
     const exit = step.exit_code;
     const exitClass = exit != null && exit !== 0 ? "exit fail" : "exit";
+    const duration = recordDurationText(step);
     const row = el("div", { class: "step-row" }, [
       el("span", { class: "idx", text: `#${Number(step.step_index) + 1}` }),
       el("span", { class: "target", text: `${step.target_type}:${step.target_id}` }),
       el("span", {}, [stateCell(step.state)]),
-      el("span", { class: "duration", text: fmtDuration(step.duration_ms) }),
+      el("span", { class: "duration", text: duration }),
       el("span", { class: exitClass, text: exit == null ? "-" : String(exit), title: exit == null ? "No exit code recorded" : `Exit code ${exit}` }),
     ]);
     row.dataset.key = `step-${step.step_index}`;
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
-    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${expandedStepIndices.has(step.step_index)}`;
+    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${duration}-${expandedStepIndices.has(step.step_index)}`;
     if (expandedStepIndices.has(step.step_index)) row.classList.add("expanded");
     makeToggleRow(row, {
       expanded: expandedStepIndices.has(step.step_index),

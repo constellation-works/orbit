@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -650,29 +650,13 @@ function runTimestampValue(run) {
   return Number.isFinite(time) ? time : 0;
 }
 
-function runElapsedMs(run) {
-  if (!run || !run.started_at) return null;
-  const started = new Date(run.started_at).getTime();
-  if (!Number.isFinite(started)) return null;
-  return Math.max(0, Date.now() - started);
-}
-
 function runFriction(run) {
   return run.diagnostics_friction || emptyRunFrictionSummary(run);
 }
 
 function runDurationInfo(run) {
   const friction = runFriction(run);
-  let durationMs = friction.durationMs;
-  let isLive = false;
-  if ((durationMs == null || durationMs <= 0) && run && run.state === "running") {
-    const elapsed = runElapsedMs(run);
-    if (elapsed != null) {
-      durationMs = elapsed;
-      isLive = true;
-    }
-  }
-  return { durationMs, isLive, longRun: friction.longRun };
+  return { ...elapsedDurationInfo(run, friction.durationMs), longRun: friction.longRun };
 }
 
 function runSortValue(run, key) {

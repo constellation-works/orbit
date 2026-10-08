@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
@@ -284,15 +284,8 @@ function relativeTime(value, now = Date.now()) {
 }
 
 function durationText(ms) {
-  if (ms == null || ms === "") return null;
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n < 0) return null;
-  const seconds = Math.round(n / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  const text = fmtDuration(ms);
+  return text === "-" ? null : text;
 }
 
 // Local wall-clock time with its zone, so a next-fire time is never read as

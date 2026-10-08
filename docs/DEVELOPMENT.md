@@ -243,6 +243,20 @@ clicks while the request is pending, preserves failure feedback and retry after
 a concurrent refresh, surfaces the server's conflict for a live run, and enables
 both controls after the task returns to backlog without a reload.
 
+The duration browser fixture checks Metrics at 1440px and 1024px with 55
+actor rows (165 duration cells), using text ranges to detect line wrapping.
+It also verifies that Automation uses the shared duration format and that
+running run and step durations show elapsed time with `↻`, advance on
+refresh, and switch to recorded durations on completion. Sub-hour durations
+retain milliseconds, decimal seconds and unpadded seconds; longer durations
+roll into hours/minutes or days/hours. It saves screenshots and
+`measurements.json`:
+
+```bash
+node crates/orbit-web/tests/http_api/dashboard_durations_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/durations-browser
+```
+
 The Operations browser fixture also checks the responsive dashboard shell. At
 375×812, the brand, workspace picker, Drain indicator and Refresh icon share
 the header row; destinations and the active section's views share a scrolling
