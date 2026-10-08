@@ -19,8 +19,9 @@ make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI logs and sandbox profile goldens
 ```
 
-`make ci-fast` runs no Rust tests. Its script fixtures and static guardrails
-do not establish that the Rust test suite passes. Focused test filters help
+`make ci-fast` compiles the workspace on the declared MSRV, checks formatting,
+and runs script fixtures and static guardrails; it runs no Rust tests. It does
+not establish that the Rust test suite passes. Focused test filters help
 investigate a change, but do not replace `make ci-test-affected`: an existing
 test can encode behavior the candidate changes even when its new tests pass.
 Hosted CI runs the full `make ci` for open PRs. Every PR-triggered workflow
@@ -753,9 +754,20 @@ guard.
 Orbit's minimum supported Rust version is declared as `rust-version` in the
 workspace `Cargo.toml` (`[workspace.package]`) and enforced by the `msrv` job
 in `.github/workflows/ci.yml` (`cargo check --workspace --locked` on the
-pinned toolchain). If a change genuinely needs a newer compiler or a
-dependency bump raises the floor, bump `rust-version` and the workflow's
-`MSRV` env var together in the same PR, and call it out in the CHANGELOG.
+explicitly selected minimum). `make ci-fast` also runs that workspace check
+locally; keep its `MSRV` Make variable and the workflow's `MSRV` environment
+variable in sync with `rust-version`.
+
+The developer and ordinary CI toolchain is pinned in the root
+[`rust-toolchain.toml`](../rust-toolchain.toml); CI setup steps that install
+Rust repeat that exact version. To bump it, use one deliberate PR: update the
+toolchain file and each non-MSRV CI setup step together, then fix any new
+compiler or Clippy diagnostics in that PR. Run `make ci-fast` and
+`make ci-lint` on the proposed version before merging. Leave the MSRV job on
+the declared minimum so it continues to catch language or dependency-floor
+regressions. If a change genuinely needs a newer compiler or a dependency bump
+raises the MSRV, update `rust-version`, the Make variable, and the workflow's
+`MSRV` environment variable together in that same PR.
 
 ## Windows compile check
 

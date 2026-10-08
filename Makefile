@@ -4,6 +4,7 @@
 # Config
 # ------------------------------------------------------------
 CARGO ?= cargo
+MSRV ?= 1.89
 BUILD_BUDGET ?= ./scripts/build-budget.py
 BINARY := orbit
 BIN_CRATE := orbit-cli
@@ -56,7 +57,7 @@ help:
 	@echo "  make audit        Supply-chain audit (cargo-deny: advisories + licenses)"
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
-	@echo "  make ci-fast      Format and repository guardrails; runs no Rust tests"
+	@echo "  make ci-fast      Format, repository guardrails, and the MSRV check; runs no Rust tests"
 	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
@@ -155,8 +156,10 @@ tree:
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
-# Format and shared guardrails only: no Rust tests. Full make ci runs on PRs.
+# Format and shared guardrails plus the MSRV compile check: no Rust tests.
+# Full make ci runs on PRs.
 ci-fast:
+	$(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
 
 # Full test targets of changed crates and all reverse workspace dependents.
