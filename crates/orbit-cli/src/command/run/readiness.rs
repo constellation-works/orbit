@@ -13,7 +13,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. When CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -106,6 +106,9 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     {
         lines.push(throttle.hold_reason());
     }
+    if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
+        lines.push(budget);
+    }
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));
     }
@@ -131,8 +134,19 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .flatten()
                 .map(|detail| format!(": {detail}"))
                 .unwrap_or_default();
+            // [ORB-14624] Which tasks a CPU-only throttle still admits, and
+            // which jump the queue before their frozen batch expires.
+            let light = if task["cpu_light"].as_bool() == Some(true) {
+                " cpu-light"
+            } else {
+                ""
+            };
+            let deadline = task["frozen_batch_deadline"]
+                .as_str()
+                .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){crew}{blocked_by}{host}",
+                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{host}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
@@ -164,6 +178,19 @@ fn approval_line(approvals: &Value) -> Option<String> {
         approvals["drain_run_id"].as_str().unwrap_or("-"),
         approvals["awaiting_pilot"],
         approvals["held_total"],
+    ))
+}
+
+/// [ORB-14624] While CPU alone throttles, the reserved light slots are the
+/// only ones open, so say how many are left.
+fn cpu_light_budget_line(budget: &Value) -> Option<String> {
+    if budget["applies"].as_bool() != Some(true) {
+        return None;
+    }
+    Some(format!(
+        "CPU-light budget: {} of {} reserved slots in use, {} left; only cpu-light \
+         auto-tasks start while CPU alone is held.",
+        budget["active"], budget["reserved"], budget["remaining"],
     ))
 }
 

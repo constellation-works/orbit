@@ -63,6 +63,10 @@ base_branch = "main"
 enabled = true
 cpu_high_percent = 90
 cpu_resume_percent = 85
+# While only CPU holds admissions, up to this many `no-diff-expected`
+# auto-task leaves (reviews, curation) still start; memory and disk pressure
+# hold them too. 0 holds them with everything else.
+cpu_light_leaves = 2
 memory_high_percent = 90
 memory_resume_percent = 85
 disk_high_percent = 90

@@ -13,6 +13,9 @@ use crate::adapter::engine_host::v2_host::admission::auto_admission::{
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
 };
+use crate::adapter::engine_host::v2_host::admission::cpu_light::{
+    CPU_LIGHT_BUDGET_FULL, LightBudget, ResourceGate, is_cpu_light,
+};
 use crate::adapter::engine_host::v2_host::admission::leaf_occupancy::{
     occupancy_json, read_leaf_occupancy,
 };
@@ -172,18 +175,37 @@ pub fn explain_workspace_auto_readiness(
     // sampled long enough to judge sustained pressure itself.
     let resource = runtime.admission_resource_throttle();
     let shared_occupancy = shared_leaf_occupancy(runtime)?;
-    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
-    {
+    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
             .unwrap_or(usize::MAX)
             .saturating_sub(shared_occupancy.occupied)
     };
+    // [ORB-14624] The classifier's own gate: under a CPU-only throttle,
+    // CPU-light leaves fill the reserved light slots and nothing else starts.
+    let light_budget = LightBudget::new(
+        runtime
+            .context
+            .settings()
+            .resource_throttle()
+            .cpu_light_leaves,
+        claimed_by_task.keys(),
+        &snapshot.task_lookup,
+    );
+    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
+    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
     let pending = snapshot
         .admissible_leaves
         .iter()
         .filter(|task_id| !claimed_by_task.contains_key(*task_id))
+        .filter(|task_id| {
+            gate == ResourceGate::Open
+                || snapshot
+                    .task_lookup
+                    .get(*task_id)
+                    .is_some_and(|task| gate.admits(task))
+        })
         .cloned()
         .collect::<Vec<_>>();
     // [ORB-11973] Use the classifier's identical ordered prefix and admission
@@ -232,7 +254,7 @@ pub fn explain_workspace_auto_readiness(
             .values()
             .filter(|task| task.status == TaskStatus::Backlog)
             .collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(&mut backlog);
+        sort_tasks_for_automatic_dispatch(&mut backlog, &snapshot.expiring_batches);
         backlog
             .into_iter()
             .take(limit)
@@ -274,6 +296,15 @@ pub fn explain_workspace_auto_readiness(
             };
             if task.status != TaskStatus::Backlog {
                 return Value::Object(object.clone());
+            }
+            // [ORB-14624] Which tasks a CPU-only throttle still admits, and
+            // which sort ahead because their frozen batch nears its deadline.
+            let cpu_light = is_cpu_light(task);
+            if cpu_light {
+                object.insert("cpu_light".to_string(), Value::Bool(true));
+            }
+            if let Some(deadline) = snapshot.expiring_batches.get(&task.id) {
+                object.insert("frozen_batch_deadline".to_string(), json!(deadline));
             }
             let unmet = unmet_task_dependencies_with_index(
                 task,
@@ -424,7 +455,11 @@ pub fn explain_workspace_auto_readiness(
                     Value::String(HOST_SHUTDOWN_SCHEDULED.to_string()),
                 );
                 object.insert("detail".to_string(), json!(shutdown.describe()));
-            } else if let Some(throttle) = resource.throttle.as_ref() {
+            } else if let Some(throttle) = resource
+                .throttle
+                .as_ref()
+                .filter(|_| !(gate == ResourceGate::LightOnly && cpu_light))
+            {
                 object.insert(
                     "reason".to_string(),
                     Value::String(RESOURCE_THROTTLED.to_string()),
@@ -438,6 +473,12 @@ pub fn explain_workspace_auto_readiness(
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else if gate == ResourceGate::LightOnly && light_budget.remaining() == 0 {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String(CPU_LIGHT_BUDGET_FULL.to_string()),
+                );
+                object.insert("detail".to_string(), json!(light_budget.full_detail()));
             } else if !examined.contains(&task.id) {
                 object.insert(
                     "reason".to_string(),
@@ -521,6 +562,9 @@ pub fn explain_workspace_auto_readiness(
             // admission, and readings that could not be used (which admit).
             "resource_throttle": resource.throttle,
             "resource_telemetry_unknown": resource.unknown,
+            // [ORB-14624] Light slots a CPU-only throttle still admits into;
+            // `applies` is true while it is spending them.
+            "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
         },
         "approvals": approvals,
         "tasks": tasks,

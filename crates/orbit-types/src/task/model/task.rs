@@ -660,10 +660,26 @@ where
 
 /// Canonical automatic admission order, shared by reporting and the owner store.
 pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
-    let band = |task: &Task| {
+    automatic_dispatch_cmp_with_expiry(left, false, right, false)
+}
+
+/// [`automatic_dispatch_cmp`] with each task's frozen-batch expiry
+/// [ORB-14624]. An expiring task — one whose frozen delivery batch nears its
+/// admission deadline — joins the corrective band and leads its priority
+/// there, so it sorts ahead of every same-priority task outside the critical
+/// band. Critical work still leads, and a higher-priority corrective task
+/// still sorts first.
+pub fn automatic_dispatch_cmp_with_expiry(
+    left: &Task,
+    left_expiring: bool,
+    right: &Task,
+    right_expiring: bool,
+) -> std::cmp::Ordering {
+    let band = |task: &Task, expiring: bool| {
         if task.priority == TaskPriority::Critical {
             0
-        } else if task.task_type == TaskType::Bug
+        } else if expiring
+            || task.task_type == TaskType::Bug
             || task
                 .tags
                 .iter()
@@ -680,9 +696,10 @@ pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
         TaskPriority::Medium => 2,
         TaskPriority::Low => 3,
     };
-    band(left)
-        .cmp(&band(right))
+    band(left, left_expiring)
+        .cmp(&band(right, right_expiring))
         .then(priority(left.priority).cmp(&priority(right.priority)))
+        .then(right_expiring.cmp(&left_expiring))
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

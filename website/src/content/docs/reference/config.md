@@ -182,6 +182,7 @@ crew or the workspace default.
 | `workflow.resource_throttle.enabled` | bool · **Default:** `true`<br>Start no new task while host CPU, memory, or disk pressure stays high. Disabled, pressure is still reported. |
 | `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. |
 | `workflow.resource_throttle.cpu_resume_percent` | integer · **Default:** `85`<br>Resume below this CPU percentage. |
+| `workflow.resource_throttle.cpu_light_leaves` | integer · **Default:** `2`<br>While CPU alone holds admissions, a local drain still starts up to this many `no-diff-expected` auto-tasks (reviews, curation). Memory and disk pressure hold them too; `0` holds them with everything else. |
 | `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. |
 | `workflow.resource_throttle.memory_resume_percent` | integer · **Default:** `85`<br>Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | integer · **Default:** `90`<br>Disk high-water mark, per observed filesystem. |

@@ -10,7 +10,10 @@
 //!   evidence is system-authored while reviewer writes retain their identity.
 //! - Host resource throttling [ORB-13901]: under an injected probe, sustained
 //!   pressure holds drain waves and ship discovery, warns through readiness,
-//!   run show and MCP, and lifts below the resume mark.
+//!   run show and MCP, and lifts below the resume mark. CPU pressure alone
+//!   still admits CPU-light auto-tasks within a reserved budget [ORB-14624].
+//! - Frozen-batch expiry [ORB-14624]: a task whose frozen delivery batch
+//!   nears its deadline sorts ahead of same-priority backlog.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -1427,10 +1430,11 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
 // Host resource throttle
 // ---------------------------------------------------------------------------
 
-/// A host whose CPU and memory readings and sample time a test sets; every
-/// filesystem reads 10%.
+/// A host whose CPU, memory and filesystem readings and sample time a test
+/// sets; every filesystem reads the same, 10% unless a test raises it.
 pub(super) struct PressureProbe {
     reading: Mutex<(Option<f64>, Option<f64>, DateTime<Utc>)>,
+    disk: Mutex<f64>,
     samples: AtomicUsize,
 }
 
@@ -1438,8 +1442,21 @@ impl PressureProbe {
     pub(super) fn calm() -> Arc<Self> {
         Arc::new(Self {
             reading: Mutex::new((Some(10.0), Some(10.0), Utc::now())),
+            disk: Mutex::new(10.0),
             samples: AtomicUsize::new(0),
         })
+    }
+
+    /// Hold `set` above its high mark across the ten-second sustain window:
+    /// one sample twelve seconds ago, then one now.
+    fn sustain(&self, runtime: &OrbitRuntime, set: impl Fn(&Self)) {
+        set(self);
+        self.reading.lock().unwrap().2 = Utc::now() - chrono::Duration::seconds(12);
+        assert!(
+            runtime.resource_admission().throttle.is_none(),
+            "one sample is not sustained"
+        );
+        self.reading.lock().unwrap().2 = Utc::now();
     }
 
     /// Memory at `percent`, observed at `at`.
@@ -1476,6 +1493,7 @@ impl HostResourceProbe for PressureProbe {
     fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
         self.samples.fetch_add(1, Ordering::SeqCst);
         let (cpu, memory, at) = *self.reading.lock().unwrap();
+        let disk = *self.disk.lock().unwrap();
         HostResourceSample {
             sampled_at: at,
             cpu_percent: cpu,
@@ -1484,7 +1502,7 @@ impl HostResourceProbe for PressureProbe {
                 .iter()
                 .map(|path| DiskSample {
                     path: path.clone(),
-                    used_percent: Some(10.0),
+                    used_percent: Some(disk),
                 })
                 .collect(),
         }
@@ -1889,4 +1907,367 @@ fn a_disabled_throttle_admits_under_pressure_without_sampling() {
         .unwrap();
     assert_eq!(readiness["capacity"]["resource_throttle"], Value::Null);
     assert_eq!(probe.samples(), 0, "a disabled throttle samples nothing");
+}
+
+// ---------------------------------------------------------------------------
+// CPU-light admission and frozen-batch expiry [ORB-14624]
+// ---------------------------------------------------------------------------
+
+/// The tags an after-landing review auto-task carries.
+const LIGHT_TAGS: &[&str] = &["code-review", "no-diff-expected", "auto-task:code-review"];
+
+/// CPU pressure from cargo-heavy leaves used to hold a review auto-task for
+/// hours. While CPU alone holds admissions, `no-diff-expected` auto-task
+/// leaves start up to the reserved light budget and an implementation leaf
+/// still waits; once the budget is taken a further light leaf waits too, and
+/// readiness names the light-budget reason.
+#[test]
+fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
+    if !isolated("a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget") {
+        return;
+    }
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let implementation = seed(
+        &runtime,
+        Seed {
+            title: "implementation",
+            priority: TaskPriority::High,
+            ..Seed::default()
+        },
+    );
+    // Tagged `no-diff-expected` but filed by hand: the exemption is for
+    // automated reading work, not for anything that promises no diff.
+    let manual_no_diff = seed(
+        &runtime,
+        Seed {
+            title: "manual no-diff",
+            tags: &["no-diff-expected"],
+            ..Seed::default()
+        },
+    );
+    let light: Vec<Task> = ["review one", "review two", "review three"]
+        .into_iter()
+        .map(|title| {
+            seed(
+                &runtime,
+                Seed {
+                    title,
+                    tags: LIGHT_TAGS,
+                    ..Seed::default()
+                },
+            )
+        })
+        .collect();
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    probe.sustain(&runtime, |probe| probe.cpu(Some(195.0)));
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["resource_throttle"]["resources"][0]["resource"], "cpu",
+        "{wave}"
+    );
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([light[0].id, light[1].id]),
+        "the reserved budget admits light leaves in queue order and nothing else: {wave}"
+    );
+    assert_eq!(wave["free_slots"], 2, "{wave}");
+    assert_eq!(
+        wave["cpu_light_budget"],
+        json!({"reserved": 2, "active": 0, "remaining": 2, "applies": true}),
+        "{wave}"
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(readiness["capacity"]["free_slots"], 2, "{readiness:#}");
+    let first = readiness_task(&readiness, &light[0].id);
+    assert_eq!(first["reason"], "ready", "{first}");
+    assert_eq!(first["cpu_light"], true, "{first}");
+    for refused in [&implementation.id, &manual_no_diff.id] {
+        let entry = readiness_task(&readiness, refused);
+        assert_eq!(entry["reason"], "resource_throttled", "{entry}");
+        assert_eq!(entry["cpu_light"], Value::Null, "{entry}");
+    }
+
+    // The admitted pair are live leaves now; the budget is spent.
+    for task in &light[..2] {
+        running_run(
+            &runtime,
+            "task_auto_pipeline",
+            json!({"task_ids": [task.id]}),
+        );
+    }
+    let full = classify(&runtime, &drain);
+    assert_eq!(full["loose_task_ids"], json!([]), "{full}");
+    assert_eq!(full["free_slots"], 0, "{full}");
+    assert_eq!(
+        full["cpu_light_budget"],
+        json!({"reserved": 2, "active": 2, "remaining": 0, "applies": true}),
+        "{full}"
+    );
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        readiness["capacity"]["cpu_light_budget"]["remaining"], 0,
+        "{readiness:#}"
+    );
+    let waiting = readiness_task(&readiness, &light[2].id);
+    assert_eq!(waiting["reason"], "cpu_light_budget_full", "{waiting}");
+    assert!(
+        waiting["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.starts_with("2 of 2 reserved CPU-light leaves")),
+        "{waiting}"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &implementation.id)["reason"],
+        "resource_throttled"
+    );
+
+    // Below the resume mark every slot opens again.
+    probe.cpu(Some(10.0));
+    probe.reading.lock().unwrap().2 = Utc::now();
+    let resumed = classify(&runtime, &drain);
+    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+    assert_eq!(
+        resumed["loose_task_ids"],
+        json!([light[2].id, implementation.id]),
+        "{resumed}"
+    );
+    assert_eq!(resumed["cpu_light_budget"]["applies"], false, "{resumed}");
+}
+
+/// Memory and disk pressure hold light leaves like any other: an agent
+/// session costs memory and its artifacts cost disk, whatever CPU does.
+#[test]
+fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
+    if !isolated("memory_and_disk_pressure_still_hold_light_auto_tasks") {
+        return;
+    }
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let light = seed(
+        &runtime,
+        Seed {
+            title: "review",
+            tags: LIGHT_TAGS,
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    let assert_held = |pressure: &str| {
+        let wave = classify(&runtime, &drain);
+        assert_eq!(wave["loose_task_ids"], json!([]), "{pressure}: {wave}");
+        assert_eq!(wave["free_slots"], 0, "{pressure}: {wave}");
+        assert_eq!(
+            wave["cpu_light_budget"]["applies"], false,
+            "{pressure}: {wave}"
+        );
+        let readiness = runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let entry = readiness_task(&readiness, &light.id);
+        assert_eq!(entry["reason"], "resource_throttled", "{pressure}: {entry}");
+        assert_eq!(entry["cpu_light"], true, "{pressure}: {entry}");
+    };
+
+    // Memory beside CPU holds the light leaf a CPU-only throttle admits.
+    probe.sustain(&runtime, |probe| {
+        probe.cpu(Some(195.0));
+        probe.memory(95.0, Utc::now());
+    });
+    assert_held("memory and cpu");
+
+    probe.cpu(Some(10.0));
+    probe.memory(10.0, Utc::now());
+    let open = classify(&runtime, &drain);
+    assert_eq!(open["loose_task_ids"], json!([light.id]), "{open}");
+
+    probe.sustain(&runtime, |probe| probe.memory(95.0, Utc::now()));
+    assert_held("memory");
+
+    probe.memory(10.0, Utc::now());
+    probe.sustain(&runtime, |probe| *probe.disk.lock().unwrap() = 95.0);
+    assert_held("disk");
+}
+
+/// A frozen delivery batch within two hours of its deadline sorts ahead of
+/// same-priority backlog, including corrective work, so it is not left to
+/// expire in the queue; one further from its deadline keeps its place.
+#[test]
+fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
+    if !isolated("a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
+    let older = seed(
+        &runtime,
+        Seed {
+            title: "older chore",
+            ..Seed::default()
+        },
+    );
+    let corrective = seed(
+        &runtime,
+        Seed {
+            title: "corrective",
+            task_type: TaskType::Bug,
+            ..Seed::default()
+        },
+    );
+    let high = seed(
+        &runtime,
+        Seed {
+            title: "high priority",
+            priority: TaskPriority::High,
+            task_type: TaskType::Bug,
+            ..Seed::default()
+        },
+    );
+    let expiring = seed(
+        &runtime,
+        Seed {
+            title: "expiring full review",
+            tags: &["no-diff-expected", "auto-task:full-review"],
+            ..Seed::default()
+        },
+    );
+    let distant = seed(
+        &runtime,
+        Seed {
+            title: "distant review",
+            tags: &["no-diff-expected", "auto-task:friction-curation"],
+            ..Seed::default()
+        },
+    );
+    admitted_frozen_batch(
+        &runtime,
+        "code-review",
+        &expiring.id,
+        chrono::Duration::minutes(90),
+    );
+    admitted_frozen_batch(
+        &runtime,
+        "friction-curation",
+        &distant.id,
+        chrono::Duration::hours(5),
+    );
+
+    let order = admitted(&list_backlog_tasks(&runtime, json!({})));
+    assert_eq!(
+        order,
+        vec![
+            high.id.clone(),
+            expiring.id.clone(),
+            corrective.id.clone(),
+            older.id.clone(),
+            distant.id.clone(),
+        ],
+        "a higher priority still leads; the expiring batch leads its priority"
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let listed: Vec<&str> = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["task_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, order.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        readiness_task(&readiness, &expiring.id)["frozen_batch_deadline"].is_string(),
+        "{readiness:#}"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &distant.id)["frozen_batch_deadline"],
+        Value::Null
+    );
+}
+
+/// Record `task_id` as the admitted action of a frozen batch on this
+/// workspace's `name` consumer, due `remaining` from now — the state delivery
+/// automation leaves after minting the batch's task.
+fn admitted_frozen_batch(
+    runtime: &OrbitRuntime,
+    name: &str,
+    task_id: &str,
+    remaining: chrono::Duration,
+) {
+    use orbit_types::workflow::automation::{
+        AutomationState, BatchAttempt, BatchState, CoverageBatch, CoverageClass, SourceRevision,
+    };
+    let consumer = format!(
+        "{}/{}/auto-task/{name}",
+        runtime.automation_machine_identity().unwrap(),
+        runtime.workspace_id().unwrap()
+    );
+    let revision = |commit: &str| SourceRevision {
+        commit: commit.to_string(),
+        tree: format!("{commit}-tree"),
+    };
+    let baseline = AutomationState {
+        members: None,
+        consumer: consumer.clone(),
+        epoch: "epoch".into(),
+        trigger: None,
+        repository: "fixture-repo".into(),
+        branch: "main".into(),
+        generation: 0,
+        baseline: revision("base"),
+        observed: revision("base"),
+        covered: revision("base"),
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        lookup_retries: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_initialize(&baseline).unwrap());
+    let mut admitted = baseline.clone();
+    admitted.generation = 1;
+    admitted.observed = revision("landing");
+    admitted.pending_commits = vec!["landing".into()];
+    admitted.active = Some(BatchAttempt {
+        batch: CoverageBatch {
+            schema_version: 1,
+            id: format!("batch-{name}"),
+            consumer,
+            epoch: "epoch".into(),
+            repository: "fixture-repo".into(),
+            branch: "main".into(),
+            coverage: CoverageClass::LandedCodeReviewV1,
+            from_exclusive: revision("base"),
+            through_inclusive: revision("landing"),
+            commits: vec!["landing".into()],
+            deliveries: vec![],
+            exclusions: vec![],
+            created_at: Utc::now() - chrono::Duration::hours(8),
+            max_attempts: 1,
+            retry_until: Utc::now() + remaining,
+        },
+        input_digest: "input-digest".into(),
+        attempt: 1,
+        action_key: format!("automation:batch-{name}:1"),
+        action_id: Some(task_id.to_string()),
+        state: BatchState::Admitted,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    });
+    assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
