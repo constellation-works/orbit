@@ -190,6 +190,26 @@ the running attempt's. A write may name only `review-report.json`, and must be a
 parses against the review contract and names that attempt; no other `review-*` path is written,
 so the broker never writes a certificate.
 
+A claimed leaf's final recovery (`final_recovery`) diagnoses its run from the same gate evidence,
+so the broker also carries its `review-*` reads, and nothing else of the namespace ([ORB-14661]).
+The scope is read-only: a read may name only `review-manifest.json`, `review-report.json`,
+`review-report-history.json`, `review-gate.json` or `review-baseline.json`, spelled exactly as
+the canonical name (a name that only normalises to one, such as ` review-gate.json` or
+`REVIEW-GATE.JSON`, is refused as `review_read_refused`), and a `review-*` write is refused as
+`review_write_refused` whatever the activity's tool policy grants. The broker serves it only for
+the claimed leaf the worker binding names (`not_claimed_leaf`), while that leaf's durable
+admission agrees with the binding (`claim_unbound`) and is launched but not yet settling
+(`claim_not_live`), and while the leaf's run is running with final recovery admitted for the
+claimed task and not yet decided (`final_recovery_stale`). The owner's claim fence applies as
+for any read.
+
+The claimed task's delivery view (`orbit.task.show` with `field: "delivery"`) is not forwarded:
+the owner holds no record of the follower's leaf run, so its answer could only be "job run not
+found" or another run's evidence. The broker answers it from the follower's own record of the
+leaf, for any claimed worker of that leaf whose claim is live, and for its final recovery only
+inside the recovery window above. `run_id` may be omitted or name the leaf; any other run is
+refused as `delivery_run_refused`.
+
 The nested `orbit` reads an artifact source inside the sandbox under `artifact.put`'s own
 confinement and no-follow open, and sends only its bytes; the broker never opens a path the
 agent names. The owner fences every call on the claim. It answers a read and takes a write only
@@ -412,7 +432,11 @@ service side regardless.
   claim. Refusals carry `claimed_owner_bridge_refused`. A `review-*` artifact call goes on to
   `dispatch/claimed_review.rs`, which adds the review ledger's attempt; its refusals carry
   `claimed_review_bridge_refused` and, for an attempt that is no longer running or a manifest
-  for another attempt, `review_attempt_stale` or `review_manifest_stale`. The nested `orbit`
+  for another attempt, `review_attempt_stale` or `review_manifest_stale`. A final recovery's
+  `review-*` read and every claimed worker's delivery view go to `dispatch/claimed_recovery.rs`
+  instead, which derives the leaf's liveness and its final-recovery window from the follower's
+  admission and run state (`live_claimed_leaf` and `claimed_leaf_in_final_recovery` in
+  `application/job/claimed.rs`) and projects the leaf's delivery locally. The nested `orbit`
   sends an artifact as base64 so a full 1 MiB artifact fits the request frame. The broker writes
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
   follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
@@ -427,6 +451,11 @@ service side regardless.
   `dispatch/tests/claimed_review.rs` and `dispatch/tests/claimed_owner.rs` cover the broker's
   scope and refusals, for the review artifacts and every other owner call, over the real socket
   on any Unix host, and that a masked sandbox never falls back to SSH.
+  `dispatch/tests/claimed_recovery.rs` drives a final recovery on a leaf admitted, created, bound
+  and launched through its durable pull admission: its gate-evidence reads and its delivery view
+  succeed, and a write, another task or workspace, another run, a decided recovery, an ended
+  run, a settling claim, an unnamed or respelled `review-*` path and another run's delivery stay
+  refused without reaching the owner.
 - `crates/orbit-cli/tests/tool/github_broker_sandbox.rs` compiles the agent sandbox the way a
   launch does (credential and plugin masks, the host's execution-env policy) around a
   stand-in `gh` that needs the host's config. A direct `gh` fails inside it, `orbit tool run
@@ -608,6 +637,7 @@ anything:
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
 | A claimed worker's owner call names another task, relation or field | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner. |
+| A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
@@ -657,5 +687,6 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-14017] — the host-credentialed `github.*` reads (§3).
 - [ORB-14194] — the claimed-review artifact route (§3).
 - [ORB-14260] — the claimed-owner calls and `owner_route_unavailable` (§3, §6.3).
+- [ORB-14661] — a claimed leaf's final-recovery evidence reads and its leaf delivery view (§3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

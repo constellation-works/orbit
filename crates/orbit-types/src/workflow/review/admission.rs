@@ -26,6 +26,10 @@ pub const REVIEW_REPORT_ARTIFACT: &str = "review-report.json";
 /// Task artifact carrying the settled gate result for the latest attempt.
 pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 
+/// Task artifact holding the host's runs for each baseline claim a review
+/// report makes.
+pub const REVIEW_BASELINE_ARTIFACT: &str = "review-baseline.json";
+
 /// Default `review.minutes`: reviewer runtime for one candidate's review,
 /// its fix commit and final validation included [ORB-13992].
 pub const DEFAULT_REVIEW_MINUTES: u32 = 30;

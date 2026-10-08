@@ -14,8 +14,9 @@
 //! cannot be started, redirected or impersonated by editing a run's input.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExecutionClaim, LocalPullAdmission};
+use orbit_store::contracts::{ExecutionClaim, LocalPullAdmission, LocalPullPhase};
 use orbit_types::tool::WorkerInvocation;
+use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 
@@ -118,5 +119,73 @@ impl OrbitRuntime {
             ))
         })?;
         self.authorize_claimed_leaf(&run_id, admission)
+    }
+
+    /// [ORB-14661] The claimed leaf this process executes, while it still
+    /// holds its claim: `run_id` must be the leaf the binding names, its
+    /// admission must agree with the binding, and that admission must be
+    /// launched and not yet settling. A claim the executor has begun to
+    /// settle, or that ended, authorizes no further read of its evidence.
+    ///
+    /// Each refusal leads with a reason token: `not_claimed_leaf`,
+    /// `claim_unbound` or `claim_not_live`.
+    pub(crate) fn live_claimed_leaf(&self, run_id: &str) -> Result<ClaimedLeaf, OrbitError> {
+        if self
+            .worker_invocation()
+            .is_none_or(|binding| binding.bound_run_id != run_id)
+        {
+            return Err(refused(
+                "not_claimed_leaf: the run is not the claimed leaf bound to this task",
+            ));
+        }
+        let leaf = self.current_claimed_leaf().map_err(|error| {
+            refused(format!(
+                "claim_unbound: {}",
+                match error {
+                    OrbitError::PolicyDenied(reason) => reason,
+                    other => other.to_string(),
+                }
+            ))
+        })?;
+        if !matches!(
+            leaf.admission.phase,
+            LocalPullPhase::Launching | LocalPullPhase::Launched
+        ) {
+            return Err(refused(
+                "claim_not_live: the leaf's claim is settling, settled or released",
+            ));
+        }
+        Ok(leaf)
+    }
+
+    /// [ORB-14661] [`Self::live_claimed_leaf`] while its run is running with
+    /// final recovery admitted for the claimed task and not yet decided: the
+    /// window in which the leaf's final-recovery agent runs. Refuses with
+    /// `final_recovery_stale` outside it.
+    pub(crate) fn claimed_leaf_in_final_recovery(
+        &self,
+        run_id: &str,
+    ) -> Result<ClaimedLeaf, OrbitError> {
+        let leaf = self.live_claimed_leaf(run_id)?;
+        let running = self
+            .stores()
+            .jobs()
+            .get_job_run(run_id)?
+            .is_some_and(|run| run.state == JobRunState::Running);
+        let deciding = self.read_run_state(run_id)?.is_some_and(|state| {
+            state.final_recovery.is_some_and(|checkpoint| {
+                checkpoint.key.run_id == run_id
+                    && checkpoint.task_id == leaf.claim.task_id
+                    && checkpoint.decision.is_none()
+                    && checkpoint.outcome.is_none()
+            })
+        });
+        if !running || !deciding {
+            return Err(refused(
+                "final_recovery_stale: the leaf's final recovery is not admitted, has already \
+                 decided, or its run has ended",
+            ));
+        }
+        Ok(leaf)
     }
 }

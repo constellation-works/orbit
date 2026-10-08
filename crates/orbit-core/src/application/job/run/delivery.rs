@@ -12,7 +12,9 @@
 //! this workspace's run store, the task in its task store, the run's own
 //! submitted `task_ids` must name the task, and the job must hold task
 //! delivery. Evidence that is missing or does not match is reported as a typed
-//! gap, never filled from a weaker source.
+//! gap, never filled from a weaker source. A claimed leaf's task lives in its
+//! owner's store instead, so its executor answers for the leaf on the durable
+//! admission binding the leaf to that task's claim.
 
 use std::collections::HashMap;
 
@@ -117,6 +119,39 @@ impl OrbitRuntime {
                 "run '{run_id}' did not deliver task '{task_id}' in this workspace"
             )));
         }
+        self.project_stored_delivery(&run, &task.id)
+    }
+
+    /// [ORB-14661] Observe what a claimed leaf run committed and landed for
+    /// its claimed task, from this executor's own record of the leaf. The
+    /// claimed task lives in its owner's store, never this one, so ownership
+    /// is the durable admission binding the leaf to the claim on that task,
+    /// already authorized by the caller, in place of the task-store lookup
+    /// [`Self::observe_run_delivery`] makes. The owner holds no record of the
+    /// leaf, so only this side can answer for it.
+    pub(crate) fn observe_claimed_leaf_delivery(
+        &self,
+        leaf: &crate::application::job::claimed::ClaimedLeaf,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        let run_id = leaf.binding.bound_run_id.as_str();
+        let task_id = leaf.claim.task_id.as_str();
+        let run = self.show_job_run_observed(run_id)?;
+        if !run_task_ids(&run).contains(&task_id) {
+            return Err(OrbitError::InvalidInput(format!(
+                "run '{run_id}' did not deliver its claimed task"
+            )));
+        }
+        self.project_stored_delivery(&run, task_id)
+    }
+
+    /// The observation of `run` for `task_id`, whose ownership the caller
+    /// has already established.
+    fn project_stored_delivery(
+        &self,
+        run: &JobRun,
+        task_id: &str,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        let run_id = run.run_id.as_str();
         let shape = match self.load_v2_job_asset_by_name(&run.job_id) {
             Ok((_, mut job)) => {
                 if !job.holds_task_delivery() {
@@ -144,10 +179,10 @@ impl OrbitRuntime {
         Ok(project_run_delivery(
             self.workspace_id()?,
             repository,
-            &run,
+            run,
             state.as_ref(),
             shape.as_ref(),
-            &task.id,
+            task_id,
         ))
     }
 }

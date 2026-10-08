@@ -42,7 +42,7 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
 
 pub(super) const FOLLOWER: &str = "hm_follower";
-const OWNER: &str = "hm_owner";
+pub(super) const OWNER: &str = "hm_owner";
 pub(super) const TASK: &str = "TSO-1";
 const LEAF: &str = "jrun-leaf-1";
 const LINEAGE: &str = "lineage-1";
@@ -105,7 +105,11 @@ impl Owner {
             .insert(path.to_string(), bytes.to_vec());
     }
 
-    fn reads(&self) -> Vec<String> {
+    pub(super) fn forget(&self, path: &str) {
+        self.artifacts.lock().unwrap().remove(path);
+    }
+
+    pub(super) fn reads(&self) -> Vec<String> {
         self.calls
             .lock()
             .unwrap()
@@ -652,5 +656,67 @@ fn a_reviewer_past_its_deadline_without_finishing_reaches_nothing() {
     assert!(
         fixture.owner.calls.lock().unwrap().is_empty(),
         "an expired reviewer's calls never reach the owner"
+    );
+}
+
+/// Two open attempts whose reviewers both run in this run leave the broker no
+/// one attempt to serve, so it refuses rather than choose between them.
+#[test]
+fn a_run_two_open_attempts_name_reaches_nothing() {
+    let fixture = Fixture::new();
+    let broker = fixture.serve("agent_review_repair");
+    let store = fixture.runtime.review_store().unwrap();
+    let workspace = fixture.runtime.workspace_id().unwrap();
+    let (reservation, _) = store
+        .review_reserve(
+            &workspace,
+            &ReviewReserveRequest {
+                lineage_key: "lineage-2",
+                task_ids: &[TASK.to_string()],
+                run_id: LEAF,
+                task_meaning_digest: "digest",
+                candidate: &SourceRevision {
+                    commit: "a".repeat(40),
+                    tree: "b".repeat(40),
+                },
+                budget: ReviewBudget::default(),
+                now: Utc::now(),
+            },
+        )
+        .unwrap();
+    let ReviewReservation::Reserved { attempt } = reservation else {
+        panic!("a second lineage reserves: {reservation:?}");
+    };
+    store
+        .review_record_invocation(
+            &workspace,
+            &ReviewInvocationRecord {
+                lineage_key: "lineage-2",
+                attempt_id: &attempt.attempt_id,
+                run_id: LEAF,
+                event: ReviewerInvocationEvent::Started {
+                    timeout_seconds: 1800,
+                },
+                now: Utc::now(),
+            },
+        )
+        .unwrap();
+    let (source, _) = fixture.report("report.json", &fixture.attempt_id);
+    for (name, input) in [
+        (GET, json!({"id": TASK, "path": REVIEW_MANIFEST_ARTIFACT})),
+        (
+            PUT,
+            json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT, "source_path": source}),
+        ),
+    ] {
+        let refused = fixture.forwarded(&broker, name, input).unwrap_err();
+        assert!(
+            refused.contains("more than one open review attempt"),
+            "{name}: {refused}"
+        );
+    }
+    assert!(
+        fixture.owner.calls.lock().unwrap().is_empty(),
+        "an ambiguous attempt's calls never reach the owner"
     );
 }

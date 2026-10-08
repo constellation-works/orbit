@@ -125,7 +125,7 @@ impl<'a> ClaimedReviewScope<'a> {
     }
 }
 
-fn denied(reason: &str) -> OrbitError {
+pub(super) fn denied(reason: &str) -> OrbitError {
     OrbitError::PolicyDenied(format!("claimed_review_bridge_refused: {reason}"))
 }
 
