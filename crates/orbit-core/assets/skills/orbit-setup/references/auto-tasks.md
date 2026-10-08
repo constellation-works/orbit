@@ -232,11 +232,13 @@ plugin being removed.
 - **`full-code-review`** (`medium`) — on demand (`orbit auto-task mint
   full-code-review`); its monthly cron stays off until you enable it. The minted
   task is a coordinator: it pins the integration branch's tip, splits the tree
-  into review areas of roughly 90k lines along package and module boundaries,
-  and files one area-review chore per area, tagged `full-code-review` and
-  `no-diff-expected` (never `code-review`), at `hard` complexity or below with
-  no pinned crew. Each area reviewer reads its whole area at that commit and
-  files confirmed findings as bugs tagged `code-review` and `full-code-review`;
+  into review areas of at most 25,000 tracked text lines, preferring package
+  and module boundaries where they fit that bound, and files one area-review
+  chore per area, tagged `full-code-review` and `no-diff-expected` (never
+  `code-review`), at `hard` complexity or below with no pinned crew. Each area
+  reviewer reads its whole area at that commit in partitions of at most 10,000
+  lines and files confirmed findings as bugs tagged `code-review` and
+  `full-code-review`;
   a clean area is a successful no-op.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
   records typed coverage evidence. Hands-on QA of recent changes is
