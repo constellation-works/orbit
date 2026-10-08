@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Vision"
 owner: codex
-last_updated: 2026-08-23
-last_validated: 2026-09-27
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: remote-access
 doc_role: vision
@@ -31,7 +31,9 @@ Any routable listener needs a real authentication and authorization design befor
 
 ### Long-lived connectivity
 
-Background reconnect, tunnel multiplexing, or several remote machines in one browser may be useful only with explicit lifecycle, port ownership, failure reporting, and authority boundaries. The foreground one-tunnel model remains the baseline.
+Crossed by the host forward ([4_decisions.md](./4_decisions.md#forward-dashboard-requests-to-registered-hosts), [specs/host-forward.md](./specs/host-forward.md)): one dashboard holds on-demand tunnels to several registered hosts, with the lifecycle, port ownership, failure reporting and authority rules that decision records. `web connect` keeps its foreground one-tunnel model.
+
+Background reconnect, heartbeats and a standing connection to every host remain behind this gate. Each needs its own lifecycle and failure design; the host forward re-establishes only when a request arrives.
 
 ### Cross-machine state
 
@@ -55,6 +57,7 @@ Measure registry parse cost, runtime-cache churn, and aggregate endpoint latency
 
 - Web binds loopback unless a separate authenticated deployment boundary is designed.
 - SSH local forwarding remains Web-specific; MCP direct stdio remains independent.
+- A forwarded request is answered by the named host's own dashboard; the serving dashboard neither caches nor merges what it relays.
 - The remote machine is authoritative for reads and writes served through its dashboard.
 - Registry snapshots select workspaces; orbit-cmd constructs registered runtimes; Core executes domain behavior.
 - Failed or stale workspace bindings are visible and isolated rather than silently redirected.

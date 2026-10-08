@@ -3,8 +3,8 @@ summary: "Host Registry — Decisions"
 type: design
 title: "Host Registry — Decisions"
 owner: codex
-last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: host-registry
 doc_role: decisions
@@ -288,6 +288,14 @@ stops asking the wrong host. Cost:
   legacy `ORB` prefix cannot both be registered.
 - An unreachable host's tasks cannot be read from elsewhere, even when a local mirror
   exists, unless the caller names the mirror's workspace explicitly.
+
+## The dashboard reaches registered hosts on demand
+
+**Context.** The host file names the operator's hosts and their SSH targets. A dashboard could use it to reach those hosts, but a standing connection to each one would turn the registry into a fleet control plane that watches and manages machines.
+
+**Decision.** The dashboard reaches a registered host only when a request names it, through `/api/on/<host>/<path>` ([remote-access specs/host-forward.md](../remote-access/specs/host-forward.md)). The set of hosts is the operator's host file and nothing else. Everything about a host except its `machine_id`, `ssh` and `task_prefix` is read live through the tunnel and kept in memory; the host file schema does not change. There is no discovery, background polling, heartbeat or desired-state model.
+
+**Consequences.** Registering a host is what makes it reachable from the dashboard, and an idle host costs nothing. Cost: the first request to a host pays for its SSH establish, an unreachable host is found only when someone asks, and nothing is known about a host between requests.
 
 ## Task References
 

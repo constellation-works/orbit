@@ -82,12 +82,23 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Self {
-        Self::with_owner(None)
+        Self::with_owner(None, "http-fixture", "HF")
+    }
+
+    /// A second host: its own root and `[machine]` identity.
+    pub(super) fn host(name: &str, task_prefix: &str) -> Self {
+        Self::with_owner(None, name, task_prefix)
     }
 
     /// A replica checkout of a workspace `owner_machine_id` owns.
     pub(super) fn replica_of(owner_machine_id: &str) -> Self {
-        Self::with_owner(Some(owner_machine_id))
+        Self::with_owner(Some(owner_machine_id), "http-fixture", "HF")
+    }
+
+    pub(super) fn machine_id(&self) -> String {
+        orbit_registry::machine_identity::load_machine_identity(&self.global)
+            .unwrap()
+            .id
     }
 
     /// Reopens an owner-prepared checkout with replica authority for HTTP tests.
@@ -123,7 +134,7 @@ impl Fixture {
         }
     }
 
-    fn with_owner(remote_owner: Option<&str>) -> Self {
+    fn with_owner(remote_owner: Option<&str>, machine_name: &str, task_prefix: &str) -> Self {
         assert!(
             std::env::var_os(CHILD_TEST).is_some(),
             "mutable fixture must be isolated"
@@ -141,8 +152,8 @@ impl Fixture {
         .unwrap();
         orbit_registry::ensure_machine_identity(&global, || {
             Ok(orbit_registry::NewMachineIdentity {
-                name: "http-fixture".into(),
-                task_prefix: "HF".into(),
+                name: machine_name.into(),
+                task_prefix: task_prefix.into(),
             })
         })
         .unwrap();
@@ -198,6 +209,22 @@ impl Fixture {
         self.server_impl(operator, false, false)
     }
 
+    /// A server whose `PATH` starts with `bin`, so its `ssh` is a stub there.
+    pub(super) fn server_with_path(&self, operator: bool, bin: &Path) -> Server {
+        let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        self.server_impl_with_env(
+            operator,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[("PATH", path.as_os_str())],
+        )
+    }
+
     pub(super) fn counted_task_server(&self) -> Server {
         self.server_impl_with_log(
             false,
@@ -238,6 +265,25 @@ impl Fixture {
         log_path: &Path,
         task_query_log: Option<&Path>,
     ) -> Server {
+        self.server_impl_with_env(
+            operator,
+            resources,
+            replay_worker,
+            log_path,
+            task_query_log,
+            &[],
+        )
+    }
+
+    fn server_impl_with_env(
+        &self,
+        operator: bool,
+        resources: bool,
+        replay_worker: bool,
+        log_path: &Path,
+        task_query_log: Option<&Path>,
+        env: &[(&str, &std::ffi::OsStr)],
+    ) -> Server {
         orbit_common::test_env::assert_child_test_exists("server_child");
         let log = tempfile::NamedTempFile::new_in(self.temp.path()).unwrap();
         let mut command = fixture_command(self.temp.path());
@@ -260,6 +306,7 @@ impl Fixture {
         if let Some(path) = task_query_log {
             command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
         }
+        command.envs(env.iter().copied());
         let mut server = Server {
             process: Process(command.spawn().unwrap()),
             task_query_log: task_query_log.map(Path::to_owned),
@@ -375,6 +422,26 @@ impl Server {
 
     pub(super) fn pid(&self) -> u32 {
         self.process.0.id()
+    }
+
+    /// SIGTERM the server (graceful shutdown) and wait, bounded, for its exit.
+    #[cfg(unix)]
+    pub(super) fn terminate(&mut self) -> std::process::ExitStatus {
+        // SAFETY: signalling this fixture's own direct child.
+        unsafe {
+            libc::kill(self.process.0.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = self.process.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "server did not exit within 30s of SIGTERM"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     pub(super) fn request(&self, method: &str, path: &str) -> RequestBuilder {

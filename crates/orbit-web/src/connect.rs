@@ -170,6 +170,7 @@ fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
         attach_timeout: ATTACH_PROBE_TIMEOUT,
         ready_timeout: READINESS_TIMEOUT,
         ssh_program: "ssh".to_string(),
+        unattended: None,
     }
 }
 
@@ -263,7 +264,7 @@ fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
 /// Best-effort `GET /healthz` over the forwarded local port. Returns `true`
 /// only on a `200` status line. Any connect/IO error (including `ssh` refusing
 /// the forwarded connection because the remote server is not up yet) is `false`.
-fn healthz_ok(local_port: u16) -> bool {
+pub(crate) fn healthz_ok(local_port: u16) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) else {
         return false;

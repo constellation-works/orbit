@@ -59,7 +59,7 @@ sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 toml.workspace = true
-tower = { version = "0.5", features = ["util"] }
+tower.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

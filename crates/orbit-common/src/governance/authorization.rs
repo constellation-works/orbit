@@ -279,6 +279,15 @@ pub const DASHBOARD_HOST_EDIT: GovernedOperation = GovernedOperation {
     rationale: "the host file decides where federated MCP, pull drains and routed task calls go for every surface on this machine",
 };
 
+/// Forward a write (POST, PUT, PATCH or DELETE) from the dashboard to a
+/// registered host's own dashboard through `/api/on/<host>/…` [ORB-14679].
+pub const DASHBOARD_HOST_FORWARD: GovernedOperation = GovernedOperation {
+    id: "host.forward",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "a forwarded write changes another registered host's state through this host's SSH identity",
+};
+
 /// Enable a plugin from the dashboard without changing recorded consent.
 pub const DASHBOARD_PLUGIN_ENABLE: GovernedOperation = GovernedOperation {
     id: "plugin.enable",
@@ -601,6 +610,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
     DASHBOARD_HOST_EDIT,
+    DASHBOARD_HOST_FORWARD,
     DASHBOARD_PLUGIN_ENABLE,
     DASHBOARD_PLUGIN_DISABLE,
     PLUGIN_TOOL_READ_ONLY,
