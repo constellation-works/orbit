@@ -194,6 +194,7 @@ export default defineConfig({
         {
           label: 'Operate',
           items: [
+            { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
             { slug: 'how-to/task-publication', label: 'Publish and Restore Tasks' },
             { slug: 'how-to/distributed-drain', label: 'Set Up a Distributed Drain' },
           ],

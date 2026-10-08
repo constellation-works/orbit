@@ -1,28 +1,30 @@
 // Capture the dashboard screenshots the docs use from a running dashboard.
 //
-//   node capture.mjs <dashboard-url> <out-dir>
+//   node capture.mjs <dashboard-url> <out-dir> [--hosts-only]
 //
 // <dashboard-url> selects one workspace, e.g.
 // http://localhost:7878/?workspace=ws_orbit. The script only reads: it opens
 // tabs and a run's detail, and never presses an action button.
-// Needs Playwright (resolved through NODE_PATH) and Google Chrome; see README.md.
+// Needs Playwright and a browser; see README.md for the prepared-host kit.
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
 const require = createRequire(import.meta.url);
-const { chromium } = require("playwright");
+const { chromium } = process.env.PLAYWRIGHT_MODULE
+  ? await import(process.env.PLAYWRIGHT_MODULE)
+  : require("playwright");
 
-const [base, outDir] = process.argv.slice(2);
-if (!base || !outDir) {
-  console.error("usage: node capture.mjs <dashboard-url> <out-dir>");
+const [base, outDir, selection] = process.argv.slice(2);
+if (!base || !outDir || (selection && selection !== "--hosts-only")) {
+  console.error("usage: node capture.mjs <dashboard-url> <out-dir> [--hosts-only]");
   process.exit(2);
 }
 await mkdir(outDir, { recursive: true });
 
 const WIDTH = 1440;
 const HEIGHT = 900;
-const browser = await chromium.launch({ channel: "chrome" });
+const browser = await chromium.launch(process.env.PLAYWRIGHT_MODULE ? {} : { channel: "chrome" });
 const page = await browser.newPage({
   viewport: { width: WIDTH, height: HEIGHT },
   deviceScaleFactor: 2,
@@ -54,6 +56,31 @@ async function tall(height, fn) {
     await page.setViewportSize({ width: WIDTH, height: HEIGHT });
     await settle(600);
   }
+}
+
+async function hostsShot() {
+  const hostsUrl = new URL(base);
+  hostsUrl.hash = "config/hosts";
+  await page.goto(hostsUrl.href, { waitUntil: "networkidle" });
+  await page.locator(".host-list .host-row").first().waitFor();
+  await settle();
+  // Omit the scope strip and trailing error detail, which can print host paths.
+  const targets = [
+    page.locator(".host-head"),
+    ...await page.locator(".host-row > .host-grid").all(),
+  ];
+  const add = page.locator(".host-add");
+  if (await add.count()) targets.unshift(add);
+  await shot("dashboard-hosts", targets, 0);
+}
+
+if (selection === "--hosts-only") {
+  try {
+    await hostsShot();
+  } finally {
+    await browser.close();
+  }
+  process.exit(0);
 }
 
 const tasksUrl = new URL(base);
@@ -102,4 +129,5 @@ await tall(1600, async () => {
   await shot("dashboard-run-detail", [panel.locator(":scope > header"), panel.locator(".gantt-panel")], 0);
 });
 
+await hostsShot();
 await browser.close();

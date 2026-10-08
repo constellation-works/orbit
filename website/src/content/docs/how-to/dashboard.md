@@ -330,6 +330,7 @@ layering and descriptions as `orbit config show`.
 | **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
+| **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
 
 **Effective** opens with a strip naming both files, then one panel per section
 (Delivery, Crews, Execution, Review, Housekeeping) and a read-only **Paths**
@@ -382,7 +383,43 @@ with two refusals:
   with no default crew is refused.
 
 Routines, auto-task definitions, and the workspace registry are not editable
-here. Settings shows one workspace at a time.
+here. Workspace settings show one workspace at a time; **Hosts** also works
+in **All workspaces**.
+
+### Hosts
+
+Open **Settings › Hosts** (`#config/hosts`) to manage the serving machine's
+[`hosts.toml`](../../reference/config/#host-registry). Through
+`orbit web connect`, this is the remote machine's registry.
+
+![Settings › Hosts: Add host, the local host labelled local · edited here, and an unreachable remote with its error code, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
+
+Captured from Orbit 0.28.0 on 2026-10-08 with an isolated demo registry.
+`build-box.invalid` is an intentionally unreachable example SSH target.
+
+The local host comes first, labelled **local · edited here**. Remote rows
+show their SSH target, task prefix, reachability, Orbit version, protocol,
+skew, and workspace roles. An unreachable host stays visible with its typed
+error. Opening the view and **Reload** probe every host. Periodic refreshes
+reread the file and retain the last probe results; they open no background
+SSH sessions. A CLI-added host appears on the next refresh.
+
+- **Add host** opens an inline form for an SSH target and an optional name.
+  Saving probes the host and registers its identity here, as `orbit host add`
+  does. It writes nothing on the remote.
+- **Rename** edits the local entry name; the machine ID and SSH route stay
+  the same.
+- **Remove** asks for confirmation inline. A `host_in_use` refusal lists
+  dependent replica checkouts and pull drains and offers a separate force
+  confirmation, which removes their route.
+
+Edits need an [operator session](#authorization). Without one, this view is
+read-only. The local host cannot be removed or renamed here. If a newer
+host file fails validation, a banner shows the error and the last valid
+snapshot stays visible until you repair the file. Mutations always validate
+the current file.
+
+For host setup and typed errors, see [Run Orbit across hosts](../multi-host/).
 
 ## Authorization
 
@@ -396,7 +433,7 @@ Two gates apply:
 
 1. **Workspace scope.** **All workspaces** and inactive workspaces are
    read-only, even for an operator. The exception is task actions on rows that
-   name their owner.
+   name their owner, and the machine-global **Settings › Hosts** view.
 2. **Operator capability.** Needed for routine and auto-task switches,
    **Mint now**, **Run ▸**, clock controls, **Mark done**, **Stop** and
    **Settle pending**, settings writes, plugin enable and disable, and the
