@@ -408,27 +408,45 @@ fn diagnostics_errors(
             .as_str()
             .is_none_or(|id| seen_process.insert(id.to_string()))
     });
-    rows.truncate(limit);
-    let mut steps_by_run = HashMap::new();
-    for row in &mut rows {
-        if row["target"] != "orbit.job.step_finished" {
-            continue;
+    // The process log is host-global, so a run-affiliated row may belong to
+    // another workspace. Only the selected workspace can resolve its runs'
+    // steps, and a foreign row would keep the generic `step <id> finished
+    // error` text; rows for runs this workspace does not own are dropped.
+    // Filtering precedes the cap so foreign rows cannot crowd out local ones.
+    let workspace_id = runtime.workspace_id()?;
+    let mut runs = HashMap::new();
+    let mut scoped = Vec::new();
+    for mut row in rows {
+        if scoped.len() >= limit {
+            break;
         }
-        let Some(run) = row["job_run"].as_str() else {
+        let Some(run) = row["job_run"].as_str().map(str::to_string) else {
+            scoped.push(row);
             continue;
         };
-        let steps = steps_by_run.entry(run.to_string()).or_insert_with(|| {
-            runtime
-                .collect_run_audit_steps(run)
+        let (owned, steps) = runs.entry(run.clone()).or_insert_with(|| {
+            let steps = runtime
+                .collect_run_audit_steps(&run)
                 .unwrap_or_else(|error| {
                     tracing::warn!(%run, %error, "diagnostics step join unavailable");
                     Vec::new()
-                })
+                });
+            let owned = !steps.is_empty()
+                || runtime.sqlite_store().is_ok_and(|store| {
+                    store
+                        .get_job_run_for_workspace(&workspace_id, &run)
+                        .is_ok_and(|found| found.is_some())
+                });
+            (owned, steps)
         });
-        if let Some(step) = steps
-            .iter()
-            .rev()
-            .find(|step| Some(step.step_id.as_str()) == row["step"].as_str())
+        if !*owned {
+            continue;
+        }
+        if row["target"] == "orbit.job.step_finished"
+            && let Some(step) = steps
+                .iter()
+                .rev()
+                .find(|step| Some(step.step_id.as_str()) == row["step"].as_str())
         {
             row["step_index"] = json!(step.step_index);
             if let Some(message) = step
@@ -439,7 +457,9 @@ fn diagnostics_errors(
                 row["message"] = json!(redact_all(message));
             }
         }
+        scoped.push(row);
     }
+    let mut rows = scoped;
     rows.extend(agent_stderr_error_rows(runtime, range, limit)?);
     rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
     let mut seen = HashSet::new();

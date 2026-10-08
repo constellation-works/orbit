@@ -81,7 +81,9 @@ function fixture(url) {
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
       return healthFixture ? [
         { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished' },
-        { event_id: 'retry', message: 'Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'apply_patch' },
+        { event_id: 'retry', message: 'error=apply_patch verification failed: Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'codex_core::tools::router' },
+        { event_id: 'timeout', message: 'failed to refresh available models: request timed out', source: 'agent-stderr', target: 'codex_models_manager::manager' },
+        { event_id: 'other', message: 'unexpected tool crash', source: 'agent-stderr', target: 'codex_core::tools::router' },
       ] : [{ message: marker, source: 'fixture' }];
     case '/api/diagnostics/metrics':
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since') });
@@ -413,6 +415,10 @@ for (const selectedWindow of ['24h', '7d']) {
   check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
   const internal = node('diag-body').querySelector('details.agent-diagnostics');
   check(internal && (selectedWindow !== '24h' || !internal.open), 'recoverable agent diagnostics start collapsed');
+  const mainRows = [...node('diag-body').querySelectorAll('.diagnostics-errors-main tbody > tr')]
+    .map(row => row.querySelector('.c-message').textContent);
+  check(mainRows.length === 2 && mainRows.every(message => !/verification failed|request timed out/.test(message)), 'real codex patch and model-timeout rows leave the main table');
+  check(internal.querySelectorAll('tbody > tr').length === 2, 'both recognised codex shapes collapse under agent diagnostics');
   internal.open = true;
   const shortened = internal.querySelector('.c-message');
   check(shortened.textContent.includes('[worktree]/src/lib.rs') && !shortened.textContent.includes('/home/operator'), 'worktree prefix shortened in message');
