@@ -15,7 +15,7 @@ use crate::workflow::child_dispatch::{
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
     DrainCancelRequest, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
-    PullCrewPreflight, PullSinglePass, TaskCancellationPolicy,
+    PullAuthRecovery, PullCrewPreflight, PullSinglePass, TaskCancellationPolicy,
 };
 
 /// Persistent pipeline state for a job run.
@@ -102,6 +102,9 @@ pub struct PipelineState {
     /// the drain could not run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_crew_preflight: Option<PullCrewPreflight>,
+    /// Recovery per released auth incident; old incidents stay acknowledged on resume.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pull_auth_recovery: BTreeMap<String, PullAuthRecovery>,
     /// The single admission pass of a pull drain submitted without a window,
     /// once it has started. Survives terminalization and resume, so the pass
     /// is never taken twice.
@@ -186,6 +189,7 @@ impl PipelineState {
             drain_cancel: None,
             task_cancellation_policy: None,
             pull_crew_preflight: None,
+            pull_auth_recovery: BTreeMap::new(),
             pull_single_pass: None,
             drain_last_pass: None,
             drain_approvals: None,

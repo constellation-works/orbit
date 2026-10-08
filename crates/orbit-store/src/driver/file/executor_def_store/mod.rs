@@ -77,6 +77,7 @@ impl ExecutorDefFileStore {
                     model_pair_override: def.model_pair_override.clone(),
                     model_flag: def.model_flag.clone(),
                     timeout_seconds: def.timeout_seconds,
+                    auth_probe: def.auth_probe.clone(),
                     env: def.env.clone(),
                     sandbox: def.sandbox,
                     allow_fallback: def.allow_fallback,

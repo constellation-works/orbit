@@ -223,6 +223,29 @@ impl Execute for DoctorCommand {
         results.extend(WorkspaceDoctorResult::timed_many(|| {
             routed_provider_rows(runtime)
         }));
+        results.extend(WorkspaceDoctorResult::timed_many(|| {
+            match runtime.active_pull_auth_exclusions() {
+                Ok(exclusions) => exclusions
+                    .into_iter()
+                    .map(|exclusion| WorkspaceDoctorResult {
+                        duration_ms: 0,
+                        check_name: format!("provider-auth:{}", exclusion.provider),
+                        status: WorkspaceDoctorStatus::Warning,
+                        message: exclusion.describe(),
+                        remediation: Some(exclusion.relogin_hint),
+                    })
+                    .collect(),
+                Err(error) => vec![WorkspaceDoctorResult {
+                    duration_ms: 0,
+                    check_name: "provider-auth".into(),
+                    status: WorkspaceDoctorStatus::Warning,
+                    message: format!(
+                        "could not inspect active drain authentication exclusions: {error}"
+                    ),
+                    remediation: Some("Inspect the drain with `orbit run show`.".into()),
+                }],
+            }
+        }));
         results.push(WorkspaceDoctorResult::timed(|| {
             mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
         }));

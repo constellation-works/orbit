@@ -548,7 +548,7 @@ Run finalization then moves the task to `backlog` under a `provider_failure_hold
 
 Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
 
-Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider for the drain window. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room.
+Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider. A declared executor `auth_probe` can re-admit them in the same drain window after credentials recover. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room.
 
 ### Final recovery pool
 
@@ -600,6 +600,60 @@ Both OS sandboxes (macOS `sandbox-exec`, Linux Bubblewrap) let workers share one
 The macOS profile allows `pseudo-tty`, `/dev/ptmx` (read, write, ioctl), and read, write and ioctl on `/dev/ttys[0-9]+`, so `openpty`/`posix_openpt` work inside a worker (for example, a test that drives a CLI through a real terminal). Access to other PTYs remains subject to normal OS checks. Linux needs no equivalent rule.
 
 ---
+
+## Executor authentication recovery probes
+
+An executor may declare an optional `spec.auth_probe`. Only a pull drain's
+**auth-excluded** providers run it: no probe runs at drain start, for healthy
+crews, after the window closes, or for capacity/refusal exclusions. The first
+attempt is due ten minutes after the failed leaf; failed attempts wait twenty,
+then thirty minutes (the cap). A successful attempt acknowledges those auth
+failures durably and re-admits the provider's crews within the same window.
+It never clears a separate preflight, capacity, crew or host exclusion.
+
+The shipped **claude** executor declares a minimal `claude -p --model haiku`
+call with built-in and MCP tools disabled ([CLI contract](https://code.claude.com/docs/en/cli-reference)). It sends a one-line prompt on stdin and requires a
+zero exit plus `ORBIT_AUTH_OK` in stdout. This uses one model request per
+attempt. `claude auth status` is not used: cached status can lag a real 401 and
+may refresh shared OAuth credentials. Codex, Gemini, Antigravity, Grok,
+Copilot, Cursor, Pi and OpenCode do not currently declare probes: their minimal
+model-call/success contracts have not been established here. Local-shell has
+no provider authentication. An executor without a probe keeps its current
+whole-window exclusion; re-login and start a new drain.
+
+Existing operator executor definitions are preserved during normal seeding;
+add this declaration to an installed definition, then start a drain to opt
+into recovery:
+
+```yaml
+auth_probe:
+  args: ["-p", "--model", "haiku", "--output-format", "text", "--tools", "", "--disallowedTools", "mcp__*", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--max-turns", "1", "--no-session-persistence"]
+  stdin: "Reply with exactly ORBIT_AUTH_OK."
+  timeout_seconds: 60
+  success: { kind: stdout_contains, text: ORBIT_AUTH_OK }
+  relogin_hint: "Run `claude auth login`, or renew `claude setup-token`."
+```
+
+`args` replaces ordinary activity argv and uses the same resolved executor
+command/launcher. `success.kind` is `exit_zero` or `stdout_contains` with a
+non-empty `text`; both require exit zero. `timeout_seconds` must be 1–120.
+Probes use the leaf runner's cleared environment with `[execution.env].pass`,
+provider-required/fixed entries, sandbox resolution and provider carve-outs
+(including the macOS login keychain), and bounded process-tree supervision.
+They receive no Orbit activity tool grants. Sandbox availability follows the
+executor's normal policy: without explicit `allow_fallback`, a refusal retains
+the exclusion and backoff.
+
+`orbit doctor`, `orbit run show <drain>` and the dashboard drain panel show
+provider, host, exclusion time, auth class, re-login hint, credential origin
+and next probe time. Credential origin reports a passed `CLAUDE_CODE_OAUTH_TOKEN`
+(or `ANTHROPIC_API_KEY`) by name only, otherwise the keychain on macOS or the
+provider cache. This is the configured credential route, not a keychain read
+or proof of which credential the CLI ultimately used. Doctor reads the record;
+it does not call a provider. Use a dedicated `claude setup-token` credential
+and pass `CLAUDE_CODE_OAUTH_TOKEN` to avoid sharing a rotating Desktop login.
+Owner-local drains already use timed task-specific provider holds, so they
+retain their existing admission and alternate-crew behavior.
 
 ## `[execution.env]` — the agent subprocess environment
 

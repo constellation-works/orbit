@@ -456,3 +456,81 @@ impl RuntimeHost for MissingWrapperHost {
         Ok(None)
     }
 }
+
+/// Recovery calls enter the same actual sandbox as provider leaves; a marker
+/// cannot grant success when the exit is nonzero or a protected read succeeds.
+#[test]
+fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
+    use orbit_engine::activity_job::cli_runner::run_auth_probe;
+    use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
+    let kind = platform_sandbox();
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    )
+    .unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("auth-probe-")
+        .tempdir_in(scratch)
+        .unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let secret = root.join("secret");
+    fs::write(&secret, "protected fixture data").unwrap();
+    let command = root.join("claude");
+    fs::write(&command, format!(
+        "#!/bin/sh\ncat > /dev/null\nif [ \"$1\" = sandbox ]; then\n  cat '{}' 2>/dev/null && exit 23\nfi\nprintf '%s\\n' \"$2\"\nexit \"$3\"\n", secret.display(),
+    )).unwrap();
+    fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut host = RecordingHost {
+        command,
+        worktree: root.clone(),
+        sandbox: kind.map(|kind| ResolvedSandbox {
+            kind,
+            fs_profile: ResolvedFsProfile {
+                name: "auth-fixture".into(),
+                read: vec!["**".into(), format!("!{}", secret.display())],
+                modify: vec![format!("{}/**", root.display())],
+            },
+            allow_fallback: false,
+            managed_worktree: false,
+            runtime_write_authority: vec![],
+            mask: None,
+        }),
+        broker_runs: Mutex::new(vec![]),
+        denial_activities: Mutex::new(vec![]),
+    };
+    let mut probe = AuthProbe {
+        args: vec!["sandbox".into(), "ORBIT_AUTH_OK".into(), "0".into()],
+        stdin: "Minimal model call".into(),
+        timeout_seconds: 5,
+        success: AuthProbeSuccess::StdoutContains {
+            text: "ORBIT_AUTH_OK".into(),
+        },
+        relogin_hint: "Run `claude login`.".into(),
+    };
+    if kind.is_some() {
+        assert!(
+            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+                .unwrap()
+                .passed,
+            "sandbox must deny the protected read while allowing the minimal invocation"
+        );
+    }
+    host.sandbox = None;
+    for (response, exit, passed) in [
+        ("ORBIT_AUTH_OK", "0", true),
+        ("unrelated response", "0", false),
+        ("ORBIT_AUTH_OK", "1", false),
+    ] {
+        probe.args = vec!["plain".into(), response.into(), exit.into()];
+        assert_eq!(
+            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+                .unwrap()
+                .passed,
+            passed
+        );
+    }
+    assert!(
+        host.broker_runs.lock().unwrap().is_empty(),
+        "auth probes grant no activity broker"
+    );
+}

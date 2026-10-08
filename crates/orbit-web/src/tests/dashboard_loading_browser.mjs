@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -12,6 +12,7 @@ const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 const locksOnly = process.argv[4] === '--locks-only';
+const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
 const locksOnlyScenario = `
 const tasks = Array.from({ length: 20 }, (_, index) => ({
   id: 'BASE-' + index, title: 'Base task ' + index, status: 'in-progress', priority: 'medium',
@@ -491,6 +492,9 @@ async function assertCrewWindow(page) {
         checked_at: '2026-10-04T13:06:00Z',
         runnable: ['luna'],
         default_crew: 'luna',
+        auth_exclusions: [{ provider: 'claude', host: 'fixture-mac', excluded_at: '2026-10-08T13:00:00Z',
+          error_class: 'provider_unavailable/auth', relogin_hint: 'Run `claude auth login`.',
+          credential_source: 'macOS keychain (no passed token)', next_probe_at: '2026-10-08T13:10:00Z' }],
         excluded: [
           { crew: 'gemini-flash', source: 'provider_unavailable', reason: 'ORB-1 failed: Antigravity terminal error: authentication failed or timed out' },
           { crew: 'opus', source: 'preflight', reason: 'provider `claude` CLI `claude` was not found on this host' },
@@ -506,7 +510,7 @@ async function assertCrewWindow(page) {
     await panel.scrollIntoViewIfNeeded();
     if (!(await panel.isVisible())) throw new Error(`Crew window invisible at ${width}px`);
     const text = await panel.textContent();
-    for (const expected of ['crews runnable: luna', 'excluded gemini-flash (provider unavailable): ORB-1 failed', 'excluded opus (preflight)']) {
+    for (const expected of ['crews runnable: luna', 'excluded gemini-flash (provider unavailable): ORB-1 failed', 'excluded opus (preflight)', 'claude auth failed on fixture-mac', '2026-10-08T13:00:00Z', 'provider_unavailable/auth', 'claude auth login', 'macOS keychain', '2026-10-08T13:10:00Z']) {
       if (!text.includes(expected)) throw new Error(`Crew window missing "${expected}" at ${width}px: ${text}`);
     }
     if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Crew window overflows the page at ${width}px`);
@@ -1087,7 +1091,7 @@ async function assertSkipLinkAndFocusRings(page) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const testScenario = locksOnly ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
+  const testScenario = (locksOnly || authExclusionsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
   const served = name === '/test.mjs' ? { data: testScenario, type: 'text/javascript' } : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -1099,7 +1103,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  if (!locksOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const failures = [];
   page.on('pageerror', error => failures.push(error.message));
@@ -1114,7 +1118,10 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
-  if (locksOnly) {
+  if (authExclusionsOnly) {
+    await assertCrewWindow(page);
+    console.log('Authentication exclusion provider, host, time, class, credential route, login hint and next probe rendered at desktop and mobile widths.');
+  } else if (locksOnly) {
     await assertLockedTaskNavigation(page);
     console.log('Locked-task axe guard, keyboard access and task navigation passed.');
   } else {

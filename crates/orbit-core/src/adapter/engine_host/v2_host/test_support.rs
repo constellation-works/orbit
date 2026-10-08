@@ -23,6 +23,7 @@ pub(crate) fn seed_executor(
             model_pair_override: None,
             model_flag: None,
             timeout_seconds: None,
+            auth_probe: None,
             env: HashMap::new(),
             sandbox,
             allow_fallback: false,

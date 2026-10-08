@@ -33,6 +33,7 @@ use orbit_core::OrbitRuntime;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+mod auth_exclusions;
 mod replay_crew;
 mod run_show_display;
 

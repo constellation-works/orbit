@@ -23,6 +23,7 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         model_pair_override: None,
         model_flag: None,
         timeout_seconds: None,
+        auth_probe: None,
         env: Default::default(),
         sandbox: None,
         allow_fallback: false,

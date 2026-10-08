@@ -1,4 +1,5 @@
 mod argv;
+mod auth_probe;
 mod envelope;
 mod inspection;
 mod inspection_tools;
@@ -17,6 +18,7 @@ mod supervisor;
 #[cfg(test)]
 mod tests;
 
+pub use auth_probe::{AuthProbeOutcome, auth_credential_source, run_auth_probe};
 pub(super) use envelope::task_id_from_input;
 pub use inspection::is_source_inspection_checkout;
 pub use launcher::{MissingLauncher, locate_provider_launcher, missing_launcher_in};

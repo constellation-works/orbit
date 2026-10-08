@@ -357,7 +357,8 @@ function buildCrewWindow(window) {
   if (!window) return null;
   const excluded = Array.isArray(window.excluded) ? window.excluded : [];
   const runnable = Array.isArray(window.runnable) ? window.runnable : null;
-  if (!runnable && excluded.length === 0) return null;
+  const auth = Array.isArray(window.auth_exclusions) ? window.auth_exclusions : [];
+  if (!runnable && excluded.length === 0 && auth.length === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel crew-window" });
   const summary = runnable
     ? `crews runnable: ${runnable.length > 0 ? runnable.join(", ") : "none"}`
@@ -367,6 +368,12 @@ function buildCrewWindow(window) {
     const source = CREW_EXCLUSION_SOURCES[exclusion.source] || "preflight";
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source}): ${exclusion.reason}` }),
+    ]));
+  }
+  for (const exclusion of auth) {
+    panel.appendChild(el("div", { class: "child-dispatch-row auth-exclusion" }, [
+      el("span", { class: "child-dispatch-meta", text:
+        `${exclusion.provider} auth failed on ${exclusion.host} at ${exclusion.excluded_at} (${exclusion.error_class}; credentials: ${exclusion.credential_source}); ${exclusion.relogin_hint}; next probe: ${exclusion.next_probe_at || "not declared; start a new drain after re-login"}` }),
     ]));
   }
   return panel;

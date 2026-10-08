@@ -235,6 +235,10 @@ pub(crate) fn pull_refill(
         && consecutive_failures.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
+    if admitting && let Err(failure) = runtime.recover_pull_auth_exclusions(&run_id) {
+        error.get_or_insert(failure.to_string());
+        admitting = false;
+    }
     if admitting {
         match probe(runtime, &run_id, &transport, &destination) {
             Ok(ProbeVerdict {
@@ -639,10 +643,9 @@ fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, O
 /// The window's provider preflight [ORB-13941]: every configured crew this
 /// host could dispatch now, resolved the way dispatch resolves it — enabled,
 /// its provider's executor resolvable, and that executor's CLI found where a
-/// leaf would launch it. Cheap: no provider process is started. No shipped
-/// provider declares a side-effect-free authentication probe, so an
-/// unauthenticated CLI passes here and is caught by its first claimed leaf,
-/// whose typed provider failure excludes the crew for the rest of the window.
+/// leaf would launch it. Cheap: no provider process is started. An
+/// unauthenticated CLI passes here and is caught by its first claimed leaf.
+/// Only auth-excluded providers with a declared probe may recover later.
 fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
     let registry = runtime.configured_crew_registry_projection();
     let mut runnable = Vec::new();
