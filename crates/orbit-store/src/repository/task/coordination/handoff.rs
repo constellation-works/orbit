@@ -235,6 +235,12 @@ impl TaskCommitBoundary {
                 "certificate required checks differ from the owner's captured review contract",
             ));
         }
+        if certificate.baseline_commands != contract.baseline_commands {
+            return Err(review_refused(
+                R::ReviewContractMismatch,
+                "certificate baseline commands differ from the owner's captured review contract",
+            ));
+        }
         let reviewer_commit_matches = match &evidence.reviewer_commit {
             Some(commit) => certificate
                 .repair_commits

@@ -37,6 +37,10 @@ pub(super) struct Judgement {
     pub(super) validation: Vec<orbit_types::workflow::ReviewValidation>,
     pub(super) validation_complete: bool,
     pub(super) required_validation_commands: Option<Vec<String>>,
+    /// The owner's `review.baseline_commands` the run was admitted under
+    /// [ORB-14684]: with the required commands, what settlement may rerun on
+    /// the base and what a failed diagnostic may not name.
+    pub(super) baseline_commands: Vec<String>,
     /// Required-check records earlier report revisions of this attempt made
     /// that the final report does not repeat verbatim.
     pub(super) retained_obligations: Vec<RetainedObligation>,
@@ -78,6 +82,11 @@ impl Judgement {
                 .admission
                 .as_ref()
                 .and_then(|admission| admission.required_validation_commands.clone()),
+            baseline_commands: context
+                .admission
+                .as_ref()
+                .map(|admission| admission.baseline_commands.clone())
+                .unwrap_or_default(),
             retained_obligations: Vec::new(),
             retired_validation: Vec::new(),
             escalation: Some(reason.to_string()),
@@ -151,6 +160,11 @@ impl Judgement {
                 .admission
                 .as_ref()
                 .and_then(|admission| admission.required_validation_commands.clone()),
+            baseline_commands: context
+                .admission
+                .as_ref()
+                .map(|admission| admission.baseline_commands.clone())
+                .unwrap_or_default(),
             retained_obligations,
             retired_validation: report.retired_validation,
             escalation: report.escalation,
@@ -182,6 +196,11 @@ impl Judgement {
                 .admission
                 .as_ref()
                 .and_then(|admission| admission.required_validation_commands.clone()),
+            baseline_commands: context
+                .admission
+                .as_ref()
+                .map(|admission| admission.baseline_commands.clone())
+                .unwrap_or_default(),
             retained_obligations: certificate.retained_obligations.clone(),
             retired_validation: certificate.retired_validation.clone(),
             escalation: certificate.escalation.clone(),
@@ -399,6 +418,7 @@ impl Judgement {
                 obligations: &self.retained_obligations,
                 retired: &self.retired_validation,
                 required_validation_commands: self.required_validation_commands.as_deref(),
+                baseline_commands: &self.baseline_commands,
             },
         )
         .is_err()
@@ -549,6 +569,7 @@ impl Judgement {
             obligations: &self.retained_obligations,
             retired: &self.retired_validation,
             required_validation_commands: self.required_validation_commands.as_deref(),
+            baseline_commands: &self.baseline_commands,
         };
         validation_evidence(&self.validation, &context).err()
     }

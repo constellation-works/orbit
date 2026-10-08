@@ -51,6 +51,7 @@ pub(super) fn evidence_only(
             obligations: &certificate.retained_obligations,
             retired: &certificate.retired_validation,
             required_validation_commands: certificate.required_validation_commands.as_deref(),
+            baseline_commands: &certificate.baseline_commands,
         },
     )
     .is_ok()

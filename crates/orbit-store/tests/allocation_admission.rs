@@ -1898,6 +1898,7 @@ fn before_pr_ship() -> AdmissionShipContract {
         crew: Some(REVIEW_CREW.into()),
         budget: ReviewBudget { minutes: 45 },
         required_validation_commands: Some(vec!["build".into(), "test".into()]),
+        baseline_commands: Vec::new(),
         host_evidence: Vec::new(),
     });
     ship
@@ -1949,6 +1950,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
             })
             .collect(),
         required_validation_commands: Some(vec!["build".into(), "test".into()]),
+        baseline_commands: Vec::new(),
         validation_complete: verdict.passed(),
         reviewer: ReviewerIdentity {
             crew: REVIEW_CREW.into(),
@@ -2109,6 +2111,28 @@ fn before_pr_handoffs_are_accepted_only_with_matching_passing_evidence() {
             "{case}"
         );
     }
+
+    // [ORB-14684] The certificate carries the owner's captured
+    // `review.baseline_commands`: a leaf that drops the list, and with it
+    // the rule that a listed check's failure is never a diagnostic, is
+    // refused; the captured list is accepted.
+    let mut listed = before_pr_ship();
+    listed.review.as_mut().unwrap().baseline_commands = vec!["heavy suite".into()];
+    let mut dropped = Delivery::admit(listed.clone());
+    let unlisted = certificate(&dropped.handoff, ReviewVerdict::Accept);
+    dropped.reviewed(&unlisted);
+    let error = dropped.accept(None).unwrap_err().to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewContractMismatch.as_str())
+            && error.contains("baseline commands"),
+        "{error}"
+    );
+    let mut kept = Delivery::admit(listed);
+    let mut captured = certificate(&kept.handoff, ReviewVerdict::Accept);
+    captured.baseline_commands = vec!["heavy suite".into()];
+    kept.reviewed(&captured);
+    kept.accept(None)
+        .expect("a certificate carrying the captured list is accepted");
 
     // The owner's own observation decides ancestry and repository identity.
     let (delivery, _) = reviewed(ReviewVerdict::Accept);
