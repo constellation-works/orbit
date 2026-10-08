@@ -1,7 +1,7 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::jitter::JitterRng;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
@@ -42,6 +42,9 @@ const PUSH_TRANSIENT_BACKOFF_CAP_MS: u64 = 160_000;
 /// into an unbounded wait.
 const PUSH_TRANSIENT_MAX_ATTEMPTS: u64 = 10;
 const PUSH_TRANSIENT_MAX_BACKOFF_MS: u64 = 600_000;
+/// The longest `forge_retry.window_ms` [ORB-14634]: the two hours the clock
+/// keeps resuming a held owner-local run.
+const PUSH_FORGE_MAX_WINDOW_MS: u64 = 2 * 60 * 60 * 1000;
 /// Largest forge refusal a hold carries.
 const FORGE_HOLD_DIAGNOSTIC_BYTES: usize = 2048;
 
@@ -157,11 +160,17 @@ fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
 
 /// The transient push retry budget: `forge_retry` in the operation input, or
 /// the production default.
+///
+/// [ORB-14634] `window_ms` keeps a push retrying past `attempts`, at the
+/// capped backoff, until that long after the forge first refused it. A
+/// claimed leaf sets it: its run cannot be resumed the way the clock resumes
+/// a held owner-local run, so it keeps its claim and retries in place.
 #[derive(Debug, Clone, Copy)]
 struct PushBackoff {
     attempts: u32,
     initial_ms: u64,
     cap_ms: u64,
+    window_ms: Option<u64>,
 }
 
 impl PushBackoff {
@@ -171,6 +180,7 @@ impl PushBackoff {
                 attempts: PUSH_TRANSIENT_ATTEMPTS,
                 initial_ms: PUSH_TRANSIENT_INITIAL_BACKOFF_MS,
                 cap_ms: PUSH_TRANSIENT_BACKOFF_CAP_MS,
+                window_ms: None,
             });
         };
         let bounded = |key: &str, min: u64, max: u64| {
@@ -188,11 +198,25 @@ impl PushBackoff {
         let attempts = bounded("max_attempts", 1, PUSH_TRANSIENT_MAX_ATTEMPTS)?;
         let initial_ms = bounded("initial_backoff_ms", 0, PUSH_TRANSIENT_MAX_BACKOFF_MS)?;
         let cap_ms = bounded("backoff_cap_ms", initial_ms, PUSH_TRANSIENT_MAX_BACKOFF_MS)?;
+        let window_ms = match retry.get("window_ms") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(bounded("window_ms", 0, PUSH_FORGE_MAX_WINDOW_MS)?),
+        };
         Ok(Self {
             attempts: attempts as u32,
             initial_ms,
             cap_ms,
+            window_ms,
         })
+    }
+
+    /// Whether a push refused for the `attempt`th time, `refused_for` after
+    /// its first refusal, stops retrying.
+    fn spent(self, attempt: u32, refused_for: Duration) -> bool {
+        attempt >= self.attempts
+            && self
+                .window_ms
+                .is_none_or(|window| refused_for >= Duration::from_millis(window))
     }
 
     /// The wait before attempt `attempt + 1`: exponential, capped, with
@@ -238,6 +262,8 @@ struct PushExhausted {
     head_sha: String,
     attempts: u32,
     waited_ms: u64,
+    /// When the forge first refused this push.
+    first_refused_at: DateTime<Utc>,
     diagnostic: String,
     error: OrbitError,
 }
@@ -257,7 +283,6 @@ impl PushFailure {
             Self::Error(error) => return error,
             Self::Exhausted(exhausted) => *exhausted,
         };
-        let now = Utc::now();
         let hold = ForgeUnavailableHold {
             target_ref: exhausted.target_ref,
             head_sha: exhausted.head_sha,
@@ -265,8 +290,8 @@ impl PushFailure {
             waited_ms: exhausted.waited_ms,
             diagnostic: bounded_diagnostic(&exhausted.diagnostic),
             step_id: String::new(),
-            held_at: now,
-            held_since: now,
+            held_at: Utc::now(),
+            held_since: exhausted.first_refused_at,
         };
         OrbitError::Execution(hold.text(&format!(
             "the forge refused the push {} times over {} s: {}",
@@ -308,6 +333,7 @@ fn execute_push_with_transient_retry(
     let mut jitter = JitterRng::from_entropy();
     let mut waited_ms = 0_u64;
     let mut attempt = 1;
+    let mut first_refusal = None;
     loop {
         let result = run_vcs_process("git", args.to_vec(), Some(repo_root), LONG_TIMEOUT_MS)
             .map_err(PushFailure::Error)?;
@@ -356,11 +382,15 @@ fn execute_push_with_transient_retry(
                 waited_ms,
             });
         }
-        if attempt >= backoff.attempts {
+        let (first_refused, first_refused_at) =
+            *first_refusal.get_or_insert_with(|| (Instant::now(), Utc::now()));
+        if backoff.spent(attempt, first_refused.elapsed()) {
             tracing::warn!(
                 operation,
                 attempts = attempt,
                 waited_ms,
+                target_ref,
+                head_sha,
                 "push retry budget exhausted by transient remote failures"
             );
             let error = succeeded(result, operation).err().unwrap_or_else(|| {
@@ -371,6 +401,7 @@ fn execute_push_with_transient_retry(
                 head_sha: head_sha.to_string(),
                 attempts: attempt,
                 waited_ms,
+                first_refused_at,
                 diagnostic,
                 error,
             })));
@@ -381,6 +412,9 @@ fn execute_push_with_transient_retry(
             attempt,
             delay_ms,
             waited_ms,
+            target_ref,
+            head_sha,
+            past_budget = attempt >= backoff.attempts,
             "retrying push after a transient remote failure"
         );
         std::thread::sleep(Duration::from_millis(delay_ms));

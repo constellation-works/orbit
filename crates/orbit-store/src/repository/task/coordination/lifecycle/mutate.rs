@@ -409,6 +409,7 @@ impl TaskCommitBoundary {
                     reason: failure.reason.clone(),
                     released_at: released_at.to_rfc3339(),
                     budget_exhausted: matches!(blocked, Some(Some(_))),
+                    forge_unavailable: value.forge_hold.is_some(),
                 });
                 state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                 state.landing_invalidated = true;

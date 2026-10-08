@@ -191,7 +191,8 @@ impl ClaimFailureClass {
 
     /// Whether the executing drain stops running the leaf's crew for the
     /// rest of its window. A cancel excludes that crew, but does not suppress
-    /// the whole host; a red base and a base conflict exclude neither.
+    /// the whole host; a red base and a base conflict exclude neither, nor
+    /// does a `transient` release that carries a forge hold [ORB-14634].
     #[must_use]
     pub const fn excludes_crew(self) -> bool {
         matches!(

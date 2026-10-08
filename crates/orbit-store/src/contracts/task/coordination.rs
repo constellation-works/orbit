@@ -663,6 +663,13 @@ pub struct ClaimEvidence {
     /// releases the task unheld.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
+    /// [ORB-14634] Set on a `transient` release whose leaf held its claim
+    /// while the forge refused its push, and released it once its retry
+    /// window closed. The forge, not the host or the crew, refused it, so the
+    /// release excludes neither from the drain's window. An owner that
+    /// predates the field keeps the task from that drain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
 }
 
 /// Why a launched claimed leaf ended without its typed handoff [ORB-14257].
@@ -788,6 +795,11 @@ pub struct ClaimReleaseRecord {
     /// releases before it no longer count.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub budget_exhausted: bool,
+    /// [ORB-14634] The release was for a forge outage
+    /// ([`ClaimEvidence::forge_hold`]), which blames neither the drain's host
+    /// nor its crew: admission does not keep the task from that drain.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forge_unavailable: bool,
 }
 
 /// A claimed leaf ended because its crew's provider could not be used on the

@@ -303,6 +303,12 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 /// `implement → review → push → open_pull_request`; `push` is the shipped action with
 /// a `forge_retry` budget of `max_attempts` short waits.
 fn delivery(fixture: &ForgeFixture, max_attempts: u32) -> JobV2 {
+    delivery_within(fixture, max_attempts, None)
+}
+
+/// [`delivery`] whose push keeps retrying past its budget for `window_ms`
+/// after the forge first refuses it, as a claimed leaf's does [ORB-14634].
+fn delivery_within(fixture: &ForgeFixture, max_attempts: u32, window_ms: Option<u64>) -> JobV2 {
     let stub = |id: &str| json!({ "id": id, "spec": { "type": "deterministic", "action": id, "config": {} } });
     let asset = json!({
         "schemaVersion": 2,
@@ -324,6 +330,7 @@ fn delivery(fixture: &ForgeFixture, max_attempts: u32) -> JobV2 {
                             "max_attempts": max_attempts,
                             "initial_backoff_ms": 20,
                             "backoff_cap_ms": 40,
+                            "window_ms": window_ms,
                         },
                     },
                 },
@@ -459,4 +466,62 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
         fixture.head.as_str()
     );
     assert!(Utc::now() >= hold.held_at);
+}
+
+/// [ORB-14634] A claimed leaf cannot be resumed the way the clock resumes a
+/// held run, so its push keeps retrying past its budget inside a window: the
+/// same run pushes the same head once the forge accepts it, and opens the
+/// pull request without implementing or reviewing again.
+#[test]
+fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
+    let fixture = ForgeFixture::new();
+    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+    fixture.refuse(5);
+    let job = delivery_within(&fixture, 2, Some(60_000));
+    let host = ForgeHost::default();
+
+    let outcome = execute(&job, &host, None);
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.forge_hold, None);
+    assert_eq!(fixture.pushes(), 6, "five refusals past a budget of two");
+    assert_eq!(
+        fixture.remote_head().as_deref(),
+        Some(fixture.head.as_str())
+    );
+    assert_eq!(
+        host.actions(),
+        ["implement", "review", "open_pull_request"],
+        "no step recovery, failure handoff or final recovery"
+    );
+    assert_eq!(
+        host.inputs("open_pull_request")[0]["head_sha"],
+        fixture.head.as_str()
+    );
+    assert_eq!(host.checkpoint("push").expect("push")["push_attempts"], 6);
+}
+
+/// [ORB-14634] Past its window the push holds as before, and the hold dates
+/// from the forge's first refusal rather than from the last.
+#[test]
+fn a_push_window_that_closes_holds_since_the_first_refusal() {
+    let fixture = ForgeFixture::new();
+    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+    fixture.refuse(ALWAYS);
+    let job = delivery_within(&fixture, 2, Some(300));
+    let host = ForgeHost::default();
+
+    let outcome = execute(&job, &host, None);
+
+    assert!(!outcome.success);
+    let hold = outcome.forge_hold.expect("a typed forge hold");
+    assert_eq!(hold.head_sha, fixture.head);
+    assert!(hold.attempts > 2, "retried past the budget: {hold:?}");
+    assert_eq!(fixture.pushes(), hold.attempts as usize);
+    assert!(
+        hold.held_at - hold.held_since >= TimeDelta::milliseconds(300),
+        "{hold:?}"
+    );
+    assert_eq!(fixture.remote_head(), None);
+    assert_eq!(host.actions(), ["implement", "review"]);
 }

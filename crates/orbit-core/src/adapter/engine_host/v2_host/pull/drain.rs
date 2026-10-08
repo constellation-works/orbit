@@ -14,6 +14,7 @@ use orbit_types::workflow::{
     FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_ROUTE_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
     TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
+    is_forge_unavailable,
 };
 
 use super::candidate::{
@@ -1029,7 +1030,10 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// task — unless it was `resume`, whose rerun then failed on its own.
 ///
 /// A `held` leaf whose review settled into an evidence hold did not fail; it
-/// is released with the typed hold ([`evidence_hold_release`]).
+/// is released with the typed hold ([`evidence_hold_release`]). One held
+/// because the forge kept refusing its push past the push's retry window is
+/// a `transient` release that carries the forge hold
+/// ([`forge_hold_release`]), which excludes neither the crew nor the host.
 pub(crate) fn leaf_failure_settlement(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
@@ -1071,11 +1075,19 @@ pub(crate) fn leaf_failure_settlement(
         let hold = (failure.class == ClaimFailureClass::BaselineRed)
             .then(|| baseline_red(run, diagnostic))
             .flatten();
-        let mut evidence = match &hold {
-            Some(hold) => baseline_red_release(record, run, hold, &failure),
-            None => release_evidence(record, &release_reason(run, &failure)),
+        // [ORB-14634] A leaf the forge kept refusing held its claim for its
+        // push's retry window; the release says so and names the head.
+        let forge = (failure.class == ClaimFailureClass::Transient
+            && run.state == JobRunState::Held)
+            .then(|| forge_hold(run, diagnostic, state))
+            .flatten();
+        let mut evidence = match (&hold, &forge) {
+            (Some(hold), _) => baseline_red_release(record, run, hold, &failure),
+            (None, Some(forge)) => forge_hold_release(record, run, forge, &failure),
+            (None, None) => release_evidence(record, &release_reason(run, &failure)),
         };
         evidence.baseline_red = hold;
+        evidence.forge_hold = forge;
         if failure.class == ClaimFailureClass::Provider {
             evidence.provider_unavailable = Some(ProviderUnavailable {
                 crew: failure.crew.clone(),
@@ -1329,6 +1341,73 @@ fn baseline_red_release(
             "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
              in the backlog, held until {base_ref} moves to a base where the command passes; no \
              pull request was opened."
+        )),
+        ..Default::default()
+    }
+}
+
+/// The forge hold a held leaf ended on: the one its run state records, else
+/// the one its held step, or the terminalizing caller's diagnostic, carries.
+fn forge_hold(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+    state: Option<&PipelineState>,
+) -> Option<ForgeUnavailableHold> {
+    state
+        .and_then(|state| state.forge_hold.clone())
+        .or_else(|| {
+            run.steps
+                .iter()
+                .rev()
+                .filter(|step| {
+                    is_forge_unavailable(step.error_code.as_deref(), step.error_message.as_deref())
+                })
+                .find_map(|step| ForgeUnavailableHold::from_text(step.error_message.as_deref()?))
+        })
+        .or_else(|| {
+            diagnostic
+                .filter(|(code, message)| is_forge_unavailable(Some(code), Some(message)))
+                .and_then(|(_, message)| ForgeUnavailableHold::from_text(message))
+        })
+}
+
+/// [ORB-14634] The release of a leaf that held its claim while the forge
+/// refused its push, once the push's retry window closed. The forge refused
+/// it, not this host or the crew, so the drain keeps offering both.
+fn forge_hold_release(
+    record: &LocalPullAdmission,
+    run: &orbit_types::workflow::JobRun,
+    hold: &ForgeUnavailableHold,
+    failure: &ClaimFailure,
+) -> ClaimEvidence {
+    let drain = &record.request.run_context.run_id;
+    let machine = &record.destination.execution_machine_id;
+    let crew = failure
+        .crew
+        .as_deref()
+        .map_or_else(|| "its crew".to_string(), |crew| format!("crew `{crew}`"));
+    let minutes = hold
+        .held_at
+        .signed_duration_since(hold.held_since)
+        .num_minutes()
+        .max(0);
+    let why = format!(
+        "leaf {} held this claim while the forge refused the push of its reviewed head {} to \
+         {} ({} attempts over {minutes} min since {}), and released it when the push's retry \
+         window closed{}",
+        run.run_id,
+        hold.head_sha,
+        hold.target_ref,
+        hold.attempts,
+        hold.held_since.to_rfc3339(),
+        candidate_note(failure)
+    );
+    ClaimEvidence {
+        summary: Some(format!("released by follower drain {drain}: {why}")),
+        comment: Some(format!(
+            "Follower drain {drain} on {machine} released this claim: {why}. The forge, not this \
+             host or {crew}, refused the push, so the drain keeps offering both. The task is back \
+             in the backlog and can be pulled again."
         )),
         ..Default::default()
     }

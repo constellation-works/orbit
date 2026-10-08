@@ -422,8 +422,14 @@ tasks still owned by that lineage and pushes the kept candidate; the resumed run
 gets its own expiry acknowledgement if it holds again. A cancel (`orbit run cancel`)
 stops a push that is waiting between attempts.
 
-A claimed leaf on a follower that holds this way releases its claim to the owner as a
-`transient` failure; it is not resumed in place.
+A claimed leaf on a follower does not wait for the clock: the clock never resumes a
+claimed run. Its pipeline sets `forge_retry.window_ms`, so the push keeps retrying
+the same head inside the run, holding the claim, for up to 2 hours from the first
+refusal. When the forge accepts, the leaf continues to the pull request. When the
+window closes first, the run holds and the leaf releases its claim to the owner as a
+`transient` failure naming the head it kept. That release does not stop the drain
+offering the crew or the host, and the task's next claim on that follower continues
+the kept candidate ([distributed drain](distributed-drain.md)).
 
 ## Replay from the beginning
 

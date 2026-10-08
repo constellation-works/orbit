@@ -638,20 +638,26 @@ impl crate::OrbitRuntime {
                 }
                 // A leaf whose task names no crew ran as the window's
                 // default, even when it died before resolving one.
-                (None, Some(failure)) if failure.class.excludes_crew() => (
-                    failure
-                        .crew
-                        .as_deref()
-                        .or(default_crew.as_deref())
-                        .map(|crew| vec![crew.to_string()])
-                        .unwrap_or_default(),
-                    CrewExclusionSource::LeafReleased,
-                    format!(
-                        "{task} was released ({}): {}",
-                        failure.class.as_str(),
-                        failure.reason
-                    ),
-                ),
+                // [ORB-14634] A forge outage is neither the crew's nor the
+                // host's, so its release excludes nothing.
+                (None, Some(failure))
+                    if failure.class.excludes_crew() && evidence.forge_hold.is_none() =>
+                {
+                    (
+                        failure
+                            .crew
+                            .as_deref()
+                            .or(default_crew.as_deref())
+                            .map(|crew| vec![crew.to_string()])
+                            .unwrap_or_default(),
+                        CrewExclusionSource::LeafReleased,
+                        format!(
+                            "{task} was released ({}): {}",
+                            failure.class.as_str(),
+                            failure.reason
+                        ),
+                    )
+                }
                 _ => continue,
             };
             for crew in crews {

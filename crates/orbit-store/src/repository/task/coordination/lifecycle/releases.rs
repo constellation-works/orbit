@@ -15,7 +15,7 @@ impl TaskCommitBoundary {
     /// crew too, but a release its worker delivered after the follower built
     /// its next request must not be pulled straight back — and keeps every
     /// task from it once one release blames the host whatever crew runs
-    /// there.
+    /// there. A release for a forge outage blames neither [ORB-14634].
     pub(in super::super) fn drain_releases(
         &self,
         machine_id: &str,
@@ -29,7 +29,10 @@ impl TaskCommitBoundary {
             {
                 continue;
             }
-            let Some(record) = state.release.filter(|record| record.class.excludes_crew()) else {
+            let Some(record) = state
+                .release
+                .filter(|record| record.class.excludes_crew() && !record.forge_unavailable)
+            else {
                 continue;
             };
             if record.class.suppresses_host() && released.host.is_none() {
