@@ -2,7 +2,7 @@
 type: context
 summary: Running log of why Orbit task runs failed or got blocked, one entry per distinct cause, with the fix that closed it.
 incident_date: 2026-09-27
-last_validated: 2026-10-07
+last_validated: 2026-10-08
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml", "crates/orbit-agent/src/providers/claude/**"]
 related_artifacts:
@@ -85,6 +85,9 @@ related_artifacts:
   - ORB-14476
   - ORB-14477
   - ORB-14478
+  - ORB-14733
+  - ORB-14750
+  - ORB-14815
 ---
 
 # Run failure log
@@ -107,6 +110,29 @@ Each entry records:
 
 Newest entries go first. When you rescue a blocked task, add its cause here before
 you close it out.
+
+## 2026-10-08: A scheduled wake-up turn displaced the Claude completion envelope
+
+- **Where:** Claude worker invocation (`claude_cli.rs`), at the `implement_one`
+  completion guard.
+- **Symptom:** The run exited 0 with `completion_envelope_satisfied=false`, although
+  the work, validation and evidence were complete. The only captured result was
+  prose with `result_index` 1 (`Loop check: nothing to act on, so I stopped the
+  loop`), and it had no `structured_output`. The invocation ran 20 to 27 minutes,
+  and the final result took 5 to 7 seconds.
+- **Cause:** The worker armed a `/loop` wake-up with `ScheduleWakeup` while it
+  waited on gates. The wake-up fired after the envelope turn, and Claude Code wrote
+  a second `result` turn over the envelope. Nothing in the worker environment
+  disabled the scheduler. Recovery resumed `implement_bundle`, and
+  `admit_resume_step` admits no later step, so validated work could not go straight
+  to commit.
+- **Fix:** ORB-14815. `CLAUDE_CLI_FIXED_ENV` now pins `CLAUDE_CODE_DISABLE_CRON=1`
+  beside the background-task switch. In the Claude Code 2.1.294 binary, the variable
+  gates the cron tools and kills the scheduler's wake-up firing. The check read the
+  binary and did not run a live loop. Envelope validation is unchanged.
+- **Tasks:** ORB-14750 (`jrun-20261008-1237-c25`), ORB-14733 (`jrun-20261008-1421-c5`),
+  ORB-14815.
+- **Final recovery:** none recorded for these runs; both were resumed by recovery.
 
 ## 2026-10-07: Pull admission still excludes no-diff tasks from followers
 
