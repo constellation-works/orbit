@@ -166,8 +166,11 @@ impl PolicyDef {
         let mut deny_read = global.deny_read.clone();
         extend_unique(&mut deny_read, &workspace.deny_read);
 
-        let mut deny_modify = global.deny_modify.clone();
-        extend_ordered_modify_rules(&mut deny_modify, &workspace.deny_modify);
+        let mut deny_modify = normalize_rule_set(&global.deny_modify, "global spec.denyModify")?;
+        let host_len = deny_modify.len();
+        let workspace_modify =
+            normalize_rule_set(&workspace.deny_modify, "workspace spec.denyModify")?;
+        extend_ordered_modify_rules(&mut deny_modify, host_len, &workspace_modify);
 
         let merged = Self {
             name: workspace.name.clone(),
@@ -242,19 +245,38 @@ fn extend_unique(target: &mut Vec<String>, extra: &[String]) {
     }
 }
 
-fn extend_ordered_modify_rules(target: &mut Vec<String>, extra: &[String]) {
+/// Append workspace `denyModify` rules after the host rules.
+///
+/// `host_len` is the number of leading host rules in `target`. An intervening
+/// exception can reopen a deny, and an intervening deny can close an
+/// exception, so a repeated rule is deduplicated only within the trailing run
+/// of rules with the same polarity.
+///
+/// A kept workspace exception replays every host rule after the last host
+/// exception covering it. Otherwise the exception would reopen a host deny
+/// that follows the host exception, which the host policy forbids.
+fn extend_ordered_modify_rules(target: &mut Vec<String>, host_len: usize, extra: &[String]) {
     for rule in extra {
-        let is_exception = rule.trim_start().starts_with('!');
-        // An intervening exception can reopen a deny, and an intervening
-        // deny can close an exception. Only deduplicate within the trailing
-        // run of rules with the same polarity, where repeats are redundant.
+        let exception = rule.strip_prefix('!');
         let redundant = target
             .iter()
             .rev()
-            .take_while(|existing| existing.trim_start().starts_with('!') == is_exception)
+            .take_while(|existing| existing.starts_with('!') == exception.is_some())
             .any(|existing| existing == rule);
-        if !redundant {
-            target.push(rule.clone());
+        if redundant {
+            continue;
+        }
+        target.push(rule.clone());
+        let Some(exception) = exception else {
+            continue;
+        };
+        let covering = target[..host_len].iter().rposition(|host| {
+            host.strip_prefix('!')
+                .is_some_and(|host| rule_covers_path_rule(host, exception))
+        });
+        if let Some(covering) = covering {
+            let replay = target[covering + 1..host_len].to_vec();
+            target.extend(replay);
         }
     }
 }

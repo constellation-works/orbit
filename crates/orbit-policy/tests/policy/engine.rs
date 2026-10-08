@@ -87,6 +87,38 @@ fn workspace_modify_rules_preserve_order_across_host_exceptions() {
             true,
         ),
         (vec![".orbit/**"], vec![".orbit/**"], ".orbit/tmp/x", false),
+        // ORB-14744: a repeated workspace exception must not reopen a host
+        // deny that follows the host exception.
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/tmp/secret/**"],
+            vec!["!.orbit/tmp/**"],
+            ".orbit/tmp/secret/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/tmp/secret/**"],
+            vec!["!.orbit/tmp/**"],
+            ".orbit/tmp/x",
+            true,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/tmp/secret/**"],
+            vec![".orbit/tmp/x", "!.orbit/tmp/**"],
+            ".orbit/tmp/secret/x",
+            false,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/tmp/secret/**"],
+            vec![".orbit/tmp/x", "!.orbit/tmp/**"],
+            ".orbit/tmp/x",
+            true,
+        ),
+        (
+            vec![".orbit/**", "!.orbit/tmp/**", ".orbit/tmp/secret/**"],
+            vec!["!.orbit/tmp/sub/**"],
+            ".orbit/tmp/secret/x",
+            false,
+        ),
     ] {
         let merged = PolicyDef::merged(&policy(&["**"], &host), &policy(&["**"], &workspace))
             .expect("merge valid ordered modify rules");
