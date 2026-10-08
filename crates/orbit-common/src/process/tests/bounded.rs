@@ -299,7 +299,8 @@ fn write_flood_script(
 
 /// Kills recorded children if the supervisor does not, including when an
 /// assertion panics or a drain fails to return. A pid is signalled only while
-/// its command line still matches the process this test spawned.
+/// its command line contains every required marker, including its unique
+/// recorded path. Cleanup signals individual pids, never a discovered group.
 #[cfg(unix)]
 struct FloodCleanup {
     cancel: Arc<AtomicBool>,
@@ -381,20 +382,12 @@ fn kill_if_cmdline(pid: u32, markers: &[&[u8]]) {
     let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 1) else {
         return;
     };
-    // Safety: `getpgrp`, `getpgid`, `killpg`, and `kill` only query or signal
-    // process ids. They do not dereference caller memory. The caller's own
-    // group is left alone.
+    // The recorded pid can belong to a group we did not create (including
+    // the test runner's group). Matching its argv grants no ownership of the
+    // other group members, so only signal this individual process.
+    // Safety: `kill` signals a positive process id without dereferencing memory.
     unsafe {
-        let own = libc::getpgrp();
-        if pid == own {
-            return;
-        }
-        let pgid = libc::getpgid(pid);
-        if pgid > 1 && pgid != own {
-            libc::killpg(pgid, libc::SIGKILL);
-        } else if pgid != own {
-            libc::kill(pid, libc::SIGKILL);
-        }
+        libc::kill(pid, libc::SIGKILL);
     }
 }
 
@@ -403,12 +396,123 @@ fn cmdline_has(pid: u32, markers: &[&[u8]]) -> bool {
     let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) else {
         return false;
     };
-    markers.iter().any(|marker| {
-        !marker.is_empty()
-            && cmdline
-                .windows(marker.len())
-                .any(|window| window == *marker)
-    })
+    cmdline_matches(&cmdline, markers)
+}
+
+fn cmdline_matches(cmdline: &[u8], markers: &[&[u8]]) -> bool {
+    !markers.is_empty()
+        && markers.iter().all(|marker| {
+            !marker.is_empty()
+                && cmdline
+                    .windows(marker.len())
+                    .any(|window| window == *marker)
+        })
+}
+
+// Safety invariant of the test-only cleanup, unreachable through run_bounded:
+// generic command names must never substitute for the unique writer marker.
+#[test]
+fn flood_cleanup_requires_every_nonempty_marker() {
+    let cmdline = b"/usr/bin/cat\0/dev/zero\0/unique/writer/0\0";
+    for (markers, expected) in [
+        (vec![b"cat".as_slice(), b"/unique/writer/0"], true),
+        (vec![b"cat".as_slice(), b"/different/writer/0"], false),
+        (vec![b"sleep".as_slice(), b"/unique/writer/0"], false),
+        (vec![b"cat".as_slice(), b""], false),
+        (vec![], false),
+    ] {
+        assert_eq!(
+            cmdline_matches(cmdline, &markers),
+            expected,
+            "cleanup must require every nonempty marker: {markers:?}"
+        );
+    }
+}
+
+// Native kernel coverage of the cleanup helper itself: a recorded pid may
+// share a group with a process that the flood fixture does not own.
+#[cfg(target_os = "linux")]
+#[test]
+fn flood_cleanup_preserves_unmarked_pids_and_other_group_members() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Child, Stdio};
+
+    struct ReapingChild(Child);
+    impl Drop for ReapingChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let assert_survives = |child: &mut Child, reason: &str| {
+        // A group signal can be observed by its members at different times.
+        // Observe survival rather than accepting one immediate try_wait poll.
+        let deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            assert!(
+                child.try_wait().expect("child status").is_none(),
+                "{reason}"
+            );
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let kids = dir.path().join("kids");
+    let other_kids = dir.path().join("other-kids");
+    fs::create_dir(&kids).expect("kids dir");
+    fs::create_dir(&other_kids).expect("other kids dir");
+    let marker = kids.join("0");
+    let leader_path = dir.path().join("absent-leader.pid");
+    // read is a shell builtin, so this process remains blocked without any
+    // descendants, with both required markers in its actual argv.
+    let mut writer = ReapingChild(
+        Command::new("sh")
+            .args(["-c", "read value", "cat"])
+            .arg(&marker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("spawn recorded writer"),
+    );
+    let group = i32::try_from(writer.0.id()).expect("process group id");
+    let mut peer = ReapingChild(
+        Command::new("sleep")
+            .arg("120")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(group)
+            .spawn()
+            .expect("spawn peer in writer group"),
+    );
+    fs::write(other_kids.join("0"), writer.0.id().to_string()).expect("unmatched pid");
+    reap_recorded(&leader_path, b"absent-leader", &other_kids);
+    assert_survives(
+        &mut writer.0,
+        "generic cat marker must not authorize signaling an unmarked pid",
+    );
+
+    fs::write(&marker, writer.0.id().to_string()).expect("recorded pid");
+    reap_recorded(&leader_path, b"absent-leader", &kids);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = writer.0.try_wait().expect("writer status") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "marked writer was not killed");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.signal(), Some(libc::SIGKILL));
+    assert_survives(
+        &mut peer.0,
+        "cleanup must not signal other members of a recorded pid's group",
+    );
 }
 
 #[cfg(unix)]
