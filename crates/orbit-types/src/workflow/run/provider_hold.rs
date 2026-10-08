@@ -123,7 +123,8 @@ impl ProviderFailureHold {
         format!("{PROVIDER_FAILURE_HOLD_MARKER} {hold} {}", detail.trim())
     }
 
-    /// The hold a history note carries, if any.
+    /// The hold a history note carries, if any. A hold may exclude no crew
+    /// (the failed run resolved none); its backoff still stands.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
         let (_, rest) = text.split_once(PROVIDER_FAILURE_HOLD_MARKER)?;
@@ -131,7 +132,6 @@ impl ProviderFailureHold {
             .into_iter::<Self>()
             .next()?
             .ok()
-            .filter(|hold| !hold.excluded_crews.is_empty())
     }
 
     /// Whether the hold still excludes its crews at `now`.

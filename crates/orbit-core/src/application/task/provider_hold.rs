@@ -16,9 +16,10 @@ use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
 
 impl OrbitRuntime {
     /// The crews `task` may be admitted to under a standing hold, or `None`
-    /// when the hold excludes every crew it could run as. `candidates` and
-    /// `source` are the draw without the hold; the fallbacks are the task's
-    /// complexity pool, then the workspace default.
+    /// when the hold excludes every crew it could run as. A hold that excludes
+    /// no crew at all leaves nothing to narrow, so it is `None` as well.
+    /// `candidates` and `source` are the draw without the hold; the fallbacks
+    /// are the task's complexity pool, then the workspace default.
     pub(crate) fn provider_held_candidates(
         &self,
         task: &Task,
@@ -27,6 +28,9 @@ impl OrbitRuntime {
         candidates: &[CrewCandidate],
         source: &str,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        if hold.excluded_crews.is_empty() {
+            return Ok(None);
+        }
         let permitted = |candidates: &[CrewCandidate]| -> Vec<CrewCandidate> {
             candidates
                 .iter()
@@ -79,18 +83,29 @@ impl OrbitRuntime {
         let Some(hold) = self.admission_provider_hold(task) else {
             return Ok(None);
         };
-        let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
-        if self
-            .provider_held_candidates(task, pools, &hold, &candidates, &source)?
-            .is_some()
-        {
-            return Ok(None);
+        // A hold that excludes no crew has no draw to narrow, so it defers
+        // whatever the task would otherwise draw, even when that draw fails.
+        if !hold.excluded_crews.is_empty() {
+            let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
+            if self
+                .provider_held_candidates(task, pools, &hold, &candidates, &source)?
+                .is_some()
+            {
+                return Ok(None);
+            }
         }
+        let excluded = if hold.excluded_crews.is_empty() {
+            "the run resolved no crew to exclude".to_string()
+        } else {
+            format!(
+                "every crew the task may run as ({}) is excluded",
+                hold.excluded_crews.join(", ")
+            )
+        };
         Ok(Some(format!(
-            "run {} ended with {}; every crew the task may run as ({}) is excluded until {}",
+            "run {} ended with {}; {excluded} until {}",
             hold.run_id,
             hold.class.as_str(),
-            hold.excluded_crews.join(", "),
             hold.not_before.to_rfc3339()
         )))
     }
