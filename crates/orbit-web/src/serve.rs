@@ -280,7 +280,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .build()
         .map_err(|e| OrbitError::Execution(format!("tokio runtime: {e}")))?;
 
-    tokio_runtime.block_on(async move {
+    let serve_result = tokio_runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| OrbitError::Io(format!("bind {addr}: {e}")))?;
@@ -334,8 +334,9 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             .into_future();
 
         drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
-    })?;
-    drop(tokio_runtime);
+    });
+    teardown_runtime(tokio_runtime);
+    serve_result?;
     let target = handover.lock().ok().and_then(|mut slot| slot.take());
     if let Some(executable) = target {
         // In-flight requests have drained and the listener is closed; the
@@ -348,6 +349,15 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         ));
     }
     Ok(())
+}
+
+/// Stop the runtime without waiting for in-flight blocking tasks to finish.
+///
+/// The server's connection drain is already bounded by
+/// [`SHUTDOWN_GRACE_PERIOD`]. Awaiting `Runtime`'s destructor afterward would
+/// reintroduce an unbounded wait when a `spawn_blocking` closure is stuck.
+pub(crate) fn teardown_runtime(runtime: tokio::runtime::Runtime) {
+    runtime.shutdown_background();
 }
 
 /// Set on a dashboard exec'd to take over from a replaced image.
