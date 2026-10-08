@@ -10,7 +10,7 @@
 //! retried without a second effect. The client is this test process,
 //! anchored by ancestry, as in the plugin broker's own tests.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,12 +25,12 @@ use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
+use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    ActivityToolDenyPolicy, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget, ReviewReservation,
-    ReviewerInvocationEvent,
+    ActivityToolDenyPolicy, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget,
+    ReviewReservation, ReviewerInvocationEvent,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -82,8 +82,10 @@ impl OwnerCoordinator for Owner {
         if name != GET {
             return Ok(json!({"tool": name, "input": input}));
         }
-        let path = input["path"].as_str().unwrap_or_default();
-        let Some(bytes) = self.artifacts.lock().unwrap().get(path).cloned() else {
+        let raw_path = input["path"].as_str().unwrap_or_default();
+        let path = orbit_types::task::canonical_artifact_path(raw_path)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let Some(bytes) = self.artifacts.lock().unwrap().get(&path).cloned() else {
             return Err(OrbitError::not_found(
                 orbit_common::NotFoundKind::Artifact,
                 format!("{TASK}/{path}"),
@@ -319,6 +321,39 @@ impl Fixture {
         }
     }
 
+    /// Enter the review broker with the raw path, before the claimed-owner
+    /// dispatcher canonicalizes it, to exercise this boundary's own guards.
+    fn direct_review_read(&self, path: &str) -> Result<Value, OrbitError> {
+        let input = json!({"id": TASK, "path": path});
+        let session = ToolSessionContext {
+            worker_invocation: Some(self.binding.clone()),
+            effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+            ..Default::default()
+        };
+        super::super::claimed_review::execute_brokered(
+            &self.runtime,
+            &self.run("agent_review_repair"),
+            &self.binding,
+            GET,
+            input.as_object().unwrap(),
+            path,
+            session,
+        )
+    }
+
+    fn pin_evidence_hold(&self, artifact: &str) {
+        let hold = json!({
+            "schema_version": 1, "attempt_id": "attempt-held", "lineage_key": LINEAGE,
+            "run_id": LEAF,
+            "candidate": {"commit": "a".repeat(40), "tree": "b".repeat(40)},
+            "task_meaning_digest": "digest",
+            "requirements": [{"kind": "hosted_ci", "name": "CI", "command": "make ci",
+                              "artifact": artifact}],
+        });
+        self.owner
+            .hold(REVIEW_EVIDENCE_HOLD_ARTIFACT, hold.to_string().as_bytes());
+    }
+
     pub(super) fn report(&self, name: &str, attempt: &str) -> (PathBuf, Vec<u8>) {
         let bytes = serde_json::to_vec(&json!({
             "schema_version": 1, "attempt_id": attempt, "verdict": "incomplete",
@@ -541,6 +576,76 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
             .filter(|row| row.brokered)
             .all(|row| row.status != AuditEventStatus::Success),
         "every refusal is audited as one: {rows:?}"
+    );
+}
+
+/// The broker sees the same canonical names as the owner's artifact store.
+/// The owner hold is deliberately allowed to contain a trim-tolerant spelling
+/// so a raw gate/manifest request cannot evade the contract-name guards.
+#[test]
+fn claimed_review_normalizes_request_and_hold_paths_before_guarding_reads() {
+    let gate = Fixture::new();
+    gate.owner.hold(REVIEW_GATE_ARTIFACT, b"gate certificate");
+    gate.pin_evidence_hold(" review-gate.json");
+    let refused = gate
+        .direct_review_read(" review-gate.json")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("claimed_review_bridge_refused"),
+        "{refused}"
+    );
+    assert!(
+        gate.owner.reads().is_empty(),
+        "the gate is never sent to the owner"
+    );
+    gate.pin_evidence_hold("review-gate.json/");
+    let refused = gate
+        .direct_review_read("review-gate.json/")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("claimed_review_bridge_refused"),
+        "{refused}"
+    );
+    assert!(
+        gate.owner.reads().is_empty(),
+        "a slash-suffixed gate name is never sent to the owner"
+    );
+
+    let manifest = Fixture::new();
+    manifest.pin_manifest("attempt-of-another-run");
+    manifest.pin_evidence_hold(" review-manifest.json");
+    let stale = manifest
+        .direct_review_read(" review-manifest.json")
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("review_manifest_stale"), "{stale}");
+    assert_eq!(manifest.owner.reads(), [REVIEW_MANIFEST_ARTIFACT]);
+
+    let evidence = Fixture::new();
+    let candidate = json!({"commit": "a".repeat(40), "tree": "b".repeat(40)});
+    let result = json!({
+        "schema_version": 1, "attempt_id": "attempt-held", "candidate": candidate,
+        "kind": "hosted_ci", "name": "CI", "command": "make ci",
+        "outcome": "passed", "log_artifact": " review-evidence-ci.log ",
+    });
+    evidence
+        .owner
+        .hold("review-evidence-ci.json", result.to_string().as_bytes());
+    evidence.owner.hold("review-evidence-ci.log", b"ci passed");
+    evidence.pin_evidence_hold(" review-evidence-ci.json ");
+    let log = evidence
+        .direct_review_read("review-evidence-ci.log/")
+        .unwrap();
+    assert_eq!(log["content"], "ci passed");
+    assert_eq!(
+        evidence.owner.reads(),
+        [
+            REVIEW_EVIDENCE_HOLD_ARTIFACT,
+            "review-evidence-ci.json",
+            "review-evidence-ci.log"
+        ]
     );
 }
 
