@@ -43,6 +43,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
 ## Operate
 
 <div class="orbit-card-grid">
+  <a class="orbit-card" href="./multi-host/">
+    <h3>Run Orbit across hosts</h3>
+    <p>Register SSH hosts, route tasks by prefix, select remote workspaces, and prepare a follower.</p>
+  </a>
   <a class="orbit-card" href="./task-publication/">
     <h3>Publish and Restore Tasks</h3>
     <p>Snapshot task records to a dedicated repository, and recover them.</p>

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "config.toml locations, crews, and the settable configuration keys."
+description: "config.toml locations, the host registry, crews, and the settable configuration keys."
 sidebar:
   order: 5
 ---
@@ -37,6 +37,80 @@ orbit config keys              # every settable key, with type and description
 `orbit config set` writes the workspace file; `--global` writes the global one.
 If the workspace file does not exist yet, add `--fresh` to start it empty or
 `--seed-from-global` to start from a copy of the global file.
+
+## Host registry
+
+`~/.orbit/hosts.toml` registers the remote Orbit installations this machine
+can reach over SSH. It is machine-global, beside `workspaces.json`; workspace
+configuration does not override or merge it. The local host's identity stays
+in `[machine]` in the global `config.toml`, outside this file.
+
+Manage entries with `orbit host add`, `rename`, and `remove`, or the
+dashboard's [Settings › Hosts](../../how-to/dashboard/#hosts). For setup and
+prefix routing, see [Run Orbit across hosts](../../how-to/multi-host/).
+
+The following illustrates the schema written by `orbit host add`; use the
+command to discover the remote identity rather than inventing its values:
+
+```toml
+schema_version = 1
+
+[[hosts]]
+name = "owner"
+machine_id = "hm_example_owner"
+ssh = "orbit-owner"
+task_prefix = "BOX"
+```
+
+| Field | Meaning and validation |
+|---|---|
+| `schema_version` | Required integer. This build accepts only `1`. |
+| `hosts` | Array of remote entries (`[[hosts]]`); omission means no remote hosts. |
+| `name` | Required host name, defaulting to the remote's `machine.name`. Non-empty, at most 128 bytes, with no surrounding whitespace, control characters, or path separators. Unique ignoring case, including against this machine's name. |
+| `machine_id` | Required remote identity: `hm_` followed by ASCII letters, digits, `_`, or `-`, at most 128 bytes overall. Unique and different from this machine's ID. |
+| `ssh` | Required SSH alias or `user@host`. No leading `-`, whitespace, control characters, or shell metacharacters. |
+| `task_prefix` | Required task namespace. Two to five uppercase ASCII letters, unique across registered hosts and this machine. Stored legacy `ORB` remains valid; fresh initialization reserves `ORB`, `ADR`, `L`, and `F`. |
+
+Unknown keys, malformed entries, unsupported schema versions, and duplicate
+identities or prefixes fail loading. Orbit keeps the file's bytes intact on
+a load failure. Mutations validate the resulting entries, sort them by name,
+and replace the file atomically. A refused mutation preserves the prior file.
+
+Reachability, Orbit version, protocol, and workspaces are read live by
+`orbit host list` and `show`; none is persisted in this file. Registration is
+one-way and stores no SSH credentials.
+
+### Legacy migration
+
+`~/.orbit/mcp-destinations.toml` is the legacy destination file. Its reader
+remains for one release. Use `orbit host` to migrate it; do not add new rows
+to the legacy file.
+
+- **Only the legacy file exists:** federated MCP, pull drains, and replica
+  worktree cleanup still read it. `orbit host list` marks rows **legacy**.
+  They have no stored task prefix, so they cannot supply prefix routes.
+- **First add, rename, or remove:** Orbit probes every retained legacy host,
+  writes `hosts.toml`, applies the operation, and deletes the legacy file.
+  `orbit host add <existing-ssh-target>` migrates an already-listed host
+  successfully, preserving its SSH target and chosen migration name;
+  `--name` applies only to a new host. Migrated names use the remote's
+  `machine.name`, falling back to its SSH target when the name is taken.
+- **A retained host does not answer:** `legacy_host_unreachable` refuses the
+  mutation and neither file changes. Restore SSH access or remove the
+  decommissioned row with `orbit host remove <ssh-target-or-machine-id>`.
+  The removed legacy host is never contacted; all remaining hosts must
+  answer. `--force` only overrides replica and pull-drain dependents.
+- **Both files exist:** every consumer, including `orbit host`, refuses
+  with `host_file_conflict`. The diagnostic compares them by machine ID
+  and lists missing routes with their `orbit host add` commands. Preserve
+  a backup, retire the legacy file, then run those commands to register
+  any missing hosts. Orbit does not choose one file for you.
+
+`orbit doctor` warns while only the legacy file exists and gives an
+`orbit host add` command using an existing SSH target. The next release
+drops the legacy reader and retains the both-files conflict check for one
+additional release. The older singular `host.toml` identity file is
+unrelated to this migration.
 
 ## Crews
 
