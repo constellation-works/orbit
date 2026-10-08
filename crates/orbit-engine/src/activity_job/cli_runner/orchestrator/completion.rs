@@ -5,9 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_agent::{
-    ParsedStdout, antigravity_terminal_error_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_content_refusal, provider_invocation_diagnostic,
+    ParsedStdout, antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
+    normalize_cli_stdout, project_cli_response, provider_authentication_failure,
+    provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
 };
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
@@ -58,6 +58,9 @@ pub(super) struct ProviderExit<'a> {
     pub(super) exit_code: Option<i32>,
     pub(super) duration: Duration,
     pub(super) timed_out: bool,
+    /// The provider-side time budget Orbit injected into argv, if the
+    /// provider has one. [ORB-14683]
+    pub(super) print_timeout: Option<Duration>,
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -84,6 +87,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         exit_code,
         duration,
         timed_out,
+        print_timeout,
     } = exit;
 
     // Provider output is not the system of record for artifact-backed
@@ -165,6 +169,14 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         .map(|error| completion_diagnostic(&error.to_string(), redaction));
     let completion_protocol_violation =
         spec.require_completion_envelope && completion_envelope_error.is_some();
+    // [ORB-14683] An exit 0 with no envelope that ran for the whole provider
+    // print-timeout is a spent budget, not a yielded agent. The elapsed time is
+    // the only evidence: `agy` ends at its budget with a `SUCCESS` wrapper of
+    // progress text. Orbit's spawn clock starts no later than the provider's, so
+    // an earlier exit cannot match. It fails whatever the activity's envelope
+    // flags say, because the run was cut off rather than finished.
+    let print_timeout_reached = completion_envelope_error.is_some()
+        && print_timeout.is_some_and(|budget| duration >= budget);
     // [ORB-10733] Protocol termination and control-plane outcome are distinct:
     // all recognized status tokens finish the frame, but a required completion
     // contract cannot checkpoint an explicit failed/timeout outcome. Only the
@@ -184,6 +196,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
         && !completion_protocol_violation
+        && !print_timeout_reached
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
 
@@ -375,6 +388,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         } else {
             Some(diagnostic)
         }
+    } else if let Some(budget) = print_timeout.filter(|_| print_timeout_reached) {
+        Some(with_sandbox_write_attribution(
+            antigravity_print_timeout_diagnostic(budget, duration),
+            sandbox_write_diagnostic.as_deref(),
+        ))
     } else if (spec.require_completion_envelope || spec.require_response_envelope)
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"))
     {

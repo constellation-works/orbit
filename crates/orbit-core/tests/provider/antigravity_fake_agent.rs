@@ -350,6 +350,115 @@ exit 1"#
     assert!(!message.contains(PROMPT_SECRET));
 }
 
+/// Progress-only terminal, as `agy` writes when it stops at `--print-timeout`.
+fn progress_only_success_body() -> &'static str {
+    r#"printf '%s\n' '{"event":"init","conversation_id":"c1","init":{"cwd":"/tmp","tools":[],"permission_mode":"always-proceed"}}'
+printf '%s\n' '{"event":"progress","message":"Background command still running"}'
+printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Background command still running; waiting for it to finish.","usage":{"total_tokens":17}}}'"#
+}
+
+/// Wall clock of 31 s leaves a derived `--print-timeout` of 1 s, short enough
+/// to reach in a test while the wall-clock deadline stays far away.
+const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
+
+/// [ORB-14683] `agy` at its print-timeout exits 0 with a `SUCCESS` wrapper of
+/// progress text. That is a spent provider budget, never completion.
+#[test]
+fn success_wrapper_without_envelope_at_print_timeout_is_reported_as_spent_budget() {
+    let body = format!("sleep 2\n{}\nexit 0", progress_only_success_body());
+    let harness = Harness::new(&body);
+    let outcome = dispatch(&harness, spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
+
+    assert!(!outcome.success, "a spent budget must not succeed");
+    assert!(
+        harness
+            .argv()
+            .windows(2)
+            .any(|args| args == ["--print-timeout", "1s"])
+    );
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("--print-timeout of 1s"),
+        "diagnostic must name the budget: {message}"
+    );
+    let duration_ms = outcome.output["duration_ms"].as_u64().expect("duration_ms");
+    assert!(duration_ms >= 1000, "{duration_ms}");
+    assert!(
+        message.contains(&format!("ran {duration_ms} ms")),
+        "diagnostic must name the elapsed time: {message}"
+    );
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
+    assert_eq!(outcome.output["timed_out"], serde_json::Value::Bool(false));
+    assert_eq!(
+        outcome.output["completion_envelope_satisfied"],
+        serde_json::Value::Bool(false)
+    );
+    assert!(
+        outcome.output["final_message"]
+            .as_str()
+            .is_some_and(|text| text.contains("Background command still running")),
+        "the bounded last message must be attached: {:?}",
+        outcome.output["final_message"]
+    );
+    assert!(!message.contains(PROMPT_SECRET));
+}
+
+/// The budget is the provider's own limit, so the verdict does not depend on
+/// the activity opting into envelope enforcement.
+#[test]
+fn print_timeout_without_envelope_fails_even_when_envelopes_are_not_required() {
+    let body = format!("sleep 2\n{}\nexit 0", progress_only_success_body());
+    let mut lenient = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
+    lenient.require_response_envelope = false;
+    lenient.require_completion_envelope = false;
+    let outcome = dispatch(&Harness::new(&body), lenient);
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .message
+            .unwrap_or_default()
+            .contains("--print-timeout of 1s")
+    );
+}
+
+#[test]
+fn success_wrapper_without_envelope_before_print_timeout_keeps_the_envelope_message() {
+    let body = format!("{}\nexit 0", progress_only_success_body());
+    let mut completion_only = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
+    completion_only.require_response_envelope = false;
+    let outcome = dispatch(&Harness::new(&body), completion_only);
+    assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("agent step did not complete: the provider exited 0")
+            && !message.contains("print-timeout"),
+        "an early exit is the ordinary completion violation: {message}"
+    );
+}
+
+#[test]
+fn valid_envelope_at_print_timeout_still_succeeds() {
+    let body = format!("sleep 2\n{}", success_body());
+    let outcome = dispatch(&Harness::new(&body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    assert!(outcome.output["duration_ms"].as_u64().expect("duration_ms") >= 1000);
+}
+
+#[test]
+fn error_terminal_after_print_timeout_keeps_the_terminal_error_message() {
+    let body = r#"sleep 2
+printf '%s\n' '{"event":"result","result":{"status":"ERROR","response":"","error":"timeout waiting for response"}}'
+exit 1"#;
+    let outcome = dispatch(&Harness::new(body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
+    assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("timeout waiting for response"),
+        "{message}"
+    );
+    assert!(!message.contains("--print-timeout of"), "{message}");
+}
+
 #[test]
 fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
     let outcome = dispatch(&Harness::new("sleep 30\nexit 0"), spec(1));

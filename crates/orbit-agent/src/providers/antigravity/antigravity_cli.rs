@@ -106,21 +106,42 @@ pub(crate) fn format_antigravity_print_timeout(duration: Duration) -> String {
 
 /// Merge `--print-timeout` into combined executor + invocation argv.
 ///
-/// No-ops for other providers. A shorter explicit executor value is kept; a
-/// longer one is capped to the derived budget; the flag is never duplicated.
+/// No-ops for other providers and returns `None`. A shorter explicit executor
+/// value is kept; a longer one is capped to the derived budget; the flag is
+/// never duplicated. Returns the value now in argv so the runner can tell a
+/// run that ended at that budget from one that exited early. [ORB-14683]
 pub fn apply_antigravity_print_timeout(
     provider: &str,
     args: &mut Vec<String>,
     remaining_deadline: Duration,
-) {
+) -> Option<Duration> {
     if provider != "antigravity" && provider != "agy" {
-        return;
+        return None;
     }
     let derived = derived_antigravity_print_timeout(remaining_deadline);
     let chosen = existing_print_timeout(args)
         .map(|existing| existing.min(derived))
         .unwrap_or(derived);
     set_print_timeout(args, chosen);
+    Some(chosen)
+}
+
+/// Step diagnostic for an `agy` run that ended at the `--print-timeout` Orbit
+/// gave it without an Orbit completion envelope. `agy` stops there with a
+/// `SUCCESS` terminal wrapper and exit 0 whose response holds only progress
+/// text, which says the provider spent its time budget, not that the work
+/// finished. Names only the budget and elapsed time; the caller attaches the
+/// bounded final message separately. [ORB-14683]
+pub fn antigravity_print_timeout_diagnostic(budget: Duration, elapsed: Duration) -> String {
+    format!(
+        "agent step did not complete: antigravity reached its --print-timeout of {} \
+         (ran {} ms) and exited 0 without a terminating Orbit response envelope. The \
+         provider's time budget was spent before the work finished, so any `SUCCESS` \
+         wrapper or exit code 0 is not completion; only what the run persisted before \
+         stopping is durable.",
+        format_antigravity_print_timeout(budget),
+        elapsed.as_millis(),
+    )
 }
 
 fn existing_print_timeout(args: &[String]) -> Option<Duration> {

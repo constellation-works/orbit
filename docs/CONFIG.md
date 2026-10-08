@@ -442,6 +442,8 @@ Pi has no MCP client, and `orbit mcp init` offers none. Keep Pi's `bash` tool av
 
 A terminal `result` with `status: "SUCCESS"` completes the step. On a non-zero exit with a terminal `ERROR`, Orbit surfaces the bounded, redacted `error` string.
 
+A run that exits 0 with a `SUCCESS` terminal but no Orbit completion envelope, after running for the whole `--print-timeout` Orbit set, is reported distinctly: the step fails with a diagnostic naming the print-timeout value and the elapsed time, and the step output keeps the bounded `final_message`. Reaching the print-timeout is a spent provider budget and is never completion, whatever the exit code or terminal status. An early exit without an envelope keeps the ordinary completion-envelope message.
+
 ## MCP client registration
 
 `orbit workspace init --mcp` registers Grok through the shared project

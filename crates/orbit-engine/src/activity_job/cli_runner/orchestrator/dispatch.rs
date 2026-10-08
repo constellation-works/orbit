@@ -266,7 +266,8 @@ pub(crate) fn run_cli_backend_for_step(
     // Combined executor + transport argv is the only place that can honor a
     // custom `--print-timeout` without duplicating it, and the remaining
     // spawn deadline is known here. [ORB-11337]
-    apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+    let print_timeout =
+        apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
     if let Some(tools) = inspection_tools {
         subprocess_args.extend(tools.args);
     }
@@ -726,6 +727,7 @@ pub(crate) fn run_cli_backend_for_step(
         exit_code,
         duration,
         timed_out,
+        print_timeout,
     });
     step_error_after_provider_evidence(
         completion,

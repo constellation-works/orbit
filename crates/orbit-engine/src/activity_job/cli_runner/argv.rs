@@ -151,12 +151,14 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
 ///
 /// Today this only merges Antigravity `--print-timeout` so `agy`'s documented
 /// 5m default cannot cut off a longer Orbit activity budget. [ORB-11337]
+/// Returns the provider print-timeout it injected, if any, so completion can
+/// tell a run that spent that budget from one that exited early. [ORB-14683]
 pub(super) fn apply_provider_runtime_arg_fixups(
     provider: &str,
     args: &mut Vec<String>,
     remaining_deadline: Duration,
-) {
-    orbit_agent::apply_antigravity_print_timeout(provider, args, remaining_deadline);
+) -> Option<Duration> {
+    orbit_agent::apply_antigravity_print_timeout(provider, args, remaining_deadline)
 }
 
 /// Replace the value following any `--debug-file` token in `static_args`
