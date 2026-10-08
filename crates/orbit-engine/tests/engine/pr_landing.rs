@@ -2764,6 +2764,82 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
     );
 }
 
+/// ORB-14651: a requeued evidence-held task is admitted again by a later run.
+/// Admission refuses for the still-missing evidence before it reserves an
+/// attempt, so the handoff must keep the hold rather than escalate.
+#[test]
+fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
+    isolated(
+        "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
+        |sandbox| {
+            const RERUN_ID: &str = "jrun-landing-rerun";
+            let fx = Fixture::new(sandbox);
+            // The operator requeue leaves the task in backlog; the rerun's
+            // admission moves it back to in-progress and claims it for the
+            // rerun before the handoff.
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.tasks
+                .lock()
+                .unwrap()
+                .get_mut(TASK_ID)
+                .unwrap()
+                .job_run_id = Some(RERUN_ID.to_string());
+            let hold = json!({
+                "schema_version": 1, "attempt_id": "rvw-held", "lineage_key": "lineage", "run_id": RUN_ID,
+                "candidate": {"commit": fx.candidate, "tree": git(&fx.repo, &["rev-parse", "HEAD^{tree}"])},
+                "task_meaning_digest": "meaning",
+                "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
+            });
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&hold).unwrap(),
+            );
+            host.artifact_creators.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                "system".into(),
+            );
+            // Admission refused before reserving an attempt, so no
+            // `review_gate_admit` output reaches the handoff.
+            let mut input = json!({
+                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "error_message": "review_awaiting_evidence: named external checks have not arrived for the held candidate",
+                "run_id": RERUN_ID,
+                "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+                "pipeline": {"worktree": {"job_run_id": RERUN_ID, "workspace_path": fx.repo},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE}},
+            });
+            let held = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(held["decision"], "awaiting_review_evidence");
+            assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+            assert_eq!(fx.forge_state("pr-head"), None);
+
+            let mut other_candidate = hold.clone();
+            other_candidate["candidate"]["commit"] =
+                json!("0000000000000000000000000000000000000000");
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&other_candidate).unwrap(),
+            );
+            let stale = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(
+                stale["decision"], "blocked_review_gate",
+                "a hold for another candidate does not cover this admission refusal"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+
+            host.artifacts.lock().unwrap().insert(
+                (TASK_ID.into(), "review-evidence-hold.json".into()),
+                serde_json::to_vec(&hold).unwrap(),
+            );
+            host.set_status(TASK_ID, TaskStatus::InProgress);
+            input["error_message"] = json!("review_gate_stale: completion rebased a reviewed head");
+            let substantive = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(substantive["decision"], "blocked_review_gate");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
