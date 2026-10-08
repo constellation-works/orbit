@@ -1360,6 +1360,10 @@ function activeRefreshJobs() {
       renderRunDetailEmpty("No run selected.");
       return jobs;
     }
+    if (aggregate) {
+      renderRunDetailEmpty("Select a workspace to view this run.");
+      return jobs;
+    }
     add("Run detail", fetchAndRenderRunDetail());
     // Events power both the Events sub-tab and the Gantt's retry markers, so
     // they're fetched on every run-detail refresh regardless of which sub-tab
