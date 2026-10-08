@@ -85,6 +85,11 @@ impl DeliveryPin {
         self.candidate_sha.as_deref()
     }
 
+    /// The task branch this run published, if recorded.
+    pub(super) fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
     /// The exact head replaced by this run's verified push, if recorded.
     pub(super) fn previous_candidate_sha(&self) -> Option<&str> {
         self.previous_candidate_sha.as_deref()

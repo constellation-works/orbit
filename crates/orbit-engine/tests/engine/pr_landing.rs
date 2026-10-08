@@ -71,6 +71,13 @@ const PR_NUMBER: &str = "42";
 // Merge gating
 // ---------------------------------------------------------------------------
 
+/// `old` for `old_reads` reads, then `new`.
+fn scripted_heads(old: &str, new: &str, old_reads: usize) -> Vec<String> {
+    let mut heads = vec![old.to_string(); old_reads];
+    heads.push(new.to_string());
+    heads
+}
+
 /// Regression for ORB-14315: provider metadata may lag a verified lease-push,
 /// but both the merge mutation and review landing must keep the new exact SHA.
 #[test]
@@ -138,7 +145,6 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
                 "time_cap",
                 "third_head",
                 "third_after_old",
-                "remote_old",
                 "remote_missing",
                 "remote_moved_after_old",
                 "review_mismatch",
@@ -180,10 +186,6 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
                         heads.push(&fx.base_sha);
                         (2, "delivery_evidence_stale")
                     }
-                    "remote_old" => {
-                        remote = Some(&fx.candidate);
-                        (1, "delivery_evidence_stale")
-                    }
                     "remote_missing" => {
                         remote = None;
                         (1, "delivery_evidence_stale")
@@ -221,6 +223,201 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
 
                 let error = action(&host, "pr_complete", &input)
                     .expect_err("unverified metadata cannot authorize delivery");
+
+                assert!(error.to_string().contains(error_code), "{case}: {error}");
+                assert_eq!(
+                    fx.status_reads() - before,
+                    expected_reads,
+                    "{case}: bounded reads"
+                );
+                assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
+                assert!(host.landings().is_empty(), "{case}: no review landing");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+                assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
+            }
+        },
+    );
+}
+
+/// Regression for ORB-14663: after a verified lease-push, `refs/pull/<N>/head`
+/// may briefly name the previous head too. Completion waits inside the same
+/// bound while the task branch on origin already names the candidate, and
+/// still merges only that exact SHA.
+#[test]
+fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin() {
+    isolated(
+        "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
+        |sandbox| {
+            // Reads that still report the previous head: (metadata, pull ref).
+            for (metadata_old_reads, pull_ref_old_reads) in [(2, 2), (1, 2)] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let input = fx.republished_completion_input(&host);
+                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                assert_eq!(fx.remote_tip(BRANCH), candidate, "branch ref is replaced");
+                let metadata = scripted_heads(&fx.candidate, &candidate, metadata_old_reads);
+                let pull_ref = scripted_heads(&fx.candidate, &candidate, pull_ref_old_reads);
+                fx.script_heads(
+                    &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
+                    Some(&fx.candidate),
+                );
+                fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
+                let before = fx.status_reads();
+
+                let completed = action(&host, "pr_complete", &input)
+                    .expect("the pull ref catches up within the bound");
+
+                assert_eq!(
+                    completed["merge"]["stale_head_observations"],
+                    pull_ref_old_reads
+                );
+                assert_eq!(completed["merge"]["waited_seconds"], pull_ref_old_reads * 5);
+                assert_eq!(fx.status_reads() - before, pull_ref_old_reads + 2);
+                assert_eq!(
+                    fx.merge_requests(),
+                    vec![format!("sha={candidate} merge_method=squash")]
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+            }
+        },
+    );
+}
+
+/// The pull-ref wait is fail-closed: anything but the known previous head with
+/// the task branch at the candidate, inside the bound, refuses and leaves the
+/// task in review without a merge request.
+#[test]
+fn previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs() {
+    isolated(
+        "previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs",
+        |sandbox| {
+            for case in [
+                "pull_ref_third",
+                "pull_ref_third_after_old",
+                "branch_missing",
+                "branch_at_previous",
+                "previous_unknown",
+                "previous_empty",
+                "previous_is_candidate",
+                "persistent",
+                "persistent_after_metadata",
+                "time_cap",
+                "review_mismatch",
+                "ls_remote_fails",
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.republished_completion_input(&host);
+                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                let remote_git_dir = fx.forge.join("remote.git");
+                let mut metadata = vec![fx.candidate.clone()];
+                let mut pull_ref = vec![fx.candidate.clone()];
+                let (expected_reads, error_code) = match case {
+                    "pull_ref_third" => {
+                        pull_ref = vec![fx.base_sha.clone()];
+                        (1, "delivery_evidence_stale")
+                    }
+                    "pull_ref_third_after_old" => {
+                        pull_ref.push(fx.base_sha.clone());
+                        metadata.push(fx.candidate.clone());
+                        (2, "delivery_evidence_stale")
+                    }
+                    "branch_missing" => {
+                        git(
+                            &fx.repo,
+                            &[
+                                "--git-dir",
+                                path_str(&remote_git_dir),
+                                "update-ref",
+                                "-d",
+                                &format!("refs/heads/{BRANCH}"),
+                            ],
+                        );
+                        (1, "delivery_evidence_stale")
+                    }
+                    "branch_at_previous" => {
+                        git(
+                            &fx.repo,
+                            &[
+                                "--git-dir",
+                                path_str(&remote_git_dir),
+                                "update-ref",
+                                &format!("refs/heads/{BRANCH}"),
+                                &fx.candidate,
+                            ],
+                        );
+                        (1, "delivery_evidence_stale")
+                    }
+                    "previous_unknown" => {
+                        input
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("previous_published_head_sha");
+                        (1, "delivery_evidence_stale")
+                    }
+                    "previous_empty" => {
+                        input["previous_published_head_sha"] = json!("");
+                        (1, "delivery_evidence_stale")
+                    }
+                    "previous_is_candidate" => {
+                        input["previous_published_head_sha"] = json!(candidate);
+                        (1, "delivery_evidence_stale")
+                    }
+                    "persistent" => {
+                        input["max_wait_seconds"] = json!(240);
+                        (4, "delivery_evidence_stale")
+                    }
+                    "persistent_after_metadata" => {
+                        input["max_wait_seconds"] = json!(240);
+                        metadata.push(candidate.clone());
+                        (4, "delivery_evidence_stale")
+                    }
+                    "time_cap" => {
+                        input["max_wait_seconds"] = json!(8);
+                        (2, "delivery_evidence_stale")
+                    }
+                    "review_mismatch" => {
+                        metadata = vec![candidate.clone()];
+                        input["reviewed_head_sha"] = json!(fx.candidate);
+                        (1, "review_gate_stale")
+                    }
+                    "ls_remote_fails" => {
+                        git(
+                            &fx.repo,
+                            &[
+                                "remote",
+                                "set-url",
+                                "origin",
+                                "/nonexistent/orbit-remote.git",
+                            ],
+                        );
+                        (1, "delivery_evidence_stale")
+                    }
+                    _ => unreachable!(),
+                };
+                fx.script_heads(
+                    &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
+                    Some(&fx.candidate),
+                );
+                fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
+                let before = fx.status_reads();
+
+                let error = action(&host, "pr_complete", &input)
+                    .expect_err("an unverified pull ref cannot authorize delivery");
 
                 assert!(error.to_string().contains(error_code), "{case}: {error}");
                 assert_eq!(
@@ -3389,7 +3586,8 @@ export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
 
 head_sha() {
-    git --git-dir="$remote" rev-parse "refs/heads/$(cat "$forge/pr-head")"
+    # A deleted branch reads as empty so a test can model its absence.
+    git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$(cat "$forge/pr-head")" || true
 }
 
 check() {
