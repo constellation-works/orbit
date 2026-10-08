@@ -81,11 +81,17 @@ pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> Worksp
         );
     }
 
-    let output = std::process::Command::new("git")
+    // `ls-files` is outside `run_git`'s admitted subcommands.
+    let mut command = std::process::Command::new("git");
+    command
         .args(["ls-files", "--", ".orbit"])
         .current_dir(repo_root)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output();
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    let output = orbit_common::process::run_bounded_capped(
+        &mut command,
+        orbit_common::fs::git::GIT_LOCAL_TIMEOUT,
+        orbit_common::fs::git::GIT_OUTPUT_LIMIT,
+    );
 
     match output {
         Ok(output) if output.status.success() => {
@@ -123,10 +129,10 @@ pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> Worksp
                 },
             )
         }
-        Err(_) => check(
+        Err(error) => check(
             "tracked-orbit-files",
             WorkspaceDoctorStatus::Skipped,
-            "git is not available".to_string(),
+            format!("git ls-files could not run: {error}"),
         ),
     }
 }

@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{ArtifactManifestFileV2, Task, TaskComment, TaskHistoryEntry, TaskStatus};
@@ -812,9 +812,10 @@ impl OrbitRuntime {
             })?;
         }
         let target = path.to_string_lossy().to_string();
-        let output = run_git(
+        let output = run_git_within(
             &self.paths().repo_root,
             &["worktree", "add", "--detach", "--quiet", &target, base_sha],
+            GIT_CHECKOUT_TIMEOUT,
         )?;
         if !output.success {
             return Err(OrbitError::Execution(format!(
@@ -845,9 +846,10 @@ impl OrbitRuntime {
             return Ok(());
         }
         let target = path.to_string_lossy().to_string();
-        let output = run_git(
+        let output = run_git_within(
             &self.paths().repo_root,
             &["worktree", "remove", "--force", &target],
+            GIT_CHECKOUT_TIMEOUT,
         )?;
         if output.success {
             return Ok(());

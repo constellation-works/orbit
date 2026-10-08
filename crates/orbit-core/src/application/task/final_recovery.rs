@@ -8,11 +8,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::{run_git, with_git_fetch_lock};
+use orbit_common::fs::git::{GIT_REMOTE_TIMEOUT, run_git, with_git_fetch_lock};
 use orbit_common::process::run_bounded_capped;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskComment, TaskStatus};
@@ -29,7 +28,6 @@ const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
 const ESCALATED_EVENT: &str = "final_recovery_escalated";
-const REMOTE_REF_REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(15);
 const REMOTE_REF_REFRESH_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// The task as it stood when the failure was recorded.
@@ -722,7 +720,7 @@ fn refresh_remote_tracking_ref(repo_root: &Path, remote: &str, branch: &str) -> 
             .env("GIT_TERMINAL_PROMPT", "0");
         let output = run_bounded_capped(
             &mut command,
-            REMOTE_REF_REFRESH_TIMEOUT,
+            GIT_REMOTE_TIMEOUT,
             REMOTE_REF_REFRESH_OUTPUT_LIMIT,
         )
         .map_err(|error| std::io::Error::other(error.to_string()))?;

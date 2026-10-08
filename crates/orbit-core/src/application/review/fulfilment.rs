@@ -36,7 +36,9 @@ use std::process::{Child, Stdio};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{
+    GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GIT_REMOTE_TIMEOUT, run_git_within,
+};
 use orbit_common::text::ceil_char_boundary;
 use orbit_engine::DispatchError;
 #[cfg(target_os = "linux")]
@@ -646,29 +648,35 @@ impl OrbitRuntime {
         let source = self.paths().repo_root.to_string_lossy().into_owned();
         // Every command after `init` names the new repository explicitly, so
         // a failed `init` can never fall through to an enclosing one.
-        for args in [
-            vec!["init", "--quiet", "--template="],
-            vec![
-                &git_dir,
-                "fetch",
-                "--quiet",
-                "--depth=1",
-                "--no-tags",
-                "--end-of-options",
-                &source,
-                commit,
-            ],
-            vec![
-                &git_dir,
-                "-c",
-                "core.hooksPath=/dev/null",
-                "checkout",
-                "--quiet",
-                "--detach",
-                commit,
-            ],
+        for (args, deadline) in [
+            (vec!["init", "--quiet", "--template="], GIT_LOCAL_TIMEOUT),
+            (
+                vec![
+                    &git_dir,
+                    "fetch",
+                    "--quiet",
+                    "--depth=1",
+                    "--no-tags",
+                    "--end-of-options",
+                    &source,
+                    commit,
+                ],
+                GIT_REMOTE_TIMEOUT,
+            ),
+            (
+                vec![
+                    &git_dir,
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "checkout",
+                    "--quiet",
+                    "--detach",
+                    commit,
+                ],
+                GIT_CHECKOUT_TIMEOUT,
+            ),
         ] {
-            let output = run_git(&path, &args)?;
+            let output = run_git_within(&path, &args, deadline)?;
             if !output.success {
                 return Err(OrbitError::Execution(format!(
                     "prepare evidence checkout {} at {commit}: git {}: {}",

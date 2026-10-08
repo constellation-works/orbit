@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
-use super::declared_pair::git_common_dir;
+use super::declared_pair::canonical_git_common_dir;
 use super::fingerprint::{DIFF_IDENTITY_FLAGS, GitWorktreeFingerprint, git_stdout_bytes};
 use super::{DispatchError, WorktreeBoundaryGuard};
 
@@ -61,12 +61,16 @@ impl WorktreeBoundaryGuard {
             )));
         }
 
-        let common_dir = git_common_dir(&self.assigned_root)?.ok_or_else(|| {
-            DispatchError::CliInvocationPermanent(format!(
-                "cannot preserve dirty worktree '{}': Git common dir is unavailable",
-                self.assigned_root.display()
-            ))
-        })?;
+        let common_dir =
+            canonical_git_common_dir(&self.assigned_root).map_err(|error| match error {
+                DispatchError::CliInvocationPermanent(reason) => {
+                    DispatchError::CliInvocationPermanent(format!(
+                        "cannot preserve dirty worktree '{}': Git common dir is unavailable: {reason}",
+                        self.assigned_root.display()
+                    ))
+                }
+                other => other,
+            })?;
         let recovery_parent = common_dir.join("orbit").join("worktree-recovery");
         let run_root = recovery_parent.join(&self.run_id);
         fs::create_dir_all(&run_root)

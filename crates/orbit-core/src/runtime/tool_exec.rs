@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
+use orbit_common::fs::git::{git_common_dir, run_git};
 use orbit_common::security::redaction::{redact_all_error, redact_sensitive_env_json};
 use orbit_tools::ToolContext;
 use orbit_types::record::OrbitEvent;
@@ -378,13 +378,13 @@ fn active_git_checkout_root(
     }
 
     let checkout_root = git_checkout_root(cwd)?;
-    let repo_common_dir = git_common_dir(canonical_repo_root)?;
+    let repo_common_dir = canonical_git_common_dir(canonical_repo_root)?;
     // A linked worktree shares the runtime repository's common directory. A
     // source-inspection slot is a standalone repository the CLI runner
     // materialized for this repository, so it is recognized by its owned
     // layout instead; without it, a pilot's subprocesses would run in the
     // primary rather than at the pinned revision [ORB-13800].
-    let owned_checkout = git_common_dir(&checkout_root)
+    let owned_checkout = canonical_git_common_dir(&checkout_root)
         .is_some_and(|checkout_common_dir| checkout_common_dir == repo_common_dir)
         || orbit_engine::activity_job::cli_runner::is_source_inspection_checkout(
             &repo_common_dir,
@@ -393,17 +393,21 @@ fn active_git_checkout_root(
     owned_checkout.then_some(checkout_root)
 }
 
+/// The checkout `path` sits in, or `None` when Git cannot say. A Git that
+/// could not run or timed out (logged) resolves like no checkout: the caller
+/// falls back to the registered root, never to an owned checkout.
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
+    let output = run_git(path, &["rev-parse", "--show-toplevel"])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve the Git checkout root: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let raw_path = stdout.lines().next()?.trim();
+    let raw_path = output.stdout.lines().next()?.trim();
     if raw_path.is_empty() {
         return None;
     }
@@ -411,22 +415,17 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     Some(path.canonicalize().unwrap_or(path))
 }
 
-fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
+/// `None` outside Git, and when Git timed out (logged): no common dir then
+/// matches, so the caller falls back to the registered root.
+fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
+    let common = git_common_dir(path)
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve the Git common dir: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let raw_path = stdout.lines().next()?.trim();
-    if raw_path.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(raw_path);
-    Some(path.canonicalize().unwrap_or(path))
+    Some(common.canonicalize().unwrap_or(common))
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {

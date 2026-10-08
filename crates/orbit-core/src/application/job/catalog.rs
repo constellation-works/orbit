@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT};
+use orbit_common::process::run_bounded_capped;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::{
     CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
@@ -495,10 +497,12 @@ fn validate_ci_integration_branch(repo_root: &Path, branch: &str) -> Result<Stri
     // another Git revision expression.
     let branch = branch.trim();
     let branch = branch.strip_prefix("origin/").unwrap_or(branch).trim();
-    let valid = std::process::Command::new("git")
+    // `check-ref-format` is outside `run_git`'s admitted subcommands.
+    let mut command = std::process::Command::new("git");
+    command
         .args(["check-ref-format", &format!("refs/heads/{branch}")])
-        .current_dir(repo_root)
-        .output()
+        .current_dir(repo_root);
+    let valid = run_bounded_capped(&mut command, GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT)
         .map_err(|error| {
             OrbitError::Execution(format!("validate CI sweep integration branch: {error}"))
         })?

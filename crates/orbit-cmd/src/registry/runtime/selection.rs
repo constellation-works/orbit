@@ -242,7 +242,7 @@ pub(super) fn find_checkout_for_git_common_dir<'a>(
     registry: &'a WorkspaceRegistry,
     selected: &Path,
 ) -> Option<&'a WorkspaceCheckout> {
-    let selected_common = git_common_dir(selected)?;
+    let selected_common = canonical_git_common_dir(selected)?;
     let mut recorded = registry.checkouts.iter().filter(|checkout| {
         recorded_git_common_dir(checkout).is_some_and(|common| common == selected_common)
     });
@@ -252,7 +252,8 @@ pub(super) fn find_checkout_for_git_common_dir<'a>(
     // Recorded `.git` missed every checkout (for example a gitfile worktree
     // registered as the catalog checkout). Spawn only on that zero-hit path.
     let mut spawned = registry.checkouts.iter().filter(|checkout| {
-        git_common_dir(&checkout.repo_root).is_some_and(|common| common == selected_common)
+        canonical_git_common_dir(&checkout.repo_root)
+            .is_some_and(|common| common == selected_common)
     });
     let first = spawned.next()?;
     spawned.next().is_none().then_some(first)
@@ -266,22 +267,17 @@ pub(super) fn recorded_git_common_dir(checkout: &WorkspaceCheckout) -> Option<Pa
     git_dir.is_dir().then(|| canonical_path(&git_dir))
 }
 
-pub(super) fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
+/// The canonical Git common dir of `path`, or `None` when Git cannot say. A
+/// Git that timed out is logged and, like any `None`, matches no checkout.
+pub(super) fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
+    let common = orbit_common::fs::git::git_common_dir(path)
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve the Git common dir: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let trimmed = raw.lines().next()?.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(canonical_path(Path::new(trimmed)))
+    Some(canonical_path(&common))
 }
 
 /// Keep registered/shared state on the catalog checkout while choosing the
@@ -335,9 +331,9 @@ pub(super) fn linked_worktree_local_root(
     if canonical_path(&worktree) == canonical_path(&checkout.repo_root) {
         return None;
     }
-    let worktree_common = git_common_dir(&worktree)?;
-    let registered_common =
-        recorded_git_common_dir(checkout).or_else(|| git_common_dir(&checkout.repo_root))?;
+    let worktree_common = canonical_git_common_dir(&worktree)?;
+    let registered_common = recorded_git_common_dir(checkout)
+        .or_else(|| canonical_git_common_dir(&checkout.repo_root))?;
     (worktree_common == registered_common).then(|| worktree.join(".orbit"))
 }
 
