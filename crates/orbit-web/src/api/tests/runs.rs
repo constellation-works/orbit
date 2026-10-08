@@ -205,16 +205,23 @@ async fn dashboard_cancel_requeues_with_reason_by_default_and_can_keep_blocked_s
             task_after_cancel.context_files,
             vec!["file:src/candidate.rs".to_string()]
         );
-        if !block {
-            let history = runtime.get_task_history(&task.id).expect("task history");
-            let entry = history.last().expect("cancellation history");
-            assert_eq!(entry.event, "workflow_run_cancelled");
-            assert!(
-                entry
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| { note.contains("preserve this candidate for later") })
-            );
-        }
+        let policy = runtime
+            .read_run_state(&run.run_id)
+            .expect("run state")
+            .and_then(|state| state.task_cancellation_policy)
+            .expect("durable cancellation policy");
+        assert_eq!(policy.block, block);
+        let history = runtime.get_task_history(&task.id).expect("task history");
+        let entry = history.last().expect("cancellation history");
+        assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+        assert_eq!(entry.to_status, Some(expected_status));
+        assert_eq!(
+            entry.event,
+            if block {
+                "workflow_run_failed"
+            } else {
+                "workflow_run_cancelled"
+            }
+        );
     }
 }

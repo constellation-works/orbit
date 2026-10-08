@@ -67,6 +67,7 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
+    let comments_before = pair.owner_task(&task)["comments"].as_array().unwrap().len();
 
     // Keep this fixture from signalling the test process used as the fake
     // worker. The run is still a launched claim and exercises final settlement.
@@ -93,10 +94,22 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     assert_eq!(cancelled.outcome, "cancelled");
     assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
     assert_eq!(pair.owner_status(&task), "backlog");
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    let failure = &settles[0]["settlement"]["Release"]["failure"];
+    assert_eq!(failure["class"], "operator_cancel");
     assert!(
-        comments_of(&pair.owner_task(&task)).contains("preserve this candidate for later"),
-        "{}",
-        pair.owner_task(&task)
+        failure["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+    );
+    let owner_task = pair.owner_task(&task);
+    let comments = owner_task["comments"].as_array().expect("owner comments");
+    assert_eq!(comments.len(), comments_before + 1);
+    assert!(
+        comments.last().unwrap()["message"]
+            .as_str()
+            .is_some_and(|note| !note.is_empty())
     );
     let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
     assert_eq!(claim.settlement_phase, "settled");
