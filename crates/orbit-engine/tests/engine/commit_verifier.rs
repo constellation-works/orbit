@@ -651,3 +651,138 @@ fn no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree() {
         "review edit\n"
     );
 }
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn doc_duties_fixture_task() -> Task {
+    let mut task = fixture_task();
+    task.task_type = TaskType::Chore;
+    task.title = "Validate the oldest workspace documentation".to_string();
+    task.tags = vec!["doc-duties".to_string(), "docs".to_string()];
+    task.context_files = vec!["dir:.".to_string()];
+    task.execution_summary =
+        "Outcome: success\n\nVerified 6 documents against current evidence; no drift found."
+            .to_string();
+    task
+}
+
+fn pipeline_commit_step_input(pipeline_asset: &str, repo: &Path, head: &str) -> Value {
+    let yaml = fs::read_to_string(
+        workspace_root().join(format!("crates/orbit-core/assets/jobs/{pipeline_asset}")),
+    )
+    .unwrap_or_else(|error| panic!("read {pipeline_asset}: {error}"));
+    let parsed: Value = serde_yaml::from_str(&yaml)
+        .unwrap_or_else(|error| panic!("parse {pipeline_asset}: {error}"));
+    let steps = parsed["spec"]["steps"]
+        .as_array()
+        .or_else(|| parsed["steps"].as_array())
+        .unwrap_or_else(|| panic!("{pipeline_asset} must have steps"));
+    let commit_step = steps
+        .iter()
+        .find(|step| step["id"] == "commit")
+        .unwrap_or_else(|| panic!("{pipeline_asset} must have a commit step"));
+    let default_input = &commit_step["default_input"];
+    assert_eq!(
+        default_input["verify_already_landed"], true,
+        "{pipeline_asset} commit step must declare verify_already_landed: true [ORB-14644]"
+    );
+
+    json!({
+        "scope": default_input["scope"].as_str().unwrap_or("all"),
+        "job_run_id": RUN_ID,
+        "workspace_path": repo.to_str().unwrap(),
+        "base_ref": "refs/heads/main",
+        "base_sha": head,
+        "verify_already_landed": default_input["verify_already_landed"].as_bool().unwrap_or(false),
+    })
+}
+
+/// A clean doc-duties chore (tagged `doc-duties` + `docs`, with `dir:.` context
+/// and no `no-diff-expected` tag) succeeds through the local pipeline's commit
+/// step when backed by valid no-diff evidence, without manufacturing a diff.
+/// Both local and PR ship modes accept the clean tree, while missing evidence
+/// remains refused as an empty stage [ORB-14644].
+#[test]
+fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let head = git_head(repo);
+    let host = VerifierHost::new(repo, doc_duties_fixture_task());
+
+    let valid_no_diff = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "reason": "Doc-duties batch accurate; no drift detected.",
+        "validation": [{
+            "command": "make ci-fast",
+            "exit_code": 0,
+            "log_artifact": "validation.json"
+        }]
+    });
+    let log = json!({
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "command": "make ci-fast",
+        "exit_code": 0,
+        "output": "ok"
+    });
+
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            artifact("no-diff.json", valid_no_diff),
+            artifact("validation.json", log),
+        ],
+    );
+
+    // 1. Clean doc-duties chore succeeds through the local pipeline's commit step
+    let local_input = pipeline_commit_step_input("task_local_pipeline.yaml", repo, &head);
+    let local_result = action(&host, &local_input)
+        .expect("clean doc-duties chore must succeed through local pipeline commit step");
+    assert_eq!(local_result["decision"], "verified_no_diff");
+    assert_eq!(local_result["skipped_no_diff_expected"], true);
+    assert_eq!(local_result["committed"], false);
+
+    // 2. Clean doc-duties chore also succeeds through the PR pipeline's commit step
+    let pr_input = pipeline_commit_step_input("task_pr_pipeline.yaml", repo, &head);
+    let pr_result = action(&host, &pr_input)
+        .expect("clean doc-duties chore must succeed through PR pipeline commit step");
+    assert_eq!(pr_result["decision"], "verified_no_diff");
+    assert_eq!(pr_result["skipped_no_diff_expected"], true);
+    assert_eq!(pr_result["committed"], false);
+
+    // The working tree remains clean and HEAD unchanged
+    assert_eq!(git_head(repo), head);
+    assert!(git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty());
+
+    // 3. Without no-diff evidence, an empty doc-duties stage is refused (not skipped)
+    let empty_host = VerifierHost::new(repo, doc_duties_fixture_task());
+    let error = action(&empty_host, &local_input)
+        .expect_err("clean doc-duties task without no-diff evidence must be refused");
+    assert!(
+        error.to_string().contains("nothing to commit"),
+        "expected empty stage refusal, got: {error}"
+    );
+
+    // 4. When doc-duties corrected drift, the diff is committed
+    fs::write(repo.join("README.md"), "drift corrected\n").expect("write drift edit");
+    let committed = action(&host, &local_input)
+        .expect("doc-duties task with drift correction commits its changes");
+    assert_eq!(committed["decision"], "performed");
+    assert_eq!(committed["committed"], true);
+    assert_eq!(committed["skipped_no_diff_expected"], false);
+    assert_ne!(git_head(repo), head);
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "drift corrected\n"
+    );
+}
