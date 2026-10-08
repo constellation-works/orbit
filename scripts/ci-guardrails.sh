@@ -64,6 +64,8 @@ fi
 "$repo_root/scripts/test-pr-state-workflows.py"
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/test-unit-test-inventory.py"
+"$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
 "$repo_root/scripts/test-ci-test-affected.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
 "$repo_root/scripts/test-codeql-rust-local.py"
