@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -10,6 +10,26 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
+const locksOnly = process.argv[4] === '--locks-only';
+const locksOnlyScenario = `
+const tasks = Array.from({ length: 20 }, (_, index) => ({
+  id: 'BASE-' + index, title: 'Base task ' + index, status: 'in-progress', priority: 'medium',
+}));
+globalThis.fetch = async path => {
+  const url = new URL(path, window.location.href);
+  let payload = { items: [], total: 0, limit: 50, truncated: false };
+  if (url.pathname === '/api/workspaces') payload = [{ id: 'one', name: 'one', status: 'active', is_default: true }];
+  if (url.pathname === '/api/tasks') payload = { items: tasks, total: 55, limit: 20, truncated: true, next_cursor: 'page-2' };
+  if (url.pathname === '/api/tasks/locks') payload = { total_locked: 0, total_tasks: 0, by_task: [] };
+  if (url.pathname === '/api/crews') payload = { default_crew: null, crews: [] };
+  if (url.pathname === '/api/workflows/auto/readiness') payload = { capacity: {}, tasks: [] };
+  if (url.pathname === '/api/routines') payload = { routines: [], clock: {} };
+  return new Response(JSON.stringify(payload), { status: 200 });
+};
+await import('/app.js');
+await new Promise(resolve => setTimeout(resolve, 0));
+globalThis.loadingTestsPassed = true;
+`;
 
 async function assertAccentFocusRing(control) {
   const focused = await control.evaluate(element => {
@@ -105,16 +125,94 @@ async function assertFrictionTaskLinks(page) {
   }
 }
 
-// axe's nested-interactive rule: a button's children are presentational, so a
-// button (or role="button") holding a focusable control hides that control
-// from a screen reader. Returns every such button under `root`.
+// axe's nested-interactive rule: an interactive control cannot contain another
+// focusable control. This includes summary, which is the disclosure control for
+// details; returns every such ancestor under `root`.
 function nestedInteractive(page, root) {
   return page.evaluate(root => {
     const focusable = 'button, select, input, textarea, a[href], [tabindex], [role="button"]';
-    return [...document.querySelectorAll(`${root} button, ${root} [role="button"]`)]
+    const interactive = `${root} button, ${root} [role="button"], ${root} summary`;
+    return [...document.querySelectorAll(interactive)]
       .filter(node => node.querySelector(focusable))
       .map(node => node.outerHTML.slice(0, 160));
   }, root);
+}
+
+async function assertLockedTaskNavigation(page) {
+  const tasks = [
+    { id: 'LOCKED-1', title: 'First locked task', status: 'in-progress', priority: 'medium' },
+    { id: 'LOCKED-2', title: 'Second locked task', status: 'backlog', priority: 'medium' },
+  ];
+  await page.evaluate(async tasks => {
+    const priorFetch = globalThis.fetch;
+    globalThis.lockedTaskFixtureFetch = priorFetch;
+    globalThis.fetch = async (path, options) => {
+      const url = new URL(path, window.location.href);
+      const payload = url.pathname === '/api/tasks'
+        ? { items: tasks, total: tasks.length, limit: 50, truncated: false }
+        : url.pathname === '/api/tasks/locks'
+          ? {
+              total_locked: tasks.length,
+              total_tasks: tasks.length,
+              by_task: tasks.map((task, index) => ({
+                ...task,
+                context_files: [`file:locked-${index + 1}.rs`],
+                job_run_id: `jrun-locked-${index + 1}`,
+              })),
+            }
+          : null;
+      if (payload) return new Response(JSON.stringify(payload), { status: 200 });
+      return priorFetch(path, options);
+    };
+    (await import('/js/router.js')).setActiveTab('tasks');
+  }, tasks);
+
+  try {
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() =>
+      document.querySelectorAll('#locks-body .lock-task-group').length === 2
+      && document.querySelector('#tasks-body [data-key="task-LOCKED-1"]')
+      && document.querySelector('#tasks-body [data-key="task-LOCKED-2"]'));
+
+    const nested = await nestedInteractive(page, '#tasks-main');
+    if (nested.length) throw new Error(`Tasks pane nests controls in an interactive element: ${nested.join('\n')}`);
+
+    if (process.env.AXE_CORE_SCRIPT) {
+      await page.addScriptTag({ path: process.env.AXE_CORE_SCRIPT });
+      const axeNodes = await page.evaluate(async () => {
+        const result = await globalThis.axe.run('#tasks-main', {
+          runOnly: { type: 'rule', values: ['nested-interactive'] },
+        });
+        return result.violations.flatMap(violation => violation.nodes.map(node => node.target.join(' ')));
+      });
+      if (axeNodes.length) throw new Error(`Axe nested-interactive found nodes in Tasks: ${axeNodes.join('\n')}`);
+    }
+
+    for (const task of tasks) {
+      const group = page.locator(`#locks-body [data-key="lock-task-${task.id}"]`);
+      const summary = group.locator(':scope > details > summary');
+      const link = group.locator(':scope > .lock-task-id');
+      await summary.focus();
+      await page.keyboard.press('Tab');
+      if (!(await link.evaluate(node => node === document.activeElement && node.tabIndex === 0))) {
+        throw new Error(`${task.id} task link must follow its disclosure in the keyboard tab order`);
+      }
+      await page.keyboard.press('Enter');
+      const row = page.locator(`#tasks-body [data-key="task-${task.id}"]`);
+      await page.locator(`#tasks-body #detail-${task.id}`).waitFor({ state: 'visible' });
+      if (!(await row.locator('.title').textContent()).includes(task.title)) {
+        throw new Error(`${task.id} task link opened the wrong task`);
+      }
+    }
+  } finally {
+    await page.evaluate(async () => {
+      globalThis.fetch = globalThis.lockedTaskFixtureFetch;
+      delete globalThis.lockedTaskFixtureFetch;
+      (await import('/js/router.js')).setActiveTab('tasks');
+      document.getElementById('refresh-btn').click();
+    });
+    await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
+  }
 }
 
 // Each row list is one Tab stop: only the current row's controls are
@@ -943,7 +1041,8 @@ async function assertSkipLinkAndFocusRings(page) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
+  const testScenario = locksOnly ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
+  const served = name === '/test.mjs' ? { data: testScenario, type: 'text/javascript' } : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
@@ -968,6 +1067,10 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  if (locksOnly) {
+    await assertLockedTaskNavigation(page);
+    console.log('Locked-task axe guard, keyboard access and task navigation passed.');
+  } else {
   await assertSkipLinkAndFocusRings(page);
   console.log('Dashboard skip link and keyboard focus checks passed.');
   await assertRunDetailActions(page, evidence);
@@ -980,6 +1083,7 @@ try {
     await page.evaluate(() => globalThis.showTaskPaginationEvidence());
     await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
     await assertRowKeyboard(page);
+    await assertLockedTaskNavigation(page);
     for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
       await page.setViewportSize({ width: viewport.width, height: 900 });
       await page.evaluate(() => {
@@ -1078,6 +1182,7 @@ try {
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
     fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge at 601–768px, card layout at 375px, unchanged at 1280px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
+  }
   }
 } finally {
   await browser?.close();
