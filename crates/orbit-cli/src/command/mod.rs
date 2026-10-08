@@ -89,7 +89,7 @@ Knowledge:
   search      Search tasks and frictions
 
 Operate:
-  run         Run a workflow (ship, job)
+  run         Run workflows, drain the backlog, and inspect runs
   job         View job definitions
   tool        View tool registry
   gc          Inspect and explicitly reap Orbit-managed garbage

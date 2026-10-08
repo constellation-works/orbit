@@ -20,9 +20,6 @@ pub struct AutoTaskToggleArgs {
     /// Whether to enable (`on`) or disable (`off`)
     #[arg(value_enum)]
     pub state: ToggleState,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskToggleArgs {

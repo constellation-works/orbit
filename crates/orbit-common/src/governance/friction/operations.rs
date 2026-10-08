@@ -157,7 +157,6 @@ const ADD: FrictionOperation = FrictionOperation {
     ],
     rejects_agent_field: true,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
-    cli_json_flag: true,
     cli_render: CliRender::Record,
 };
 
@@ -201,7 +200,6 @@ const LIST: FrictionOperation = FrictionOperation {
     // Agents list frictions through `orbit.search` with `kind: friction` and
     // no query; this verb backs the CLI listing and the dashboard.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::RecordTable,
 };
 
@@ -216,7 +214,6 @@ const SHOW: FrictionOperation = FrictionOperation {
     // `list` already returns the record bodies an agent needs; fetching one by
     // id is a human/dashboard follow-up and stays on the CLI surface.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::Record,
 };
 
@@ -230,7 +227,6 @@ const STATS: FrictionOperation = FrictionOperation {
     rejects_agent_field: false,
     // Aggregate administration stays off the MCP surface.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::AlwaysJson,
 };
 
@@ -245,7 +241,6 @@ const TAGS: FrictionOperation = FrictionOperation {
     // The taxonomy is already spelled out in the `add`/`update` tag parameter
     // descriptions, so a separate advertised lookup earns nothing.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::TagList,
 };
 
@@ -321,7 +316,6 @@ const UPDATE: FrictionOperation = FrictionOperation {
     ],
     rejects_agent_field: false,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
-    cli_json_flag: true,
     cli_render: CliRender::Record,
 };
 
@@ -335,7 +329,6 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     rejects_agent_field: false,
     // Resolution is an operator decision taken through the CLI / dashboard.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::Record,
 };
 
@@ -373,7 +366,6 @@ const REHOME: FrictionOperation = FrictionOperation {
     // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
     // remains the CLI spelling of the same move.
     mcp_scope: None,
-    cli_json_flag: true,
     cli_render: CliRender::Record,
 };
 

@@ -68,9 +68,6 @@ pub struct ShipCommand {
     /// Overrides machine.worker_containment_strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
@@ -191,9 +188,6 @@ pub struct LegacyShipLocalCommand {
     /// Deprecated. Use `orbit run ship --mode local --base <BRANCH>`.
     #[arg(short = 'b', long)]
     pub base: Option<String>,
-    /// Deprecated.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for LegacyShipLocalCommand {

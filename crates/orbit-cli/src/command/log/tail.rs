@@ -50,9 +50,9 @@ pub struct TailArgs {
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Emit each event as one raw JSON line instead of the four-column view.
-    #[arg(long)]
-    pub json: bool,
+    /// Stream rendering, derived from the output sink rather than argv.
+    #[arg(skip)]
+    pub(super) json_lines: bool,
 
     /// Override the JSONL path. Falls back to `$ORBIT_LOG_PATH`, then
     /// `$HOME/.orbit/state/logs/orbit.jsonl`. Provided primarily for tests.
@@ -78,11 +78,10 @@ impl Execute for TailArgs {
         Ok(Payload::stream(
             doc,
             Box::new(move |sink, writer| {
-                // Line shape follows the resolved sink, not the command-local
-                // `--json` flag: `--format json|ndjson` must emit JSONL even
-                // when that flag is absent.
+                // Line shape follows the resolved sink: JSON modes retain
+                // the stream's established JSONL record format.
                 let mut args = self;
-                args.json = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
+                args.json_lines = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
                 match run_tail(&path, &args, &filters, sink.color_allowed(), writer) {
                     Ok(()) => Ok(()),
                     // The reader closing the pipe is how `orbit log tail -f |
@@ -123,7 +122,7 @@ fn run_tail<W: Write + ?Sized>(
         path,
         initial,
         filters,
-        args.json,
+        args.json_lines,
         use_color,
         writer,
         FollowControl::Forever,
@@ -193,7 +192,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
         path,
         initial,
         filters,
-        args.json,
+        args.json_lines,
         use_color,
         writer,
         FollowControl::UntilStopped(control.stop),
@@ -225,7 +224,7 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
 ) -> io::Result<InitialWindow> {
     let (initial, history) = read_initial_window(path, args, filters, after_first_read)?;
     for line in history {
-        emit_line(&line, args.json, use_color, writer)?;
+        emit_line(&line, args.json_lines, use_color, writer)?;
     }
     Ok(initial)
 }
@@ -362,13 +361,13 @@ fn run_split_tail<W: Write + ?Sized>(
         .iter()
         .skip(history.len().saturating_sub(args.lines))
     {
-        emit_line(line, args.json, use_color, writer)?;
+        emit_line(line, args.json_lines, use_color, writer)?;
     }
     if args.follow {
         follow_files(
             feeds,
             filters,
-            args.json,
+            args.json_lines,
             use_color,
             writer,
             FollowControl::Forever,

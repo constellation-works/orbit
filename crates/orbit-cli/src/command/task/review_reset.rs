@@ -19,9 +19,6 @@ pub struct TaskReviewResetArgs {
     /// Adopt the current configured budget instead of the captured budget
     #[arg(long)]
     pub adopt_configured_budget: bool,
-    /// Emit the updated ledger as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 /// What a reset prints beside its ledger, here or routed to another host.
 pub(crate) const REVIEW_RESET_TEXT: &str =

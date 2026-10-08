@@ -15,10 +15,6 @@ pub struct ConfigGetArgs {
     /// including built-in defaults for keys that file omits.
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
-    /// Emit JSON. For global/workspace scope, `exists` reports whether the key
-    /// is explicitly set, even when `value` contains its resolved default.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ConfigGetArgs {

@@ -37,9 +37,6 @@ pub struct ShipSweepCommand {
     /// Report what would be dispatched without submitting any run.
     #[arg(long)]
     pub dry_run: bool,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 struct SweepReport {

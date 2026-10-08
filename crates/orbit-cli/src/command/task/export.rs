@@ -22,9 +22,6 @@ pub struct TaskExportArgs {
     /// Export every task in the workspace (the default when `--ids` is omitted).
     #[arg(long)]
     pub all: bool,
-    /// Emit machine-readable JSON instead of a human summary.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskExportArgs {

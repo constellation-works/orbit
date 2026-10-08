@@ -15,16 +15,19 @@ This page maps the command surface. For a command's exact options, run
 | `--root <ROOT>` | Override the Orbit root directory. Highest precedence. |
 | `--workspace <SELECTOR>` | Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Only an active workspace can be selected. Unlike `--root`, it does not change the root directory. |
 | `--format <MODE>` | `auto` (default: a table on a terminal, plain text when piped), `table`, `json`, or `ndjson`. |
+| `--json` | Shorthand for JSON output, always pretty-printed. Accepted throughout the command tree, including plugin groups. Plugin-derived `--json` tool-input flags keep their own meaning; select output JSON at the root/group or with `--format json`. A conflicting `--format` produces a JSON usage error on stderr and exit 2. |
 
 Every subcommand accepts these options too, so `orbit --workspace ws_x task list`
 and `orbit task list --workspace ws_x` are equivalent. This site puts them
-before the subcommand.
+before the subcommand. `audit export` keeps its command-local `--format json|csv`
+for the exported file; `--json` selects the output mode independently and
+leaves the existing export confirmation unchanged.
 
 ## Environment
 
 | Command | Purpose |
 |---|---|
-| `orbit init` | Set up the global Orbit root, this machine's `[machine]` identity and task-ID prefix, and the default skills. `--machine-name <NAME>` and `--task-prefix <PREFIX>` choose the identity (the prefix is required on first init). `--non-interactive` skips prompts, and then requires `--machine-name` on a fresh machine. `--skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES`) leaves the Linux Bubblewrap and AppArmor setup to the host's administrator. `--force` resets the global root to shipped defaults. `--json`. |
+| `orbit init` | Set up the global Orbit root, this machine's `[machine]` identity and task-ID prefix, and the default skills. `--machine-name <NAME>` and `--task-prefix <PREFIX>` choose the identity (the prefix is required on first init). `--non-interactive` skips prompts, and then requires `--machine-name` on a fresh machine. `--skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES`) leaves the Linux Bubblewrap and AppArmor setup to the host's administrator. `--force` resets the global root to shipped defaults. |
 | `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`; `--force` reconciles an already registered workspace. |
 | `orbit workspace list` \| `show` \| `sync` \| `role` | List and show registered workspaces, converge managed artifacts (`sync`), and validate this checkout's role (`role`). |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or rebind it in the workspace registry without re-running init. Config files and managed defaults are left untouched. |
@@ -36,7 +39,7 @@ before the subcommand.
 | `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage plugins. `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugins' command groups appear under `Plugins:` in `orbit --help`. |
 | `orbit plugin secret set` \| `list` \| `rm` | Manage the secrets a plugin declares in `spec.secrets`. `set <plugin> <name>` reads the value from stdin or a no-echo prompt, never from an argument. `list <plugin>` shows whether each secret is set, never its value. `rm <plugin> <name>` deletes one. |
 | `orbit migrate` | List pending `.orbit` layout and store migrations; `--confirm` applies them. |
-| `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. `--preflight` checks whether running Orbit processes prevent an upgrade without opening stores, and `--contract` describes the executable admission protocol without opening state. `--local-candidate <PATH> --source-commit <SHA>` installs an operator-attested local build pinned to a full commit, with `--write-candidate-manifest`, then `--candidate-manifest` and `--install-target`. `--json` for machine-readable output. |
+| `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. `--preflight` checks whether running Orbit processes prevent an upgrade without opening stores, and `--contract` describes the executable admission protocol without opening state. `--local-candidate <PATH> --source-commit <SHA>` installs an operator-attested local build pinned to a full commit, with `--write-candidate-manifest`, then `--candidate-manifest` and `--install-target`. |
 
 A plugin source keeps its plugin in a `.orbit-plugin/` directory that holds
 `plugin.yaml`. That directory is the plugin root and the only tree installed.
@@ -93,16 +96,16 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 
 | Command | Purpose |
 |---|---|
-| `orbit run ship [task_id ...]` | Ship the selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. `--base`, `--allow-crew`, `--strict-worker-containment`, `--claim-token`, `--json`. |
+| `orbit run ship [task_id ...]` | Ship the selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. `--base`, `--allow-crew`, `--strict-worker-containment`, `--claim-token`. |
 | `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
-| `orbit run auto [--for <duration>]` | Drain the backlog for a time window. `--concurrency`; `--allow-crew`; `--low-complexity-crews`, `--medium-complexity-crews`, `--hard-complexity-crews`, `--xhard-complexity-crews` (crew pools for tasks with no crew, as `crew` or `crew:weight`, overriding the `[workflow]` pools); `--strict-worker-containment` (require a systemd user scope for the coordinator and every worker, overriding `machine.worker_containment_strict` for this drain); `--claim-token` when another operator holds the workspace claim; `--json`. |
+| `orbit run auto [--for <duration>]` | Drain the backlog for a time window. `--concurrency`; `--allow-crew`; `--low-complexity-crews`, `--medium-complexity-crews`, `--hard-complexity-crews`, `--xhard-complexity-crews` (crew pools for tasks with no crew, as `crew` or `crew:weight`, overriding the `[workflow]` pools); `--strict-worker-containment` (require a systemd user scope for the coordinator and every worker, overriding `machine.worker_containment_strict` for this drain); `--claim-token` when another operator holds the workspace claim. |
 | `orbit run auto --approve-proposed` | Authorize every pass of a local drain to pilot and approve qualifying `proposed` tasks, including tasks filed during the window. Qualifies with `no-diff-expected`, or context files and an assessed complexity; duplicate, already-landed, conflict or warning findings keep it proposed. `no-auto-approve` opts out. Off by default; approval is separate from `--complete`. See [Authorize the backlog](../../how-to/continuous-delivery/#2-authorize-the-backlog). |
 | `orbit run auto --pull <SELECTOR>` | On a replica checkout, pull work from the owner named by the host-qualified selector, or by `--pull <workspace> --host <owner>`. Each claim runs as a leaf that ends at a pull request handed back to the owner, which keeps landing authority. Takes `--for` and `--concurrency`; `--allow-crew` limits which crews' tasks are claimed. Conflicts with `--complete`, `--approve-proposed`, `--strict-worker-containment`, the crew-pool flags, `--claim-token`, and `--stop`. See [Set Up a Distributed Drain](../../how-to/distributed-drain/). |
 | `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Admitted workers keep running; this is not cancellation. On a replica it also delivers any recorded pull settlements to the owner, even with no active drain. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Also authorize the run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit run readiness [task_id ...]` | Explain, read-only, why backlog tasks can or cannot start. `--concurrency`, `--allow-crew`, `--limit`. |
-| `orbit run task-pilot [task_id ...]` | Preflight `proposed` and `backlog` tasks and save validated selectors. Omit IDs to discover tasks automatically. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`, `--json`. |
-| `orbit run ship-sweep` | Dispatch ship runs in every workspace with `[workflow] auto_ship = true`. `-m`/`--mode pr\|local` overrides the pipeline mode of every dispatched run; without it each workspace uses its own ship mode, `pr` by default. `--dry-run`, `--json`. |
+| `orbit run task-pilot [task_id ...]` | Preflight `proposed` and `backlog` tasks and save validated selectors. Omit IDs to discover tasks automatically. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`. |
+| `orbit run ship-sweep` | Dispatch ship runs in every workspace with `[workflow] auto_ship = true`. `-m`/`--mode pr\|local` overrides the pipeline mode of every dispatched run; without it each workspace uses its own ship mode, `pr` by default. `--dry-run`. |
 | `orbit run job <job_id>` | Run any job by ID or YAML path. `--input key=value`, `--wait`. |
 | `orbit run agent <prompt>` | Operator only. Run an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--wait`, `--idempotency-key`, `--provider-sandbox`. Returns a run ID to read with `orbit run show` or `logs`; `--wait` blocks and prints the answer instead. |
 
@@ -126,9 +129,9 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit run cancel <run_id> --confirm` | Cancel a pending or running job run and release its task reservations. A task leaf returns to `backlog` with its candidate resumable; `--block` keeps it blocked for manual recovery. `--reason <TEXT>` records a note with the cancellation audit event. A pull drain cancels gracefully: unlaunched claims return to the owner's backlog, and launched leaves finish and settle. `--force` also stops a drain's in-flight leaves. |
 | `orbit run concurrency <run_id> --set N` | Change how many tasks a live drain keeps in flight. `--reason`, `--if-revision`. `--claim-token <TOKEN>` (or `ORBIT_WORKSPACE_CLAIM_TOKEN`) supplies this workspace's exclusive claim when another operator holds one. |
 | `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. `--run <ID>` limits to one run; `--older-than-hours <N>` to runs finished at least that long ago. A dry run skips the size estimate unless you pass `--estimate-bytes`. `--target-only` reclaims only each worktree's `target/` build output, for any terminal run with no live worker, and keeps the checkout. |
-| `orbit gc audit` | Report audit rows older than `retention.audit_days` (host-wide command audit and this workspace's run audit) and the audit blobs no remaining row names, with rows and bytes per table and blob root; `--apply` deletes them in batches of 1,000 rows. A blob written in the last 24 hours or marked pending by a write in progress is kept. Reports the store file's freelist; run `VACUUM` yourself to return it. `--older-than-days <N>`, `--json`. |
-| `orbit gc runs` | Report this workspace's terminal runs older than `retention.runs_days` that still keep pipeline state; `--apply` drops that state and stamps the run archived. The run, its steps and its summary stay, so `run show` and run history keep working. Held and non-terminal runs are never touched. `--older-than-days <N>`, `--json`. |
-| `orbit gc tmp` | Report this workspace checkout's scratch contents (`.orbit/tmp/`) and empty it with `--confirm`, keeping the directory. `--confirm` refuses while any job run is pending, running, or retrying, and the command needs Linux or macOS. Without `--confirm` it only reports; `--dry-run` requests that default explicitly. `--json`. |
+| `orbit gc audit` | Report audit rows older than `retention.audit_days` (host-wide command audit and this workspace's run audit) and the audit blobs no remaining row names, with rows and bytes per table and blob root; `--apply` deletes them in batches of 1,000 rows. A blob written in the last 24 hours or marked pending by a write in progress is kept. Reports the store file's freelist; run `VACUUM` yourself to return it. `--older-than-days <N>`. |
+| `orbit gc runs` | Report this workspace's terminal runs older than `retention.runs_days` that still keep pipeline state; `--apply` drops that state and stamps the run archived. The run, its steps and its summary stay, so `run show` and run history keep working. Held and non-terminal runs are never touched. `--older-than-days <N>`. |
+| `orbit gc tmp` | Report this workspace checkout's scratch contents (`.orbit/tmp/`) and empty it with `--confirm`, keeping the directory. `--confirm` refuses while any job run is pending, running, or retrying, and the command needs Linux or macOS. Without `--confirm` it only reports; `--dry-run` requests that default explicitly. |
 
 On a replica, `orbit gc worktrees` reaps a claimed run whose claim is already
 settled with the owner without checking its task. For any other run, it asks
@@ -151,14 +154,14 @@ reported as `skipped:owner_unreachable` (transport failure),
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
 | `orbit doctor` | Check workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). The `--fix-*` flags are opt-in repairs, and `--remove-graph` removes retired graph state from this worktree and the shared workspace. `--confirm` authorizes the destructive repairs, such as `--fix-orphan-task-stores`. |
-| `orbit doctor providers` | Show each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. `--json`. |
-| `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. `--json`. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
+| `orbit doctor providers` | Show each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. |
+| `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
 
 ## Scheduler
 
 | Command | Purpose |
 |---|---|
-| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run`, `--verbose`, `--json`. The global `--workspace <SELECTOR>` limits the pass to one registered workspace. |
+| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run`, `--verbose`. The global `--workspace <SELECTOR>` limits the pass to one registered workspace. |
 | `orbit sweep` | Alias for `orbit clock tick`, with the same arguments and output. |
 | `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines, and pause or resume them on this host only. `list --include-inactive-plugins` (alias `--all`) also shows routines seeded by a plugin that is switched off, marked inactive with the reason. |
 | `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |

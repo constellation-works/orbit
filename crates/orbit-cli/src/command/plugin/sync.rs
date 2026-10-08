@@ -14,9 +14,6 @@ pub struct PluginSyncArgs {
     /// manifests request grants (repeatable, comma-separated)
     #[arg(long = "grant", value_delimiter = ',', conflicts_with = "dry_run")]
     pub grants: Vec<String>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for PluginSyncArgs {

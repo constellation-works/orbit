@@ -15,9 +15,6 @@ pub struct TaskRecheckBlockedArgs {
     /// Return tasks whose launcher now resolves to backlog. Without it, only report.
     #[arg(long)]
     pub confirm: bool,
-    /// Emit machine-readable JSON instead of a human summary.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskRecheckBlockedArgs {

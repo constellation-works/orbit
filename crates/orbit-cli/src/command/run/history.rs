@@ -44,10 +44,6 @@ pub struct RunHistoryArgs {
     #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Report stored run records as-is: skip stale-run reconciliation, which
     /// finalizes an orphaned pending or running run as interrupted and
     /// releases its task reservations

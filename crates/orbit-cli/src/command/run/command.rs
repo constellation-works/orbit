@@ -45,7 +45,7 @@ Maintenance:
 
 #[derive(Args)]
 #[command(
-    about = "Run a job workflow (supports run ship / job)",
+    about = "Run workflows, drain the backlog, and inspect runs",
     arg_required_else_help = true,
     subcommand_required = true,
     override_usage = "orbit run <COMMAND>",

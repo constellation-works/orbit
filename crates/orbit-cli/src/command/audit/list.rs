@@ -60,9 +60,6 @@ pub struct AuditListArgs {
     /// Maximum number of events to return
     #[arg(long, default_value_t = 100, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AuditListArgs {

@@ -20,9 +20,6 @@ pub struct TaskShowArgs {
     pub(crate) routing: super::command::TaskHostArgs,
     /// Task ID
     pub id: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     #[arg(
         long = "fields",
         alias = "field",

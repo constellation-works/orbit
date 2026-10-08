@@ -7,20 +7,17 @@ Arguments:
           Job run ID to cancel
 
 Options:
-      --json
-          Output as JSON
+      --confirm
+          Confirm process termination and irreversible run terminalization
 
       --root <ROOT>
           Override the Orbit root directory (highest precedence)
 
-      --confirm
-          Confirm process termination and irreversible run terminalization
+      --reason <REASON>
+          Optional reason recorded with the cancellation audit event
 
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
-
-      --reason <REASON>
-          Optional reason recorded with the cancellation audit event
 
       --force
           Do not wait for a drain's in-flight leaves: stop them too, returning a pull drain's claims to the owner's backlog
@@ -36,6 +33,9 @@ Options:
           - table:  Aligned columns with a header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')

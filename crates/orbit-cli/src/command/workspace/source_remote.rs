@@ -38,11 +38,7 @@ impl Execute for WorkspaceSourceRemoteCommand {
 }
 
 #[derive(Args)]
-pub struct WorkspaceSourceRemoteShowArgs {
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
-}
+pub struct WorkspaceSourceRemoteShowArgs {}
 
 impl Execute for WorkspaceSourceRemoteShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
@@ -71,9 +67,6 @@ pub struct WorkspaceSourceRemoteRebindArgs {
     /// Validate and report the transition without changing the registry.
     #[arg(long)]
     dry_run: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for WorkspaceSourceRemoteRebindArgs {

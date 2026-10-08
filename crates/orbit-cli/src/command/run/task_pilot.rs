@@ -32,9 +32,6 @@ pub struct TaskPilotCommand {
     /// Maximum tasks per pilot partition. Omit to use the job default (5).
     #[arg(long = "max-partition-size", value_name = "N")]
     pub max_partition_size: Option<u32>,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
     /// Block until the submitted run reaches a terminal state, and exit
     /// nonzero unless it succeeded.
     #[arg(long)]

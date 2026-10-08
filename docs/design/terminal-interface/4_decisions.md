@@ -43,7 +43,7 @@ A command produces a structured payload; rendering is a separate layer that cons
 
 - The payload is the contract. The human rendering is a projection of it and may only drop or reformat fields, never introduce a value the payload does not carry.
 - Output mode is resolved centrally, not per command: an explicit global `--format` (`auto|table|json|ndjson`) wins; otherwise `auto` renders the table form when stdout is a TTY and the plain machine form when it is not.
-- The existing per-command `--json` flags stay as accepted aliases for `--format json`. They are not removed.
+- `--json` is declared once as the global shorthand for `--format json`, accepted throughout the assembled command tree. It preserves historical pretty output and rejects a conflicting explicit output format. Plugin-derived tool-input flags with the same spelling retain their domain meaning; the output shorthand remains available at the root/group.
 - Piped output is plain: no borders, no ANSI, no width adaptation to a terminal that isn't there.
 
 Rejected alternative: add `--json` to the 64 commands that lack it and leave the rendering inline. Rejected because it treats the symptom. The drift between the JSON and table views is caused by their being built independently in the same function; adding more independent pairs makes the invariant harder to hold, and still leaves a piped `orbit tool list` emitting box-drawing characters.

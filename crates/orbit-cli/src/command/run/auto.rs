@@ -160,9 +160,6 @@ pub struct AutoCommand {
     /// `--pull` takes only a full host-qualified selector.
     #[arg(long, value_name = "HOST", requires = "pull")]
     pub host: Option<String>,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]

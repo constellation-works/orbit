@@ -9,7 +9,6 @@ fn deadline_failure_returns_nonzero_with_deferred_workspaces_in_both_views() {
     let args = ClockTickArgs {
         dry_run: false,
         verbose: false,
-        json: false,
     };
     let outcome = SweepOutcome {
         deadline_exceeded: true,

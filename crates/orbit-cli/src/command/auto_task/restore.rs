@@ -14,9 +14,6 @@ use super::output::definition_to_json;
 pub struct AutoTaskRestoreArgs {
     /// Shipped default name
     pub name: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskRestoreArgs {

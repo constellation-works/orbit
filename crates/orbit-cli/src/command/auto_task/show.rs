@@ -13,9 +13,6 @@ use super::output::definition_to_json;
 pub struct AutoTaskShowArgs {
     /// Definition name
     pub name: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Preview the baseline and source observations without admitting actions.
     #[arg(long)]
     pub preview: bool,

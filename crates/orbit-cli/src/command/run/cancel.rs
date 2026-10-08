@@ -43,10 +43,6 @@ pub struct RunCancelArgs {
     /// Job run ID to cancel
     pub run_id: String,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Confirm process termination and irreversible run terminalization
     #[arg(long)]
     pub confirm: bool,

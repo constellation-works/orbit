@@ -112,9 +112,6 @@ pub struct TaskUpdateArgs {
         alias = "allow-dropping-system-tags"
     )]
     pub allow_drop_system_tags: bool,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 /// Every field-mutation argument on this command. `--approve` performs a
@@ -180,7 +177,6 @@ impl Execute for TaskUpdateArgs {
             force,
             discard_candidate,
             allow_drop_system_tags,
-            json: _,
         } = self;
 
         if approve {
