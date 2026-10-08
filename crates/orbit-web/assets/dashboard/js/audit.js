@@ -418,7 +418,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     const card = el("div", { class: `health-card ${severity}` });
 
     const header = el("div", { class: "card-header" });
-    header.appendChild(el("span", { class: "tool-name", text: row.tool }));
+    header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
     header.appendChild(el("span", {
       class: "status-badge",
       text: `${(rate * 100).toFixed(1)}% Unexpected Failure Rate`,

@@ -156,7 +156,7 @@
 
 .config-crew-cells {
   display: grid;
-  grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 28px;
+  grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 60px;
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
 .config-crew-head {

@@ -238,6 +238,18 @@ node crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/audit-browser
 ```
 
+The dashboard polish browser fixture checks every Settings, Health and
+Automation deep link on load and reload at 375px, plus hash changes. Long view
+lists scroll within the space beside their destination so both selections stay
+visible. It also checks Crews header geometry, column alignment and consistent
+empty values at 1280, 1440 and 1920px, and full-name Audit tooltips for tools
+with shared prefixes. It saves screenshots and `measurements.json`:
+
+```bash
+node crates/orbit-web/tests/http_api/dashboard_polish_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/polish-browser
+```
+
 The refresh browser fixture loads the complete dashboard, aborts `/api/*` with
 Playwright after a successful load, and checks retained KPI chips, rail counts
 and the Drain pill at 1440px and 768px. Failed refreshes dim these surfaces;

@@ -737,16 +737,18 @@ export function getRunFilter() {
 }
 
 export function formatRunCount(shown, fetched, meta) {
+  const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
+  const limit = `${capped ? "server limit" : "limit"} ${meta?.limit || fetched}`;
   if (meta && Number.isFinite(meta.total)) {
     const base = shown === fetched
       ? `${shown} shown`
       : `${shown} shown (of ${fetched} fetched)`;
     return meta.truncated
-      ? `${base} · ${meta.total} total · server limit ${meta.limit}`
+      ? `${base} · ${meta.total} total · ${limit}`
       : `${base} · ${meta.total} total`;
   }
   if (meta && meta.truncated) {
-    return `${shown} shown · server limit ${meta.limit || fetched} · older matching runs not loaded`;
+    return `${shown} shown · ${limit} · older matching runs not loaded`;
   }
   return shown === fetched
     ? `${shown} shown`
