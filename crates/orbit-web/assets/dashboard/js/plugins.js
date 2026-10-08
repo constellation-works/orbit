@@ -159,10 +159,17 @@ async function changePlugin(plugin, scope, action, section) {
   const buttons = Array.from(section.children).flatMap(row => Array.from(row.children)).filter(node => node.tagName === 'BUTTON');
   for (const button of buttons) button.disabled = true;
   try {
-    await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
-    await fetchAndRenderPlugins();
-  } catch (error) {
-    if (revision === getWorkspaceRevision()) changeErrors.set(plugin.name, error.message || String(error));
+    try {
+      await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
+    } catch (error) {
+      if (revision === getWorkspaceRevision()) changeErrors.set(plugin.name, error.message || String(error));
+      return;
+    }
+    try {
+      await fetchAndRenderPlugins();
+    } catch (_) {
+      // requestPanel reports a failed refresh as stale panel data.
+    }
   } finally {
     pendingChanges.delete(plugin.name);
     for (const button of buttons) button.disabled = false;
