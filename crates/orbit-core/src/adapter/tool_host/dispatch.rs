@@ -136,7 +136,13 @@ pub(super) fn execute(
         OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => {
-            let written = super::task_tools::add(runtime, input, agent, model)?;
+            let written = super::task_tools::add(
+                runtime,
+                input,
+                agent,
+                model,
+                session_context.worker_invocation.as_ref(),
+            )?;
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
         }

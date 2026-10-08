@@ -241,14 +241,31 @@ pub(crate) fn execute(
         }
         // [ORB-14260] A claimed worker files follow-up work as ordinary
         // creation, but only work spawned from its own claimed task, and only
-        // while the owner still holds that claim as active.
+        // while the owner still holds that claim as active. [ORB-14792] A
+        // claimed review task's findings may also name the task in this
+        // workspace that introduced each, as `regression_from`.
         OrbitBuiltinAction::TaskAdd => {
             binding
                 .validate_arguments(input)
                 .map_err(OrbitError::InvalidInput)?;
-            binding
-                .validate_spawned_relations(input)
+            let findings = orbit_types::workflow::files_regression_findings(
+                &runtime.get_task(&binding.task_id)?.tags,
+            );
+            let culprits = binding
+                .validate_spawned_relations(input, findings)
                 .map_err(OrbitError::PolicyDenied)?;
+            for culprit in culprits {
+                match runtime.get_task(&culprit) {
+                    Ok(_) => {}
+                    Err(OrbitError::NotFound { .. }) => {
+                        return Err(OrbitError::PolicyDenied(format!(
+                            "a claimed review worker's regression_from target `{culprit}` is \
+                             not a task in the claimed task's workspace"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             require_active_claim(runtime, session)?;
             return Ok(None);
         }

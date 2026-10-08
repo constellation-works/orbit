@@ -499,7 +499,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   coordinator (the step runner's broker, outside the sandbox), for a closed
   list of calls: `orbit.task.show` of the claimed task,
   `orbit.task.add` of a task `spawned_from` the claimed task and related to
-  nothing else, `orbit.friction.add` (during the claimed task, if it names
+  nothing else (a claimed `delivery-code-review` or `code-review` task's
+  finding may also name its culprit as `regression_from`, which the owner
+  checks), `orbit.friction.add` (during the claimed task, if it names
   one), and `orbit.task.artifact.get`/`put` on the claimed task. Its nested
   `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
   the task and claim from its own records, applies the activity's tool
@@ -508,6 +510,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   (`stale_claim`). Inside the sandbox, any other owner call is refused
   (`claimed_owner_bridge_refused`) and none is tried over SSH. The claimed
   implement step is still not granted `orbit.task.update` (above).
+  `orbit.search` is among the refused calls, so a claimed review files its
+  findings without a duplicate search, and the owner's triage dedupes them.
+  A finding the owner still refuses arrives as the claimed task's
+  `unfiled-findings.json` artifact: file each entry on the owner, keeping its
+  relations.
 - If the coordinator is missing or gone, the call fails as
   `owner_route_unavailable` and the agent ends its step on that code. The
   run skips step and final recovery, and the leaf releases its claim with the

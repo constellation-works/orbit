@@ -34,6 +34,11 @@ fn spawned_from(target: &str) -> Value {
     json!([{"type": "spawned_from", "target": target}])
 }
 
+fn finding() -> Value {
+    json!([{"type": "spawned_from", "target": TASK},
+           {"type": "regression_from", "target": "TSO-2"}])
+}
+
 /// Stand in for the agent sandbox's mask: the Linux sentinel over the plugin
 /// secret store.
 fn mask(fixture: &Fixture) {
@@ -75,6 +80,14 @@ fn every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_clai
             json!({"title": "Follow-up", "description": "Found while working.",
                    "complexity": "low", "relations": spawned_from(TASK), "model": "codex"}),
         ),
+        // The broker holds no copy of the claimed task, so a finding's
+        // `regression_from` crosses it beside `spawned_from`; the owner decides
+        // whether the claimed task files findings [ORB-14792].
+        (
+            ADD,
+            json!({"title": "Finding", "description": "Found in review.",
+                   "complexity": "low", "relations": finding(), "model": "codex"}),
+        ),
         (
             FRICTION,
             json!({"body": "The route was slow.", "model": "codex", "during_task": TASK}),
@@ -110,7 +123,8 @@ fn every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_clai
         assert!(input.get("source_path").is_none(), "{name}: {input}");
     }
     assert_eq!(received[1].1["relations"], spawned_from(TASK));
-    let put = &received[4].1;
+    assert_eq!(received[2].1["relations"], finding());
+    let put = &received[5].1;
     assert_eq!(put["artifacts"][0]["path"], "evidence.json");
     let content: Vec<u8> = serde_json::from_value(put["artifacts"][0]["content"].clone()).unwrap();
     assert_eq!(content, br#"{"checked": true}"#);
@@ -152,6 +166,12 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             ADD,
             json!({"title": "t", "description": "d", "complexity": "low",
                    "relations": spawned_from("TSO-2")}),
+        ),
+        (
+            "a finding not spawned from the claimed task",
+            ADD,
+            json!({"title": "t", "description": "d", "complexity": "low",
+                   "relations": [{"type": "regression_from", "target": "TSO-2"}]}),
         ),
         (
             "a task that also blocks another",

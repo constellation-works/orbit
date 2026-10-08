@@ -29,22 +29,47 @@ struct CleanLeaf {
 
 impl CleanLeaf {
     fn new(already_landed: bool, completion: &str) -> Self {
-        Self::build(already_landed, completion, false, true)
+        Self::build(already_landed, completion, &[], true)
     }
 
     /// A clean leaf whose task carries the `no-diff-expected` tag, claimed by
     /// the follower through ordinary pull admission [ORB-14474].
     fn tagged(completion: &str) -> Self {
-        Self::build(false, completion, true, true)
+        Self::build(
+            false,
+            completion,
+            &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
+            true,
+        )
     }
 
     /// A tagged review whose implementer files findings and attaches its
     /// coverage, but writes no clean-tree report [ORB-14791].
     fn review_only(completion: &str) -> Self {
-        Self::build(false, completion, true, false)
+        Self::build(
+            false,
+            completion,
+            &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
+            false,
+        )
     }
 
-    fn build(already_landed: bool, completion: &str, tagged: bool, report: bool) -> Self {
+    /// A tagged clean leaf whose task a `delivery-code-review` auto-task
+    /// minted. Like `review_only`, it writes no clean-tree report [ORB-14791].
+    fn delivery_review(completion: &str) -> Self {
+        Self::build(
+            false,
+            completion,
+            &[
+                orbit_types::task::NO_DIFF_EXPECTED_TAG,
+                "delivery-code-review",
+                "auto-task:delivery-code-review",
+            ],
+            false,
+        )
+    }
+
+    fn build(already_landed: bool, completion: &str, tags: &[&str], report: bool) -> Self {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{CHECK}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
@@ -66,13 +91,13 @@ impl CleanLeaf {
         );
         publish_origin(repo);
         let base = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
-        if tagged {
+        if !tags.is_empty() {
             pair.wire
                 .owner
                 .update_task_as_human(
                     &task,
                     orbit_core::application::task::TaskUpdateParams {
-                        tags: Some(vec![orbit_types::task::NO_DIFF_EXPECTED_TAG.into()]),
+                        tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
                         ..Default::default()
                     },
                     "fixture operator".into(),
@@ -599,6 +624,104 @@ fn owner_refuses_a_no_diff_expected_skip_for_an_untagged_task() {
             .is_err()
     );
     fixture.assert_no_blocked();
+}
+
+/// A follower's claimed `delivery-code-review` files each finding on the
+/// owner with `regression_from` the task that introduced it, which the owner
+/// checks is one of its own tasks, and the owner records the claim and run
+/// that filed it. A finding the owner still refuses reaches it as the review
+/// task's `unfiled-findings.json`, which the handoff attaches [ORB-14792].
+#[test]
+fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest",
+    ) {
+        return;
+    }
+    let mut fixture = CleanLeaf::delivery_review("done");
+    let owner = fixture.pair.wire.owner.clone();
+    let culprit = owner
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "The delivery that introduced the defect",
+                "description": "Landed in the reviewed batch.",
+                "complexity": "low", "model": "codex",
+                "workspace": fixture.pair.owner_repo.to_string_lossy(),
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let relations = |culprit: &str| {
+        json!([{"type": "spawned_from", "target": fixture.task},
+               {"type": "regression_from", "target": culprit}])
+    };
+    let file = |culprit: &str| {
+        fixture.bound.run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Finding from the delivery review",
+                "description": "The culprit delivery broke the invariant.",
+                "complexity": "low", "type": "bug", "model": "codex",
+                "tags": ["delivery-code-review"], "relations": relations(culprit),
+            }),
+        )
+    };
+
+    let filed = file(&culprit).expect("a claimed review files a regression finding");
+    let id = filed["id"].as_str().expect("the finding's id");
+    assert_eq!(
+        fixture.pair.owner_task(id)["relations"],
+        relations(&culprit)
+    );
+    let binding = fixture.bound.worker_invocation().unwrap().clone();
+    assert!(
+        owner
+            .get_task_comments(id)
+            .unwrap()
+            .iter()
+            .any(|comment| comment.message.contains(&binding.claim_id)
+                && comment.message.contains(&fixture.leaf)),
+        "the finding records the claim and run that filed it"
+    );
+
+    let before = owner.list_tasks().unwrap().len();
+    let prefix = culprit.split('-').next().unwrap();
+    let missing = file(&format!("{prefix}-999999")).unwrap_err().to_string();
+    assert!(
+        missing.contains("not a task in the claimed task's workspace"),
+        "a culprit outside the owner's workspace is refused: {missing}"
+    );
+    assert_eq!(owner.list_tasks().unwrap().len(), before);
+
+    let unfiled = json!([{
+        "title": "A finding the owner refused",
+        "description": "The owner refused it during the run.",
+        "relations": relations(&culprit),
+    }]);
+    fixture.input["implementation"]["unfiled_findings"] = unfiled.clone();
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    let attached = owner
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": fixture.task, "path": "unfiled-findings.json"}),
+        )
+        .expect("the handoff attaches the unfiled findings to the review task");
+    let record: Value = serde_json::from_str(attached["content"].as_str().unwrap()).unwrap();
+    assert_eq!(record["findings"], unfiled, "{record}");
+    assert_eq!(record["claim_id"], binding.claim_id);
+    assert_eq!(record["run_id"], fixture.leaf);
+    assert!(
+        handoff.execution_summary.contains("unfiled-findings.json"),
+        "the owner's summary points at the attachment: {}",
+        handoff.execution_summary
+    );
+    fixture
+        .settle(&handoff)
+        .expect("the owner accepts the review's handoff");
 }
 
 #[test]

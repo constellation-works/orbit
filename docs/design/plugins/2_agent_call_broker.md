@@ -164,12 +164,29 @@ SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, t
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
-scoped to the claim: a read or an artifact names the claimed task; a new task must relate to
-the claimed task, and only as `spawned_from`; a friction may name only
-the claimed task as the one it was found during. A request field the call does not need, or an
+scoped to the claim: a read or an artifact names the claimed task; a new task must name the
+claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
+task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
+friction may name only the claimed task as the one it was found during. A request field the call does not need, or an
 internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
 read scoped to the claimed task.
+
+The broker holds no copy of the claimed task, so it admits a `regression_from` relation by shape
+alone. The owner decides. It accepts one only when the claimed task carries the provenance tag of
+a review auto-task that files regression findings (`auto-task:delivery-code-review` or
+`auto-task:code-review`), and only when the target is a task in the owner's workspace. Any other
+claimed task's `regression_from` is refused as before. A worker cannot change the claimed task's
+tags. The owner records the claim, bound run and executing machine as the new task's first
+comment.
+
+`orbit.search` and `orbit.task.list` are not on the list. A claimed worker therefore cannot run
+the duplicate search a review template asks for. Its prompt says to file without it, and the
+owner's triage dedupes. Opening a read across every task in the owner's store to every claimed
+worker was rejected: the list stays scoped to the claimed task. A finding the owner still refuses
+is returned in the implementer's `unfiled_findings` output. The claimed handoff attaches it to
+the claimed task as `unfiled-findings.json` (schema version 1, the task, claim and run, and the
+finding objects), through the claim, and notes the count in the handed-off summary.
 
 An artifact call's path is decided in its canonical form, the key the owner stores the artifact
 under (surrounding whitespace, a leading `./`, duplicate slashes and `.` components removed), and
@@ -444,7 +461,8 @@ service side regardless.
   sends an artifact as base64 so a full 1 MiB artifact fits the request frame. The broker writes
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
   follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
-  only while its claim is active and only `spawned_from` the claimed task.
+  only while its claim is active and only `spawned_from` the claimed task, plus, for a claimed
+  review task, `regression_from` a task in the owner's workspace.
 - `crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs` drives a reviewer inside the
   real agent sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) through both the CLI and
   MCP against a real owner home reached by an `ssh` stand-in that needs `~/.ssh/known_hosts`,
@@ -640,7 +658,7 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed worker's owner call names another task, relation or field | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner. |
+| A claimed worker's owner call names another task, relation or field | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
@@ -692,5 +710,6 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-14194] — the claimed-review artifact route (§3).
 - [ORB-14260] — the claimed-owner calls and `owner_route_unavailable` (§3, §6.3).
 - [ORB-14661] — a claimed leaf's final-recovery evidence reads and its leaf delivery view (§3).
+- [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

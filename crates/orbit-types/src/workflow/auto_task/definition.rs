@@ -35,6 +35,19 @@ pub fn auto_task_tag(name: &str) -> String {
     format!("{AUTO_TASK_TAG_PREFIX}{name}")
 }
 
+/// The shipped review auto-tasks whose template files each confirmed finding
+/// with a `regression_from` relation to the task that introduced it.
+const REGRESSION_FINDING_AUTO_TASKS: [&str; 2] = ["delivery-code-review", "code-review"];
+
+/// Whether a task with `tags` was minted by a review auto-task that files
+/// regression findings [ORB-14792]: it carries one of their
+/// `auto-task:<name>` provenance tags.
+pub fn files_regression_findings(tags: &[String]) -> bool {
+    REGRESSION_FINDING_AUTO_TASKS
+        .iter()
+        .any(|name| tags.contains(&auto_task_tag(name)))
+}
+
 /// Artifact path a completed sweep writes its cursor to, and the scheduler's
 /// `skip_if_unchanged` precondition reads back. The cursor is this structured
 /// record — never prose parsed out of an execution summary.

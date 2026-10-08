@@ -54,6 +54,18 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # Claimed mode: findings the owner refused to file. The handoff
+      # attaches them to the claimed task as `unfiled-findings.json`.
+      unfiled_findings:
+        type: array
+        items:
+          type: object
+          required: [title, description]
+          properties:
+            title:
+              type: string
+            description:
+              type: string
       # Claimed no-diff evidence: the deterministic commit step imports only
       # these bounded scratch files and verifies them before delivery.
       no_diff_artifacts:
@@ -123,6 +135,17 @@ spec:
       replaces the artifact-attachment requirement in item 12 for claimed mode.
       A task tagged `no-diff-expected` needs no such report: leave the
       worktree clean, and the commit step hands off on the tag.
+    - In claimed mode, `orbit.task.add` relations must include
+      `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
+      minted by `delivery-code-review` or `code-review` may also give each
+      finding a `regression_from` relation to the task in its workspace that
+      introduced it. `orbit.search` and `orbit.task.list` do not reach the
+      owner, so skip a duplicate search the task asks for and say so in
+      `comment`; the owner's triage dedupes filed tasks. If the owner still
+      refuses a finding, return it in `unfiled_findings` as
+      `[{"title":..., "description":..., "relations":[...]}]`. The handoff
+      attaches these to the claimed task as `unfiled-findings.json` for the
+      owner to file.
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
 

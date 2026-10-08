@@ -11,7 +11,7 @@ paths:
   - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321]
+related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792]
 last_validated: 2026-10-06
 ---
 
@@ -101,7 +101,7 @@ attaching a report by hand, or disabling before-PR review.
 | `stale_claim` | The owner no longer holds the claim as active: it was released, failed, revoked by recovery, or superseded by a later pull, or it is bound to another run | Preserve the refusal, the claim's owner state (`ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'` on the owner) and the follower's ledger. Do not replay the call. The claim's lifecycle already ended, so the review cannot finish in this run. Let the run settle. Then follow the [distributed drain runbook](./distributed-drain.md) for that claim state. |
 | `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
 | `claimed_review_bridge_refused` | Another activity, path in the review gate's `review-*` namespace (including an evidence path the owner's current hold does not name), request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
-| `claimed_owner_bridge_refused` | A request field the coordinator does not carry, another task, or, inside the sandbox, an owner call outside the claimed worker's list | As for `claimed_review_bridge_refused`. |
+| `claimed_owner_bridge_refused` | A request field the coordinator does not carry, another task, a new task's relation other than `spawned_from` the claimed task or a finding's `regression_from`, or, inside the sandbox, an owner call outside the claimed worker's list (including `orbit.search`) | As for `claimed_review_bridge_refused`. A finding that cannot be filed belongs in the implementer's `unfiled_findings`, which the handoff attaches to the claimed task as `unfiled-findings.json`; file it from there on the owner. |
 | `owner_route_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | The reviewer ends its step on this code, and the run skips recovery and releases the claim. Treat the outcome as unknown: preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
 | `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
 | `owner_route_unavailable`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | The run releases the claim as above. Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before the task is pulled again; a version string alone is not proof. |
