@@ -55,6 +55,7 @@
 .drain-completion-option:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .drain-form { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hair); }
 .drain-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: end; }
+.drain-field-approve { grid-column: 1 / -1; }
 .drain-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .drain-field-label { color: var(--fg-dim); font: 500 12px var(--font-sans); }
 .drain-stepper {

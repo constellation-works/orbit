@@ -9,6 +9,8 @@ const pendingOperations = new Set();
 const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.";
 const AUTO_DRAIN_DURATION_SECONDS = { "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800 };
 const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
+const AUTO_DRAIN_APPROVE_RULE = "Approval needs context files and an assessed complexity (or the no-diff-expected tag) plus a clean task-pilot verification. Tasks tagged no-auto-approve are skipped.";
+const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let lastOperations = null;
 let lastAutoTasks = null;
@@ -17,6 +19,7 @@ let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
 let autoDrainComplete = false;
+let autoDrainApproveProposed = false;
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
@@ -1305,6 +1308,13 @@ function autoDrainReasons(payload) {
     complete: workspaceReason || (payload.controls_authorized === false
       ? "Automatic completion requires an authorized operator session; the window can still start with default review completion."
       : ""),
+    // A pull replica cannot approve (`--pull` conflicts with
+    // `--approve-proposed`): the owner's window does that.
+    approve: workspaceReason || (payload.replica === true
+      ? "A pull replica cannot approve proposed tasks; start the window on the owner machine."
+      : payload.controls_authorized === false
+        ? "Approving proposed tasks requires an authorized operator session; the window can still start and leave them for you."
+        : ""),
     // Stop is also the settle-only pass (`orbit run auto --stop`): it delivers
     // recorded settlements and needs no live window, so only a read-only view
     // or a missing operator session blocks it.
@@ -1466,12 +1476,37 @@ function renderAutoDrainHead(payload) {
       class: "drain-window-count",
       text: `This window: ${running} running of ${capacity.admitted_workers} admitted`,
     }));
+    const approvals = autoDrainApprovalsLine(payload.approvals);
+    if (approvals) head.appendChild(approvals);
   }
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
     feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}${phase === "winding_down" ? ` · this window: ${running} still running` : ""}.`);
   }
   announcedDrainState = stateKey;
+}
+
+// Whether the live window was started with approve-proposed, and what its
+// passes have done so far. The payload's `approvals` reports the status
+// drain's own input: `approved_total` counts the whole window, while the
+// held figures describe the latest pass, with each task's reason in the title.
+function autoDrainApprovalsLine(approvals) {
+  if (!approvals || approvals.enabled !== true) return null;
+  const approved = Number(approvals.approved_total);
+  const held = Number(approvals.held_total);
+  const parts = ["Approving proposed tasks"];
+  if (Number.isFinite(approved)) parts.push(`${approved} approved`);
+  if (Number.isFinite(held)) parts.push(`${held} held`);
+  const reasons = Object.entries(approvals.held_by_reason || {})
+    .map(([reason, count]) => `${count} × ${(reason || "unclassified").replaceAll("_", " ")}`);
+  const heldTasks = (Array.isArray(approvals.held) ? approvals.held : [])
+    .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}`);
+  const title = [
+    AUTO_DRAIN_APPROVE_RULE,
+    reasons.length ? `Held in the latest pass: ${reasons.join(", ")}.` : "",
+    heldTasks.join("\n"),
+  ].filter(Boolean).join("\n");
+  return el("span", { class: "drain-window-count drain-approvals", text: parts.join(" · "), title });
 }
 
 function autoDrainDurationControl(payload) {
@@ -1582,6 +1617,44 @@ function autoDrainCompletionControl(payload, reasons) {
   return el("div", { class: "drain-field drain-field-complete" }, [label, group]);
 }
 
+// Approving proposed tasks is a second two-option choice beside completion,
+// in the same segmented style; the amber option is the one that acts on work
+// nobody has looked at yet. Its reason is visible text, not only a tooltip.
+function autoDrainApproveControl(payload, reasons) {
+  const group = el("div", { class: "drain-completion" });
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-labelledby", "auto-drain-approve-label");
+  const option = (value, text, title) => {
+    const input = el("input");
+    input.type = "radio";
+    input.name = "auto-drain-approve";
+    input.value = value;
+    input.checked = autoDrainApproveProposed === (value === "approve");
+    input.disabled = value === "approve" && Boolean(reasons.approve);
+    input.dataset.drainFocus = `approve-${value}`;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      autoDrainApproveProposed = value === "approve";
+      renderAutoDrain(payload);
+    });
+    return el("label", {
+      class: `drain-completion-option${input.checked ? " selected" : ""}${value === "approve" ? " done" : ""}`,
+      title: input.disabled ? reasons.approve : title,
+    }, [input, el("span", { text })]);
+  };
+  group.append(
+    option("leave", "Leave for me", "Proposed tasks stay proposed until you approve them."),
+    option("approve", "Approve qualifying", AUTO_DRAIN_APPROVE_RULE),
+  );
+  const label = el("span", { class: "drain-field-label", text: "Proposed tasks" });
+  label.id = "auto-drain-approve-label";
+  const field = el("div", { class: "drain-field drain-field-approve" }, [label, group]);
+  if (reasons.approve && !reasons.submit) {
+    field.appendChild(el("div", { class: "operation-control-note drain-stop-note disabled-reason", text: reasons.approve }));
+  }
+  return field;
+}
+
 // Why Start is off, in one place so typing in the concurrency field can
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
@@ -1589,7 +1662,8 @@ function autoDrainStartBlocked(payload) {
   return Boolean(reasons.submit)
     || pendingOperations.has("auto-drain:start")
     || !autoDrainConcurrencyValid()
-    || (autoDrainComplete && Boolean(reasons.complete));
+    || (autoDrainComplete && Boolean(reasons.complete))
+    || (autoDrainApproveProposed && Boolean(reasons.approve));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -1615,26 +1689,28 @@ function autoDrainStartButton(payload, form) {
     const completeLine = autoDrainComplete
       ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
       : "Shipped tasks stay in review; a separate action completes them.";
+    const approveProposed = autoDrainApproveProposed;
     const confirmText = [
       `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
       completeLine,
+      ...(approveProposed ? [`${AUTO_DRAIN_APPROVE_WARNING} ${AUTO_DRAIN_APPROVE_RULE}`] : []),
     ].join("\n");
     if (!window.confirm(confirmText)) return;
     pendingOperations.add(key);
     feedback("auto-drain-operation-feedback", "pending", `Starting a ${duration} auto-delivery window…`);
     renderAutoDrain(payload);
     try {
-      const body = { for_duration: duration, complete: autoDrainComplete };
+      const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed };
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
-      feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
+      feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`);
       await refreshDrainAfterAction();
     } catch (error) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
@@ -1988,7 +2064,7 @@ function renderAutoDrain(payload) {
     el("div", { class: "drain-form" }, [
       durationLabel,
       autoDrainDurationControl(payload),
-      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload, form), autoDrainCompletionControl(payload, reasons)]),
+      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload, form), autoDrainCompletionControl(payload, reasons), autoDrainApproveControl(payload, reasons)]),
       form.problem,
       el("div", { class: "drain-actions" }, [autoDrainStartButton(payload, form), autoDrainStopButton(payload)]),
       autoDrainStopNote(payload),

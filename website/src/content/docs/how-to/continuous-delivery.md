@@ -175,7 +175,9 @@ end with some tasks still in the backlog.
 
 - **Dashboard:** in the **Drain** card, pick a **Window length** (`15m` to
   `8h`), set **Parallel tasks**, and under **When a task finishes** choose
-  **Stop at review** or **Mark done**. Click **Start … window** and confirm.
+  **Stop at review** or **Mark done**. Optionally choose **Approve qualifying**
+  under **Proposed tasks** (`--approve-proposed`). Click **Start … window** and
+  confirm.
   See [Auto-drain](../dashboard/#auto-drain).
 - **Agent:** ask for a window and say how long, how many tasks at once, and
   whether to complete them.
