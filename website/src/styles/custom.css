@@ -296,6 +296,14 @@ body {
   color: var(--sl-color-text-accent);
 }
 
+/* DESIGN.md §3.4: the active sidebar page is marked by a 2px accent bar on the
+   left edge, not by Starlight's filled block. */
+.sidebar-content a[aria-current='page'] {
+  background-color: transparent;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+  color: var(--sl-color-text-accent);
+}
+
 /* Starlight clips the title wrapper so long titles cannot cover the search
    box; the nav has to sit outside that clip. */
 .header .title-wrapper {
