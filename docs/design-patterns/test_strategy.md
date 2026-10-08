@@ -53,6 +53,10 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 
 `scripts/unit-test-inventory.py` counts the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. `make ci-fast` fails when a crate's count rises above [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json). The change that adds unit tests must raise the baseline too, so the growth appears as a reviewed diff. Run `scripts/unit-test-inventory.py` for the current counts, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to record them.
 
+Admitted unit tests:
+
+- `crates/orbit-cli/src/tests/main.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.
