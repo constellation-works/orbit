@@ -105,7 +105,8 @@
   flex-wrap: wrap;
   gap: 6px;
 }
-/* Readiness: one entry per gap, its severity marked like the row chip. */
+/* Readiness: one entry per gap. The severity is the row chip (.readiness-badge);
+   the message and Fix line share one content column. Two sizes: 12px body, 11px secondary. */
 .readiness-list {
   display: flex;
   flex-direction: column;
@@ -116,29 +117,24 @@
   font-size: 12px;
 }
 .readiness-gap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-left: 8px;
-  border-left: 2px solid var(--border);
-}
-.readiness-gap-blocking {
-  border-left-color: var(--state-pending);
-}
-.readiness-gap-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: start;
+  gap: 2px 8px;
   font-size: 12px;
   color: var(--fg);
 }
-.readiness-severity {
-  flex: none;
-  font-size: 10px;
-  color: var(--fg-mute);
+.readiness-gap .readiness-badge {
+  margin-right: 0;
+  font-size: 11px;
+  justify-self: start;
 }
-.readiness-gap-blocking .readiness-severity {
-  color: var(--state-pending);
+.readiness-gap-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .readiness-fix {
   color: var(--fg-dim);
