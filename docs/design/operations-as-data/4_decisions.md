@@ -1,15 +1,15 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-09-20
-last_validated: 2026-09-20
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/tests/authorization.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
