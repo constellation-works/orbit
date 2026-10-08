@@ -4,10 +4,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use orbit_common::{process::run_bounded_capped, test_env};
+use orbit_common::process::{
+    identity::{ProcessLiveness, probe_process_liveness},
+    run_bounded_capped,
+};
+use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryRequest, FinalRecoveryTaskRevision,
@@ -212,15 +216,25 @@ impl Delivery {
     fn resume(&self, source: &str, expected: &str) -> String {
         let submitted = self.cli.json(&["job", "resume", source, "--json"]);
         let run = submitted["run_id"].as_str().unwrap().to_string();
+        let deadline = Instant::now() + Duration::from_secs(20);
         self.cli.poll_run(&run, expected, Duration::from_secs(20));
-        assert_eq!(
-            self.runtime
-                .show_job_run(&run)
-                .unwrap()
-                .retry_source_run_id
-                .as_deref(),
-            Some(source)
-        );
+        let completed = self.runtime.show_job_run(&run).unwrap();
+        assert_eq!(completed.retry_source_run_id.as_deref(), Some(source));
+        // The terminal run write precedes task cleanup. Wait for the worker
+        // to finish that cleanup before asserting task status or history;
+        // observing `failed` alone can still find the task readmitted.
+        let pid = completed.pid.expect("resumed run has a detached worker");
+        loop {
+            let liveness = probe_process_liveness(pid, completed.pid_start_time.as_deref());
+            if liveness == ProcessLiveness::Exited {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "resumed worker did not exit after {expected}: {completed:?}; {liveness:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         run
     }
 }

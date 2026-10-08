@@ -522,6 +522,14 @@ connection and keeps the registry writer held through claim and completion.
 This avoids conflating total CLI startup time or a competing CLI participant's
 generation admission with registry-lock independence.
 
+Detached resume lifecycle fixtures wait for the recorded worker to exit before
+checking the task's final status and history. Run terminalization is persisted
+before coupled-task cleanup, so observing a terminal run alone can still see a
+readmitted task in progress. Verify the recorded PID and start identity while
+waiting, and retain the bounded deadline and final task assertions.
+The cleanup ordering regression holds the task commit boundary while another
+thread finalizes the run, then verifies the task block after that thread exits.
+
 The parent-signal fixture selects the proc tool from MCP `tools/list`, using the
 CLI when that tool is not advertised. Its child writes a marker under the
 fixture's own directory with a shell builtin and a quoted positional argument,
