@@ -4,6 +4,7 @@ import { satteri } from '@astrojs/markdown-satteri';
 import { defineHastPlugin } from 'satteri';
 import { changelogLinks, changelogReleases } from './plugins/changelog.mjs';
 import { inlineCodeWrap } from './plugins/inline-code.mjs';
+import { pagefindIgnoreFrameChrome } from './plugins/expressive-code-pagefind.mjs';
 
 function findFirstTh(node) {
   for (const child of node.children || []) {
@@ -114,6 +115,7 @@ export default defineConfig({
     starlight({
       title: 'Orbit',
       expressiveCode: {
+        plugins: [pagefindIgnoreFrameChrome],
         styleOverrides: {
           borderRadius: '8px',
           codeBackground: 'var(--sl-color-bg-inline-code)',
@@ -159,14 +161,14 @@ export default defineConfig({
       pagefind: true,
       sidebar: [
         {
-          label: 'Start Here',
+          label: 'Start here',
           items: [
-            { slug: 'index', label: 'What Orbit Is' },
+            { slug: 'index', label: 'What Orbit is' },
             { slug: 'getting-started', label: 'Quickstart' },
             { slug: 'getting-started/install', label: 'Install Orbit' },
-            { slug: 'how-to/mcp-integration', label: 'Connect Your Agent' },
-            { slug: 'getting-started/first-task', label: 'First Task' },
-            { slug: 'getting-started/workflows', label: 'Delivery Workflows' },
+            { slug: 'how-to/mcp-integration', label: 'Connect your agent' },
+            { slug: 'getting-started/first-task', label: 'First task' },
+            { slug: 'getting-started/workflows', label: 'Delivery workflows' },
           ],
         },
         {
@@ -174,9 +176,9 @@ export default defineConfig({
           items: [
             { slug: 'concepts', label: 'Overview' },
             { slug: 'concepts/tasks', label: 'Tasks' },
-            { slug: 'concepts/agents', label: 'Agents and Crews' },
-            { slug: 'concepts/activities-jobs', label: 'Activities and Jobs' },
-            { slug: 'concepts/scheduling', label: 'Routines and Auto-Tasks' },
+            { slug: 'concepts/agents', label: 'Agents and crews' },
+            { slug: 'concepts/activities-jobs', label: 'Activities and jobs' },
+            { slug: 'concepts/scheduling', label: 'Routines and auto-tasks' },
             { slug: 'concepts/policies', label: 'Policies' },
           ],
         },
@@ -184,30 +186,30 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { slug: 'how-to', label: 'Overview' },
-            { slug: 'how-to/dashboard', label: 'Use the Dashboard' },
-            { slug: 'how-to/continuous-delivery', label: 'Run a Delivery Window' },
-            { slug: 'how-to/recurring-work', label: 'Schedule Recurring Work' },
-            { slug: 'how-to/write-activity', label: 'Write an Activity' },
-            { slug: 'how-to/scoping-rules', label: 'Choose Scopes' },
+            { slug: 'how-to/dashboard', label: 'Use the dashboard' },
+            { slug: 'how-to/continuous-delivery', label: 'Run a delivery window' },
+            { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
+            { slug: 'how-to/write-activity', label: 'Write an activity' },
+            { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
           ],
         },
         {
           label: 'Operate',
           items: [
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
-            { slug: 'how-to/task-publication', label: 'Publish and Restore Tasks' },
-            { slug: 'how-to/distributed-drain', label: 'Set Up a Distributed Drain' },
+            { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
+            { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
           ],
         },
         {
           label: 'Reference',
           items: [
             { slug: 'reference', label: 'Overview' },
-            { slug: 'reference/cli', label: 'CLI Commands' },
+            { slug: 'reference/cli', label: 'CLI commands' },
             { slug: 'reference/config', label: 'Configuration' },
-            { slug: 'reference/activity-job-yaml', label: 'Activity and Job YAML' },
-            { slug: 'reference/policy-format', label: 'Policy Format' },
-            { slug: 'reference/scoping', label: 'Scoping Rules' },
+            { slug: 'reference/activity-job-yaml', label: 'Activity and job YAML' },
+            { slug: 'reference/policy-format', label: 'Policy format' },
+            { slug: 'reference/scoping', label: 'Scoping rules' },
           ],
         },
         {
@@ -219,9 +221,9 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { slug: 'contributing', label: 'Overview' },
-                { slug: 'contributing/local-dev', label: 'Local Development' },
-                { slug: 'contributing/crate-layout', label: 'Crate Layout' },
-                { slug: 'contributing/pr-workflow', label: 'PR Workflow' },
+                { slug: 'contributing/local-dev', label: 'Local development' },
+                { slug: 'contributing/crate-layout', label: 'Crate layout' },
+                { slug: 'contributing/pr-workflow', label: 'PR workflow' },
               ],
             },
             { slug: 'privacy', label: 'Privacy' },
