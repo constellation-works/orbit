@@ -69,6 +69,10 @@ import json, os, subprocess, sys
 arguments = sys.argv[1:]
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(arguments) + "\\n")
+if os.environ.get("GUARD_TEST_PROBE_WORKER_MARKER") and arguments[:2] in (["nextest", "run"], ["test", "--no-fail-fast"]):
+    # Test processes lose only the worker-binding marker, not the rest of the run envelope.
+    assert "ORBIT_WORKER_CONTEXT_REQUIRED" not in os.environ
+    assert os.environ["ORBIT_RUN_ID"] == "jrun-fixture"
 if arguments[0] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif arguments == ["nextest", "--version"]:
@@ -246,6 +250,16 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result = self.gate(TMPDIR=str(temporary_root), GIT_CEILING_DIRECTORIES=existing_ceiling,
                            GUARD_TEST_PROBE_TMP_GIT="1", GUARD_TEST_EXISTING_CEILING=existing_ceiling)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_test_processes_do_not_inherit_the_worker_binding_marker(self):
+        self.touch_core()
+        for environment in (dict(), dict(GUARD_TEST_NO_NEXTEST="1")):
+            with self.subTest(environment=environment):
+                self.log.write_text("")
+                result = self.gate(ORBIT_WORKER_CONTEXT_REQUIRED="1", ORBIT_RUN_ID="jrun-fixture",
+                                   GUARD_TEST_PROBE_WORKER_MARKER="1", **environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(any("--doc" in call for call in self.calls()))
 
     def test_missing_base_fails_closed(self):
         result = self.gate("--base", "missing-delivery-base")

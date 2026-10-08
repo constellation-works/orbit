@@ -44,6 +44,14 @@ When the temporary directory is inside the checkout, the runner adds that
 directory to `GIT_CEILING_DIRECTORIES` for test execution. This prevents
 non-Git fixtures from discovering the managed checkout above them; existing
 caller boundaries and sandbox permissions are preserved.
+The runner also drops `ORBIT_WORKER_CONTEXT_REQUIRED` from test processes. A
+claimed executor exports it so that Orbit commands its agent runs refuse to
+start without their recorded worker binding; a test process has no binding,
+so every in-process fixture that opens a runtime would fail with `managed
+worker runtime binding unavailable`. The rest of the run envelope is passed
+through, and tests of the refusal set the marker on their own child. A focused
+`cargo test` inside a claimed executor needs the same treatment:
+`env -u ORBIT_WORKER_CONTEXT_REQUIRED cargo test ...`.
 
 By default the comparison base is the merge base of `HEAD` with
 `origin/agent-main`, or local `agent-main` when the remote ref is absent.
