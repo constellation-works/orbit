@@ -66,17 +66,18 @@ impl OrbitRuntime {
         let mut history = Vec::new();
         for (target, event) in self.apply_resolves_side_effects(task, &targets) {
             match &event {
-                OrbitEvent::TaskRelationSideEffectFailed { reason, .. } => {
-                    // A target that is still pending keeps its earlier entry;
-                    // repeating it on every write would only grow the history.
-                    if !pending.contains(target) {
-                        history.push(resolves_history_entry(
-                            RESOLVES_SIDE_EFFECT_FAILED_EVENT,
-                            target,
-                            Some(reason),
-                        ));
-                    }
+                // A target that is still pending keeps its earlier entry;
+                // repeating it on every write would only grow the history.
+                OrbitEvent::TaskRelationSideEffectFailed { reason, .. }
+                    if !pending.contains(target) =>
+                {
+                    history.push(resolves_history_entry(
+                        RESOLVES_SIDE_EFFECT_FAILED_EVENT,
+                        target,
+                        Some(reason),
+                    ));
                 }
+                OrbitEvent::TaskRelationSideEffectFailed { .. } => {}
                 _ if pending.contains(target) => history.push(resolves_history_entry(
                     RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
                     target,

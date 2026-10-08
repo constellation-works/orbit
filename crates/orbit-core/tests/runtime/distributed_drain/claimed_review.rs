@@ -315,6 +315,7 @@ impl ReviewedLeaf {
 
     /// The leaf's worker ends held, as the executor ends a run whose gate
     /// settled into an evidence hold.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(super) fn leaf_holds(&self, hold: &ReviewEvidenceHold) {
         let jobs = &self.pair.follower_jobs;
         let mut state = self
