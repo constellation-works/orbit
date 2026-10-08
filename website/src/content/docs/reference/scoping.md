@@ -22,6 +22,18 @@ keep their names (see the table).
 | Skills | Merge by key | Global defaults live in `~/.orbit/skills`; workspace entries override by skill name. |
 | Audit | Global only | One authoritative event trail. |
 
+## Where state lives
+
+| Path | Holds |
+|---|---|
+| `~/.orbit/` | Machine state: task bundles, `orbit.db` (audit, runs, routines, frictions), workspace registry, shipped resources, skills, and `config.toml`. |
+| `<repo>/.orbit/` | Workspace identity, local config overrides, auto-tasks, routines, worktrees, and logs. This state is gitignored. |
+
+Deleting workspace state gives that checkout a clean slate; it does not delete
+the task bundles or audit database in the global root. For backups, stuck runs,
+database recovery, and upgrades, see the
+[runbooks](https://github.com/constellation-works/orbit/blob/agent-main/docs/INDEX.md#runbooks).
+
 ## Typical workspace state
 
 ```text
