@@ -46,9 +46,14 @@ spec:
     run was submitted with. While sustained host resource pressure holds
     (`[workflow.resource_throttle]`), the pass admits nothing, reports the
     held resources in `resource_throttle`, records them on the drain's last
-    pass and waits the short poll; live children are never touched. Readings
-    that cannot be used fail open and are listed in
-    `resource_telemetry_unknown`.
+    pass and waits the short poll; live children are never touched. When CPU
+    is the only held resource, `no-diff-expected` auto-task leaves still fill
+    up to `cpu_light_leaves` reserved slots, counted against live leaves and
+    reported in `cpu_light_budget`; memory or disk pressure holds them too.
+    Readings that cannot be used fail open and are listed in
+    `resource_telemetry_unknown`. A backlog task minted over a frozen
+    delivery batch within two hours of its admission deadline sorts ahead of
+    same-priority backlog.
   input_schema_json:
     type: object
     properties:
@@ -117,5 +122,16 @@ spec:
         type: array
         items:
           type: string
+      cpu_light_budget:
+        type: object
+        properties:
+          reserved:
+            type: number
+          active:
+            type: number
+          remaining:
+            type: number
+          applies:
+            type: boolean
   action: classify_workspace_auto_tasks
   config: {}

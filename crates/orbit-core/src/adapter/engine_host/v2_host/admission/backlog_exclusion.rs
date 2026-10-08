@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskOsRequirement,
@@ -153,6 +154,10 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
     /// selection, exclusion reasons, and the lock-wait diagnostic all name the
     /// same holder for the same selector [ORB-11973].
     pub(in crate::adapter::engine_host::v2_host) lock_holders: BTreeMap<String, Vec<String>>,
+    /// Backlog tasks minted over a frozen delivery batch that nears its
+    /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
+    /// same-priority backlog in `admissible_leaves`.
+    pub(in crate::adapter::engine_host::v2_host) expiring_batches: BTreeMap<String, DateTime<Utc>>,
 }
 
 /// The tasks a live claim is currently executing [ORB-12500].
@@ -474,7 +479,11 @@ fn backlog_snapshot_in_mode(
                 && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .collect();
-    sort_tasks_for_automatic_dispatch(&mut backlog);
+    // [ORB-14624] A frozen batch about to pass its deadline would lose its
+    // retry budget waiting in the queue. Ordering only: a store that cannot
+    // be read leaves the ordinary order, never a failed pass.
+    let expiring_batches = expiring_backlog_batches(runtime, &backlog);
+    sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches);
     let mut excluded = Vec::new();
     let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
@@ -740,7 +749,27 @@ fn backlog_snapshot_in_mode(
         admissible_leaves,
         excluded,
         lock_holders,
+        expiring_batches,
     })
+}
+
+/// The backlog tasks whose frozen batch nears its deadline [ORB-14624].
+fn expiring_backlog_batches(
+    runtime: &OrbitRuntime,
+    backlog: &[&Task],
+) -> BTreeMap<String, DateTime<Utc>> {
+    match crate::application::automation::expiring_frozen_batch_tasks(runtime, Utc::now()) {
+        Ok(mut expiring) => {
+            expiring.retain(|task_id, _| backlog.iter().any(|task| task.id == *task_id));
+            expiring
+        }
+        Err(error) => {
+            tracing::warn!(
+                "could not read frozen batch deadlines; backlog keeps its ordinary order: {error}"
+            );
+            BTreeMap::new()
+        }
+    }
 }
 
 /// The exclusion for a task whose `os:` tags this host does not satisfy.
@@ -874,14 +903,22 @@ fn pilot_preparation_exclusion(task_id: &str) -> BacklogTaskExclusion {
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical
 /// first, then corrective work, then priority, age, and the task ID as the
-/// total tie-breaker.
+/// total tie-breaker. A task in `expiring` leads its priority outside the
+/// critical band (`automatic_dispatch_cmp_with_expiry`).
 pub(in crate::adapter::engine_host::v2_host) fn sort_tasks_for_automatic_dispatch<
     T: Borrow<Task>,
 >(
     tasks: &mut [T],
+    expiring: &BTreeMap<String, DateTime<Utc>>,
 ) {
     tasks.sort_by(|left, right| {
-        orbit_types::task::automatic_dispatch_cmp(left.borrow(), right.borrow())
+        let (left, right) = (left.borrow(), right.borrow());
+        orbit_types::task::automatic_dispatch_cmp_with_expiry(
+            left,
+            expiring.contains_key(&left.id),
+            right,
+            expiring.contains_key(&right.id),
+        )
     });
 }
 

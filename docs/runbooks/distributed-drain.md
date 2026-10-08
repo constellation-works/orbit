@@ -1143,6 +1143,22 @@ orbit run show <drain-run>   # Throttled: line from the drain's last pass
 - `orbit run auto`, MCP `orbit.workflow.auto` start, and `orbit run ship` with
   named tasks proceed and print a warning. The drain admits nothing until the
   pressure clears; a named ship starts at once.
+- CPU-light work keeps moving under CPU pressure. When CPU is the only held
+  resource, a local drain still starts `no-diff-expected` auto-task leaves
+  (after-landing review, friction curation, full review) until
+  `workflow.resource_throttle.cpu_light_leaves` (default 2) of them are live
+  leaves; every other leaf waits. Memory or disk pressure holds them too, and
+  pull drains do not use the budget. Readiness marks these tasks `cpu-light`,
+  prints `CPU-light budget: <active> of <reserved> reserved slots in use`,
+  reports `cpu_light_budget_full` for a light task waiting on a spent budget,
+  and carries the numbers in `capacity.cpu_light_budget`; the drain's pass
+  output carries the same object.
+- A task minted over a frozen delivery batch within two hours of the batch's
+  admission deadline (`retry_until`, or an operator reissue's) sorts ahead of
+  same-priority backlog, corrective work included; critical work still leads.
+  Readiness names that deadline as `frozen-batch-deadline` (JSON
+  `frozen_batch_deadline`). Raising such a task to critical is no longer
+  needed to keep its batch from expiring behind ordinary work.
 - Readings that cannot be taken (unavailable, invalid or stale) never
   throttle. They are listed as `resource_telemetry_unknown` and logged once.
 - Each throttle and recovery is logged once under `orbit.core.host_resource`.

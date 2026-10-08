@@ -324,6 +324,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 130,
         resolve: |raw: Option<u8>| resolve_percent(raw, 90, "workflow.resource_throttle.cpu_high_percent"),
     },
+    workflow_resource_throttle_cpu_light_leaves: u8 => u8 {
+        key: "workflow.resource_throttle.cpu_light_leaves", value_type: "integer",
+        description: "Leaves reserved for CPU-light work (`no-diff-expected` auto-tasks) while only CPU pressure throttles admissions; memory and disk pressure still hold them (0..=32, default 2; 0 holds them too).",
+        section: ConfigSection::Delivery, order: 137,
+        resolve: |raw: Option<u8>| resolve_cpu_light_leaves(raw),
+    },
     workflow_resource_throttle_cpu_resume_percent: u8 => u8 {
         key: "workflow.resource_throttle.cpu_resume_percent", value_type: "integer",
         description: "Host cpu resume percentage (1..=100, default 85).",
@@ -967,6 +973,8 @@ pub struct ResourceThrottleSettings {
     pub cpu_high_percent: u8,
     /// CPU recovery percentage, strictly below the high-water mark.
     pub cpu_resume_percent: u8,
+    /// Leaves CPU-light work may hold while only CPU pressure throttles.
+    pub cpu_light_leaves: u8,
     /// Memory high-water percentage.
     pub memory_high_percent: u8,
     /// Memory recovery percentage.
@@ -984,6 +992,7 @@ impl ConfigSnapshot {
             enabled: self.workflow_resource_throttle_enabled,
             cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
             cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
+            cpu_light_leaves: self.workflow_resource_throttle_cpu_light_leaves,
             memory_high_percent: self.workflow_resource_throttle_memory_high_percent,
             memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
@@ -999,6 +1008,21 @@ fn resolve_validation_path_mode(raw: Option<String>) -> Result<String, OrbitErro
         other => Err(OrbitError::InvalidInput(format!(
             "workflow.validation_env.path_mode must be `prepend` or `replace`, got `{other}`"
         ))),
+    }
+}
+
+/// Ceiling for `workflow.resource_throttle.cpu_light_leaves`: a reservation,
+/// not a second concurrency limit.
+const MAX_CPU_LIGHT_LEAVES: u8 = 32;
+
+fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError> {
+    let value = raw.unwrap_or(2);
+    if value <= MAX_CPU_LIGHT_LEAVES {
+        Ok(value)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "workflow.resource_throttle.cpu_light_leaves must be in 0..={MAX_CPU_LIGHT_LEAVES}"
+        )))
     }
 }
 

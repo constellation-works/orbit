@@ -311,6 +311,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.resource_throttle.cpu_light_leaves": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.resource_throttle.cpu_resume_percent": {
       "scope": "built-in",
       "state": "default",

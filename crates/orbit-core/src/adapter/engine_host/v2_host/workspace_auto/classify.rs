@@ -12,6 +12,7 @@ use crate::adapter::engine_host::v2_host::admission::auto_admission::{
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusion, allowlist_from_input, backlog_snapshot,
 };
+use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
 
 use super::action_failed;
 use super::drains::{
@@ -117,7 +118,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     }
     // [ORB-13901] Sustained host pressure holds the wave the same way until
     // every resource is back below its resume mark. Live children are never
-    // touched, and unknown telemetry admits.
+    // touched, and unknown telemetry admits. [ORB-14624] CPU pressure alone
+    // still admits CPU-light leaves within their reserved budget, below.
     let resource = runtime.resource_admission();
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy
@@ -140,8 +142,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
     runtime.drain_upgrade_boundary();
-    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
-    {
+    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -156,6 +157,18 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // The same snapshot readiness reads, so the two cannot disagree about the
     // eligible population before they even reach the selection rule.
     let snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
+    let light_budget = LightBudget::new(
+        runtime
+            .context
+            .settings()
+            .resource_throttle()
+            .cpu_light_leaves,
+        &claimed,
+        &snapshot.task_lookup,
+    );
+    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
+    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
     // Priority/age order is the snapshot's, and everything below preserves it:
     // the slots are scarce, so they go to the front of the queue rather than to
     // whichever tasks happen to sort last.
@@ -165,6 +178,25 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         .filter(|task_id| !claimed.contains(*task_id))
         .cloned()
         .collect();
+    // Under a CPU-only throttle the wave is chosen from CPU-light leaves
+    // alone, in the same order, so heavier work ahead of them in the queue
+    // does not hide them from the candidate pool.
+    let gated: Vec<String>;
+    let candidates: &[String] = if gate == ResourceGate::Open {
+        &pending
+    } else {
+        gated = pending
+            .iter()
+            .filter(|task_id| {
+                snapshot
+                    .task_lookup
+                    .get(*task_id)
+                    .is_some_and(|task| gate.admits(task))
+            })
+            .cloned()
+            .collect();
+        &gated
+    };
 
     // [ORB-11973] The wave used to be `pending[..free_slots]`, which could hand
     // every slot to one cluster of overlapping tasks and leave independent work
@@ -172,7 +204,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // compatible set instead, walking past a blocked candidate to the next
     // compatible one rather than stopping at it.
     let max_tasks = candidate_pool_limit(action, input)?;
-    let examined = &pending[..pending.len().min(max_tasks)];
+    let examined = &candidates[..candidates.len().min(max_tasks)];
     let holders = AdmissionHolders::new(
         &snapshot.lock_holders,
         &claimed,
@@ -191,7 +223,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // candidates rather than out of slots, so report exactly that case instead
     // of leaving a short wave looking like an empty backlog.
     let candidate_pool_truncated =
-        pending.len() > examined.len() && selection.selected.len() < free_slots;
+        candidates.len() > examined.len() && selection.selected.len() < free_slots;
     let admitted = &selection.selected;
     let loose_task_dispatches: Vec<Value> = admitted
         .iter()
@@ -274,6 +306,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "host_shutdown": host_shutdown,
         "resource_throttle": resource.throttle,
         "resource_telemetry_unknown": resource.unknown,
+        // [ORB-14624] Light slots a CPU-only throttle still admits into.
+        "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
     }))
 }
 
