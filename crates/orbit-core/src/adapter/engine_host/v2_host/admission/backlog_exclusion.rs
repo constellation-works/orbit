@@ -582,9 +582,10 @@ fn backlog_snapshot_in_mode(
         false
     });
     // [ORB-14258] A task held for a red base waits until the command passes
-    // on a new base tip;
-    // dispatching it would only fail the same command again. A hold that
-    // cannot be read is not one: the delivery's own validation decides.
+    // on a new base tip; dispatching it would only fail the same command
+    // again. Only the clock tick's recorded verdict is read here, never a
+    // validation run [ORB-14739]. A hold that cannot be read is not one: the
+    // delivery's own validation decides.
     backlog.retain(|task| match runtime.standing_baseline_hold(task) {
         Ok(None) => true,
         Ok(Some(why)) => {

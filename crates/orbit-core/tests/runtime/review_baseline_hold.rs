@@ -240,6 +240,8 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
     std::fs::write(fixture.repo.join("check.sh"), GREEN).unwrap();
     git(&fixture.repo, &["commit", "--quiet", "-am", "fix the base"]);
     let green = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    let refresh = fixture.runtime.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.lifted, vec![fixture.task_id.clone()], "{refresh:?}");
     // The fixture has no PR route, so admission still withholds it for that.
     assert_ne!(
         readiness(&fixture)["reason"],
@@ -374,4 +376,118 @@ fn a_failure_the_base_does_not_explain_is_never_held() {
             "no hold is recorded"
         );
     }
+}
+
+/// [ORB-14739] A held task whose base tip moved to a commit where the check
+/// would run for minutes does not block the readiness explanation or the
+/// drain's backlog snapshot: both read the hold's recorded verdict and never
+/// run the command. Only the owner's clock tick re-checks the hold.
+#[test]
+fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_moved_base_never_runs_the_check_inside_a_snapshot",
+    ) {
+        return;
+    }
+    let fixture = fixture(RED, "after\n");
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: git(&fixture.repo, &["rev-parse", "main"]),
+        command: CHECK.into(),
+        run_id: run_id.clone(),
+    };
+    let handoff = execute_deterministic_action(
+        &fixture.runtime,
+        "pr_failure_handoff",
+        &json!({}),
+        &json!({
+            "failed_step_id": "validate",
+            "error_code": "deterministic_action_refused",
+            "error_message": hold.text("required validation 'sh check.sh' fails on the base too"),
+            "run_id": run_id,
+            "job_input": {"task_ids": [fixture.task_id]},
+            "pipeline": {"worktree": {
+                "job_run_id": run_id, "workspace_path": fixture.input["workspace_path"],
+            }},
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Low),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+
+    // The base moves to a check that marks it ran, then outlasts the test.
+    let marker = fixture.repo.parent().unwrap().join("base-check-ran");
+    git(&fixture.repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(
+        fixture.repo.join("check.sh"),
+        format!(
+            "#!/bin/sh\ntouch '{}'\nsleep 120\nexit 0\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    git(
+        &fixture.repo,
+        &["commit", "--quiet", "-am", "slow base check"],
+    );
+    git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
+
+    let started = std::time::Instant::now();
+    let entry = readiness(&fixture);
+    let backlog = fixture
+        .runtime
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            Default::default(),
+        )
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(60),
+        "the snapshots waited {elapsed:?} on the base check"
+    );
+    assert!(!marker.exists(), "a snapshot ran the required command");
+    assert_eq!(entry["reason"], "baseline_red_hold", "{entry}");
+    assert!(
+        entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(&hold.base_sha)),
+        "with no verdict yet the recorded hold stands: {entry}"
+    );
+    assert!(
+        backlog["excluded"].as_array().is_some_and(|excluded| {
+            excluded.iter().any(|row| {
+                row["id"] == fixture.task_id.as_str() && row["reason"] == "baseline_red_hold"
+            })
+        }),
+        "{backlog}"
+    );
+
+    // A tick whose budget is already spent starts no check either.
+    let refresh = fixture
+        .runtime
+        .refresh_baseline_holds(Some(std::time::Instant::now()))
+        .unwrap();
+    assert!(
+        refresh.lifted.is_empty() && refresh.held.is_empty(),
+        "{refresh:?}"
+    );
+    assert!(!marker.exists(), "an expired tick ran the required command");
 }

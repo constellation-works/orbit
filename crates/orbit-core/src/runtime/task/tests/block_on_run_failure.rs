@@ -312,7 +312,8 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
 /// on the candidate holds its task in the backlog instead of blocking it. The
 /// backlog snapshot withholds the task while the base still points at the red
 /// commit and after it moves to another failing tip, then admits it only after
-/// the command passes on a new base tip.
+/// the clock tick records that the command passes on a new base tip; the
+/// snapshot itself never re-checks [ORB-14739].
 #[test]
 fn a_red_base_failure_holds_the_task_until_the_command_passes() {
     let (_root, runtime, repo_root) = test_runtime();
@@ -397,6 +398,8 @@ fn a_red_base_failure_holds_the_task_until_the_command_passes() {
     .expect("write still-red base command");
     git(&repo_root, &["add", "Makefile"]);
     git(&repo_root, &["commit", "-q", "-m", "still red"]);
+    let refresh = runtime.refresh_baseline_holds(None).expect("refresh holds");
+    assert_eq!(refresh.held, vec![task_id.clone()], "{refresh:?}");
     let still_held = backlog(&runtime);
     assert_eq!(
         still_held["task_ids"],
@@ -416,6 +419,13 @@ fn a_red_base_failure_holds_the_task_until_the_command_passes() {
         .expect("write passing-base command");
     git(&repo_root, &["add", "Makefile"]);
     git(&repo_root, &["commit", "-q", "-m", "fix lint"]);
+    assert_eq!(
+        backlog(&runtime)["task_ids"],
+        serde_json::json!([]),
+        "the snapshot waits for the tick's verdict"
+    );
+    let refresh = runtime.refresh_baseline_holds(None).expect("refresh holds");
+    assert_eq!(refresh.lifted, vec![task_id.clone()], "{refresh:?}");
     let lifted = backlog(&runtime);
     assert_eq!(lifted["task_ids"], serde_json::json!([task_id]), "{lifted}");
 }

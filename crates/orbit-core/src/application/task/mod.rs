@@ -30,6 +30,7 @@ pub(crate) mod validation_tools;
 /// reservations, status-derived locks, and the admission work that freezes a
 /// claim's footprint all resolve declarations through it.
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+pub use baseline_hold::BaselineHoldRefresh;
 pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };

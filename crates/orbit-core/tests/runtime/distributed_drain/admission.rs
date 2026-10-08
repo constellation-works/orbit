@@ -1261,7 +1261,8 @@ model = \"gpt-sol\"
 /// task returns to the backlog under that hold, and the failure breaker does
 /// not count it. The owner's admission withholds the task while the base still
 /// points at the red commit and after it moves to another failing tip, then
-/// offers it once the required command passes on the new base.
+/// offers it once the owner's clock tick records that the required command
+/// passes on the new base. Pull admission never re-checks it [ORB-14739].
 #[test]
 fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
     if !isolated(
@@ -1354,6 +1355,8 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
     .unwrap();
     git(repo, &["add", "Makefile"]);
     git(repo, &["commit", "-q", "-m", "still red"]);
+    let refresh = pair.wire.owner.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.held, vec![task.clone()], "{refresh:?}");
     let moved_red = pair.pass(&drain);
     assert_eq!(
         moved_red["admitted"], 0,
@@ -1364,6 +1367,14 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
     std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
     git(repo, &["add", "Makefile"]);
     git(repo, &["commit", "-q", "-m", "fix lint"]);
+    let unchecked = pair.pass(&drain);
+    assert_eq!(
+        unchecked["admitted"], 0,
+        "admission waits for the tick's verdict on the green tip: {unchecked}"
+    );
+    assert_eq!(pair.leaf_runs(), leaves);
+    let refresh = pair.wire.owner.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.lifted, vec![task.clone()], "{refresh:?}");
     let next = pair.queued_leaf(&drain, 1);
     assert_eq!(
         pair.claimed_task(&next),

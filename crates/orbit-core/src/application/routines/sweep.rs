@@ -558,6 +558,37 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // [ORB-14739] Standing baseline-red holds are re-checked here, never on a
+    // read or admission path: a moved base tip reruns the hold's required
+    // command there (once per tip and command), so this runs after
+    // everything the tick dispatches. Admission reads the recorded verdict.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            match runtime.refresh_baseline_holds(Some(deadline)) {
+                Ok(refresh) => {
+                    if !refresh.lifted.is_empty() || !refresh.held.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            lifted = refresh.lifted.len(),
+                            held = refresh.held.len(),
+                            "sweep.baseline_holds"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.baseline_holds_failed"
+                ),
+            }
+        }
+    }
+
     let deadline_exceeded = Instant::now() >= deadline;
     if deadline_exceeded {
         tracing::error!(target: "orbit.core.sweep", skipped_workspaces = ?skipped_workspaces,
