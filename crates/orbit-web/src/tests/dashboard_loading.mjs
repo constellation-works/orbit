@@ -582,9 +582,19 @@ const fireVisibilityChange = () => {
 
 // Pausing a dashboard removes its pending poll. Returning to it refreshes once,
 // then failed polls double their delay and a successful retry restores 30s.
+// Becoming visible schedules the poll that hiding must then cancel.
+setDocumentHidden(false);
+fireVisibilityChange();
+await settle();
+const visiblePoll = activePoll();
+check(visiblePoll && visiblePoll.ms === 30000, 'visible dashboard schedules its normal 30s poll');
+const hiddenSummaryReads = summaryReads;
 setDocumentHidden(true);
 fireVisibilityChange();
-const hiddenSummaryReads = summaryReads;
+await settle();
+check(visiblePoll.handle.cancelled, 'hiding cancels the pending poll');
+// Run the poll regardless of cancellation: the hidden-tab guard alone must stop its request.
+visiblePoll.fn(...visiblePoll.args);
 await settle();
 check(summaryReads === hiddenSummaryReads, 'hidden dashboard makes no audit-summary request');
 setDocumentHidden(false);
