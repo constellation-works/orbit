@@ -102,15 +102,17 @@
   border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
 }
 .drain-stat-label {
-  display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px; min-width: 0;
   color: var(--fg-dim); font: 12px var(--font-sans);
 }
-.drain-stat-label span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.drain-stat-label span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .drain-stat-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .drain-stat.eligible .drain-stat-dot { background: var(--state-success); }
-.drain-stat.blocked .drain-stat-dot { background: var(--priority-medium); }
+.drain-stat.locks .drain-stat-dot { background: var(--priority-medium); }
+.drain-stat.capacity .drain-stat-dot { background: var(--state-running); }
+.drain-stat.other .drain-stat-dot { background: var(--fg-dim); }
 .drain-stat-value { color: var(--fg); font: 600 20px var(--font-sans); line-height: 1.2; }
-.drain-stat.blocked.nonzero .drain-stat-value { color: var(--priority-medium); }
+.drain-stat.locks.nonzero .drain-stat-value { color: var(--priority-medium); }
 .drain-blocked { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .drain-blocked-row { min-width: 0; padding-left: 8px; border-left: 2px solid var(--priority-medium); }
 .drain-blocked-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; min-width: 0; font-size: 11.5px; }
