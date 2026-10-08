@@ -113,3 +113,38 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
         );
     }
 }
+
+#[test]
+fn first_admission_in_a_fresh_process_reads_host_cpu() {
+    if !super::dispatch_admission::isolated(
+        "host_resources::first_admission_in_a_fresh_process_reads_host_cpu",
+    ) {
+        return;
+    }
+    // The native probe is process-global: only a fresh child process makes
+    // this runtime's first observation the host's first observation.
+    let runtime = OrbitRuntime::in_memory().unwrap();
+    let started = std::time::Instant::now();
+    let status = runtime.host_resource_status();
+    let elapsed = started.elapsed();
+    assert!(
+        status.cpu.percent.is_some_and(|value| value >= 0.0),
+        "first observation must carry host CPU, got {:?}",
+        status.cpu
+    );
+    assert!(
+        elapsed
+            <= orbit_core::runtime::host_resource::RESOURCE_CACHE_TTL
+                + std::time::Duration::from_millis(500),
+        "first observation took {elapsed:?}; admission may wait about RESOURCE_CACHE_TTL"
+    );
+    let admission = runtime.resource_admission();
+    assert!(
+        !admission
+            .unknown
+            .iter()
+            .any(|reason| reason.starts_with("cpu")),
+        "first admission must not report CPU unknown: {:?}",
+        admission.unknown
+    );
+}
