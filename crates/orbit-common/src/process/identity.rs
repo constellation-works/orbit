@@ -481,13 +481,63 @@ pub fn process_is_alive(_pid: u32) -> bool {
 /// a single PID) can reuse the same parse instead of re-deriving it.
 #[cfg(target_os = "linux")]
 pub fn linux_process_state(pid: u32) -> Option<(char, libc::pid_t)> {
+    linux_process_stat(pid).map(|stat| (stat.state, stat.process_group))
+}
+
+/// The `/proc/<pid>/stat` fields a process-tree walk needs.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxProcessStat {
+    /// Run state: `R`, `S`, `D`, `T` (stopped by a signal), `t` (stopped
+    /// under a tracer), `Z`, ...
+    pub state: char,
+    pub parent_pid: u32,
+    pub process_group: libc::pid_t,
+    /// Start time in clock ticks after boot. With the pid it names one
+    /// process: a reused pid starts later.
+    pub start_ticks: u64,
+}
+
+/// Parse `/proc/<pid>/stat`. `None` when the process is gone or its record
+/// is unreadable.
+#[cfg(target_os = "linux")]
+pub fn linux_process_stat(pid: u32) -> Option<LinuxProcessStat> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm (field 2) can contain spaces and ')', so split at its last ')'.
     let (_, tail) = stat.rsplit_once(')')?;
-    let mut fields = tail.split_whitespace();
-    let state = fields.next()?.chars().next()?;
-    let _parent_pid = fields.next()?;
-    let process_group = fields.next()?.parse().ok()?;
-    Some((state, process_group))
+    let fields = tail.split_whitespace().collect::<Vec<_>>();
+    Some(LinuxProcessStat {
+        state: fields.first()?.chars().next()?,
+        parent_pid: fields.get(1)?.parse().ok()?,
+        process_group: fields.get(2)?.parse().ok()?,
+        start_ticks: fields.get(19)?.parse().ok()?,
+    })
+}
+
+/// True when `pid` is stopped by a signal (state `T`) and, when a versioned
+/// identity token was recorded for it, is still that process.
+///
+/// Linux only; elsewhere this answers `false`, so a caller never reports a
+/// process as stopped on a host that cannot tell.
+pub fn probe_process_stopped(pid: u32, pid_start_time: Option<&str>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if linux_process_stat(pid).is_none_or(|stat| stat.state != 'T') {
+            return false;
+        }
+        match pid_start_time.filter(|token| is_stable_token(token)) {
+            Some(recorded) => matches!(
+                probe_process_start_identity(pid),
+                ProbeOutcome::Token(current) if stable_tokens_match(recorded, &current)
+            ),
+            None => true,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, pid_start_time);
+        false
+    }
 }
 
 /// Native Darwin process state and process-group id.

@@ -5,6 +5,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::process::stopped_descendants::{
+    StoppedDescendant, StoppedDescendantWatch, stopped_descendant_threshold,
+};
 use wait_timeout::ChildExt;
 
 #[cfg(unix)]
@@ -119,6 +122,38 @@ fn inject_supervision_failure(point: SupervisionFailure) -> Result<(), OrbitErro
         )));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static STOPPED_THRESHOLD: std::cell::Cell<Option<Duration>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Run `f` with supervisors on this thread ending stopped descendants after
+/// `threshold` instead of the configured one.
+#[cfg(all(test, unix))]
+pub(super) fn with_stopped_descendant_threshold<T>(
+    threshold: Duration,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Duration>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STOPPED_THRESHOLD.set(self.0);
+        }
+    }
+    let _restore = Restore(STOPPED_THRESHOLD.replace(Some(threshold)));
+    f()
+}
+
+fn stopped_descendant_watch() -> StoppedDescendantWatch {
+    #[cfg(all(test, unix))]
+    if let Some(threshold) = STOPPED_THRESHOLD.get() {
+        return StoppedDescendantWatch::new(threshold);
+    }
+    StoppedDescendantWatch::new(stopped_descendant_threshold())
 }
 
 /// Output collected from a spawned process.
@@ -283,6 +318,10 @@ fn wait_cancellable(
     }
 
     let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+    // A descendant that stays stopped would hold the child's wait until the
+    // deadline; see `stopped_descendants`.
+    let mut stopped_watch = stopped_descendant_watch();
+    let mut stopped_descendants: Vec<StoppedDescendant> = Vec::new();
     let mut stdin_write_error = None;
     let mut capture_limited: Option<&'static str> = None;
     // Annotated because the only `Some(signal)` arms are Unix-only.
@@ -330,6 +369,10 @@ fn wait_cancellable(
                 Err(TryRecvError::Disconnected) => {}
             }
         }
+
+        // The child is not reaped yet, so its pid still names it. Each one
+        // is reported on stderr below.
+        stopped_descendants.extend(stopped_watch.poll(child.process.id()));
 
         let wait_slice = deadline
             .map(|end| {
@@ -450,6 +493,12 @@ fn wait_cancellable(
 
     #[cfg(not(unix))]
     let _ = interrupted_signal;
+    for stopped in &stopped_descendants {
+        if !stderr.is_empty() {
+            stderr.push(b'\n');
+        }
+        stderr.extend_from_slice(format!("supervisor: {}", stopped.describe()).as_bytes());
+    }
     // Output after this point was discarded; without the note a caller could
     // mistake a cut stream for the whole of it.
     if drain_stopped {
