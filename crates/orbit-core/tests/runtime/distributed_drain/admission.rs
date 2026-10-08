@@ -6,6 +6,46 @@ use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::*;
 
+/// A configured follower name survives the refill request, owner admission,
+/// claimed leaf insertion, task binding and pulled-by history. Legacy callers
+/// without a name keep their machine id and unknown display name.
+#[test]
+fn pull_admission_preserves_execution_machine_name() {
+    if !isolated(
+        module_path!(),
+        "pull_admission_preserves_execution_machine_name",
+    ) {
+        return;
+    }
+    for name in [Some("Daniels-Mac-mini.local"), None] {
+        let mut pair = Pair::new(1);
+        let location = orbit_types::task::ExecutionLocation {
+            machine_id: FOLLOWER.into(),
+            machine_name: name.map(ToOwned::to_owned),
+        };
+        pair.follower = pair
+            .follower
+            .with_automation_execution_location(Some(location.clone()));
+        let drain = pair.run_drain();
+        // The existing lost-bind-reply fixture stops after real admission and
+        // insertion, before this non-worker test binary would launch a leaf.
+        let leaf_id = pair.queued_leaf(&drain, 1);
+        let leaf = pair.follower_jobs.get_job_run(&leaf_id).unwrap().unwrap();
+        assert_eq!(leaf.executed_on, Some(location.clone()));
+        let task = pair.owner_task(&pair.tasks[0]);
+        assert_eq!(task["job_run_machine"], json!(location));
+        let history = pair.wire.owner.get_task_history(&pair.tasks[0]).unwrap();
+        let pulled = history
+            .iter()
+            .find(|entry| entry.event == "pulled_by")
+            .unwrap();
+        let evidence: Value = serde_json::from_str(pulled.note.as_deref().unwrap()).unwrap();
+        assert_eq!(evidence["machine_id"], FOLLOWER);
+        assert_eq!(evidence["run_context"]["machine_name"], json!(name));
+        assert_eq!(evidence["run_context"]["run_id"], drain);
+    }
+}
+
 /// Exercise the owner's actual tool/redaction boundary with the incident's
 /// inherited session metadata, then the follower's real refill action.
 #[test]

@@ -6111,6 +6111,9 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
     assert_eq!(pending["answer"], Value::Null, "{pending}");
     let run_id = pending["run_id"].as_str().unwrap();
     let observed = client.call_tool_ok("orbit_workflow_run_show", json!({"id":run_id}));
+    let (machine_id, machine_name) = machine_identity(&workspace.home);
+    assert_eq!(observed["executed_on"]["machine_id"], machine_id);
+    assert_eq!(observed["executed_on"]["machine_name"], machine_name);
     assert!(
         matches!(observed["state"].as_str(), Some("pending" | "running")),
         "a client deadline leaves the run active: {observed}"

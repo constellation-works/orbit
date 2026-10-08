@@ -261,7 +261,9 @@ pub(crate) fn pull_refill(
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),
-                            machine_name: None,
+                            machine_name: runtime
+                                .automation_execution_location()
+                                .and_then(|location| location.machine_name.clone()),
                         },
                         ship: ship.clone(),
                         crews: Some(capability),

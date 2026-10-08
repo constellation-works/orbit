@@ -234,7 +234,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(fallback.title, `Execution machine id: ${fallbackId}`);
   const named = buildExecutionProvenance({ known: true, machine_id: fallbackId, machine_name: "Mac follower" });
   assert.equal(named.textContent, "on Mac follower");
-  assert.equal(named.title, `Execution machine id: ${fallbackId}`);
+  assert.equal(named.title, `Execution machine: Mac follower (${fallbackId})`);
 }
 
 // The actual task renderer and shipped CSS keep remote execution provenance on
@@ -271,10 +271,10 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(fallback.title, `Execution machine id: ${machineId}`);
   const named = rows[1].querySelector(".task-quick-cell .exec-origin");
   assert.equal(named.textContent, "on Mac follower");
-  assert.equal(named.title, `Execution machine id: ${machineId}`);
+  assert.equal(named.title, `Execution machine: Mac follower (${machineId})`);
 }
 
-// Run detail uses the same visible location and retains its full-id tooltip.
+// Run detail uses the same visible location and retains the name and full id.
 {
   const runDetail = await import("./js/run-detail.js");
   const machineId = "hm_ba054a1afbfb914";
@@ -293,7 +293,9 @@ const mount = async (taskId = "ORB-2", options = {}) => {
     runDetail.renderRunDetailMeta();
     const provenance = document.querySelector("#run-detail-meta .exec-origin");
     assert.equal(provenance.textContent, label);
-    assert.equal(provenance.title, `Execution machine id: ${machineId}`);
+    assert.equal(provenance.title, location.machine_name
+      ? `Execution machine: ${location.machine_name} (${machineId})`
+      : `Execution machine id: ${machineId}`);
   }
 }
 

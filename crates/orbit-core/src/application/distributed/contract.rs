@@ -206,7 +206,7 @@ impl crate::OrbitRuntime {
             crews: None,
             os: None,
         };
-        let identity = trusted_identity(&machine_id, session);
+        let identity = trusted_identity(&machine_id, session, None);
         let refusal = orbit_store::admission_refusal(&identity, &request, owner_binary_version());
         if let Some(refusal) = refusal {
             diagnostics.push(match refusal {
@@ -273,14 +273,19 @@ pub(super) fn is_remote(session: &ToolSessionContext) -> bool {
         .is_some_and(|transport| transport != McpTransport::Local)
 }
 
-/// Build store-side identity from trusted session facts alone.
+/// Build store-side identity from session facts. The request may supply a
+/// display name when the transport has none; it never supplies the machine id.
 pub(super) fn trusted_identity(
     machine_id: &str,
     session: &ToolSessionContext,
+    display_name: Option<&str>,
 ) -> AdmissionIdentity {
     let location = ExecutionLocation {
         machine_id: machine_id.to_string(),
-        machine_name: session.caller_machine_name.clone(),
+        machine_name: session
+            .caller_machine_name
+            .clone()
+            .or_else(|| display_name.map(ToOwned::to_owned)),
     };
     if is_remote(session) {
         AdmissionIdentity::trusted_remote(location)

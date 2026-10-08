@@ -248,7 +248,7 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     assert_eq!(probe["session"]["caller_machine_id"], "hm_follower");
     let request = json!({"request_id":"same-admission", "caller_version":probe["binary_version"],
         "caller_schema":probe["protocol_schema"],"caller_before_pr":false,
-        "run_context":{"run_id":"follower-drain","job_name":"workspace_pull_pipeline"},"ship":probe["ship"]});
+        "run_context":{"run_id":"follower-drain","job_name":"workspace_pull_pipeline","machine_name":"follower-host"},"ship":probe["ship"]});
     std::fs::write(&lose, "drop the next committed reply").unwrap();
     let lost = call(&follower, "orbit.task.pull", request.clone()).unwrap_err();
     assert!(
@@ -265,6 +265,18 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     let admitted = call(&follower, "orbit.task.pull", request.clone()).unwrap();
     assert_eq!(admitted["receipt"], lookup["receipt"]);
     assert_eq!(admitted["receipt"]["claim"]["task_id"], id);
+    assert_eq!(
+        admitted["receipt"]["claim"]["executed_on"]["machine_id"],
+        "hm_follower"
+    );
+    assert_eq!(
+        admitted["receipt"]["claim"]["executed_on"]["machine_name"],
+        "follower-host"
+    );
+    assert_eq!(
+        admitted["receipt"]["claim"]["run_context"]["machine_name"],
+        "follower-host"
+    );
     let claim = admitted["receipt"]["claim"]["claim_id"].clone();
     let bind = json!({"claim_id":claim,"run_id":"leaf-1","ship":probe["ship"]});
     assert!(call(&host("hm_wrong"), "orbit.drain.claim.bind", bind.clone()).is_err());

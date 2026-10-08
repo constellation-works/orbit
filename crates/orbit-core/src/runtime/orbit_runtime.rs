@@ -53,7 +53,7 @@ pub struct OrbitRuntime {
     /// stays registry-neutral; it only carries the refusal supplied by that
     /// owner so every task-record writer shares one fail-closed gate.
     coordination_write_owner: Option<Arc<str>>,
-    automation_machine_identity: Option<Arc<str>>,
+    automation_execution_location: Option<Arc<orbit_types::task::ExecutionLocation>>,
     /// The operating system admission matches a task's `os:` tags against.
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
@@ -220,7 +220,7 @@ impl OrbitRuntime {
             owner_coordinator: None,
             drain_owner_transport: None,
             coordination_write_owner: None,
-            automation_machine_identity: None,
+            automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
@@ -278,7 +278,7 @@ impl OrbitRuntime {
             owner_coordinator: None,
             drain_owner_transport: None,
             coordination_write_owner: None,
-            automation_machine_identity: None,
+            automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
@@ -352,20 +352,34 @@ impl OrbitRuntime {
     }
 
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
-    pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
-        self.context
-            .set_execution_location(machine_id.as_ref().map(|machine_id| {
-                orbit_types::task::ExecutionLocation {
-                    machine_id: machine_id.clone(),
-                    machine_name: None,
-                }
-            }));
-        self.automation_machine_identity = machine_id.map(Arc::from);
+    pub fn with_automation_machine_identity(self, machine_id: Option<String>) -> Self {
+        self.with_automation_execution_location(machine_id.map(|machine_id| {
+            orbit_types::task::ExecutionLocation {
+                machine_id,
+                machine_name: None,
+            }
+        }))
+    }
+
+    /// Supply the executing machine's stable identity and configured display name.
+    pub fn with_automation_execution_location(
+        mut self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) -> Self {
+        self.context.set_execution_location(location.clone());
+        self.automation_execution_location = location.map(Arc::new);
         self
     }
 
     pub fn automation_machine_identity(&self) -> Option<&str> {
-        self.automation_machine_identity.as_deref()
+        self.automation_execution_location()
+            .map(|location| location.machine_id.as_str())
+    }
+
+    pub(crate) fn automation_execution_location(
+        &self,
+    ) -> Option<&orbit_types::task::ExecutionLocation> {
+        self.automation_execution_location.as_deref()
     }
 
     /// Registered owner of the bound workspace, when composition supplied a

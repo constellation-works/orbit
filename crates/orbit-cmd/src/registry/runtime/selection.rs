@@ -602,9 +602,14 @@ pub(super) fn attach_registry_context(
     global_root: &Path,
     identity: &MachineIdentityState,
 ) -> OrbitRuntime {
-    let machine_id = identity.id().map(ToOwned::to_owned);
+    let location = identity
+        .id()
+        .map(|machine_id| orbit_types::task::ExecutionLocation {
+            machine_id: machine_id.to_string(),
+            machine_name: identity.name().map(ToOwned::to_owned),
+        });
     let runtime = attach_workspace_catalog(
-        runtime.with_automation_machine_identity(machine_id),
+        runtime.with_automation_execution_location(location),
         global_root,
     );
     crate::worker_coordination::attach(runtime)
