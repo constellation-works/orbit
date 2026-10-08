@@ -35,7 +35,9 @@ cannot be confirmed is listed with its reason and makes the command exit 1. For 
 it changes nothing.\n\n\
 Cancelling a task leaf returns its task to the backlog with the reason and \
 keeps the candidate available to resume. `--block` keeps the task blocked for \
-the existing manual recovery flow.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+the existing manual recovery flow, including for the leaves and children a \
+`--force` or cascading cancel stops; a pull drain's released claims always \
+return to the owner's backlog.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
