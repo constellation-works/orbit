@@ -407,6 +407,53 @@ try {
   await drainCheck('900', null);
   await page.setViewportSize({ width: 375, height: 812 });
   await drainCheck('375x812', null);
+  // The approve-proposed opt-in and the live window's approvals line fit the
+  // card with no overflow, and the card is captured on its own for review.
+  const approveCard = async (label) => {
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixturePhase('idle');
+      document.querySelector('input[name="auto-drain-approve"][value="approve"]').click();
+    });
+    const form = await page.evaluate(() => {
+      const card = document.getElementById('auto-drain-panel');
+      const box = card.getBoundingClientRect();
+      const label = card.querySelector('.drain-field-approve');
+      return {
+        selected: card.querySelector('input[name="auto-drain-approve"][value="approve"]').checked,
+        overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
+        reachable: label.getBoundingClientRect().width > 0,
+      };
+    });
+    if (!form.selected || !form.reachable || form.overflowing.length) throw new Error(`Approve-proposed control at ${label}: ${JSON.stringify(form)}`);
+    await page.waitForTimeout(400);
+    await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixturePhase('draining');
+      await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] });
+    });
+    const live = await page.evaluate(() => {
+      const card = document.getElementById('auto-drain-panel');
+      const box = card.getBoundingClientRect();
+      return {
+        text: card.querySelector('.drain-approvals')?.textContent,
+        overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
+      };
+    });
+    if (live.text !== 'Approving proposed tasks · 3 approved · 2 held' || live.overflowing.length) throw new Error(`Live approvals line at ${label}: ${JSON.stringify(live)}`);
+    await page.waitForTimeout(400);
+    await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixtureApprovals({ enabled: false });
+      document.querySelector('input[name="auto-drain-approve"][value="leave"]')?.click();
+      await globalThis.setDrainFixturePhase('draining');
+    });
+  };
+  await approveCard('375x812');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', '336px'));
+  await approveCard('1440-dock336');
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
   // The Log dock toolbar keeps every control reachable at the 280px (<=1250px

@@ -221,7 +221,10 @@ pointer access with visible focus, count spacing, and page width across routes.
 The Drain fixture distinguishes host throttling, stopped admissions, workspace
 leaf saturation and task conflicts. It checks window, workspace and pool count
 labels and verifies that both blocker task IDs remain visible at 1024px while
-the lock path truncates.
+the lock path truncates. It also checks that the **Proposed tasks**
+(approve-proposed) control, its disabled reasons and the live window's approvals
+line fit the card at 336px and 375px, and captures `drain-approve-*` card
+screenshots. The dashboard is dark-only, so there is no light-theme pass.
 Run it with an installed Playwright module and put evidence in `.orbit/tmp/`:
 
 ```bash

@@ -192,12 +192,13 @@ The card shows:
 | **Window length** | `15m` to `8h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
 | **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those eligible now. **Mark done** needs an operator session. |
+| **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Settle pending** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
-review; **Mark done** stays disabled and says why. Nothing is reserved or
+review; **Mark done** and **Approve qualifying** stay disabled and say why. Nothing is reserved or
 started until you click **Start**. Results appear in the card's status line.
 
 On a replica, a live pull drain counts as a window. The header reads **Pull
@@ -424,6 +425,8 @@ in-flight ship or a held workspace claim.
 **Resume** keeps the source run's completion policy. If that policy marks
 tasks done, resuming requires operator capability and otherwise returns
 `403` with `code: authorization_denied` and `operation: auto_drain.complete`.
+Starting a window with `approve_proposed` set without operator capability
+returns the same `403` with `operation: auto_drain.approve_proposed`.
 **Replay run** requires operator capability for any source run.
 
 ## Troubleshooting

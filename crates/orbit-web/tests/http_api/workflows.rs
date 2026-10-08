@@ -801,3 +801,98 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
         },
     );
 }
+
+#[test]
+fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
+    isolated(
+        "workflows::auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("workspace_auto_pipeline");
+            let uri = format!("/api/workflows/auto?workspace={WS}");
+            let agent = fixture.server(false);
+            let operator = fixture.server(true);
+            let before = run_ids(&fixture);
+
+            // A session without the operator capability cannot turn it on, and
+            // is told which governed operation refused it.
+            let denied = error_code(
+                agent.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","approve_proposed":true}),
+                ),
+                403,
+                "authorization_denied",
+            );
+            assert_eq!(denied["operation"], "auto_drain.approve_proposed");
+            assert_eq!(run_ids(&fixture), before, "a denied start persists no run");
+
+            // Anything but a JSON boolean is refused before a run exists.
+            for wrong in [json!("true"), json!(1), json!(null)] {
+                assert_parse_error(
+                    operator.send(
+                        "POST",
+                        &uri,
+                        json!({"for_duration":"1m","approve_proposed":wrong}),
+                    ),
+                    "invalid type",
+                );
+            }
+            assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
+
+            // Omitted and explicit false start the same window as before, from
+            // an unauthorized session too.
+            for body in [
+                json!({"for_duration":"1m"}),
+                json!({"for_duration":"1m","approve_proposed":false}),
+            ] {
+                let started = json_ok(agent.send("POST", &uri, body));
+                assert_eq!(started["approve_proposed"], false, "{started}");
+                assert_eq!(started["completion"], "review", "{started}");
+                let run = run_input(&fixture, &started);
+                assert_ne!(run["approve_proposed"], true, "{run}");
+            }
+
+            let started = json_ok(operator.send(
+                "POST",
+                &uri,
+                json!({"for_duration":"1m","approve_proposed":true}),
+            ));
+            assert_eq!(started["approve_proposed"], true, "{started}");
+            assert_eq!(
+                started["completion"], "review",
+                "approving proposed tasks does not change completion: {started}"
+            );
+            let run = run_input(&fixture, &started);
+            assert_eq!(run["approve_proposed"], true, "{run}");
+        },
+    );
+}
+
+#[test]
+fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
+    isolated(
+        "workflows::auto_readiness_reports_authorization_and_replica_for_the_start_form",
+        || {
+            let fixture = Fixture::new();
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let agent = json_ok(fixture.server(false).get(&uri));
+            assert_eq!(agent["controls_authorized"], false, "{agent}");
+            assert_eq!(agent["replica"], false, "{agent}");
+            let operator = json_ok(fixture.server(true).get(&uri));
+            assert_eq!(operator["controls_authorized"], true, "{operator}");
+            assert_eq!(operator["replica"], false, "{operator}");
+            assert_eq!(operator["approvals"]["enabled"], false, "{operator}");
+        },
+    );
+}
+
+fn run_input(fixture: &Fixture, started: &Value) -> Value {
+    let run_id = started["run_id"].as_str().expect("run id");
+    listed_runs(fixture)
+        .into_iter()
+        .find(|run| run.run_id == run_id)
+        .and_then(|run| run.input)
+        .expect("persisted run input")
+}

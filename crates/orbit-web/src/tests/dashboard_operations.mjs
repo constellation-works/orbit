@@ -34,6 +34,8 @@ let nextTask = 1;
 let drainRunId = null;
 let drainPhase = 'idle';
 let controlsAuthorized = true;
+let replicaWorkspace = false;
+let approvalsFixture = { enabled: false };
 let stopOutcome = 'stopped';
 let stopSettlements;
 let drainAdmissionsStopped = false;
@@ -83,7 +85,7 @@ globalThis.fetch = async (path, options = {}) => {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
-    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', submitted_at: new Date().toISOString() });
+    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString() });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
@@ -142,6 +144,8 @@ globalThis.fetch = async (path, options = {}) => {
   if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: controlsAuthorized,
+    replica: replicaWorkspace,
+    approvals: approvalsFixture,
     snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
     capacity: {
       active_leaf_runs: 4, max_active_leaf_runs: 4, free_slots: 0,
@@ -223,12 +227,49 @@ markDone.checked = true; markDone.dispatchEvent(new Event('change'));
 assert(completionOption('done').checked && !completionOption('review').checked, 'choosing Mark done selects it and releases review');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
-assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true, `start posts the chosen window: ${JSON.stringify(started)}`);
+assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false, `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
 const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');
+
+// Approving proposed tasks is its own explicit opt-in, off by default, with the
+// qualification rule in the tooltip and a line in the confirm dialog.
+const approveOption = value => descendants(get('auto-drain-body')).find(node => node.type === 'radio' && node.name === 'auto-drain-approve' && node.value === value);
+const approveLabel = value => approveOption(value).parentNode;
+assert(drainText().includes('Proposed tasks') && drainText().includes('Leave for me') && drainText().includes('Approve qualifying'), 'proposed-task handling names both choices');
+assert(approveOption('leave').checked && !approveOption('approve').checked, 'approving proposed tasks defaults to off');
+assert(String(approveLabel('approve').title).includes('context files') && String(approveLabel('approve').title).includes('task-pilot') && String(approveLabel('approve').title).includes('no-diff-expected') && String(approveLabel('approve').title).includes('no-auto-approve'), `the tooltip states the qualification rule: ${approveLabel('approve').title}`);
+const requestsBeforeApprove = requests.filter(r => r.path === '/api/workflows/auto').length;
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+const defaultStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
+assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false, `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
+assert(!confirmations.at(-1).includes('approve qualifying proposed tasks'), 'the confirm dialog stays quiet when approving is off');
+approveOption('approve').checked = true; approveOption('approve').dispatchEvent(new Event('change'));
+assert(approveOption('approve').checked && !approveOption('leave').checked, 'choosing Approve qualifying selects it');
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+const approveStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
+assert(approveStart.body.approve_proposed === true && approveStart.body.complete === false, `the opt-in posts approve_proposed true: ${JSON.stringify(approveStart)}`);
+assert(confirmations.at(-1).includes('approve qualifying proposed tasks, including ones filed while it runs'), `the confirm dialog names it: ${confirmations.at(-1)}`);
+assert(get('auto-drain-operation-feedback').textContent.includes('Approving qualifying proposed tasks.'), 'the start result says the window approves');
+approveOption('leave').checked = true; approveOption('leave').dispatchEvent(new Event('change'));
+assert(approveOption('leave').checked, 'approving returns to off');
+
+// Unauthorized sessions and pull replicas get the control disabled with the
+// reason as visible text; Start itself still works without the opt-in.
+controlsAuthorized = false;
+await fetchAndRenderOperations();
+assert(approveOption('approve').disabled && !approveOption('leave').disabled, 'an unauthorized session cannot choose to approve');
+assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
+assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can still start a default window');
+controlsAuthorized = true;
+replicaWorkspace = true;
+await fetchAndRenderOperations();
+assert(approveOption('approve').disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
+replicaWorkspace = false;
+await fetchAndRenderOperations();
+assert(!approveOption('approve').disabled, 'the opt-in returns on an owner');
 
 // Concurrency the server would refuse (zero, negative, fractional) never reaches
 // it: the readiness read a poll makes would answer 400 and blank the card, and
@@ -389,6 +430,17 @@ const liveLink = descendants(get('auto-drain-live')).find(node => String(node.hr
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
 assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
 assert(get('auto-drain-live').querySelector('.drain-window-count').textContent.includes('This window: 1 running of 3 admitted'), 'live counts label this window separately from workspace slots');
+assert(!get('auto-drain-live').textContent.includes('Approving proposed tasks'), 'a window started without approve-proposed says nothing about it');
+approvalsFixture = { enabled: true, drain_run_id: drainRunId, approved_total: 3, approved: ['ORB-1'], awaiting_pilot: 1, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] };
+await fetchAndRenderOperations();
+const approvalsNode = get('auto-drain-live').querySelector('.drain-approvals');
+assert(approvalsNode?.textContent === 'Approving proposed tasks · 3 approved · 2 held', `the live window shows approve-proposed with counts: ${approvalsNode?.textContent}`);
+assert(String(approvalsNode.title).includes('1 × missing complexity') && String(approvalsNode.title).includes('ORB-9: pilot held'), `hold reasons are in the tooltip: ${approvalsNode.title}`);
+approvalsFixture = { enabled: true, drain_run_id: drainRunId };
+await fetchAndRenderOperations();
+assert(get('auto-drain-live').querySelector('.drain-approvals').textContent === 'Approving proposed tasks', 'a payload without counts shows only the flag');
+approvalsFixture = { enabled: false };
+await fetchAndRenderOperations();
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
@@ -763,6 +815,10 @@ assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('ro
 globalThis.setDrainFixturePhase = async (phase) => {
   drainPhase = phase;
   drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainFixtureApprovals = async (approvals) => {
+  approvalsFixture = approvals;
   await fetchAndRenderAutoDrainPane();
 };
 globalThis.setDrainFixtureReadiness = async ({ capacity = {}, tasks = null } = {}) => {

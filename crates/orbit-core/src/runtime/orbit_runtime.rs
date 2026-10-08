@@ -509,6 +509,12 @@ impl OrbitRuntime {
         self.coordination_write_owner.as_deref()
     }
 
+    /// The owner machine id when this runtime is a replica checkout, so a
+    /// surface can tell that owner-only drain controls are not offered here.
+    pub fn replica_owner_machine(&self) -> Option<&str> {
+        self.coordination_write_owner()
+    }
+
     /// Returns at most `limit` recent in-process session events, newest first.
     /// The log retains only the newest [`event_bus::SESSION_EVENT_CAPACITY`] events;
     /// session IDs remain stable when older events are discarded. Only returned events are cloned.

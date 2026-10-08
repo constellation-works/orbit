@@ -244,6 +244,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                         vec![
                             json!({"for_duration":"1m","complete":false}),
                             json!({"for_duration":"1m","complete":true}),
+                            json!({"for_duration":"1m","approve_proposed":true}),
                         ]
                     } else {
                         vec![body(path)]
@@ -256,7 +257,9 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             path == "/job-runs/:id/resume" && id == "jrun-resume-done";
                         let completion_auto =
                             path == "/workflows/auto" && probe_body["complete"] == true;
-                        let operator_only = completion_resume || completion_auto;
+                        let approve_auto =
+                            path == "/workflows/auto" && probe_body["approve_proposed"] == true;
+                        let operator_only = completion_resume || completion_auto || approve_auto;
                         if ORDINARY_WRITES.contains(&(method, path)) && !operator_only {
                             assert_ne!(
                                 payload["code"], "authorization_denied",
@@ -273,6 +276,9 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                             );
                             if completion_resume || completion_auto {
                                 assert_eq!(payload["operation"], "auto_drain.complete");
+                            }
+                            if approve_auto {
+                                assert_eq!(payload["operation"], "auto_drain.approve_proposed");
                             }
                         }
                     }

@@ -226,6 +226,15 @@ pub const DASHBOARD_AUTO_DRAIN_COMPLETE: GovernedOperation = GovernedOperation {
     rationale: "opting into automatic completion authorizes review -> done for every task the drain window ships, not only the ones visible at submission",
 };
 
+/// Opt-in `--approve-proposed` for a dashboard-submitted bounded auto-drain
+/// window (the `--approve-proposed` equivalent of `orbit run auto`).
+pub const DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED: GovernedOperation = GovernedOperation {
+    id: "auto_drain.approve_proposed",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "opting in lets every pass of the window approve qualifying proposed tasks into the backlog, including ones filed after submission",
+};
+
 /// Stop new admissions for the workspace's live auto-drain window from the
 /// dashboard (the `--stop` equivalent of `orbit run auto`) [ORB-12728].
 pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
@@ -585,6 +594,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
     DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,

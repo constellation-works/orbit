@@ -421,6 +421,13 @@ must still run here. If nothing allowed is runnable, each pass reports
 `no_runnable_crew` and requests nothing; restart without the flag or with a
 crew that runs here.
 
+A pull drain never approves `proposed` tasks: `--pull` conflicts with
+`--approve-proposed`, and only the owner approves work. The replica's dashboard
+Drain card follows the same rule: readiness reports `replica: true` and the
+**Proposed tasks** control is disabled with that reason. Start an
+approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
+qualifying** in the owner's Drain card) on the owner.
+
 This host should declare the same `workflow.required_validation_commands` as
 the owner, since the owner re-checks the evidence against its own list. An
 empty list is not a refusal: the drain starts with a `Note:` line saying no

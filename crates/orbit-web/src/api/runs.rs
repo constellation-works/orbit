@@ -5,7 +5,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP, DASHBOARD_JOB_RUN,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_STOP, DASHBOARD_JOB_RUN,
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_common::security::redaction::redact_all;
@@ -144,6 +145,11 @@ pub(super) struct AutoDrainBody {
     /// `review`, same as an omitted `--complete`.
     #[serde(default)]
     complete: bool,
+    /// Opt-in to approving qualifying `proposed` tasks on every pass of this
+    /// window, mirroring CLI `--approve-proposed`. Default leaves proposed
+    /// tasks for the operator, same as an omitted flag.
+    #[serde(default)]
+    approve_proposed: bool,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
     /// operator holds one.
     #[serde(default)]
@@ -180,15 +186,18 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// (`POST /workflows/auto?workspace=<id>`).
 ///
 /// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
-/// N] [--complete]`, reusing the same `submit_workspace_auto_run` runtime
-/// path. `?workspace` is required: a missing or blank selector returns 400
+/// N] [--complete] [--approve-proposed]`, reusing the same drain-submission
+/// runtime path the CLI does. `?workspace` is required: a missing or blank selector returns 400
 /// `workspace_required` and starts nothing, including when the server has a
 /// default workspace (`Ws` would otherwise select that default).
 /// `submit_workspace_auto_run` still enforces the workspace claim. The
 /// duration must be a bounded window, and opting into `CompletionPolicy::Done`
 /// is explicit and separately governed — it authorizes `review -> done` for
 /// every task the window ships, not only the ones visible now, so it is gated
-/// the same way `auto_task.mint`'s unconditional mint is.
+/// the same way `auto_task.mint`'s unconditional mint is. `approve_proposed`
+/// (CLI `--approve-proposed`) is likewise explicit and operator-gated: it lets
+/// the window approve qualifying proposed tasks, including ones filed after
+/// submission. A non-boolean value fails body parsing like any other bad field.
 pub(super) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -210,8 +219,17 @@ pub(super) async fn auto_drain_workflow_action(
     } else {
         orbit_core::CompletionPolicy::Review
     };
+    let approve_proposed = body.approve_proposed;
+    if approve_proposed
+        && let Err(denial) = authorized_caller(
+            &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+            state.operator_session(),
+        )
+    {
+        return authorization_denied(denial);
+    }
     match blocking("auto-drain workflow", move || {
-        runtime.submit_workspace_auto_run(
+        runtime.submit_workspace_auto_run_with_containment(
             Some(for_seconds),
             body.concurrency,
             completion,
@@ -222,6 +240,9 @@ pub(super) async fn auto_drain_workflow_action(
             Some("dashboard"),
             body.claim_token.as_deref(),
             JobRunTrigger::dashboard(),
+            // Strict worker containment is a CLI-only flag.
+            false,
+            approve_proposed,
         )
     })
     .await
@@ -233,6 +254,7 @@ pub(super) async fn auto_drain_workflow_action(
             "state": if invoke.queued { "queued" } else { "submitted" },
             "submitted_at": invoke.submitted_at,
             "completion": completion.as_input_value(),
+            "approve_proposed": approve_proposed,
         }))
         .into_response(),
         Err(response) => *response,
@@ -344,21 +366,42 @@ pub(super) async fn auto_drain_readiness(
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
     match blocking("auto-drain readiness", move || {
-        runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+        let mut payload = runtime.workspace_auto_readiness(
+            &[],
+            query.concurrency,
+            AUTO_DRAIN_READINESS_LIMIT,
+            &[],
+        )?;
+        // A replica executes through a pull drain, which cannot approve
+        // proposed tasks (`--pull` conflicts with `--approve-proposed`), so the
+        // form withholds that opt-in there.
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "replica".to_string(),
+                Value::Bool(runtime.replica_owner_machine().is_some()),
+            );
+        }
+        Ok(payload)
     })
     .await
     {
         Ok(mut payload) => {
-            // So the form can hide/disable the `complete` opt-in and the
-            // stop control before the operator ever hits the
-            // separately-governed 403 at submission. Both operations admit
-            // the same operator capability, so one flag describes both.
+            // So the form can hide/disable the `complete` and
+            // `approve_proposed` opt-ins and the stop control before the
+            // operator ever hits the separately-governed 403 at submission.
+            // All three operations admit the same operator capability, so one
+            // flag describes them.
             if let Some(object) = payload.as_object_mut() {
                 let operator_session = state.operator_session();
                 object.insert(
                     "controls_authorized".to_string(),
                     Value::Bool(
                         authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok()
+                            && authorized_caller(
+                                &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+                                operator_session,
+                            )
+                            .is_ok()
                             && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
                                 .is_ok(),
                     ),
