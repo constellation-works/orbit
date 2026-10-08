@@ -28,34 +28,112 @@ class GuardrailTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"))
+        self.targets = self.root / "targets.json"
+        self.env["GUARD_TEST_TARGETS"] = str(self.targets)
+        # A miniature libtest. Without a targets file every listing reports one
+        # `fixture_test`. With one (see `set_targets`) it honours target
+        # selection, the positional filter and `--exact`, so a guard that drops
+        # any of them lists different tests than the workflow would run.
+        self.write_executable(self.bin / "fixture_libtest.py", '''import json, os
+
+def load_targets():
+    path = os.environ["GUARD_TEST_TARGETS"]
+    return json.load(open(path)) if os.path.exists(path) else None
+
+def matches(test, filters, libtest_args):
+    if not filters:
+        return True
+    return test == filters[0] if "--exact" in libtest_args else filters[0] in test
+
+def list_target(target, filters, libtest_args):
+    return [test + ": test" for test in target["tests"] if matches(test, filters, libtest_args)]
+
+def cargo_listing(targets, cargo_args, libtest_args):
+    if targets is None:
+        return ["fixture_test: test"]
+    selectors, filters, index = [], [], 0
+    while index < len(cargo_args):
+        token = cargo_args[index]
+        if token in ("--test", "--bin"):
+            selectors.append((token[2:], cargo_args[index + 1]))
+            index += 1
+        elif token in ("--lib", "--bins"):
+            selectors.append((token[2:].rstrip("s"), None))
+        elif token == "-p":
+            index += 1
+        elif not token.startswith("-"):
+            filters.append(token)
+        index += 1
+    lines = []
+    for target in targets:
+        if selectors and not any(kind == target["kind"] and name in (None, target["name"])
+                                 for kind, name in selectors):
+            continue
+        lines += list_target(target, filters, libtest_args)
+    return lines
+''')
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixture_libtest
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
-    # `--no-run --message-format json`: report one test binary per package
-    # named in the fixture metadata, the way a workspace build does.
+    # `--no-run --message-format json`: report the test binaries of every
+    # package named in the fixture metadata, the way a workspace build does.
+    targets = fixture_libtest.load_targets()
+    if targets is None:
+        targets = [dict(name="fixture", kind="lib", binary=os.environ["GUARD_TEST_BIN"])]
     for package in json.load(open(os.environ["GUARD_TEST_METADATA"]))["packages"]:
-        print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
-                          "profile": {"test": True}, "executable": os.environ["GUARD_TEST_BIN"]}))
+        for target in targets:
+            print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
+                              "profile": {"test": True}, "executable": target["binary"],
+                              "target": {"name": target["name"], "kind": [target["kind"]]}}))
 elif sys.argv[1] == "test":
-    print("fixture_test: test")
+    args = sys.argv[2:]
+    split = args.index("--") if "--" in args else len(args)
+    for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
+        print(line)
 ''')
         # Stands in for a compiled test binary: logs its argv like the cargo
-        # stub and lists one libtest-style test.
+        # stub and lists the tests of the target it was built for.
         self.write_executable(self.bin / "fixture-test-bin", '''#!/usr/bin/env python3
 import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixture_libtest
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
-    log.write(json.dumps(["fixture-test-bin"] + sys.argv[1:]) + "\\n")
-print("fixture_test: test")
+    log.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\\n")
+targets = fixture_libtest.load_targets()
+if targets is None:
+    print("fixture_test: test")
+else:
+    target = next(t for t in targets if t["binary"].endswith(os.path.basename(sys.argv[0])))
+    args = sys.argv[1:]
+    filters = [a for a in args if not a.startswith("-")]
+    for line in fixture_libtest.list_target(target, filters, args):
+        print(line)
 ''')
         self.write_executable(self.bin / "rg", "#!/bin/bash\nexit 1\n")
 
     def write_executable(self, path, content):
         path.write_text(content)
         path.chmod(0o755)
+
+    def set_targets(self, *targets):
+        """Give the fixture package these (name, kind, tests) test targets."""
+        entries = []
+        for name, kind, tests in targets:
+            binary = self.bin / f"fixture-test-bin-{name}"
+            shutil.copy2(self.bin / "fixture-test-bin", binary)
+            entries.append(dict(name=name, kind=kind, tests=tests, binary=str(binary)))
+        self.targets.write_text(json.dumps(entries))
+
+    def set_macos_step(self, command):
+        workflow = self.root / ".github/workflows/ci-macos.yml"
+        workflow.write_text(workflow.read_text().replace(
+            "cargo test -p orbit-types fixture_test", command))
 
     def run_guard(self, name, *arguments):
         shutil.copy2(SCRIPTS / name, self.scripts / name)
@@ -68,7 +146,7 @@ print("fixture_test: test")
             self.write_executable(self.scripts / name, "#!/bin/bash\nexit 0\n")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         workflows = self.root / ".github/workflows"
-        workflows.mkdir(parents=True)
+        workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
         self.metadata.write_text(json.dumps(dict(
             packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
@@ -161,6 +239,60 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_forwards_target_selectors_and_exact_to_the_listing(self):
+        self.prepare_ci()
+        self.set_targets(("process", "test", ["update::runs"]), ("other", "test", ["update::runs"]))
+        self.set_macos_step("cargo test --no-fail-fast -p orbit-types --locked update:: --test process"
+                            " -- --exact --nocapture")
+        result = self.run_guard("check-ci-macos.sh")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "--test", "process",
+                                  "update::", "--", "--list", "--exact"]])
+
+    def test_macos_check_rejects_filter_matching_only_in_another_test_binary(self):
+        # `--test process` matches nothing when the module moved to another
+        # binary, even though the package still has a matching test elsewhere.
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("process", "test", ["other::runs"]), ("tool", "test", ["update::runs"]))
+                self.set_macos_step("cargo test -p orbit-types --locked update:: --test process")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("matched zero tests: orbit-types update:: --test process", result.stderr)
+
+    def test_macos_check_rejects_filter_matching_only_as_substring_under_exact(self):
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("tool", "test", ["plugin_cli_group::lockfile_upgrade_renamed"]))
+                self.set_macos_step("cargo test -p orbit-types --locked plugin_cli_group::lockfile_upgrade"
+                                    " --test tool -- --exact")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("matched zero tests", result.stderr)
+
+    def test_macos_check_accepts_filters_that_the_selected_target_runs(self):
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("process", "test", ["update::runs"]),
+                                 ("tool", "test", ["plugin_cli_group::lockfile_upgrade"]))
+                self.set_macos_step("cargo test -p orbit-types --locked update:: --test process\n"
+                                    "      - run: cargo test -p orbit-types --locked"
+                                    " plugin_cli_group::lockfile_upgrade --test tool -- --exact")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_macos_check_rejects_missing_selected_target_in_workspace_build(self):
+        self.prepare_ci()
+        self.set_targets(("tool", "test", ["update::runs"]))
+        self.set_macos_step("cargo test -p orbit-types --locked update:: --test process")
+        result = self.run_guard("check-ci-macos.sh", "--workspace-build")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("no test binary matching --test process", result.stderr)
 
     def test_macos_check_rejects_unknown_flags(self):
         self.prepare_ci()
