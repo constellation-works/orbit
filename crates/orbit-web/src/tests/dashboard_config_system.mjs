@@ -145,7 +145,12 @@ const globalFile = () => ({
 const effective = () => ({
   scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
   sections: [
-    { token: 'delivery', title: 'Delivery', blurb: 'delivery settings', key_prefix: 'workflow', kind: 'keys', counts: { set: 1, unset: 0, total: 1 }, keys: [
+    { token: 'machine', title: 'Machine (machine.*)', blurb: 'machine identity', key_prefix: 'machine', kind: 'keys', counts: { set: 3, default: 0, unset: 0, total: 3 }, keys: [
+      { key: 'machine.id', label: 'id', value: 'hm_fixture', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Generated machine identity' },
+      { key: 'machine.task_prefix', label: 'task_prefix', value: 'HF', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Task ID namespace' },
+      { key: 'machine.name', label: 'name', value: 'http-fixture', value_type: 'string', state: 'set', settable: true, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Display name' },
+    ] },
+    { token: 'delivery', title: 'Delivery (workflow.*)', blurb: 'delivery settings', key_prefix: 'workflow', kind: 'keys', counts: { set: 1, unset: 0, total: 1 }, keys: [
       ...Object.keys(defaults).map(name => name in workspaceSet
         ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
         : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
@@ -187,7 +192,11 @@ const fetch = async (path, options = {}) => {
   requests.push({ path: url.pathname + url.search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
   if (url.pathname === '/api/config/file') return fileFailure ? response(fileFailure.body, fileFailure.status) : response(globalFile());
   if (url.pathname === '/api/config/effective') return response(effective());
-  if (url.pathname === '/api/config/keys') return response({ keys: [] });
+  if (url.pathname === '/api/config/keys') return response({ keys: [
+    { key: 'machine.id', value_type: 'string', section: 'machine', description: 'Generated machine identity', settable: false, options: [] },
+    { key: 'machine.task_prefix', value_type: 'string', section: 'machine', description: 'Task ID namespace', settable: false, options: [] },
+    { key: 'machine.name', value_type: 'string', section: 'machine', description: 'Display name', settable: true, options: [] },
+  ] });
   if (url.pathname === '/api/host/resources') return hostPayload ? response(hostPayload) : response({ error: 'down' }, 503);
   if (options.method === 'PUT' && url.pathname.startsWith('/api/config/keys/')) {
     const name = decodeURIComponent(url.pathname.slice('/api/config/keys/'.length)).slice(KEY.length);
@@ -254,6 +263,36 @@ assert.ok(classesOf(cell('memory_high_percent')).includes('overridden'));
 assert.match(named(cell('memory_high_percent'), 'config-source')[1].title, /that value wins for this workspace's runtimes/);
 assert.equal(classesOf(cell('cpu_high_percent')).includes('overridden'), false);
 assert.equal(named(body, 'config-filter').length, 0, 'there is no key filter on the throttle panel');
+
+// ---- immutable identity rows stay read-only and section headings show a prefix once ----
+setConfigSubtab('effective');
+await fetchAndRenderConfig();
+for (const key of ['machine.id', 'machine.task_prefix']) {
+  const row = named(body, 'config-row').find(node => node.dataset.key === key);
+  assert.ok(row, `${key} renders in Effective`);
+  assert.equal(named(row, 'config-pencil').length, 0, `${key} has no edit button`);
+  const main = named(row, 'config-row-main')[0];
+  assert.equal(classesOf(main).includes('clickable'), false, `${key} is not click-to-edit`);
+  main.dispatch('click');
+  assert.equal(named(body, 'config-editor').length, 0, `${key} click opens no editor`);
+}
+const sectionTitles = textOf(body, 'config-section-title');
+for (const [title, prefix] of [['Machine (machine.*)', 'machine.*'], ['Delivery (workflow.*)', 'workflow.*']]) {
+  const heading = sectionTitles.find(value => value === title);
+  assert.ok(heading, `${title} section heading renders`);
+  assert.equal(heading.split(prefix).length - 1, 1, `${title} shows its key prefix once`);
+}
+assert.equal(named(body, 'config-section-prefix').length, 0, 'section headers do not add a second prefix');
+
+setConfigSubtab('keys');
+await fetchAndRenderConfig();
+const listedKeys = named(body, 'config-key-row').map(node => node.textContent);
+assert.equal(listedKeys.length, 1, 'Keys lists only writable registry keys');
+assert.match(listedKeys[0], /machine\.name/);
+assert.doesNotMatch(listedKeys.join(' '), /machine\.(id|task_prefix)/);
+
+setConfigSubtab('system');
+await fetchAndRenderConfig();
 
 // ---- edit round-trip ----
 edit('cpu_high_percent');
