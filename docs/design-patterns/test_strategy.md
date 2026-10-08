@@ -49,6 +49,10 @@ These are not admitted:
 
 Regression tests follow STD-04 §R1: drive the entry point production callers use. A bug found at a boundary gets its regression test at that boundary.
 
+## Growth ratchet
+
+`scripts/unit-test-inventory.py` counts the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. `make ci-fast` fails when a crate's count rises above [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json). The change that adds unit tests must raise the baseline too, so the growth appears as a reviewed diff. Run `scripts/unit-test-inventory.py` for the current counts, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to record them.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

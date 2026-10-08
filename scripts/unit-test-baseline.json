@@ -1,0 +1,56 @@
+{
+  "crates": {
+    "orbit-agent": {
+      "test_functions": 26
+    },
+    "orbit-automation": {
+      "test_functions": 36
+    },
+    "orbit-cli": {
+      "test_functions": 30
+    },
+    "orbit-cmd": {
+      "test_functions": 27
+    },
+    "orbit-common": {
+      "test_functions": 39
+    },
+    "orbit-config": {
+      "test_functions": 37
+    },
+    "orbit-core": {
+      "test_functions": 296
+    },
+    "orbit-engine": {
+      "test_functions": 95
+    },
+    "orbit-exec": {
+      "test_functions": 57
+    },
+    "orbit-mcp": {
+      "test_functions": 25
+    },
+    "orbit-policy": {
+      "test_functions": 12
+    },
+    "orbit-registry": {
+      "test_functions": 10
+    },
+    "orbit-search": {
+      "test_functions": 2
+    },
+    "orbit-store": {
+      "test_functions": 56
+    },
+    "orbit-tools": {
+      "test_functions": 24
+    },
+    "orbit-types": {
+      "test_functions": 43
+    },
+    "orbit-web": {
+      "test_functions": 45
+    }
+  },
+  "schema_version": 1
+}
