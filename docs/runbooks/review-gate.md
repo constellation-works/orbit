@@ -106,7 +106,8 @@ the manifest and certificate record `evidence_carried` (`from_tree`,
 `rerequested` with the reason (`patch_changed`, `source_unavailable`) and the
 review holds again for evidence on the new tree. An operator status decision or changed task
 meaning prevents automatic receipt from overriding that decision. Held runs
-are settled outcomes for pipeline waits and are excluded from reliability's
+are settled outcomes for pipeline waits, pass the parent's success guard
+(reported as `held_count`), and are excluded from reliability's
 success/failure denominator.
 
 ## 2. Inspect
