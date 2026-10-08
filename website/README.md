@@ -93,10 +93,13 @@ node website/scripts/check-inline-code.mjs \
 ```
 
 The script discovers every built HTML page and checks 375, 768, 1280 and 1440px
-in both site themes with web fonts loaded. It opens disclosures, selects each
-provider panel, measures glyph line breaks and code/container bounds, checks
-mobile page overflow, and verifies the agents provider table's width and borders.
-It saves measurements and failure screenshots in the evidence directory.
+in both site themes with web fonts loaded. It also checks
+`/reference/config/` at 320, 1024, 1152 and 1920px in both themes, including
+code clipping, delimiter-only line breaks, single-line desktop keys, and table
+and page width. It opens disclosures, selects each provider panel, measures
+glyph line breaks and code/container bounds, checks mobile page overflow, and
+verifies the agents provider table's width and borders. It saves measurements
+and failure screenshots in the evidence directory.
 
 When changing a Markdown plugin, run
 `ASTRO_TELEMETRY_DISABLED=1 npm exec -- astro sync --force` in `website/`
