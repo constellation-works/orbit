@@ -409,6 +409,10 @@ impl crate::OrbitRuntime {
             match self
                 .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
             {
+                Some(PilotAdmissionHold::HostOperational(hold)) => {
+                    self.record_host_operational_hold(&task.id, &hold)?;
+                    admission_holds.insert(task.id.clone(), hold.detail());
+                }
                 Some(PilotAdmissionHold::OperatorValidation(hold)) => {
                     self.record_operator_validation_hold(&task.id, &hold)?;
                     admission_holds.insert(task.id.clone(), hold.detail());
@@ -434,6 +438,7 @@ impl crate::OrbitRuntime {
                 comments,
                 &|| Ok(history.to_vec()),
             )? {
+                Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                 Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
                 Some(PilotAdmissionHold::NativeOs(hold)) => Ok(hold.wait_on(task, request.os)),
                 _ => Ok(None),

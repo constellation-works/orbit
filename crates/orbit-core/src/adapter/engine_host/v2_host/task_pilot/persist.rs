@@ -190,6 +190,16 @@ pub(super) fn apply_task(
             let operator_hold = (!requirements.is_empty()).then(|| {
                 crate::application::task::OperatorValidationHold::new(&assessed, requirements)
             });
+            let host_operational_hold = (task.assessment["disposition"] == "host_operational")
+                .then(|| {
+                    crate::application::task::HostOperationalHold::new(
+                        &assessed,
+                        task.assessment["evidence"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                });
             // Recorded whatever the task's tags are now: admission compares it
             // with the tags each time, so adding the matching `os:` tag
             // satisfies it and removing that tag restores it.
@@ -217,11 +227,17 @@ pub(super) fn apply_task(
                     .as_ref()
                     .map(|hold| hold.history(&task.operation_id))
                     .into_iter()
+                    .chain(
+                        host_operational_hold
+                            .as_ref()
+                            .map(|hold| hold.history(&task.operation_id)),
+                    )
                     .chain(crew_redraw_history)
                     .collect(),
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
                     "operator_validation_hold": operator_hold,
+                    "host_operational_hold": host_operational_hold,
                     "native_os_hold": native_os_hold,
                     "context_files_before": snapshot.context_files,
                     "complexity_before": snapshot.complexity,

@@ -331,6 +331,7 @@ pub fn explain_workspace_auto_readiness(
                     BacklogTaskExclusionReason::PilotDuplicate
                     | BacklogTaskExclusionReason::PilotAlreadyLanded
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
+                    | BacklogTaskExclusionReason::HostOperationalHandoff
                     | BacklogTaskExclusionReason::NativeOsRequired
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing => {
                         object.insert("reason".to_string(), json!(excluded.reason));

@@ -63,9 +63,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     runtime
-        .record_backlog_operator_validation_holds()
+        .record_backlog_pilot_operator_handoffs()
         .map_err(|error| {
-            action_failed(action, format!("record operator validation holds: {error}"))
+            action_failed(action, format!("record pilot operator handoffs: {error}"))
         })?;
 
     let submitted_max_active_leaf_runs = templated_u64(

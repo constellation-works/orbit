@@ -95,6 +95,8 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     PilotAlreadyLanded,
     /// Current validation needs an operator-reserved governed operation.
     OperatorValidationHandoff,
+    /// The latest assessment identifies operator-side work no managed lane can perform.
+    HostOperationalHandoff,
     /// The latest applied pilot assessment found a criterion that needs
     /// native evidence from an OS this host does not run, and the task's
     /// `os:` tags do not name that OS. `detail` names the criterion and the
@@ -191,10 +193,10 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     runtime
-        .record_backlog_operator_validation_holds()
+        .record_backlog_pilot_operator_handoffs()
         .map_err(|error| DispatchError::DeterministicActionFailed {
             action: action.into(),
-            message: format!("record operator validation holds: {error}"),
+            message: format!("record pilot operator handoffs: {error}"),
         })?;
     let max_tasks = input
         .get("max_tasks")
@@ -862,6 +864,10 @@ fn pilot_finding_exclusion(
     })?;
     Ok(hold.and_then(|hold| {
         let (reason, detail) = match hold {
+            PilotAdmissionHold::HostOperational(hold) => (
+                BacklogTaskExclusionReason::HostOperationalHandoff,
+                hold.detail(),
+            ),
             PilotAdmissionHold::OperatorValidation(hold) => (
                 BacklogTaskExclusionReason::OperatorValidationHandoff,
                 hold.detail(),

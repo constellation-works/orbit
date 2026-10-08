@@ -122,6 +122,91 @@ fn apply_validation_assessment(pair: &Pair, criterion: &str) {
     apply_assessment(pair, criterion, json!({}));
 }
 
+#[test]
+fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
+    if !isolated(
+        module_path!(),
+        "owner_pull_holds_host_operational_until_a_decision_or_newer_assessment",
+    ) {
+        return;
+    }
+    for release in ["approve-anyway", "selectors"] {
+        let pair = Pair::new(1);
+        apply_assessment(
+            &pair,
+            "The owner-side repair is observable.",
+            json!({
+                "disposition": "host_operational", "context_files_after": [],
+                "evidence": "Only the operator can repair the owner-side definition.",
+            }),
+        );
+        let drain = pair.start_drain();
+        let first = pair.pass(&drain);
+        assert!(first["error"].is_null(), "{first}");
+        assert!(pair.owner_claims().is_empty());
+        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+        let records = pair.follower_jobs.local_pull_admissions().unwrap();
+        let receipt = records
+            .iter()
+            .filter_map(|record| record.receipt.as_ref())
+            .next()
+            .unwrap();
+        assert_eq!(receipt.queue_depth, 0);
+        assert!(
+            receipt
+                .deferred_conflicts
+                .iter()
+                .any(|entry| entry.task_id == pair.tasks[0]
+                    && entry.reason.contains("host_operational")
+                    && entry
+                        .reason
+                        .contains("Only the operator can repair the owner-side definition.")),
+            "{receipt:?}"
+        );
+        let history = pair.wire.owner.get_task_history(&pair.tasks[0]).unwrap();
+        let hold = history
+            .iter()
+            .find(|entry| entry.event == "host_operational_held")
+            .unwrap();
+        let record: Value = serde_json::from_str(hold.note.as_deref().unwrap()).unwrap();
+        assert_eq!(record["disposition"], "host_operational");
+        if release == "selectors" {
+            apply_assessment(&pair, "The owner-side repair is observable.", json!({}));
+        } else {
+            pair.wire.owner.update_task_as_human(&pair.tasks[0], orbit_core::application::task::TaskUpdateParams {
+                comment: Some("task-pilot-admission: approve-anyway\nThe operator reviewed the handoff and accepts admission.".into()),
+                ..Default::default()
+            }, "human:fixture".into()).unwrap();
+        }
+        let second = pair.pass(&drain);
+        assert!(launch_refused(&second), "{second}");
+        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+    }
+}
+
+#[test]
+fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
+    if !isolated(
+        module_path!(),
+        "owner_pull_admits_selectors_and_verified_no_diff_dispositions",
+    ) {
+        return;
+    }
+    for disposition in ["selectors", "verified_no_diff"] {
+        let pair = Pair::new(1);
+        let findings = if disposition == "verified_no_diff" {
+            json!({"disposition": disposition, "context_files_after": [], "evidence": "The operator verified that no repository edit is needed."})
+        } else {
+            json!({})
+        };
+        apply_assessment(&pair, "The repair is observable.", findings);
+        let drain = pair.start_drain();
+        let first = pair.pass(&drain);
+        assert!(launch_refused(&first), "{first}");
+        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+    }
+}
+
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
 fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
