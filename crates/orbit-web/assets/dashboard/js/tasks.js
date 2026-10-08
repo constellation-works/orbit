@@ -439,14 +439,14 @@ function filterTasks(tasks, context) {
 
 const TASK_META_FIELDS = [
   ["orchestrator", "orchestrator"],
-  ["implemented_by", "implemented_by"],
-  ["planned_by", "planned_by"],
-  ["created_by", "created_by"],
-  ["pr_number", "pr"],
-  ["pr_status", "pr_status"],
-  ["job_run_id", "job_run"],
-  ["created_at", "created"],
-  ["updated_at", "updated"],
+  ["implemented_by", "Implemented by"],
+  ["planned_by", "Planned by"],
+  ["created_by", "Created by"],
+  ["pr_number", "PR"],
+  ["pr_status", "PR status"],
+  ["job_run_id", "Run"],
+  ["created_at", "Created"],
+  ["updated_at", "Updated"],
 ];
 
 const RELATION_GROUPS = [
@@ -1976,6 +1976,9 @@ function buildTaskDetail(task, context) {
           }),
         );
       }
+      // The execution note is a separate element; the space keeps its text
+      // from reading as part of the run id.
+      value.appendChild(document.createTextNode(" "));
       value.appendChild(
         buildExecutionProvenance(
           machine && machine.machine_id

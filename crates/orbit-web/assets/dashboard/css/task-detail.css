@@ -85,6 +85,11 @@
   font-size: 11px;
   text-align: right;
 }
+/* The run line stacks the run id, its no-local-run note and the execution
+   note; each is its own line so the notes never run on from the id. */
+.detail-side .meta-item .value > span {
+  display: block;
+}
 .detail-side .meta-item .value a,
 .external-ref-line a {
   color: var(--accent);
@@ -176,7 +181,7 @@
   align-items: flex-end;
 }
 .property-row .detail-tag-row {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 .detail-tag-row .chip {
   cursor: default;
