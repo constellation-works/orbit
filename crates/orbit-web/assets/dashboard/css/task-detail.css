@@ -652,6 +652,19 @@ input.field-editor-input {
   max-width: 72ch;
 }
 .comment-body h2 { scroll-margin-top: 48px; }
+.pilot-assessment-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+}
+.pilot-assessment-fields dt, .pilot-assessment-label { color: var(--fg-dim); }
+.pilot-assessment-fields dd { margin: 0; overflow-wrap: anywhere; }
+.pilot-assessment-label { margin-top: 12px; }
+@media (max-width: 600px) {
+  .pilot-assessment-fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .pilot-assessment-fields dd { margin-bottom: 6px; }
+}
 .comment-raw {
   font-family: var(--font-mono);
   font-size: 11px;

@@ -22,6 +22,7 @@ mod crew_effort_admission;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
 mod local_read_projections_cli;
+mod pilot_comments;
 mod reconcile_review;
 mod review_after_landing_cli;
 mod shared_root_task_isolation;

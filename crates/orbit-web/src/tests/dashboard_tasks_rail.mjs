@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { task as pilotTask, assessment, message as pilotMessage } from '../../tests/http_api/pilot_comment_fixture.mjs';
 
 const classesOf = node => String(node.className || '').split(/\s+/).filter(Boolean);
 class Node {
@@ -210,6 +211,55 @@ const historyLines = byId['tasks-body'].querySelectorAll('.history-line').map(li
 assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
 assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
 assert.ok(historyLines.some(line => line.includes(': status_changed')), historyLines.join('\n'));
+
+// Drive comment presentation through the shipped task detail renderer and raw control.
+const openTask = fixture => {
+  paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [fixture]);
+  const title = byId['tasks-body'].querySelector('.row button.title');
+  title.parentNode.dispatch('click', { target: title });
+  return byId['tasks-body'].querySelector('.comment-card');
+};
+const card = openTask(pilotTask);
+const body = card.querySelector('.comment-body');
+const labels = body.querySelectorAll('dt').map(node => node.textContent);
+const values = body.querySelectorAll('dd').map(node => node.textContent);
+const fields = Object.fromEntries(labels.map((label, index) => [label, values[index]]));
+assert.equal(fields.Disposition, assessment.disposition);
+assert.equal(fields.Confidence, assessment.confidence);
+assert.equal(fields['Recommended crew'], `implementer → ${assessment.recommended_crew}`);
+assert.equal(fields['Recommended complexity'], `low → ${assessment.recommended_complexity}`);
+assert.equal(fields.Rationale, assessment.assessment_rationale);
+assert.equal(fields['Duplicate of'], `${assessment.duplicate_of.task_id} · ${assessment.duplicate_of.evidence}`);
+assert.equal(fields['Already landed'], assessment.already_landed.evidence);
+for (const value of [...assessment.evidence_gaps, ...assessment.reassessment_triggers, ...assessment.blocked_by]) {
+  assert.ok(body.querySelectorAll('li').some(node => node.textContent === value), value);
+}
+assert.ok(!body.textContent.includes('{"'), 'default view presents fields rather than serialized JSON');
+assert.ok(!card.classList.contains('collapsed'), 'assessment fields are visible without expanding the original JSON');
+const raw = card.querySelector('.comment-raw');
+assert.equal(raw.textContent, pilotMessage);
+assert.equal(raw.style.display, 'none');
+const rawToggle = card.querySelectorAll('button').find(button => button.textContent === 'raw');
+rawToggle.dispatch('click');
+assert.equal(body.style.display, 'none');
+assert.equal(raw.style.display, '');
+assert.equal(raw.textContent, pilotMessage, 'raw control shows the original receipt bytes');
+rawToggle.dispatch('click');
+assert.equal(body.style.display, '');
+
+for (const [index, comment] of [
+  { by: 'task-pilot', message: `operation_id=${'b'.repeat(64)}\n{"assessment":broken` },
+  { by: 'human:fixture', message: pilotMessage },
+  { by: 'task-pilot', message: `operation_id=invalid\n${JSON.stringify({ assessment })}` },
+  { by: 'task-pilot', message: `operation_id=${'c'.repeat(64)}\n{"assessment":{}}` },
+].entries()) {
+  const fallback = openTask({ ...pilotTask, id: `ORB-${80 + index}`, comments: [comment] });
+  assert.equal(fallback.querySelector('.comment-body').textContent, comment.message, 'unrecognized comment retains the Markdown/plain-text fallback');
+  assert.equal(fallback.querySelector('.comment-raw').textContent, comment.message);
+}
+const plain = openTask({ ...pilotTask, id: 'ORB-90', comments: [{ ...pilotTask.comments[0], message: `operation_id=${'d'.repeat(64)}\n${JSON.stringify({ assessment: { ...assessment, assessment_rationale: '<img src=x onerror=alert(1)>' } })}` }] });
+assert.ok(plain.querySelector('.comment-body').textContent.includes('<img src=x onerror=alert(1)>'));
+assert.equal(plain.querySelectorAll('img').length, 0, 'assessment fields are text, never executable markup');
 
 // No pagination metadata: the rail falls back to the rows it was given.
 common.setWorkspace('ws_orbit');
