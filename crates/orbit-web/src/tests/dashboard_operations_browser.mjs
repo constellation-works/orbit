@@ -706,6 +706,7 @@ try {
     };
   });
   if (!header.actionsInHeader || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
   for (const selector of ['#refresh-btn', '#global-drain-state', ...['cpu', 'memory', 'disk'].map(resource => `#host-resource-chips [data-resource="${resource}"]`)]) {
     await page.locator(selector).focus();
     await page.locator(selector).scrollIntoViewIfNeeded();
