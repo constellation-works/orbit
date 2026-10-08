@@ -1,7 +1,7 @@
 //! Legacy auto-task scheduling cursor contracts.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// On-disk shape of `<orbit_dir>/state/auto-tasks.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -9,6 +9,21 @@ pub struct AutoTaskCursorState {
     /// Definition name → cursor.
     #[serde(default)]
     pub definitions: BTreeMap<String, AutoTaskCursor>,
+    /// Inactive-plugin skips already warned about in this workspace. Each
+    /// clock tick is a new process, so the record lives here, not in memory.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub inactive_plugin_warnings: BTreeSet<InactivePluginWarning>,
+}
+
+/// One plugin-inactive auto-task skip that has been warned about once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InactivePluginWarning {
+    /// Skipped definition name.
+    pub definition: String,
+    /// Plugin namespace that seeded the definition.
+    pub plugin: String,
+    /// Seeded plugin version.
+    pub version: String,
 }
 
 /// One definition's scheduling cursor on this host.

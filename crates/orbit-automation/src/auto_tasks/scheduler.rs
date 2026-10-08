@@ -10,11 +10,9 @@ use orbit_store::compose::auto_task::{
 };
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
-    SkipIfUnchanged,
+    InactivePluginWarning, SkipIfUnchanged,
 };
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// A plugin-inactive skip with stable provenance for warning deduplication.
 pub struct InactivePluginSkip {
@@ -25,9 +23,6 @@ pub struct InactivePluginSkip {
     /// Operator-facing explanation.
     pub reason: String,
 }
-
-type SkipWarningKey = (PathBuf, String, String, String);
-static SKIP_WARNINGS: OnceLock<Mutex<HashSet<SkipWarningKey>>> = OnceLock::new();
 
 #[cfg(test)]
 use std::sync::{Arc, Barrier};
@@ -184,19 +179,12 @@ fn fire_definition(
 ) -> Result<AutoTaskFireReport, OrbitError> {
     // A plugin-seeded definition whose plugin is inactive cannot admit work.
     if let Some(skip) = host.skip_reason(definition) {
-        let workspace = host.state_dir();
-        let key = (
-            workspace.canonicalize().unwrap_or(workspace),
-            definition.name.clone(),
-            skip.plugin,
-            skip.version,
-        );
-        let first = SKIP_WARNINGS
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key);
-        if first {
+        let warning = InactivePluginWarning {
+            definition: definition.name.clone(),
+            plugin: skip.plugin,
+            version: skip.version,
+        };
+        if first_inactive_plugin_warning(state_path, warning, options.dry_run) {
             tracing::warn!(
                 target: "orbit.automation.auto_tasks",
                 auto_task = %definition.name,
@@ -253,6 +241,34 @@ fn fire_definition(
         }
         fire_locked(host, definition, session, now)
     })
+}
+
+/// Whether this workspace has not yet warned about `warning`. The record
+/// lives in the cursor state file because every clock tick is a new process.
+/// A dry run records nothing. State that cannot be read or written warns
+/// rather than hiding the skip.
+fn first_inactive_plugin_warning(
+    state_path: &Path,
+    warning: InactivePluginWarning,
+    dry_run: bool,
+) -> bool {
+    let recorded = load_cursor_state(state_path)
+        .is_ok_and(|state| state.inactive_plugin_warnings.contains(&warning));
+    if recorded {
+        return false;
+    }
+    if dry_run {
+        return true;
+    }
+    // Recheck under the lock so overlapping ticks warn once between them.
+    with_cursor_lock(state_path, |session| {
+        if !session.state.inactive_plugin_warnings.insert(warning) {
+            return Ok(false);
+        }
+        session.save()?;
+        Ok(true)
+    })
+    .unwrap_or(true)
 }
 
 /// Admission acts only on the revision discovery loaded. Deletion and the

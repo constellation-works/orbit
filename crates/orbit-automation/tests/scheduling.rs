@@ -60,15 +60,22 @@ fn isolated(test: &str) -> bool {
         return false;
     }
     let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-    let home = fixture.path().join("home");
-    std::fs::create_dir(&home).unwrap();
+    run_child(test, fixture.path());
+    true
+}
+
+/// Run one isolated child of `test` with `dir` as its working directory, so
+/// successive children can share a fixture root.
+fn run_child(test: &str, dir: &Path) {
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
     command
         .args([test, "--exact", "--nocapture", "--test-threads=1"])
-        .current_dir(fixture.path())
+        .current_dir(dir)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env_remove("ORBIT_HOME")
@@ -82,7 +89,6 @@ fn isolated(test: &str) -> bool {
         "{test}: {stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    true
 }
 
 #[test]
@@ -854,4 +860,67 @@ fn inactive_plugin_warning_is_deduplicated_across_scheduler_passes() {
         ],
         "repeat passes must downgrade while a new version or workspace warns once"
     );
+}
+
+/// Each clock tick is a new process, so the warned key must outlive the
+/// process: two ticks against one root warn once in total.
+#[test]
+fn inactive_plugin_warning_is_deduplicated_across_clock_tick_processes() {
+    const TEST: &str = "inactive_plugin_warning_is_deduplicated_across_clock_tick_processes";
+    let levels_path = Path::new("levels.log");
+    if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() != Ok(TEST) {
+        let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        run_child(TEST, fixture.path());
+        run_child(TEST, fixture.path());
+        let levels = std::fs::read_to_string(fixture.path().join(levels_path)).unwrap();
+        assert_eq!(
+            levels.lines().collect::<Vec<_>>(),
+            ["WARN", "DEBUG"],
+            "the second tick process must not repeat the first one's warning"
+        );
+        return;
+    }
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    struct Capture(Arc<Mutex<Vec<tracing::Level>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit.automation.auto_tasks" {
+                self.0.lock().unwrap().push(*event.metadata().level());
+            }
+        }
+    }
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    std::fs::create_dir_all(root.join("auto_tasks")).unwrap();
+    std::fs::write(root.join("auto_tasks/parked.yaml"), "schemaVersion: 1\nname: parked\nenabled: true\nschedule:\n  every_minutes: 60\ndedupe: always\ntemplate:\n  title: Parked fixture\n").unwrap();
+    let host = AutoHost {
+        root,
+        minted: Cell::new(0),
+        skip_version: RefCell::new(Some("1.0".into())),
+    };
+    let levels = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(levels.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        let outcome = run_auto_task_scheduler_at(
+            &host,
+            at("2026-10-07T00:00:00Z"),
+            SchedulerOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.reports[0].action, "skipped");
+    });
+    assert_eq!(host.minted.get(), 0);
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(levels_path)
+        .unwrap();
+    for level in levels.lock().unwrap().iter() {
+        writeln!(log, "{level}").unwrap();
+    }
 }

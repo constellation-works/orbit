@@ -124,8 +124,12 @@ Resume `/api/log/stream` with `from` and `agent_from`; SSE `Last-Event-ID`
 overrides them and uses `operational:agent` cursors for split feeds. Legacy
 numeric IDs still resume the operational cursor.
 
-Plugin-inactive auto-task skips warn once per workspace, definition, and seeded
-plugin version in each process; repeat scheduler passes log the skip at DEBUG.
+Plugin-inactive auto-task skips warn once per workspace, definition, plugin, and
+seeded plugin version. The warned keys persist in the workspace's
+`state/auto-tasks.json`, so later scheduler passes, including each new clock-tick
+process, log the skip at DEBUG. A job step skipped because its `when:` guard was
+false logs `orbit.job.step_skipped` at INFO; other skips, such as a step a resumed
+run already completed, stay at WARN.
 
 Rotation is implemented in `crates/orbit-common/src/observability/log_rotation.rs`.
 

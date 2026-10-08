@@ -12,7 +12,7 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
                 ctx.task_id(),
                 V2AuditEventKind::StepSkipped {
                     step_id: step.id.clone(),
-                    reason: format!("when:{expr} => false"),
+                    reason: when_false_skip_reason(expr),
                 },
             );
             return Ok(StepOutcome {

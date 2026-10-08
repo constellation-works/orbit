@@ -690,6 +690,64 @@ fn items_expression_rejects_non_array_json() {
     }
 }
 
+/// A step whose `when:` guard is false is ordinary control flow and logs its
+/// skip at INFO; a skip that is not a guard decision, such as a resumed step,
+/// stays at WARN so the operational feed still shows it.
+#[test]
+fn when_false_step_skips_log_below_warn_and_other_skips_keep_warn() {
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    struct StepId(Option<String>);
+    impl tracing::field::Visit for StepId {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "step_id" {
+                self.0 = Some(value.to_string());
+            }
+        }
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+    struct Capture(Arc<Mutex<Vec<(String, tracing::Level)>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit.job.step_skipped" {
+                let mut step = StepId(None);
+                event.record(&mut step);
+                self.0.lock().unwrap().push((
+                    step.0.expect("step_skipped names its step"),
+                    *event.metadata().level(),
+                ));
+            }
+        }
+    }
+
+    let mut guarded = probe_step("guarded", probe_input('+', 1));
+    guarded["when"] = json!("{{ input.flag }} == true");
+    let job = job_asset(json!([probe_step("done", probe_input('+', 0)), guarded]));
+    let input = json!({ "flag": false });
+    let mut resume = PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+    resume.step_outputs.insert(0, json!({}));
+    resume.step_states.insert(0, JobRunState::Success);
+
+    let skips = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(skips.clone()));
+    let run = tracing::subscriber::with_default(subscriber, || {
+        run_graph_job_with_resume(&job, input, Some(&resume))
+    });
+    assert!(run.succeeded(), "{:?}", run.result);
+    assert!(run.host.calls().is_empty(), "neither step dispatches");
+    assert_eq!(
+        *skips.lock().unwrap(),
+        [
+            ("done".to_string(), tracing::Level::WARN),
+            ("guarded".to_string(), tracing::Level::INFO),
+        ],
+        "a resume skip warns; a false when: guard does not"
+    );
+}
+
 /// One kind character per branch, worker or iteration: `+` succeeds, `-`
 /// fails, `!` panics.
 fn probe_input(kind: char, index: usize) -> Value {
