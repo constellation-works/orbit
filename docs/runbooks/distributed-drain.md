@@ -536,19 +536,34 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   leaf could not reach the owner), `baseline_red` (required validation fails
   on the base exactly as on the candidate; the owner holds the task until the
   base passes), `transient` (validation could not reach the network after its
-  reruns, the forge kept refusing the leaf's push past its backoff
+  reruns, the forge kept refusing the leaf's push past its retry window
   (`[forge_unavailable]`), or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
-  breaker does not count a release. After `operator_cancel` or `transient`,
-  the drain stops offering that crew for the rest of its window. After
+  breaker does not count a release. When the forge refuses a claimed PR
+  leaf's push for a server-side reason (`Internal Server Error`, `Service
+  Unavailable` and the like), the leaf keeps its claim and retries the push
+  of the same reviewed head, past the usual backoff budget, for up to two
+  hours from the first refusal (the pipeline's `forge_retry.window_ms`). The
+  claim stays live and the leaf's runtime stays busy, so an upgrade waits
+  for it as for a long agent step. Once the forge accepts, the same leaf
+  pushes that head and opens the pull request without implementing or
+  reviewing again. When the window closes first, the leaf releases the claim
+  as `transient` and the release names the held head, its target ref, the
+  attempts and the first refusal; that candidate then stays only on the
+  follower. A forge release blames neither the crew nor the host: the drain
+  keeps offering both, and the owner may hand the task straight back to the
+  same drain, whose next claim continues the kept candidate. After
+  `operator_cancel` or any other `transient` release, the drain stops
+  offering that crew for the rest of its window. After
   `provider`, an authentication failure stops every crew of that provider
   (an `anthropic` crew is the same provider as `claude`); a capacity failure
   stops only the crew the leaf ran.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
   `crews.host_suppressed`); fix the host and start a new drain. In either
-  case the owner does not hand the released task back to that drain, so it is
-  not pulled straight back; another drain may still take it. When the leaf had
+  case (forge releases aside) the owner does not hand the released task back
+  to that drain, so it is not pulled straight back; another drain may still
+  take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
   claim continues it rather than starting over, unless the task's spec
   changed or `orbit task update --discard-candidate` discarded it since. A
@@ -587,7 +602,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   provider could not authenticate, which lists every crew of that provider,
   or reported its selected model at capacity, which lists that crew, with
   the task and error) or `leaf_released` (a claimed leaf was
-  released for a `transient` failure, with the task, class and reason). Each iteration's output carries
+  released for a `transient` failure other than a forge outage, with the
+  task, class and reason). Each iteration's output carries
   the same window as `crews`. To use an excluded crew again, fix the provider
   on this host (for example, sign the CLI in) or wait for model capacity,
   then start a new drain.

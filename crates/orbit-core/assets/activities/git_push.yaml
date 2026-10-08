@@ -9,7 +9,9 @@ spec:
     A rewritten branch requires the exact expected remote SHA from the durable
     pre-rewrite checkpoint. A push the forge refuses for a server-side reason
     is retried with exponential backoff; past that budget the run holds at
-    this step (forge_unavailable) for the clock to resume.
+    this step (forge_unavailable) for the clock to resume. A claimed leaf's
+    `forge_retry.window_ms` keeps the push retrying past the budget instead,
+    until the window closes.
   input_schema_json:
     type: object
     properties:
@@ -44,6 +46,11 @@ spec:
             type: integer
           backoff_cap_ms:
             type: integer
+          # Keep retrying past max_attempts, at backoff_cap_ms,
+          # until this long after the forge first refused the push (at most
+          # two hours). Absent stops at max_attempts.
+          window_ms:
+            type: [integer, "null"]
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.

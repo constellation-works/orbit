@@ -11,6 +11,11 @@
 //! resumes the held run from its checkpoints, so the retry pushes the same
 //! head and continues to `pr_open` without implementing or reviewing again.
 //!
+//! The clock never resumes a claimed leaf. Its push instead retries inside
+//! the run for its `forge_retry.window_ms`, holding the claim; a hold past
+//! that window releases the claim carrying this hold, which names the head
+//! kept and blames neither the crew nor the host [ORB-14634].
+//!
 //! The push operation writes the hold as JSON straight after
 //! [`FORGE_UNAVAILABLE_MARKER`] in its failure text, the form the engine
 //! reads it back from.

@@ -341,15 +341,17 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
 }
 
 /// [ORB-14617] A claimed leaf whose delivery push the forge kept refusing
-/// ends held, not failed. Its claim recovery cannot resume it the way the
-/// clock resumes a local run, so the settlement releases the task as
-/// `transient` with the refusal as its reason, and the owner hands it out
-/// again rather than blocking it.
+/// ends held, not failed. [ORB-14634] It held its claim while its push
+/// retried inside the push's window, so once that window closes the
+/// settlement releases the task as `transient` naming the reviewed head it
+/// kept and why. The forge refused it, not this host or the crew: the drain
+/// keeps offering the crew, and the owner hands the task straight back to it
+/// with the kept candidate, which only this host has.
 #[test]
-fn a_forge_held_leaf_releases_the_claim_as_transient() {
+fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
     if !isolated(
         module_path!(),
-        "a_forge_held_leaf_releases_the_claim_as_transient",
+        "a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew",
     ) {
         return;
     }
@@ -357,16 +359,22 @@ fn a_forge_held_leaf_releases_the_claim_as_transient() {
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
+    let mut outputs = prepared();
+    outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
+    outputs["review_gate_admit"] = json!({"applies": true});
+    outputs["review_gate_settle"] = json!({"applies": true, "reviewed_head_sha": HEAD});
+    outputs["validate"] = json!({"decision": "passed"});
+    leaf_completed(&pair, &leaf, outputs);
     let now = Utc::now();
     let hold = ForgeUnavailableHold {
         target_ref: format!("refs/heads/{BRANCH}"),
         head_sha: HEAD.into(),
-        attempts: 6,
-        waited_ms: 301_000,
+        attempts: 30,
+        waited_ms: 7_190_000,
         diagnostic: "! [remote rejected] (Internal Server Error)".into(),
         step_id: "push".into(),
         held_at: now,
-        held_since: now,
+        held_since: now - chrono::TimeDelta::hours(2),
     };
     pair.follower_jobs
         .complete_job_run_step(
@@ -393,7 +401,8 @@ fn a_forge_held_leaf_releases_the_claim_as_transient() {
     let pass = settle_only(&pair, &drain);
 
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
-    let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
+    let release = &settlement_of(&pair, &leaf)["Release"];
+    let failure = &release["failure"];
     assert_eq!(failure["class"], "transient", "{failure}");
     let reason = failure["reason"].as_str().unwrap_or_default();
     assert!(
@@ -401,6 +410,34 @@ fn a_forge_held_leaf_releases_the_claim_as_transient() {
         "{failure}"
     );
     assert!(!reason.contains('['), "no Orbit marker or JSON: {failure}");
+    assert_eq!(release["forge_hold"]["head_sha"], HEAD, "{release}");
+    let candidate = &failure["candidate"];
+    assert_eq!(candidate["head_sha"], HEAD, "{candidate}");
+    assert_eq!(candidate["failed_step_id"], "push", "{candidate}");
+    let comments = comments_of(&pair.owner_task(&task));
+    assert!(
+        comments.contains(HEAD) && comments.contains("held this claim while the forge refused"),
+        "the release names the kept head and why: {comments}"
+    );
+
+    assert_eq!(sol_exclusion(&pair, &drain), None, "the crew stays offered");
+    assert_eq!(window(&pair, &drain).host_suppressed, None);
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(
+        pair.claimed_task(&next),
+        task,
+        "the owner hands the task back to the same drain"
+    );
+    let resumed = pair
+        .admission(&next)
+        .receipt
+        .and_then(|receipt| receipt.task)
+        .and_then(|task| task.resume_candidate)
+        .expect("the claim carries the kept candidate");
+    assert_eq!(
+        (resumed.branch.as_str(), resumed.head_sha.as_str()),
+        (BRANCH, HEAD)
+    );
 }
 
 /// The candidate's own failure, and a task its final recovery judged, still

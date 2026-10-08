@@ -61,12 +61,21 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
     hold: &ForgeUnavailableHold,
 ) -> Result<(), OrbitError> {
     let header = format!("push held: forge unavailable [run={}]", context.batch_id);
+    // [ORB-14634] A claimed leaf already retried inside its window; its
+    // claim's release, not the clock, decides what happens next.
+    let next = if host.worker_invocation().is_some() {
+        "The candidate, its worktree and its review are kept on this host; the leaf retried \
+         the push for as long as its claim's retry window allowed and now releases the claim, \
+         naming the head it kept."
+    } else {
+        "The candidate, its worktree and its review are kept; the clock resumes the held run, \
+         which pushes the same head and continues to the pull request without implementing or \
+         reviewing again."
+    };
     let message = format!(
         "{header}\n\nThe forge refused the push of {} to {} {} times over {} s for a \
-         server-side reason, so the run holds at this step instead of failing. The candidate, \
-         its worktree and its review are kept; the clock resumes the held run, which pushes \
-         the same head and continues to the pull request without implementing or reviewing \
-         again.\n\nLast refusal:\n{}",
+         server-side reason, so the run holds at this step instead of failing. {next}\n\nLast \
+         refusal:\n{}",
         hold.head_sha,
         hold.target_ref,
         hold.attempts,

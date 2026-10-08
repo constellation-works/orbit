@@ -23,6 +23,11 @@
 # failure settlement, and the owner keeps it. The task's next claim carries it
 # as `resume_candidate`; the `resume_candidate` step applies it onto the new
 # base so the implementer continues it rather than starting over.
+# ORB-14634: a push the forge keeps refusing does not release the claim. The
+# leaf keeps it and retries the same reviewed head in place for a bounded
+# window, so the forge's recovery continues to `pr_open` without implementing
+# or reviewing again; past the window the leaf holds and releases the claim
+# naming that head, without excluding its crew or host.
 # ORB-14338: when a step fails before `push`, the `failure_activity`
 # (`claim_candidate_carry`) pushes the committed candidate to
 # `refs/orbit/candidates/<task>/<run>` on `origin`, so a claim on any host can
@@ -276,6 +281,16 @@ spec:
         rewrite_performed: "{{ steps.sync_base.output.rewritten }}"
         rewrite_head_before: "{{ steps.sync_base.output.head_sha_before }}"
         expected_remote_sha: "{{ steps.sync_base.output.remote_sha_before }}"
+        # [ORB-14634] A forge outage holds the claim rather than releasing it:
+        # past the usual six backed-off attempts the push keeps retrying the
+        # same head every five minutes for up to two hours after the forge
+        # first refused it, then holds. Generic resume cannot continue a
+        # claimed leaf the way the clock resumes a held owner-local run.
+        forge_retry:
+          max_attempts: 6
+          initial_backoff_ms: 10000
+          backoff_cap_ms: 300000
+          window_ms: 7200000
         # Same attempt-scoped delivery gate as `commit`.
         implementation: "{{ steps.implement_one.output }}"
 

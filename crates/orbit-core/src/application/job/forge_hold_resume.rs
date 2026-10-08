@@ -76,7 +76,9 @@ impl OrbitRuntime {
                 .job_run_retries(&run.run_id, 1)?
                 .is_empty()
                 || run_owner_liveness(&run) == RunOwnerLiveness::Alive
-                // The owner's claim recovery re-admits a claimed execution.
+                // A claimed leaf retried inside its claim's push window and
+                // released the claim naming its head [ORB-14634]; the next
+                // claim continues that candidate.
                 || self.is_claimed_execution(&run.run_id)?
             {
                 continue;
