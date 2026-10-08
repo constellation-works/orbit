@@ -10,9 +10,9 @@ use serde_json::Value;
 use crate::{OrbitRuntime, V2AuditEventFilter};
 
 use super::run_projection::{
-    audit_steps_from_events, bound_provider_processes, enclosing_step_id,
-    latest_timestamp_from_envelope_rows, provider_processes_from_events, read_invocation_blob,
-    recovery_attempts_from_partitioned_rows, step_index_by_id,
+    audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
+    enclosing_step_id, latest_timestamp_from_envelope_rows, provider_processes_from_events,
+    read_invocation_blob, recovery_attempts_from_partitioned_rows, step_index_by_id,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -532,6 +532,17 @@ impl OrbitRuntime {
 
     pub fn collect_run_audit_steps(&self, run_id: &str) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_steps_from_events(
+            &self.collect_run_audit_events(run_id)?,
+        ))
+    }
+
+    /// Read every finished step attempt, retaining failures overwritten by a
+    /// later retry in the final-step projection.
+    pub fn collect_run_audit_step_attempts(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RunAuditStep>, OrbitError> {
+        Ok(audit_step_attempts_from_events(
             &self.collect_run_audit_events(run_id)?,
         ))
     }

@@ -114,6 +114,46 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
     steps
 }
 
+/// Preserve each finished attempt instead of overwriting earlier completions
+/// when a step is resumed. Step indices still follow first-started order.
+pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditStep> {
+    let mut starts = HashMap::new();
+    let mut attempts = Vec::new();
+    for event in events {
+        let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
+            continue;
+        };
+        match event.body_kind.as_deref() {
+            Some("step_started") => {
+                let index = starts.len() as u32;
+                let start = starts.entry(step_id).or_insert((index, None));
+                start.1 = event.timestamp;
+            }
+            Some("step_finished") => {
+                let index = starts.len() as u32;
+                let start = starts.entry(step_id).or_insert((index, None));
+                let outcome = event.raw.get("outcome").and_then(Value::as_str);
+                attempts.push(RunAuditStep {
+                    step_index: start.0,
+                    step_id: step_id.to_string(),
+                    started_at: start.1,
+                    finished_at: event.timestamp,
+                    state: outcome.map(str::to_string),
+                    outcome: outcome.map(str::to_string),
+                    error_message: event
+                        .raw
+                        .get("error_message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+                start.1 = event.timestamp;
+            }
+            _ => {}
+        }
+    }
+    attempts
+}
+
 /// Index each activity step by id so a provider process can name its position
 /// in the run as well as its step.
 pub(super) fn step_index_by_id(steps: &[RunAuditStep]) -> HashMap<String, u32> {
