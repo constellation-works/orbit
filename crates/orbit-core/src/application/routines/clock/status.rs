@@ -192,14 +192,29 @@ pub(super) fn clock_status_with(
     };
     if platform == ClockPlatform::Systemd && (enabled || schedulable) {
         match query_systemd_service_health(runner, now_usec) {
-            Ok(Some(issue)) => {
-                schedulable = false;
-                health_issue = Some(match health_issue {
-                    Some(previous) => format!("{previous}; {issue}"),
-                    None => issue,
-                });
+            Ok(service) => {
+                if enabled
+                    && service.running
+                    && service.issue.is_none()
+                    && manager_details.as_ref().is_some_and(|details| {
+                        details.loaded == Some(true)
+                            && details.is_running()
+                            && !details.next_elapse_known
+                    })
+                {
+                    // With OnUnitActiveSec, systemd waits for the oneshot to
+                    // finish before assigning the timer's next elapse.
+                    schedulable = true;
+                    health_issue = None;
+                }
+                if let Some(issue) = service.issue {
+                    schedulable = false;
+                    health_issue = Some(match health_issue {
+                        Some(previous) => format!("{previous}; {issue}"),
+                        None => issue,
+                    });
+                }
             }
-            Ok(None) => {}
             Err(error) => {
                 schedulable = false;
                 health_issue = Some(format!(
@@ -221,7 +236,7 @@ pub(super) fn clock_status_with(
 fn query_systemd_service_health(
     runner: &dyn ClockCommandRunner,
     now_usec: Option<u64>,
-) -> Result<Option<String>, OrbitError> {
+) -> Result<SystemdServiceHealth, OrbitError> {
     let command = ManagerCommand {
         program: "systemctl",
         args: vec![
@@ -241,9 +256,14 @@ fn query_systemd_service_health(
     Ok(systemd_service_health(&output, now_usec))
 }
 
+struct SystemdServiceHealth {
+    running: bool,
+    issue: Option<String>,
+}
+
 /// Use the manager's monotonic start timestamp, so wall-clock adjustments
 /// cannot hide an overdue oneshot (which stays `activating` while running).
-fn systemd_service_health(output: &str, now_usec: Option<u64>) -> Option<String> {
+fn systemd_service_health(output: &str, now_usec: Option<u64>) -> SystemdServiceHealth {
     let property = |name| {
         output.lines().find_map(|line| {
             let (key, value) = line.split_once('=')?;
@@ -251,7 +271,8 @@ fn systemd_service_health(output: &str, now_usec: Option<u64>) -> Option<String>
         })
     };
     let mut issues = Vec::new();
-    if matches!(property("ActiveState"), Some("activating" | "active"))
+    let running = matches!(property("ActiveState"), Some("activating" | "active"));
+    if running
         && let Some(start) = property("ExecMainStartTimestampMonotonic")
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
@@ -274,7 +295,10 @@ fn systemd_service_health(output: &str, now_usec: Option<u64>) -> Option<String>
     {
         issues.push(issue);
     }
-    (!issues.is_empty()).then(|| format!("systemd sweep service: {}; recovery: inspect `systemctl --user status {SYSTEMD_UNIT}.service` and run `orbit clock repair`", issues.join("; ")))
+    SystemdServiceHealth {
+        running,
+        issue: (!issues.is_empty()).then(|| format!("systemd sweep service: {}; recovery: inspect `systemctl --user status {SYSTEMD_UNIT}.service` and run `orbit clock repair`", issues.join("; "))),
+    }
 }
 
 #[cfg(unix)]
