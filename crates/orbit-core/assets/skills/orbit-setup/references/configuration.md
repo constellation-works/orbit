@@ -190,19 +190,20 @@ See [first-run.md](first-run.md) for the Linux prerequisite.
 
 ## Crew selection and actual execution
 
-For ship dispatch, an explicit run crew overrides the task's explicit pin or
-validated pool assignment. Otherwise the complexity pool and default chain
-apply as described below. A creation without a crew draws from its complexity pool,
-falling back to
-`default_crew`, and stores `crew_source` as `explicit`, `pool:<complexity>`,
-or `default`, also recorded in assignment history. A complexity re-rate
-redraws a pool-sourced crew from another tier and records both tiers and crews
-in `crew_redrawn` history; explicit crews stay pinned. Status transitions alone
-preserve the choice. Admission revalidates pool assignments against the current
-tier and enabled pool members, recovering legacy provenance from assignment
-history when needed, without writing to the task. An empty crew string on task
-update re-draws for the task's current complexity rather than leaving the field
-empty. Discover actual
+For ship dispatch, an explicit run crew overrides the task's explicit pin,
+validated pool assignment, or `default` fallback. Otherwise the complexity pool
+and default chain apply as described below. A creation without a crew draws
+from its complexity pool, falling back to `default_crew`, and stores
+`crew_source` as `explicit`, `pool:<complexity>`, or `default`, also recorded
+in assignment history. A complexity re-rate redraws a pool-sourced crew from
+another tier or a `default` fallback and records the previous and new sources
+and crews in `crew_redrawn` history; explicit crews stay pinned. A `default`
+fallback is not an explicit pin. Status transitions alone preserve the choice.
+Admission revalidates pool assignments and `default` fallbacks against the
+current tier and enabled pool members, recovering legacy provenance from
+assignment history when needed, without writing to the task. An empty crew
+string on task update re-draws for the task's current complexity rather than
+leaving the field empty. Discover actual
 crew names through the connected server's crew discovery when available, or
 inspect effective configuration; executor names are not a list of crew names.
 

@@ -12,7 +12,7 @@ When needed, onboarding uses the distribution package manager to install
 Bubblewrap. If the host still has no Bubblewrap with `--bind-fd`, it installs
 the signed, static Bubblewrap published with the Orbit release, root-owned at
 `/usr/local/libexec/orbit/bwrap`; it is never setuid and never replaces a host
-`bwrap` that qualifies. On Ubuntu 24.04, it loads only the packaged
+`bwrap` that qualifies. On Ubuntu, a UID-map denial loads only the packaged
 `bwrap-userns-restrict` AppArmor profile, and refuses to overwrite a custom
 profile. Interactive onboarding uses the normal administrator authentication
 prompt. `orbit init --non-interactive` requires root or already-authorized
@@ -23,13 +23,16 @@ administrator or image build owns the host's packages, `orbit init
 without touching the host; `linux-bwrap` dispatch stays fail-closed until
 `orbit doctor providers` reports the sandbox ready.
 
-Automatic preparation code paths: Ubuntu 24.04, Debian 13, Fedora 43–45,
-Enterprise Linux 10 (`rhel`, `rocky`, `almalinux`, `centos`) and Arch. Older or
-unknown versions, such as Ubuntu 22.04, get the bundled Bubblewrap when theirs
-is missing or lacks `--bind-fd`, and an explicit unsupported result for any
-other failure. Package availability has been checked; native package/security-policy
-and sandboxed subprocess integration has **not yet been validated** for these
-rows. The actual user-scoped capability probe is always the readiness gate.
+Automatic preparation selects the package manager from the distro id and
+`ID_LIKE`; versions never gate support. Ubuntu and Debian use apt; Fedora,
+RHEL, Rocky, AlmaLinux and CentOS use dnf; Arch uses pacman; openSUSE
+(`opensuse`, `opensuse-leap`, `opensuse-tumbleweed`) and SUSE (`suse`, `sles`)
+use zypper. A host whose Bubblewrap is missing or lacks `--bind-fd`
+gets the bundled binary, and any other preparation failure is an explicit
+unsupported result. Package availability has been checked; native
+package/security-policy and sandboxed subprocess integration has **not yet
+been validated** for these families. The actual user-scoped capability probe
+is always the readiness gate.
 
 Use `orbit doctor providers --json` to compare configured `sandbox` with
 `sandbox_ready` and `sandbox_readiness_detail`; `sandbox_wrapper` and
