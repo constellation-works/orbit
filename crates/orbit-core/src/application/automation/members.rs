@@ -80,6 +80,9 @@ pub(crate) struct Host<'a> {
     pinned: RefCell<BTreeMap<String, Option<String>>>,
     /// The pin namespace owner, resolved once [ORB-14164].
     owner: RefCell<Option<pins::Owner>>,
+    /// Resolve (and best-effort fetch) once per evaluation, shared by page
+    /// observation, reconciliation and admission.
+    head: RefCell<Option<(String, SourceRevision)>>,
 }
 
 impl<'a> Host<'a> {
@@ -97,6 +100,7 @@ impl<'a> Host<'a> {
             instructions: RefCell::new(BTreeMap::new()),
             pinned: RefCell::new(BTreeMap::new()),
             owner: RefCell::new(None),
+            head: RefCell::new(None),
         }
     }
 
@@ -217,10 +221,18 @@ impl<'a> Host<'a> {
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
-        // Pilots prepare against the worktree branch. A fetch failure must
-        // not fail preparation freshness, and this path does not observe
-        // deliveries.
-        self.source().local_head(branch)
+        if let Some(head) = self.head.borrow().as_ref() {
+            return Ok(head.clone());
+        }
+        // Only pilot preparation best-effort fetches; incident consumers
+        // retain their local-only source contract.
+        let head = if self.trigger.kind == StateTriggerKind::PreparationEligible {
+            self.source().preparation_head(branch)?
+        } else {
+            self.source().local_head(branch)?
+        };
+        *self.head.borrow_mut() = Some(head.clone());
+        Ok(head)
     }
 
     fn observe(
@@ -393,7 +405,7 @@ impl MemberHost for Host<'_> {
 
         // Re-derive the material now: a member whose input moved may not be admitted.
         // Branch head is invariant for this call; resolve it once rather than
-        // per task_id (each local head is several git spawns, and it does not fetch).
+        // per task_id; observation and admission share the cached source.
         if self.trigger.kind == StateTriggerKind::PreparationEligible {
             let (_, source) = self.head(&self.trigger.branch)?;
             // Retained pending members may be off the current observation
@@ -913,6 +925,30 @@ pub(crate) fn stale_tasks(
         .map_err(automation_error_to_orbit)?;
     let prepared_source = &claim.member.source;
     if head == *prepared_source {
+        return Ok(BTreeMap::new());
+    }
+
+    // A pilot can now pin origin while the primary branch still lags it.
+    // That older local head does not invalidate material already inspected
+    // at the fetched pin. Read existing refs only: local advances beyond the
+    // pin and rewritten histories still take the original stale-claim path.
+    if source
+        .git(&[
+            "merge-base",
+            "--is-ancestor",
+            &head.commit,
+            &prepared_source.commit,
+        ])
+        .is_ok()
+        && source
+            .git(&[
+                "merge-base",
+                "--is-ancestor",
+                &prepared_source.commit,
+                &format!("refs/remotes/origin/{branch}"),
+            ])
+            .is_ok()
+    {
         return Ok(BTreeMap::new());
     }
 

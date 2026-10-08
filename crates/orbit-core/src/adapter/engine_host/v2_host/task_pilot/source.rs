@@ -134,9 +134,9 @@ impl SourceSnapshot {
     }
 
     /// When the pinned revision was committed and how old it was at
-    /// preparation, or `null` when Git cannot say [ORB-14476]. A state
-    /// routine pins its local branch head, which moves only on an operator
-    /// pull or deploy, so this is how far behind a preparation may be.
+    /// preparation, or `null` when Git cannot say [ORB-14476]. State pilots
+    /// best-effort fetch origin before pinning; this also exposes the age of
+    /// the local fallback when that fetch is unavailable.
     pub(super) fn age(&self, workspace: &Path) -> Value {
         // `committer <name> <email> <epoch> <zone>` in the raw commit header.
         let committed = run_git(workspace, &["cat-file", "commit", &self.source_revision])

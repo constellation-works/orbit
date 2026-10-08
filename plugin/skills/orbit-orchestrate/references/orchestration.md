@@ -195,8 +195,11 @@ At the prepare activity boundary, an omitted optional `base_branch` is bound as
 an empty string. Prepare treats an omitted or empty value as the registered
 workspace base branch, else `workflow.base_branch`, fetches that landing branch, and pins one
 `source_revision` while preserving primary HEAD, index, dirty and untracked
-files. Remote failure stops before an agent call. Each pilot runs in its own
-detached checkout at that revision, with
+files. Manual preparation without a pinned source stops on remote failure.
+State-triggered preparation best-effort fetches once during evaluation and
+pins origin, keeping a local branch already ahead of origin; fetch failure
+uses the local head captured before fetching. Its prepare step retains that
+claim's pin. Each pilot runs in its own detached checkout at that revision, with
 its cwd, input paths, and read-only filesystem profile bound there. Task tools
 retain the owning logical workspace, and apply still checks task snapshots
 with compare-and-set on that authority. Inspection checkouts use at most 16
