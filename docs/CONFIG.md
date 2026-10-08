@@ -359,7 +359,7 @@ existing agent-envelope rules.
 **Which crew a task dispatches.** The first tier that is set wins:
 
 1. **explicit**: `--crew` or run-input `crew`.
-2. **task_config**: an explicit `task.crew` or a pool assignment valid for the current tier. Tasks normally get this at creation; admission redraws stale pool assignments before resolving the run (see [pools](#automatic-crew-pools-by-complexity)).
+2. **task_config**: an explicit `task.crew` or a pool assignment valid for the current tier. Tasks normally get this at creation; admission redraws stale pool assignments and default fallbacks before resolving the run (see [pools](#automatic-crew-pools-by-complexity)).
 3. **workspace_default**: `workflow.default_crew`.
 4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined, and any other ID selects the same-named crew. It never overrides a configured `default_crew`.
 5. **system_default**: the `opus` crew, or a legacy `claude` crew.
@@ -480,11 +480,11 @@ xhard_complexity_crews = ["fable", "astra"]
 ```
 
 - **Crew is selected when the task is created.** A task created without `crew` (via `orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, or an import) draws from the pool for its complexity, falling back to `default_crew`, and stores the result in `task.crew` and the provenance in `task.crew_source`. A `crew_assigned` history entry also records the source: `explicit`, `pool:<complexity>` or `default`. A workspace with no crews configured leaves the field unset.
-- **Complexity changes redraw pool assignments.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another complexity pool is redrawn for the new tier in the same mutation. A `crew_redrawn` history entry names the previous and new tiers and crews. Explicit crews stay pinned, including when an update explicitly names the crew already selected by a pool. Status transitions alone preserve the selection. An explicit `task update --crew <name>` pins the selection; [`task update --crew ""`](#setting-taskcrew) draws again. Every stored crew change records the actor, prior and new crew, and whether it came from an explicit name or a pool draw.
+- **Complexity changes redraw automatic assignments.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another complexity pool or from the `default` fallback is redrawn for the new tier in the same mutation. A `crew_redrawn` history entry names the previous and new sources and crews. Explicit crews stay pinned, including when an update explicitly names the crew already selected by a pool. Status transitions alone preserve the selection. An explicit `task update --crew <name>` pins the selection; [`task update --crew ""`](#setting-taskcrew) draws again. Every stored crew change records the actor, prior and new crew, and whether it came from an explicit name or a pool draw.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. A pool whose members are all [disabled](#disabled-crews) is treated the same way; disabled members of a mixed pool are skipped. Blank entries and unknown crew names fail before dispatch.
 - **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name. The one exception is a standing [provider failure hold](#provider-failure-holds), which redirects a task-crew draw away from the crews it excludes.
-- **Admission and legacy tasks.** At admission (drain or ship), a pool-sourced crew is checked against the current tier and its enabled, positive-weight pool members. A stale assignment draws from the current pool, falling back to the default chain. Legacy assignment history recovers provenance when `crew_source` is absent; a crew with no assignment evidence is treated as explicit. Tasks without a crew also use the current pool. Admission does not write back to the task.
+- **Admission and legacy tasks.** At admission (drain or ship), a pool-sourced crew is checked against the current tier and its enabled, positive-weight pool members. A stale pool assignment or a `default`-sourced fallback draws from the current pool, falling back to the current default chain when no pool is available. A default fallback is never an explicit pin. Legacy assignment history recovers provenance when `crew_source` is absent; a crew with no assignment evidence is treated as explicit. Tasks without a crew also use the current pool. Admission does not write back to the task.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that one pool for one drain, and the flag with no names disables it. `orbit run ship` has no override flags.
 
 #### Weighting a pool
@@ -559,7 +559,7 @@ final_recovery_crews = ["sol:100", "opus:20"]
 |---|---|
 | Dashboard | The crew dropdown on each task card. The label `default: <crew>` means the task has no `crew` and inherits `default_crew`. |
 | CLI | `orbit task add --crew <name>`, or `orbit task update <id> --crew <name>`. Passing `--crew ""` to `update` re-draws for the current complexity. |
-| MCP | The `crew` parameter on `orbit.task.add` / `orbit.task.update`. An empty string on update re-draws; `null` is rejected. Omitting `crew` preserves an explicit pin; changing complexity can redraw a pool assignment. |
+| MCP | The `crew` parameter on `orbit.task.add` / `orbit.task.update`. An empty string on update re-draws; `null` is rejected. Omitting `crew` preserves an explicit pin; changing complexity can redraw a pool assignment or default fallback. |
 
 ### What "ran" vs what "was selected"
 

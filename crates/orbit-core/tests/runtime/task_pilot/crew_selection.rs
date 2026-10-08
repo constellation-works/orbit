@@ -1,6 +1,7 @@
 //! Crew provenance survives rerating and admission through the public runtime.
-//! Pool names are fixture policy; the guarded incident is creation-time draws
-//! being mistaken for operator pins after a complexity assessment.
+//! Pool names are fixture policy; the guarded incident is creation-time pool
+//! draws and default fallbacks being mistaken for operator pins after a
+//! complexity assessment or pool configuration change.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
@@ -11,6 +12,10 @@ use super::{Workspace, runtime_at};
 use crate::dispatch_admission::isolated;
 
 fn workspace() -> Workspace {
+    workspace_with_low_pool(true)
+}
+
+fn workspace_with_low_pool(populated: bool) -> Workspace {
     let mut workspace = Workspace::new();
     std::fs::write(
         workspace.repo.join(".orbit/config.toml"),
@@ -29,6 +34,18 @@ model = "fixture-hard"
 "#,
     )
     .unwrap();
+    if !populated {
+        let config = workspace.repo.join(".orbit/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(
+            config,
+            text.replace(
+                "low_complexity_crews = [\"low_lane\"]",
+                "low_complexity_crews = []",
+            ),
+        )
+        .unwrap();
+    }
     workspace.runtime = runtime_at(
         &workspace.runtime.global_root(),
         &workspace.repo.join(".orbit"),
@@ -53,7 +70,7 @@ fn task(workspace: &Workspace, explicit: bool) -> Task {
         .unwrap()
 }
 
-fn assess_hard(workspace: &Workspace, task: &Task) -> Value {
+fn assess(workspace: &Workspace, task: &Task, complexity: TaskComplexity) -> Value {
     let prepared = workspace.prepare(&[&task.id]);
     let applied = workspace.action(
         "apply_task_pilot_results",
@@ -64,9 +81,9 @@ fn assess_hard(workspace: &Workspace, task: &Task) -> Value {
                 "task_id": task.id,
                 "context_files_before": task.context_files,
                 "context_files_after": task.context_files,
-                "disposition": "selectors", "recommended_crew": "hard_lane",
-                "recommended_complexity": "hard", "confidence": "high",
-                "assessment_rationale": "The fixture needs the hard tier.",
+                "disposition": "selectors", "recommended_crew": if complexity == TaskComplexity::Hard { "hard_lane" } else { "low_lane" },
+                "recommended_complexity": complexity.as_str(), "confidence": "high",
+                "assessment_rationale": "Assess the fixture tier.",
                 "validation_approach": "Observe crew assignment and run admission.",
                 "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
                 "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
@@ -90,14 +107,19 @@ fn redraws(workspace: &Workspace, task: &Task) -> usize {
 }
 
 #[test]
-fn pilot_redraws_pool_assignments_and_preserves_add_and_update_pins() {
+fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
     if !isolated(
-        "task_pilot::crew_selection::pilot_redraws_pool_assignments_and_preserves_add_and_update_pins",
+        "task_pilot::crew_selection::pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins",
     ) {
         return;
     }
-    for pin in ["pool", "add", "update"] {
-        let workspace = workspace();
+    for (populated, pin) in [
+        (true, "pool"),
+        (false, "default"),
+        (false, "add"),
+        (false, "update"),
+    ] {
+        let workspace = workspace_with_low_pool(populated);
         let mut task = task(&workspace, pin == "add");
         if pin == "update" {
             // Pinning the same name must replace the pool provenance too.
@@ -119,14 +141,19 @@ fn pilot_redraws_pool_assignments_and_preserves_add_and_update_pins() {
             task.crew_source.as_deref(),
             Some(if pin == "pool" {
                 "pool:low"
+            } else if pin == "default" {
+                "default"
             } else {
                 "explicit"
             })
         );
-        let prepared = assess_hard(&workspace, &task);
+        // A same-tier pilot assessment preserves even a default fallback.
+        assess(&workspace, &task, TaskComplexity::Low);
+        assert_eq!(redraws(&workspace, &task), 0);
+        let prepared = assess(&workspace, &task, TaskComplexity::Hard);
         let rerated = workspace.runtime.get_task(&task.id).unwrap();
         assert_eq!(rerated.complexity, Some(TaskComplexity::Hard));
-        if pin == "pool" {
+        if pin == "pool" || pin == "default" {
             assert_eq!(rerated.crew.as_deref(), Some("hard_lane"));
             assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
             let history = workspace.runtime.get_task_history(&task.id).unwrap();
@@ -138,8 +165,9 @@ fn pilot_redraws_pool_assignments_and_preserves_add_and_update_pins() {
                 .as_deref()
                 .unwrap();
             assert!(
-                note.contains("pool:low") && note.contains("pool:hard"),
-                "redraw evidence names both tiers: {note}"
+                note.contains(if populated { "pool:low" } else { "default" })
+                    && note.contains("pool:hard"),
+                "redraw evidence names both sources: {note}"
             );
             assert_eq!(redraws(&workspace, &task), 1);
         } else {
@@ -157,21 +185,24 @@ fn pilot_redraws_pool_assignments_and_preserves_add_and_update_pins() {
             restarted.get_task(&task.id).unwrap().crew_source,
             rerated.crew_source
         );
-        assess_hard(&workspace, &rerated);
-        assert_eq!(redraws(&workspace, &task), usize::from(pin == "pool"));
+        assess(&workspace, &rerated, TaskComplexity::Hard);
+        assert_eq!(
+            redraws(&workspace, &task),
+            usize::from(pin == "pool" || pin == "default")
+        );
         assert_eq!(prepared["task_ids"], json!([task.id]));
     }
 }
 
 #[test]
-fn complexity_update_redraws_only_pool_assignments_and_clear_draws_current_tier() {
+fn complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier() {
     if !isolated(
-        "task_pilot::crew_selection::complexity_update_redraws_only_pool_assignments_and_clear_draws_current_tier",
+        "task_pilot::crew_selection::complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier",
     ) {
         return;
     }
-    for explicit in [false, true] {
-        let workspace = workspace();
+    for (populated, explicit) in [(true, false), (false, false), (false, true)] {
+        let workspace = workspace_with_low_pool(populated);
         let task = task(&workspace, explicit);
         let updated = workspace
             .runtime
@@ -208,20 +239,26 @@ fn complexity_update_redraws_only_pool_assignments_and_clear_draws_current_tier(
 }
 
 #[test]
-fn admission_recovers_legacy_pool_history_and_reports_current_tier_selection() {
+fn admission_recovers_automatic_history_and_reports_current_tier_selection() {
     if !isolated(
-        "task_pilot::crew_selection::admission_recovers_legacy_pool_history_and_reports_current_tier_selection",
+        "task_pilot::crew_selection::admission_recovers_automatic_history_and_reports_current_tier_selection",
     ) {
         return;
     }
     for (pin, legacy) in [
         ("pool", false),
         ("pool", true),
+        ("default", false),
+        ("default", true),
         ("add", true),
         ("update", true),
     ] {
-        let explicit = pin != "pool";
-        let workspace = workspace();
+        let explicit = pin == "add" || pin == "update";
+        let mut workspace = if pin == "default" {
+            workspace_with_low_pool(false)
+        } else {
+            workspace()
+        };
         let mut task = task(&workspace, pin == "add");
         if pin == "update" {
             task = workspace
@@ -237,6 +274,25 @@ fn admission_recovers_legacy_pool_history_and_reports_current_tier_selection() {
                 )
                 .unwrap();
         }
+        if pin == "default" {
+            assert_eq!(task.crew_source.as_deref(), Some("default"));
+            // The tier is unchanged, but its formerly empty pool now has a
+            // crew. Admission must treat the fallback as automatic too.
+            let config = workspace.repo.join(".orbit/config.toml");
+            let text = std::fs::read_to_string(&config).unwrap();
+            std::fs::write(
+                config,
+                text.replace(
+                    "low_complexity_crews = []",
+                    "low_complexity_crews = [\"hard_lane\"]",
+                ),
+            )
+            .unwrap();
+            workspace.runtime = runtime_at(
+                &workspace.runtime.global_root(),
+                &workspace.repo.join(".orbit"),
+            );
+        }
         let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
             &orbit_store::maintenance::task_registry::task_registry_path(
                 &workspace.runtime.global_root(),
@@ -250,15 +306,15 @@ fn admission_recovers_legacy_pool_history_and_reports_current_tier_selection() {
         )
         .unwrap()
         .task;
-        // Seed the legacy defect at the persistence boundary: the tier moved
-        // but the old crew and history remain, with no provenance field.
+        // Seed stale pool tiers and legacy provenance at the persistence
+        // boundary. Default cases keep their creation tier and history.
         backends
             .document
             .update_task_document(
                 &task.id,
                 TaskDocumentUpdateParams {
                     actor: "fixture".into(),
-                    complexity: Some(TaskComplexity::Hard),
+                    complexity: (pin != "default").then_some(TaskComplexity::Hard),
                     crew_source: legacy.then_some(None),
                     ..Default::default()
                 },
@@ -302,7 +358,20 @@ fn admission_recovers_legacy_pool_history_and_reports_current_tier_selection() {
             assert_eq!(selection["source"], "task.crew", "{shown}");
         } else {
             assert_ne!(selection["source"], "task.crew", "{shown}");
-            assert_eq!(selection["complexity"], "hard", "{shown}");
+            assert_eq!(
+                selection["complexity"],
+                if pin == "default" { "low" } else { "hard" },
+                "{shown}"
+            );
+            assert_eq!(
+                selection["source"],
+                if pin == "default" {
+                    "workflow.low_complexity_crews"
+                } else {
+                    "workflow.hard_complexity_crews"
+                },
+                "{shown}"
+            );
             assert_eq!(
                 selection["eligible_pool"][0]["name"], "hard_lane",
                 "{shown}"

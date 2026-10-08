@@ -646,7 +646,8 @@ impl OrbitRuntime {
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —
         // a re-queue after a provider failure lands on a fresh draw instead of
-        // on nothing. A pool assignment from another tier is redrawn too.
+        // on nothing. A pool assignment from another tier or a default fallback
+        // is redrawn when complexity changes too.
         let mut crew_assignment = None;
         let mut crew_redraw_history = None;
         if let Some(crew) = &mut params.crew {

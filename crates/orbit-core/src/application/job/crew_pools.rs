@@ -2,9 +2,9 @@
 //! [ORB-12717], and capture pool policy on the admitting pipeline so each
 //! task's selection is frozen in its run input. Descendant pipelines inherit
 //! the same task choice; a task created without a crew before assignment moved
-//! to creation time, or a stale pool assignment after rerating, is routed
-//! through the current pools at admission, which
-//! reads the record and never writes it.
+//! to creation time, a stale pool assignment after rerating, or a default
+//! fallback for an empty pool, is routed through the current pools at admission,
+//! which reads the record and never writes it.
 
 use std::collections::BTreeMap;
 
@@ -130,8 +130,9 @@ impl OrbitRuntime {
         Ok(None)
     }
 
-    /// Redraw a pool assignment from another tier before publishing the new
-    /// complexity. The caller commits crew, source and this history together.
+    /// Redraw a pool assignment from another tier or a default fallback before
+    /// publishing the new complexity. The caller commits crew, source and this
+    /// history together.
     pub(crate) fn rerate_task_crew(
         &self,
         task: &mut Task,
@@ -140,10 +141,13 @@ impl OrbitRuntime {
         let Some(source) = self.task_crew_source(task)? else {
             return Ok(None);
         };
-        let Some(tier) = source.strip_prefix("pool:") else {
+        let pool_tier = source.strip_prefix("pool:");
+        if source != "default" && pool_tier.is_none() {
             return Ok(None);
-        };
-        if complexity.is_some_and(|complexity| complexity.as_str() == tier) {
+        }
+        if (source == "default" && complexity == task.complexity)
+            || complexity.is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
+        {
             return Ok(None);
         }
         let before = task.crew.clone();
@@ -273,13 +277,13 @@ impl OrbitRuntime {
         let pool_tier = source
             .as_deref()
             .and_then(|source| source.strip_prefix("pool:"));
-        if let Some(tier) = pool_tier {
+        if pool_tier.is_some() || source.as_deref() == Some("default") {
             if let Some((candidates, pool_source)) =
                 self.complexity_pool_candidates(task.complexity, pools)?
             {
                 if task
                     .complexity
-                    .is_some_and(|complexity| complexity.as_str() == tier)
+                    .is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
                     && let Some(candidate) = candidates.iter().find(|candidate| {
                         candidate.weight > 0
                             && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
