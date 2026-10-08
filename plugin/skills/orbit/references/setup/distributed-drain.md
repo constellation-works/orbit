@@ -267,6 +267,17 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
 
 It inspects. It does not reclaim.
 
+A claimed leaf's run lives in the follower's store, so the owner's
+`orbit run history` never lists it. The owner keeps each failure or release
+settlement a leaf sent, with its evidence class (`provider_unavailable`,
+`baseline_red`, `forge_unavailable`, `evidence_hold`, `final_recovery`,
+`failure`, `summary`), typed failure class and bounded reason. Listing settled
+claims needs no operator capability:
+
+```bash
+orbit run settlements --since 7d --no-reconcile --json
+```
+
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then
 `GET /api/distributed/claims?task=<task-id>`). The endpoint accepts

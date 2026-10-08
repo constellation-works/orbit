@@ -8,9 +8,10 @@ template:
   title: Mine recurring run failures
   description: |-
     Mine this workspace's own run evidence for recurring failure patterns that
-    are not yet tracked. The durable output is one friction record or proposed
-    task per untracked pattern plus the recorded scan cursor; the execution
-    summary is the audit trail. Narrative-only output does not count as delivery.
+    are not yet tracked. The durable output is one proposed fix task per
+    untracked pattern (a friction only when no cause can be established) plus
+    the recorded scan cursor; the execution summary is the audit trail.
+    Narrative-only output does not count as delivery.
 
     ## Rules and command surfaces
 
@@ -19,10 +20,14 @@ template:
       `orbit run history --limit <n> --no-reconcile --json`,
       `orbit run show <run-id> --no-reconcile --json`,
       `orbit run logs <run-id> --no-reconcile`, and
-      `orbit run events <run-id> --no-reconcile`; do not read or edit the Orbit
-      database or state files directly. Never drop `--no-reconcile`: without it
-      these reads finalize an orphaned `pending` or `running` run as
-      `interrupted` and release its task reservations.
+      `orbit run events <run-id> --no-reconcile`, and read the settlements
+      claimed leaves on follower hosts sent this owner only with
+      `orbit run settlements --since <window start> --no-reconcile --json`;
+      do not read or edit the Orbit database or state files directly. Never
+      drop `--no-reconcile`: without it the run reads finalize an orphaned
+      `pending` or `running` run as `interrupted` and release its task
+      reservations, and the settlement read recovers an interrupted
+      coordination commit.
     - Use the registered Orbit tool surface for records. Find the newest completed
       prior instance with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["run-failure-patterns","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
@@ -36,12 +41,19 @@ template:
       distinctive token (an error code, step name, or tool name), never a
       multi-word phrase, and do not treat a 0-hit multi-word query as proof that
       nothing covers the pattern.
-    - File a pattern with
-      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation"],"during_task":"<this task ID>","model":"<agent-family>"}'`,
-      or, only when the fix is clear, propose a task (tool-created tasks start
-      `proposed`) with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["run-failure-patterns"],"type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
-      Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Before filing a fix task, read the installed `orbit` skill's
+      task-authoring reference (`references/task-authoring.md`) and follow it
+      for task shape. File each fix task (tool-created tasks start `proposed`)
+      with
+      `orbit tool run orbit.task.add --input '{"title":"<surface and failure>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["run-failure-patterns","no-auto-approve"],"type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Add `"crew":"opus"` when the assessed complexity is `hard` or `xhard`.
+      The `no-auto-approve` tag keeps the task `proposed` for human approval:
+      an `--approve-proposed` drain never promotes it. File a friction instead
+      only when the evidence cannot establish a cause, with
+      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation","run-failure-patterns"],"during_task":"<this task ID>","model":"<agent-family>"}'`.
+      Never file both for one pattern: friction curation turns frictions into
+      tasks, so a friction beside a fix task duplicates the work. Do not use
+      direct lifecycle CLI subcommands; they skip agent provenance.
     - Fail open. A window with no new untracked pattern is a successful no-op. Do
       not invent work to justify the run.
 
@@ -76,40 +88,130 @@ template:
     3. Worker log evidence for those runs from
        `orbit run logs <run-id> --no-reconcile` (and `--step <step-id>` for one
        step), read only as far as needed to name the error.
+    4. Follower leaf failures. A claimed leaf runs on a follower host, so this
+       host's run history never lists it; its owner keeps the failure or
+       release settlement the leaf sent. Each entry of
+       `orbit run settlements --since <window start> --no-reconcile --json`
+       whose `settled_at` falls in the window is one occurrence in one run
+       (its `leaf_run_id`) on host `machine_name` or `machine_id`. Its
+       `evidence` names the class (`provider_unavailable`, `baseline_red`,
+       `forge_unavailable`, `final_recovery`, `failure`, `summary`),
+       `failure_class` the typed failure, `failed_step_id` the step, and
+       `reason` the leaf's own diagnostic. An `unrecorded` entry settled
+       before the owner kept settlements: take its reason from the task's
+       history `note` or comment at `settled_at` through `orbit.task.show`.
+       An `evidence_hold` release, and an `operator_cancel` failure class,
+       are designed outcomes, not failures. A leaf run that also appears in
+       this host's run history is one occurrence, not two. When the read
+       refuses because a coordination commit is pending, record that in the
+       summary and continue without follower evidence. In a follower's
+       replica checkout the list is empty; leave its claimed leaves (jobs
+       `task_claimed_pr_pipeline` and `task_claimed_local_pipeline`) to the
+       owner's scan, which counts them from these settlements.
+
+    ## Fold cascades by recorded cause
+
+    A parent pipeline whose child fails also fails, in
+    `pipeline_success_guard`. Fold parents by the recorded cause, never by
+    judgment or by matching error text: read `root_cause` from
+    `orbit run show <run-id> --no-reconcile --json` for every failed run.
+    When `root_cause.run_id` names another run, the run is an echo of that
+    run: count the occurrence once, at the root cause. When the root cause is
+    a `pipeline_success_guard` failure, read its run's
+    `pipeline_state.child_dispatches[].child_run_id` and their states: a
+    `held` child is a designed hold (review evidence, a red base, a forge
+    outage), so neither that run nor any parent folded into it is a failure.
+    Report the fold count and the held-chain count in the summary.
 
     ## Cluster by normalized signature
 
     Normalize each failure to a signature of error class, failing step, and
     tool: the error class is the stable code or leading error kind (for example
-    an `error.code=` value, an HTTP status, or the failing guard name); the
-    failing step is the step or deterministic action named in the error; the
-    tool is the provider CLI, Orbit tool, or command that raised it. Strip run
-    ids, task ids, timestamps, paths, SHAs, and counts before comparing, and
-    group by the signature with the job ID as context.
+    an `error.code=` value, an HTTP status, the failing guard name, or a
+    settlement's `evidence` and `failure_class`); the failing step is the step
+    or deterministic action named in the error; the tool is the provider CLI,
+    Orbit tool, or command that raised it. Strip run ids, task ids, timestamps,
+    paths, SHAs, host names, and counts before comparing, and group by the
+    signature with the job ID and host as context. One pattern seen on this
+    host and on a follower is one pattern.
 
-    A cluster is a pattern only when it has **at least 3 occurrences across at
-    least 2 distinct runs** in the window. One-offs and single-run retry loops
-    below that threshold are not filed; count them in the summary only.
+    Split review refusals. A `review_gate_settle` or `review` refusal also
+    carries an escalation category, read from the refusal's error message
+    (`review_gate_blocked: verdict <verdict> (<escalation>)`, a
+    `[baseline_red]` marker, or `review_timeout_incomplete`; a follower
+    settlement's `reason`) and, for the
+    task's latest attempt, from the stored review evidence read with
+    `orbit.task.artifact.get`: `review-gate.json` (`verdict`, `escalation`)
+    and `review-report.json` (`verdict`, `escalation`, `external_evidence`,
+    and each `validation[]` record's `outcome` and `role`). Each category is a
+    pattern by itself:
+
+    - `base_red`: a `[baseline_red]` refusal, or an escalation saying a
+      required check fails on the base, is pre-existing, or needs a green base.
+    - `external_evidence`: a non-empty `external_evidence`, or an escalation
+      asking for evidence the reviewer's host cannot produce: a native OS
+      (`native_os`), a hosted CI result (`hosted_ci`), or CodeQL (`codeql`).
+    - `report_revision`: the gate refused the reviewer's report or its
+      revisions, such as `validation_incomplete` for a required check an
+      earlier revision recorded and the final one omits, a superseded attempt
+      with no replacing pass, or a report or certificate mismatch.
+    - `scope_or_criteria`: a `reject` whose escalation says the task's scope,
+      acceptance criteria or approach must change.
+    - `timeout`: the reviewer exceeded its wall clock or review budget.
+    - `other`: anything else.
+
+    A cluster is a pattern when it has **at least 3 occurrences across at
+    least 2 distinct runs** in the window. Below that threshold, a single
+    occurrence is still a pattern when all of these hold:
+
+    - it came from a deterministic Orbit action (a step such as `git_push`,
+      `git_commit`, `pr_open`, `pr_complete` or a guard) or a tool limit (a
+      timeout clamp, a size cap), not a provider (authentication, capacity,
+      rate limit), capacity or network error (DNS, TLS, status 000, a
+      connection reset), which stay counted only;
+    - it blocked a task (the task is `blocked`, or its claim failed) or
+      needed an operator rerun or resume;
+    - the code verification below shows it would recur under the same
+      conditions.
+
+    Count every other one-off and single-run retry loop in the summary only.
 
     ## Check coverage before filing
 
     For each pattern, search open and closed tasks and frictions with one
     distinctive token at a time from its signature (the error code, the step
-    name, the tool name), and inspect every plausible hit. A pattern is already
-    tracked when an open task or open friction describes the same underlying
-    failure, or a done task does and no occurrence postdates its completion;
-    record the `<signature> -> <id>` mapping and do not file. Occurrences after
-    a done fix are a regression: file them as a new pattern that names the done
-    task. Never file duplicates, including two records for one pattern in the
-    same scan.
+    name, the tool name, the escalation category), and inspect every plausible
+    hit. A pattern is already tracked when an open task (including a
+    `proposed` one) or open friction describes the same underlying failure, a
+    done task does and no occurrence postdates its completion, or a rejected
+    task's rationale decided the same failure is not to be fixed; record the
+    `<signature> -> <id>` mapping and do not file. Occurrences after a done fix
+    are a regression: file them as a new pattern that names the done task.
+    Never file duplicates, including two records for one pattern in the same
+    scan.
+
+    ## Verify the mechanism in code
+
+    For every untracked pattern, find the mechanism in this checkout, which
+    is at the workspace's current integration base; record
+    `git rev-parse HEAD`. Name the file and function that raise or permit the
+    failure, and quote the guard, comment or constant that explains it (a
+    few lines). A pattern whose cause the evidence and code cannot establish
+    is filed as a friction, not a task.
 
     ## File untracked patterns
 
-    File exactly one record per untracked pattern: a friction by default, or a
-    proposed task when the evidence makes the fix clear. The body states the
-    normalized signature, occurrence count, distinct run count, first and last
-    seen timestamps, up to three representative run ids, the affected job IDs,
-    and one short excerpt of the error.
+    File exactly one record per untracked pattern: a proposed fix task, or a
+    friction when no cause could be established. The body carries:
+
+    - the problem, in a sentence or two;
+    - an evidence table: normalized signature, occurrence count, distinct
+      run count, hosts, first and last seen timestamps, up to three
+      representative run ids, the affected job IDs, and one short redacted
+      excerpt;
+    - the verified mechanism: file, function, quoted guard and commit;
+    - for a task, the proposed change; then observable acceptance criteria,
+      `context_files` naming the verified files, and an assessed complexity.
 
     Excerpts must be redacted. Quote at most a few lines, and replace tokens,
     credentials, authorization headers, cookies, email addresses, and home or
@@ -122,8 +224,10 @@ template:
     ## Record the cursor
 
     Always record the window bounds and the new cursor (the scan start
-    timestamp) in the persisted execution summary, with runs scanned, failures
-    collected, patterns found, filed ids, and already-tracked mappings. Write
+    timestamp) in the persisted execution summary, with runs scanned,
+    follower settlements read, failures collected, the fold and held-chain
+    counts, patterns found, filed ids, already-tracked mappings, and the
+    one-offs counted but not filed. Write
     `{"schema_version":1,"cursor":"<RFC 3339 scan start>","runs_scanned":<count>}`
     to `.orbit/tmp/run-failure-cursor.json` (`$ORBIT_SCRATCH_DIR`) and attach it with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/run-failure-cursor.json","path":"run-failure-cursor.json","model":"<agent-family>"}'`.
@@ -131,8 +235,10 @@ template:
     Write it on every completed scan, including an empty window.
   acceptance_criteria:
   - The scan window started at the previous completed instance's recorded cursor, or seven days before the scan on the first run, and ended at the recorded scan start.
-  - Failures were clustered by normalized signature, and only clusters with at least 3 occurrences across at least 2 distinct runs were treated as patterns.
+  - Follower leaf settlements from `orbit run settlements --no-reconcile` were counted with this host's runs, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
+  - Failures were clustered by normalized signature, with review refusals split by escalation category, and only clusters with at least 3 occurrences across at least 2 distinct runs, or a blocking deterministic Orbit-action or tool-limit one-off, were treated as patterns.
   - Open and closed tasks and frictions were searched for every pattern before filing, and no duplicate record was filed.
+  - Every untracked pattern's mechanism was verified in code, and it was filed as one proposed fix task tagged `run-failure-patterns` and `no-auto-approve`, or as a friction only when no cause could be established, never both.
   - Every filed record carries the signature, occurrence count, first and last seen, representative run ids, and a redacted excerpt.
   - No run was retried, resumed, cancelled, or edited, and no run state was mutated.
   - The execution summary reports runs scanned, patterns found, filed versus already-tracked ids, and the window bounds, and the new cursor is attached as `run-failure-cursor.json`.

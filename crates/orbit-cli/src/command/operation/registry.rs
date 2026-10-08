@@ -202,6 +202,12 @@ impl Commands {
                         args.run_id.as_deref(),
                         RuntimeNeed::Required,
                     ),
+                    RunSubcommand::Settlements(args) => (
+                        "settlements",
+                        Some("execution_claim"),
+                        None,
+                        observation_runtime_need(args.no_reconcile),
+                    ),
                     RunSubcommand::Cancel(args) => (
                         "cancel",
                         Some("job_run"),

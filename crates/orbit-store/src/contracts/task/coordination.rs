@@ -809,6 +809,131 @@ pub struct ClaimReleaseRecord {
     pub forge_unavailable: bool,
 }
 
+/// What a claimed leaf's failure or release settlement told the owner, kept
+/// on the claim's lifecycle state [ORB-14439]. The leaf ran on another host,
+/// so the owner's run history never records it; this is the owner's only
+/// durable account of why it ended. Claims settled before the record existed
+/// carry none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSettlementRecord {
+    /// The settlement the leaf sent. A release the owner turned into a
+    /// failure still reads `release`; the claim's phase says what applied.
+    pub kind: ClaimSettlementKind,
+    /// The most specific evidence the settlement carried.
+    pub evidence: ClaimSettlementEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
+    /// The typed failure's reason, else the settlement summary; bounded.
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    /// The first leaf step that did not complete, when the leaf kept a
+    /// candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_step_id: Option<String>,
+    pub settled_at: String,
+}
+
+/// Largest reason a [`ClaimSettlementRecord`] keeps.
+const MAX_SETTLEMENT_REASON_BYTES: usize = 1024;
+
+impl ClaimSettlementRecord {
+    #[must_use]
+    pub fn of(kind: ClaimSettlementKind, evidence: &ClaimEvidence, settled_at: String) -> Self {
+        let failure = evidence.failure.as_ref();
+        let reason = failure
+            .map(|failure| failure.reason.as_str())
+            .or(evidence.summary.as_deref())
+            .unwrap_or_default()
+            .trim();
+        let cut = orbit_common::text::floor_char_boundary(reason, MAX_SETTLEMENT_REASON_BYTES);
+        Self {
+            kind,
+            evidence: ClaimSettlementEvidence::of(evidence),
+            failure_class: failure.map(|failure| failure.class),
+            reason: reason[..cut].to_string(),
+            crew: failure
+                .and_then(|failure| failure.crew.clone())
+                .or_else(|| {
+                    evidence
+                        .provider_unavailable
+                        .as_ref()
+                        .and_then(|provider| provider.crew.clone())
+                }),
+            failed_step_id: failure
+                .and_then(|failure| failure.candidate.as_ref())
+                .and_then(|candidate| candidate.failed_step_id.clone()),
+            settled_at,
+        }
+    }
+}
+
+/// Which settlement a claimed leaf sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimSettlementKind {
+    /// The leaf failed its claim; the owner blocks the task.
+    Fail,
+    /// The leaf gave its claim back unfinished.
+    Release,
+}
+
+/// The evidence class of a claimed leaf's settlement, most specific first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimSettlementEvidence {
+    /// [`ClaimEvidence::provider_unavailable`].
+    ProviderUnavailable,
+    /// [`ClaimEvidence::baseline_red`].
+    BaselineRed,
+    /// [`ClaimEvidence::forge_hold`].
+    ForgeUnavailable,
+    /// [`ClaimEvidence::evidence_hold`].
+    EvidenceHold,
+    /// [`ClaimEvidence::final_recovery`].
+    FinalRecovery,
+    /// Only a typed [`ClaimEvidence::failure`].
+    Failure,
+    /// Only a summary: an untyped settlement, such as a leaf that never
+    /// launched because the owner refused its bind.
+    Summary,
+}
+
+impl ClaimSettlementEvidence {
+    #[must_use]
+    pub fn of(evidence: &ClaimEvidence) -> Self {
+        if evidence.provider_unavailable.is_some() {
+            Self::ProviderUnavailable
+        } else if evidence.baseline_red.is_some() {
+            Self::BaselineRed
+        } else if evidence.forge_hold.is_some() {
+            Self::ForgeUnavailable
+        } else if evidence.evidence_hold.is_some() {
+            Self::EvidenceHold
+        } else if evidence.final_recovery.is_some() {
+            Self::FinalRecovery
+        } else if evidence.failure.is_some() {
+            Self::Failure
+        } else {
+            Self::Summary
+        }
+    }
+
+    /// The class's wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderUnavailable => "provider_unavailable",
+            Self::BaselineRed => "baseline_red",
+            Self::ForgeUnavailable => "forge_unavailable",
+            Self::EvidenceHold => "evidence_hold",
+            Self::FinalRecovery => "final_recovery",
+            Self::Failure => "failure",
+            Self::Summary => "summary",
+        }
+    }
+}
+
 /// A claimed leaf ended because its crew's provider could not be used on the
 /// executing host (an authentication failure, for instance), not because the
 /// work failed. Its claim is released to the backlog and the crew is excluded
@@ -928,6 +1053,9 @@ pub struct ClaimInspection {
     /// offered to the task's next claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserved_candidate: Option<PreservedClaimCandidate>,
+    /// [ORB-14439] The failure or release settlement the claim's leaf sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<ClaimSettlementRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

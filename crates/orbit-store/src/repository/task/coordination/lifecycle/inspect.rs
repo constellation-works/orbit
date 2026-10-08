@@ -68,6 +68,7 @@ impl TaskCommitBoundary {
                     landing_invalidated: false,
                     release: None,
                     preserved_candidate: None,
+                    settlement: None,
                 }
             }
         };

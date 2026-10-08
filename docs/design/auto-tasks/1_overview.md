@@ -130,12 +130,23 @@ definition of the same name.
   Clean batches use validated no-diff evidence.
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
-  since the previous scan's `run-failure-cursor.json` artifact. Failures
-  sharing a normalized signature at least 3 times across at least 2 runs are
-  filed as one redacted friction or proposed task per pattern unless an
-  existing task or friction already tracks it. The scan never mutates run
-  state — its run reads pass `--no-reconcile`, so an orphaned run it lists is
-  not finalized — and a window with no new pattern is a successful no-op.
+  since the previous scan's `run-failure-cursor.json` artifact. On an owner it
+  also reads the failure and release settlements followers' claimed leaves
+  sent, through `orbit run settlements --no-reconcile`, since those leaves
+  never enter the owner's run history; a pattern seen on two hosts is one
+  pattern. Parents that fail `pipeline_success_guard` fold into their child by
+  `orbit run show`'s `root_cause`, and a parent of a `held` child is no
+  failure. Review refusals are clustered by escalation category (`base_red`,
+  `external_evidence`, `report_revision`, `scope_or_criteria`, `timeout`,
+  `other`). A cluster is a pattern at 3 occurrences across 2 runs, or as a
+  single occurrence when a deterministic Orbit action or tool limit blocked a
+  task and would recur. Unless an existing task or friction already tracks
+  it, each pattern's mechanism is verified in code and filed as one redacted
+  `proposed` fix task tagged `run-failure-patterns` and `no-auto-approve`; a
+  friction replaces the task only when no cause can be established. The scan
+  never mutates run state — its run and settlement reads pass
+  `--no-reconcile`, so an orphaned run it lists is not finalized — and a
+  window with no new pattern is a successful no-op.
 - `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
@@ -177,6 +188,9 @@ encode this repository's branches and gates. Re-init preserves them:
   shipped definition's canonical `code-review` name.
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
+- ORB-14439 — `run-failure-patterns` files proposed fix tasks, reads follower
+  leaf settlements, folds cascades by `root_cause`, splits review refusals by
+  escalation category, and files blocking one-offs.
 - ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
 - ORB-13636 — Added the disabled `full-code-review` coordinator default and
   keyed the `code-review` cursor selector on its provenance tag after

@@ -670,6 +670,22 @@ It reports phase, age, reservation expiry, execution machine, bound run, last
 event, unresolved merge intent, and landing invalidation. **Nothing in this
 listing reclaims, rebinds, or repairs a claim.**
 
+A claimed leaf's run lives in the follower's store, so the owner's
+`orbit run history` never lists it. The owner keeps the failure or release
+settlement each leaf sent: its kind, evidence class (`provider_unavailable`,
+`baseline_red`, `forge_unavailable`, `evidence_hold`, `final_recovery`,
+`failure`, or `summary` for an untyped one), typed failure class, crew, failed
+step and bounded reason. Settled claims carry no in-flight attempt, so this
+listing needs no operator capability; the `run-failure-patterns` auto-task
+reads it:
+
+```bash
+orbit run settlements --since 7d --no-reconcile --json
+```
+
+Claims settled before the owner kept settlements read `unrecorded` unless
+their release kept a typed class; the task's history note carries the reason.
+
 The owner's dashboard shows the same state, plus the accepted handoff, inside
 the task detail it belongs to — there is no distributed tab, and the panel
 appears only for a task this workspace holds a claim for:

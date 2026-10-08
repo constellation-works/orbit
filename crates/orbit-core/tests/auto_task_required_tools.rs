@@ -130,3 +130,26 @@ fn full_code_review_area_chore_declares_tools_used_for_findings() {
         );
     }
 }
+
+#[test]
+fn run_failure_fix_tasks_wait_for_human_approval() {
+    let source = BUNDLED_AUTO_TASKS
+        .iter()
+        .find_map(|(name, source)| (*name == "run-failure-patterns").then_some(*source))
+        .unwrap_or_else(|| panic!("run-failure-patterns is a bundled auto-task"));
+    let definition = parse_template("run-failure-patterns", source);
+    let payloads = task_add_payloads(&definition.template.description);
+    let [fix_task] = payloads.as_slice() else {
+        panic!("run-failure-patterns files one kind of fix task: {payloads:?}");
+    };
+    let tags = fix_task["tags"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the fix task carries tags: {fix_task}"));
+    for tag in ["run-failure-patterns", "no-auto-approve"] {
+        assert!(
+            tags.iter().any(|candidate| candidate == tag),
+            "fix task omits `{tag}`: an unattended scan's tasks must stay proposed for human \
+             approval, never promoted by an --approve-proposed drain"
+        );
+    }
+}

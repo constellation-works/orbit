@@ -253,8 +253,16 @@ plugin being removed.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
-  evidence for recurring failures that nobody has filed, and records one
-  friction or proposed task per untracked pattern.
+  evidence, and on an owner the failure and release settlements its followers'
+  claimed leaves sent (`orbit run settlements --no-reconcile`), for failures
+  that nobody has filed. It folds parent pipelines into their child by the
+  recorded `root_cause` (a parent of a `held` child is no failure), splits
+  review refusals by escalation category, and also files a single blocking
+  failure of a deterministic Orbit action or tool limit. Each untracked
+  pattern, its mechanism verified in code, becomes one `proposed` fix task
+  tagged `run-failure-patterns` and `no-auto-approve`, so it waits for human
+  approval; a friction replaces the task only when no cause can be
+  established, never both.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
