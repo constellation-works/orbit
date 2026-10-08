@@ -349,9 +349,10 @@ function renderLocksPanel(payload) {
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
     const files = Array.isArray(task.context_files) ? task.context_files : [];
-    const group = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-group" });
+    const group = el("div", { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
     group.dataset.hash = JSON.stringify(task);
+    const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
 
     const idButton = el("button", {
       class: "lock-task-id mono",
@@ -366,7 +367,6 @@ function renderLocksPanel(payload) {
     });
 
     const header = el("summary", { class: "lock-task-header" }, [
-      idButton,
       statusPill(task.status || "unknown"),
       el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
     ]);
@@ -377,7 +377,7 @@ function renderLocksPanel(payload) {
         title: `job_run=${task.job_run_id}`,
       }));
     }
-    group.appendChild(header);
+    details.appendChild(header);
 
     const list = el("div", { class: "lock-file-list" });
     for (const path of files) {
@@ -387,7 +387,9 @@ function renderLocksPanel(payload) {
         title: String(path),
       }));
     }
-    group.appendChild(list);
+    details.appendChild(list);
+    group.appendChild(details);
+    group.appendChild(idButton);
     return group;
   });
   syncNodes(body, nodes);
