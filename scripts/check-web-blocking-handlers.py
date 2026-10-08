@@ -16,32 +16,9 @@ import sys
 from pathlib import Path
 
 
-# Only the handler modules themselves — not sibling tests or the Ws extractor
-# in state.rs (that pin is a separate task).
-HANDLER_FILES = {
-    "audit.rs",
-    "auto_tasks.rs",
-    "automation.rs",
-    "crews.rs",
-    "denials.rs",
-    "diagnostics.rs",
-    "distributed.rs",
-    "frictions.rs",
-    "health.rs",
-    "incidents.rs",
-    "jobs.rs",
-    "log.rs",
-    "metrics.rs",
-    "mod.rs",
-    "operation.rs",
-    "reliability.rs",
-    "routines.rs",
-    "runs.rs",
-    "scoreboard.rs",
-    "search.rs",
-    "tasks.rs",
-    "workspaces.rs",
-}
+# Every module directly under crates/orbit-web/src/api is scanned, so a new
+# handler file is covered by default. Sibling `tests/` is a subdirectory and is
+# not matched; the Ws extractor in state.rs is a separate task.
 
 SKIP_ASYNC_FNS = {"blocking"}
 
@@ -72,6 +49,23 @@ FORBIDDEN = (
 ASYNC_FN = re.compile(r"\basync\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
+def lifetime_or_label_end(source: str, quote_idx: int) -> int:
+    """Return the end of a lifetime or loop label starting at `quote_idx`, else 0.
+
+    `'static` and `'outer:` are an apostrophe and an identifier with no closing
+    apostrophe; `'a'` and `'\\n'` are character literals and must stay masked.
+    """
+    n = len(source)
+    j = quote_idx + 1
+    if j >= n or not (source[j].isalpha() or source[j] == "_"):
+        return 0
+    while j < n and _ident_char(source[j]):
+        j += 1
+    if j < n and source[j] == "'":
+        return 0
+    return j
+
+
 def mask_strings_and_comments(source: str) -> str:
     """Replace comments and string/char/byte literals with spaces."""
     out = []
@@ -96,6 +90,12 @@ def mask_strings_and_comments(source: str) -> str:
             chunk = source[start:i]
             out.append("".join("\n" if c == "\n" else " " for c in chunk))
             continue
+        if ch == "'":
+            lifetime_end = lifetime_or_label_end(source, i)
+            if lifetime_end:
+                out.append(source[i:lifetime_end])
+                i = lifetime_end
+                continue
         if ch in "\"'":
             quote = ch
             start = i
@@ -246,9 +246,7 @@ def handler_paths(repo_root: Path) -> list[Path]:
     api = repo_root / "crates/orbit-web/src/api"
     health = repo_root / "crates/orbit-web/src/health.rs"
     if api.is_dir():
-        for path in sorted(api.glob("*.rs")):
-            if path.name in HANDLER_FILES:
-                paths.append(path)
+        paths.extend(sorted(api.glob("*.rs")))
     if health.is_file():
         paths.append(health)
     return paths
@@ -279,10 +277,28 @@ pub(super) async fn good_handler(State(state): State<DashboardState>) -> Respons
         Err(response) => *response,
     }
 }
+
+impl Kind {
+    fn label(self) -> &'static str {
+        "kind"
+    }
+}
+
+pub(super) async fn after_lifetime_handler(State(state): State<DashboardState>) -> Response {
+    'outer: for c in ['x', '\\'', '"'] {
+        break 'outer;
+    }
+    let pinned = state.pin();
+    Json(pinned).into_response()
+}
 """
     hits = scan_file(Path("fixture.rs"), fixture)
-    if len(hits) != 1 or "bad_handler" not in hits[0] or "state.pin()" not in hits[0]:
+    if sum("bad_handler" in hit and "state.pin()" in hit for hit in hits) != 1:
         raise RuntimeError(f"fixture did not report the inline pin: {hits!r}")
+    if sum("after_lifetime_handler" in hit and "state.pin()" in hit for hit in hits) != 1:
+        raise RuntimeError(f"fixture lost the handler after a lifetime: {hits!r}")
+    if len(hits) != 2:
+        raise RuntimeError(f"fixture reported unexpected hits: {hits!r}")
     if any("good_handler" in hit for hit in hits):
         raise RuntimeError(f"fixture flagged an offloaded pin: {hits!r}")
 
