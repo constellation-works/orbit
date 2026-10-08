@@ -129,7 +129,21 @@ impl OrbitRuntime {
     ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
         let task = self.get_task(task_id)?;
-        let material = validation_material(&task);
+        self.pilot_admission_hold_in(&task, &comments, &|| self.get_task_history(task_id))
+    }
+
+    /// [`Self::pilot_admission_hold`] over a task and comments the caller has
+    /// read, reading history through `history` only when a pilot receipt
+    /// needs it. Pull admission re-checks the candidate it is about to claim
+    /// this way, from the bundle its exclusive section already read, rather
+    /// than reading the store inside that section [ORB-14724].
+    pub(crate) fn pilot_admission_hold_in(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+    ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
+        let material = validation_material(task);
         let mut legacy_decision = false;
         // Atomic pilot application persists the full assessment after its replay
         // receipt in a task-pilot-authored comment. Read that durable format, not
@@ -161,7 +175,7 @@ impl OrbitRuntime {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
             let operation_id = header.strip_prefix("operation_id=").unwrap_or_default();
-            let operator_decision = self.get_task_history(task_id)?.iter().any(|entry| {
+            let operator_decision = history()?.iter().any(|entry| {
                 if entry.event != "operator_validation_resolved" || is_automation_actor(&entry.by) {
                     return false;
                 }
@@ -201,16 +215,16 @@ impl OrbitRuntime {
             } else if !operator_decision {
                 // Older pilot audits have no material snapshot. They remain
                 // current only while no document edit follows their receipt.
-                let edited = self.get_task_history(task_id)?.iter().any(|event| {
+                let edited = history()?.iter().any(|event| {
                     event.at > comment.at && matches!(event.event.as_str(), "updated" | "renamed")
                 });
                 if !edited {
                     let mut registered = self.allowlist_known_tool_names();
                     registered.sort();
-                    let requirements = operator_validation_requirements(&task, &registered);
+                    let requirements = operator_validation_requirements(task, &registered);
                     if !requirements.is_empty() {
                         return Ok(Some(PilotAdmissionHold::OperatorValidation(
-                            OperatorValidationHold::new(&task, requirements),
+                            OperatorValidationHold::new(task, requirements),
                         )));
                     }
                 }

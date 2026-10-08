@@ -1,0 +1,413 @@
+//! ORB-14724: a pull admission holds the host-wide exclusive commit boundary,
+//! so every task write on the host waits while it runs. The section must cost
+//! what one decision needs, not what the partition holds, and a candidate
+//! that changes between selection and the section must never be admitted from
+//! the selection's stale view.
+
+use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use chrono::Utc;
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType};
+use tempfile::TempDir;
+
+use super::super::TaskCommitBoundary;
+use super::super::admission::ValidationHold;
+use super::super::boundary::section_probe::{SECTIONS, SectionCost};
+use super::super::selection::after_selection;
+use crate::Store;
+use crate::compose::workspace_coordinated_backends;
+use crate::contracts::*;
+use crate::driver::sqlite::task_registry::{
+    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
+};
+use crate::repository::task::v2::TaskV2Store;
+
+const PARTITION: &str = "orbit-test-123456";
+
+/// One owner partition: its commit boundary and a task store inside it.
+struct Owner {
+    _root: TempDir,
+    boundary: Arc<TaskCommitBoundary>,
+    tasks: Arc<TaskV2Store>,
+    repo: PathBuf,
+    orbit_dir: PathBuf,
+}
+
+impl Owner {
+    fn open() -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let registry =
+            TaskRegistryStore::open(&task_registry_path(root.path())).expect("open registry");
+        let repo = root.path().join("repo");
+        let orbit_dir = repo.join(".orbit");
+        std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+        registry
+            .bind_workspace(BindWorkspaceParams {
+                partition_id: Some(PARTITION.to_string()),
+                slug: "Orbit Test".to_string(),
+                repo_root: repo.clone(),
+                workspace_path: repo.clone(),
+                orbit_dir: orbit_dir.clone(),
+                repo_fingerprint: None,
+            })
+            .expect("bind workspace");
+        let store = Store::open(&root.path().join("state.sqlite")).expect("open store");
+        let backends = workspace_coordinated_backends(registry.clone(), PARTITION.into(), store)
+            .expect("compose");
+        let tasks = Arc::new(TaskV2Store::with_commit_boundary(
+            registry,
+            PARTITION.into(),
+            Arc::clone(&backends.commit_boundary),
+        ));
+        Self {
+            _root: root,
+            boundary: backends.commit_boundary,
+            tasks,
+            repo,
+            orbit_dir,
+        }
+    }
+
+    fn create(&self, spec: Spec<'_>) -> Task {
+        self.tasks
+            .create_task(TaskCreateParams {
+                actor: "codex".into(),
+                parent_id: None,
+                title: spec.title.into(),
+                description: "Detailed task description".into(),
+                acceptance_criteria: vec!["First criterion".into()],
+                dependencies: spec.dependencies,
+                relations: Vec::new(),
+                tags: Vec::new(),
+                required_tools: Vec::new(),
+                plan: "1. Do the work".into(),
+                execution_summary: String::new(),
+                context_files: vec![spec.file],
+                repo_root: None,
+                created_by: Some("codex".into()),
+                planned_by: None,
+                implemented_by: None,
+                status: spec.status,
+                priority: spec.priority,
+                complexity: None,
+                task_type: TaskType::Feature,
+                external_refs: Vec::new(),
+                source_task_id: None,
+                crew: None,
+                crew_source: None,
+                orchestrator: None,
+                comments: Vec::new(),
+                context_creation: Vec::new(),
+            })
+            .expect("create task")
+    }
+
+    /// Admit one request, re-checking each committed candidate's holds with
+    /// `hold`, and return the receipt with the one admission section's cost.
+    fn admit(
+        &self,
+        request_id: &str,
+        hold: &ValidationHold<'_>,
+    ) -> (AdmissionReceipt, SectionCost) {
+        SECTIONS.with(|sections| sections.borrow_mut().clear());
+        let lookup = self
+            .boundary
+            .admit_task(
+                &AdmissionIdentity::trusted_remote(ExecutionLocation {
+                    machine_id: "machine-a".into(),
+                    machine_name: None,
+                }),
+                &request(request_id),
+                "test",
+                &self.repo,
+                &self.orbit_dir,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                hold,
+            )
+            .expect("admit");
+        let AdmissionLookup::Found { receipt, .. } = lookup else {
+            panic!("expected a receipt: {lookup:?}");
+        };
+        let sections = SECTIONS.with(|sections| sections.borrow().clone());
+        assert_eq!(sections.len(), 1, "one exclusive section per admission");
+        (*receipt, sections[0])
+    }
+
+    fn status(&self, id: &str) -> TaskStatus {
+        self.tasks.get_task(id).unwrap().unwrap().status
+    }
+}
+
+struct Spec<'a> {
+    title: &'a str,
+    status: TaskStatus,
+    priority: TaskPriority,
+    file: String,
+    dependencies: Vec<String>,
+}
+
+impl<'a> Spec<'a> {
+    fn new(title: &'a str, status: TaskStatus, file: &str) -> Self {
+        Self {
+            title,
+            status,
+            priority: TaskPriority::Medium,
+            file: file.into(),
+            dependencies: Vec::new(),
+        }
+    }
+}
+
+fn request(id: &str) -> AdmissionRequest {
+    AdmissionRequest {
+        request_id: id.into(),
+        caller_version: "test".into(),
+        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
+        caller_before_pr: false,
+        review_gate: false,
+        run_context: AdmissionRunContext {
+            run_id: "drain".into(),
+            job_name: "auto".into(),
+            machine_name: None,
+        },
+        ship: AdmissionShipContract {
+            mode: "pr".into(),
+            base_branch: "agent-main".into(),
+            landing_branch: "agent-main".into(),
+            before_pr: false,
+            completion: "review".into(),
+            authorization_reference: None,
+            review: None,
+        },
+        crews: None,
+        os: None,
+    }
+}
+
+const PARTITION_TASKS: usize = 5_000;
+const BACKLOG: usize = 40;
+const IN_PROGRESS: usize = 10;
+const REVIEW: usize = 5;
+/// Backlog tasks the selection itself rules out, ahead of the admitted one.
+const CONFLICTING: usize = 5;
+
+/// A 5,000-task partition shaped like the incident's: almost every task is
+/// done, about 40 are backlog — each depending on one done task, the first
+/// few overlapping an in-flight footprint — and 15 are in flight. One
+/// admission's exclusive section reads the in-flight tasks, the one
+/// candidate it re-checks, that candidate's dependency and the commit's own
+/// read: nothing proportional to the partition, and nothing canonical. The
+/// pilot re-check runs once, for the committed candidate, on the comments and
+/// history the section already read.
+#[test]
+#[allow(clippy::print_stderr)]
+fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundles() {
+    let owner = Owner::open();
+    let done = (0..PARTITION_TASKS - BACKLOG - IN_PROGRESS - REVIEW)
+        .map(|index| {
+            owner
+                .create(Spec::new(
+                    "done",
+                    TaskStatus::Done,
+                    &format!("src/done_{index}.rs"),
+                ))
+                .id
+        })
+        .collect::<Vec<_>>();
+    for (index, status) in std::iter::repeat_n(TaskStatus::InProgress, IN_PROGRESS)
+        .chain(std::iter::repeat_n(TaskStatus::Review, REVIEW))
+        .enumerate()
+    {
+        owner.create(Spec::new(
+            "in flight",
+            status,
+            &format!("src/flight_{index}.rs"),
+        ));
+    }
+    let backlog = (0..BACKLOG)
+        .map(|index| {
+            let conflicting = index < CONFLICTING;
+            owner.create(Spec {
+                priority: if conflicting {
+                    TaskPriority::Critical
+                } else {
+                    TaskPriority::Medium
+                },
+                dependencies: vec![done[index].clone()],
+                ..Spec::new(
+                    "backlog",
+                    TaskStatus::Backlog,
+                    &if conflicting {
+                        format!("src/flight_{index}.rs")
+                    } else {
+                        format!("src/backlog_{index}.rs")
+                    },
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let rechecked = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&rechecked);
+    let hold = move |_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| {
+        counted.set(counted.get() + 1);
+        Ok(None)
+    };
+    let (receipt, cost) = owner.admit("pull-1", &hold);
+
+    let claimed = receipt.claim.as_ref().expect("a claim").task_id.clone();
+    assert_eq!(claimed, backlog[CONFLICTING].id, "{receipt:?}");
+    assert_eq!(receipt.deferred_conflicts.len(), CONFLICTING, "{receipt:?}");
+    assert_eq!(owner.status(&claimed), TaskStatus::InProgress);
+    assert_eq!(
+        cost.canonical_reads, 0,
+        "ORB-14724: no artifact-hashing read inside the admission section"
+    );
+    assert_eq!(
+        rechecked.get(),
+        1,
+        "ORB-14724: holds are re-checked for the committed candidate only, not per backlog task"
+    );
+    // In flight, the re-read candidate, its one dependency, and the commit.
+    let bound = (IN_PROGRESS + REVIEW + 3) as u64;
+    assert!(
+        cost.lightweight_reads <= bound,
+        "ORB-14724: the admission section read {} bundles of a {PARTITION_TASKS}-task partition; \
+         it may read only in-flight, candidate and dependency bundles ({bound})",
+        cost.lightweight_reads
+    );
+    eprintln!(
+        "ORB-14724 admission section on {PARTITION_TASKS} tasks: held {:?}, {} lightweight and {} \
+         canonical bundle reads",
+        cost.held, cost.lightweight_reads, cost.canonical_reads
+    );
+}
+
+/// What changes a selected backlog task between selection and the section.
+#[derive(Clone, Copy)]
+enum Change {
+    Status,
+    Dependency,
+    Footprint,
+    PilotHold,
+}
+
+/// Each way a selected candidate can change after selection is judged on
+/// what the section reads, so the stale selection never admits it: a task
+/// that left `backlog`, gained an unfinished dependency, moved onto an
+/// in-flight footprint, or was held by a pilot apply is deferred or skipped.
+#[test]
+fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
+    for change in [
+        Change::Status,
+        Change::Dependency,
+        Change::Footprint,
+        Change::PilotHold,
+    ] {
+        let owner = Owner::open();
+        let in_flight = owner.create(Spec::new(
+            "in flight",
+            TaskStatus::InProgress,
+            "src/flight.rs",
+        ));
+        let unfinished = owner.create(Spec::new(
+            "unfinished",
+            TaskStatus::Proposed,
+            "src/other.rs",
+        ));
+        let candidate = owner.create(Spec {
+            priority: TaskPriority::Critical,
+            ..Spec::new("candidate", TaskStatus::Backlog, "src/candidate.rs")
+        });
+        let next = owner.create(Spec::new("next", TaskStatus::Backlog, "src/next.rs"));
+
+        let tasks = Arc::clone(&owner.tasks);
+        let id = candidate.id.clone();
+        after_selection::set(move || {
+            let actor = "human:fixture".to_string();
+            match change {
+                Change::Status => tasks.update_task_history(
+                    &id,
+                    &TaskHistoryUpdateParams {
+                        actor,
+                        status: Some(TaskStatus::Blocked),
+                        ..TaskHistoryUpdateParams::default()
+                    },
+                ),
+                Change::Dependency => tasks.update_task_document(
+                    &id,
+                    &TaskDocumentUpdateParams {
+                        actor,
+                        dependencies: Some(vec![unfinished.id]),
+                        ..TaskDocumentUpdateParams::default()
+                    },
+                ),
+                Change::Footprint => tasks.update_task_document(
+                    &id,
+                    &TaskDocumentUpdateParams {
+                        actor,
+                        context_files: Some(vec!["src/flight.rs".into()]),
+                        ..TaskDocumentUpdateParams::default()
+                    },
+                ),
+                Change::PilotHold => tasks.update_task_history(
+                    &id,
+                    &TaskHistoryUpdateParams {
+                        actor,
+                        append_comments: vec![TaskComment {
+                            at: Utc::now(),
+                            by: "task-pilot".into(),
+                            message: "held".into(),
+                        }],
+                        ..TaskHistoryUpdateParams::default()
+                    },
+                ),
+            }
+            .expect("change the selected candidate");
+        });
+        let hold = |_: &Task, comments: &[TaskComment], _: &[TaskHistoryEntry]| {
+            Ok(comments
+                .iter()
+                .any(|comment| comment.message == "held")
+                .then(|| "held by a pilot apply".to_string()))
+        };
+        let (receipt, _) = owner.admit("pull-1", &hold);
+
+        let claimed = receipt.claim.as_ref().map(|claim| claim.task_id.clone());
+        assert_eq!(
+            claimed.as_deref(),
+            Some(next.id.as_str()),
+            "the changed candidate is passed over for the next one: {receipt:?}"
+        );
+        assert_ne!(owner.status(&candidate.id), TaskStatus::InProgress);
+        let diagnosed = receipt
+            .invalid_candidates
+            .iter()
+            .chain(&receipt.deferred_conflicts)
+            .find(|diagnostic| diagnostic.task_id == candidate.id);
+        match change {
+            Change::Status => assert!(diagnosed.is_none(), "{receipt:?}"),
+            Change::Dependency => {
+                assert_eq!(diagnosed.expect("diagnosed").blocked_by.len(), 1);
+            }
+            Change::Footprint => {
+                assert_eq!(
+                    diagnosed.expect("diagnosed").blocked_by,
+                    vec![in_flight.id.clone()]
+                );
+            }
+            Change::PilotHold => {
+                assert_eq!(
+                    diagnosed.expect("diagnosed").reason,
+                    "held by a pilot apply"
+                );
+            }
+        }
+    }
+}

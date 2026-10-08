@@ -405,6 +405,8 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
         return read_bundle_at(bundle_dir);
     }
 
+    #[cfg(test)]
+    CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
         read_bundle_at(bundle_dir)
     })
@@ -412,6 +414,8 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    #[cfg(test)]
+    LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {
         return read_bundle_lightweight_at(bundle_dir);
     }
@@ -426,6 +430,11 @@ thread_local! {
     /// Listing-path bundle reads on this thread, so tests can bound what a
     /// read costs while the generated index is degraded.
     pub(crate) static LISTING_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Every lightweight bundle read on this thread, listing or by id, so
+    /// tests can bound how many bundles an admission section opens.
+    pub(crate) static LIGHTWEIGHT_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Canonical (artifact-hashing) bundle reads on this thread.
+    pub(crate) static CANONICAL_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {

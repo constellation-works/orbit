@@ -1112,7 +1112,7 @@ impl Coordinated {
             &self.orbit_dir,
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &|_| Ok(None),
+            &|_, _, _| Ok(None),
         )
     }
 

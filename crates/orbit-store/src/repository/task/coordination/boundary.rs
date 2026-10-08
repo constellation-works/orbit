@@ -204,6 +204,8 @@ impl TaskCommitBoundary {
     {
         with_exclusive_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
             with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
+                #[cfg(test)]
+                let _probe = section_probe::SectionProbe::enter();
                 self.recover_if_pending()?;
                 let _depth = BoundaryDepth::enter(&self.partition_dir);
                 op()
@@ -241,5 +243,62 @@ impl TaskCommitBoundary {
 
     pub(super) fn lock_target(&self) -> PathBuf {
         self.partition_dir.join(COORDINATION_LOCK_FILE)
+    }
+}
+
+/// What each outermost admission section on this thread cost, so tests can
+/// bound the work done while every other task writer on the host waits.
+#[cfg(test)]
+pub(crate) mod section_probe {
+    use std::cell::{Cell, RefCell};
+    use std::time::{Duration, Instant};
+
+    use crate::repository::task::v2_bundle::{CANONICAL_BUNDLE_READS, LIGHTWEIGHT_BUNDLE_READS};
+
+    /// One exclusive section: how long it was held and the bundles read in it.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct SectionCost {
+        pub(crate) held: Duration,
+        pub(crate) lightweight_reads: u64,
+        pub(crate) canonical_reads: u64,
+    }
+
+    thread_local! {
+        static DEPTH: Cell<u32> = const { Cell::new(0) };
+        pub(crate) static SECTIONS: RefCell<Vec<SectionCost>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) struct SectionProbe {
+        started: Instant,
+        lightweight: u64,
+        canonical: u64,
+    }
+
+    impl SectionProbe {
+        pub(super) fn enter() -> Self {
+            DEPTH.with(|depth| depth.set(depth.get() + 1));
+            Self {
+                started: Instant::now(),
+                lightweight: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get),
+                canonical: CANONICAL_BUNDLE_READS.with(Cell::get),
+            }
+        }
+    }
+
+    impl Drop for SectionProbe {
+        fn drop(&mut self) {
+            let outermost = DEPTH.with(|depth| {
+                depth.set(depth.get() - 1);
+                depth.get() == 0
+            });
+            if outermost {
+                let cost = SectionCost {
+                    held: self.started.elapsed(),
+                    lightweight_reads: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get) - self.lightweight,
+                    canonical_reads: CANONICAL_BUNDLE_READS.with(Cell::get) - self.canonical,
+                };
+                SECTIONS.with(|sections| sections.borrow_mut().push(cost));
+            }
+        }
     }
 }

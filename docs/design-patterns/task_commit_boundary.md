@@ -153,7 +153,10 @@ claim footprints also participate in ordinary reservation conflicts after TTL ex
   it already published. Record the decision once; make everything else a replay of it.
 - **A decision must be made from state that cannot move under it.** Put the readers and the
   commit in the same exclusive section, and make every ordinary writer take the shared side —
-  a lock held only around the final writes does not prevent the check from going stale.
+  a lock held only around the final writes does not prevent the check from going stale. Keep
+  that section proportional to the one decision: select candidates before it, under the shared
+  side, and inside it re-read and re-check only what the chosen candidate's decision rests on,
+  so a stale selection can defer a candidate but never admit it (pull admission, ORB-14724).
 
 ## When NOT to
 

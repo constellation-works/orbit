@@ -55,19 +55,12 @@ impl TaskV2Store {
     /// The tasks an index query selects, in index order — or, when the index
     /// cannot serve, every settled task from the bundle scan, newest first.
     /// Callers re-apply their predicates, so either answer is correct.
-    pub(super) fn tasks_for_index_filter(
+    pub(crate) fn tasks_for_index_filter(
         &self,
         filter: TaskIndexFilter,
     ) -> Result<Vec<Task>, OrbitError> {
-        if self.validate_index()?.is_some() {
-            let ids = self
-                .registry
-                .indexed_task_ids_filtered(&self.workspace_id, &filter)?;
-            return self
-                .bundles_from_ids(ids)?
-                .into_iter()
-                .map(|bundle| self.task_from_bundle(bundle))
-                .collect();
+        if let Some(tasks) = self.indexed_tasks(&filter)? {
+            return Ok(tasks);
         }
         let mut tasks = self
             .scan_and_repair_index("missing or stale index")?
@@ -76,6 +69,25 @@ impl TaskV2Store {
             .collect::<Result<Vec<_>, _>>()?;
         sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
         Ok(tasks)
+    }
+
+    /// The tasks an index query selects, in index order, or `None` when the
+    /// freshness scan finds that the index cannot serve.
+    pub(crate) fn indexed_tasks(
+        &self,
+        filter: &TaskIndexFilter,
+    ) -> Result<Option<Vec<Task>>, OrbitError> {
+        if self.validate_index()?.is_none() {
+            return Ok(None);
+        }
+        let ids = self
+            .registry
+            .indexed_task_ids_filtered(&self.workspace_id, filter)?;
+        self.bundles_from_ids(ids)?
+            .into_iter()
+            .map(|bundle| self.task_from_bundle(bundle))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
     }
 
     /// The freshness scan: compare every registered task's index row with its
