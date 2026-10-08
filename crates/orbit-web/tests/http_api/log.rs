@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::Command;
 
+use orbit_core::JobRunState;
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
@@ -147,6 +148,7 @@ fn snapshots_and_diagnostics_skip_non_utf8_log_records() {
         "log::snapshots_and_diagnostics_skip_non_utf8_log_records",
         || {
             let fixture = Fixture::new();
+            fixture.seed_run("http-log-fixture", "fixture", JobRunState::Failed);
             let record = |timestamp: &str, level: &str, step: &str| {
                 format!(
                     "{}\n",
@@ -474,7 +476,7 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
             for (id, ts) in [("agent-recent", recent), ("agent-old", old)] {
                 let ts_text = ts.to_rfc3339();
                 let stderr = format!(
-                    "{ts_text} ERROR model_manager: request timed out: retrying\n{ts_text} ERROR model_manager: request timed out: retrying\n{ts_text} ERROR apply_patch: verification failed: src/file.rs\n"
+                    "{ts_text} ERROR codex_models_manager::manager: failed to refresh available models: request timed out\n{ts_text} ERROR codex_models_manager::manager: failed to refresh available models: request timed out\n{ts_text} ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in src/file.rs\n"
                 );
                 let blob = blobs.write(stderr.as_bytes()).unwrap();
                 insert(
@@ -494,7 +496,7 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
                 process("run-a", recent, "process-a"),
                 process("run-a", recent, "process-a"),
                 process("run-b", recent, "process-b"),
-                process("run-old", old, "process-old"),
+                process("run-a", old, "process-old"),
                 process("run-future", now + Duration::minutes(10), "future"),
             ];
             records.push(
@@ -534,9 +536,12 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
             assert_eq!(row("direct")["message"], "direct failure");
             assert_eq!(
                 row("agent-recent")["message"],
-                "request timed out: retrying\nverification failed: src/file.rs"
+                "failed to refresh available models: request timed out\nerror=apply_patch verification failed: Failed to find expected lines in src/file.rs"
             );
-            assert_eq!(row("agent-recent")["target"], "model_manager, apply_patch");
+            assert_eq!(
+                row("agent-recent")["target"],
+                "codex_models_manager::manager, codex_core::tools::router"
+            );
             assert_eq!(row("agent-recent")["step_index"], 0);
             assert_eq!(
                 row("agent-recent")["step"],
@@ -561,6 +566,147 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
                     .status()
                     .as_u16(),
                 400
+            );
+        },
+    );
+}
+
+#[test]
+fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
+    isolated(
+        "log::diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs",
+        || {
+            use chrono::{Duration, Utc};
+            use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
+            use orbit_types::workspace::WorkspaceCheckout;
+            const OTHER: &str = "ws_http_other";
+
+            let fixture = Fixture::new();
+            let registry_path =
+                orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+            let mut registry =
+                orbit_registry::workspace_registry::load_registry_from(&registry_path).unwrap();
+            let mut workspace = registry.workspaces[0].clone();
+            workspace.id = OTHER.into();
+            workspace.name = "other".into();
+            let repo = fixture.path("other");
+            let work = repo.join(".orbit");
+            fs::create_dir_all(&work).unwrap();
+            fs::write(
+                work.join("config.yaml"),
+                format!("schema_version: 1\nworkspace_id: {OTHER}\n"),
+            )
+            .unwrap();
+            let checkout = WorkspaceCheckout::owner(OTHER.into(), repo, work);
+            registry.workspaces.push(workspace.clone());
+            registry.checkouts.push(checkout.clone());
+            orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path)
+                .unwrap();
+            let other =
+                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                    &fixture.global,
+                    &workspace,
+                    &checkout,
+                )
+                .unwrap();
+
+            let recent = Utc::now() - Duration::minutes(2);
+            let finish = |runtime: &OrbitRuntime, run: &str, message: &str| {
+                for (suffix, body) in [
+                    (
+                        "start",
+                        json!({"body_kind":"step_started", "step_id":"fulfil"}),
+                    ),
+                    (
+                        "finish",
+                        json!({"body_kind":"step_finished", "step_id":"fulfil", "outcome":"error", "error_message":message}),
+                    ),
+                ] {
+                    let id = format!("{run}-{suffix}");
+                    let mut body = body;
+                    body["event_id"] = json!(id);
+                    body["ts"] = json!(recent.to_rfc3339());
+                    body["run_id"] = json!(run);
+                    runtime
+                        .insert_v2_audit_event(&V2AuditEventInsertParams {
+                            workspace_id: runtime.workspace_id().unwrap(),
+                            event_id: id,
+                            source: "v2_envelope".into(),
+                            schema_version: 1,
+                            event_type: body["body_kind"].as_str().unwrap().into(),
+                            ts: recent,
+                            run_id: run.into(),
+                            agent_identity: "http-fixture".into(),
+                            parent_event_id: None,
+                            workspace_path: None,
+                            payload_json: body.to_string(),
+                        })
+                        .unwrap();
+                }
+            };
+            finish(&fixture.runtime, "run-local", "local step failed");
+            finish(&other, "run-foreign", "foreign step failed");
+
+            let process = |run: &str, id: &str| {
+                json!({
+                    "timestamp":recent.to_rfc3339(), "level":"ERROR", "target":"orbit.job.step_finished",
+                    "fields":{"job_run_id":run, "step_id":"fulfil", "outcome":"error", "success":false, "event_id":id},
+                })
+            };
+            let unknown = process("run-unknown", "process-unknown");
+            let direct = json!({"timestamp":recent.to_rfc3339(), "level":"ERROR", "target":"backend",
+                "fields":{"error_message":"direct failure", "event_id":"direct"}});
+            fs::write(
+                fixture.path("process.log"),
+                [
+                    process("run-local", "process-local"),
+                    process("run-foreign", "process-foreign"),
+                    unknown,
+                    direct,
+                ]
+                .iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+            )
+            .unwrap();
+            let server = fixture.server(false);
+            let rows_for = |workspace: &str| {
+                json_ok(server.get(&format!(
+                    "/api/diagnostics/errors?since=24h&limit=50&workspace={workspace}"
+                )))
+                .as_array()
+                .unwrap()
+                .clone()
+            };
+            let describe = |rows: &[Value]| {
+                let mut seen: Vec<_> = rows
+                    .iter()
+                    .map(|row| {
+                        (
+                            row["event_id"].as_str().unwrap().to_string(),
+                            row["message"].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                seen.sort();
+                seen
+            };
+            let pair = |id: &str, message: &str| (id.to_string(), message.to_string());
+            assert_eq!(
+                describe(&rows_for("ws_http_fixture")),
+                vec![
+                    pair("direct", "direct failure"),
+                    pair("process-local", "local step failed"),
+                ],
+                "a run owned by another workspace is neither listed nor left with the generic step text"
+            );
+            assert_eq!(
+                describe(&rows_for(OTHER)),
+                vec![
+                    pair("direct", "direct failure"),
+                    pair("process-foreign", "foreign step failed"),
+                ],
+                "the owning workspace shows the same run with its step error"
             );
         },
     );

@@ -38,10 +38,15 @@ function shortenWorktreePaths(message) {
 function recoverableAgentDiagnostic(row) {
   if (row.source !== "agent-stderr") return false;
   const lines = String(row.message || "").split("\n").filter(Boolean);
+  // Codex logs patch verification under `codex_core::tools::router` (the tool
+  // name only appears in the message) and model refresh timeouts under
+  // `codex_models_manager::manager`.
+  const target = row.target || "";
+  const patchTarget = /tools::router|apply_patch/i.test(target);
+  const modelTarget = /models?_manager/i.test(target);
   return lines.length > 0 && lines.every(message =>
-    (/apply_patch/i.test(row.target || "") && /verification failed|Failed to find expected lines/i.test(message))
-    || (/model_manager/i.test(row.target || "") && /request timed out/i.test(message)));
-
+    (patchTarget && /apply_patch verification failed|Failed to find expected lines/i.test(message))
+    || (modelTarget && /request timed out/i.test(message)));
 }
 
 function hasCtx(ctx, key) {
