@@ -11,6 +11,7 @@ mod import;
 mod lint;
 mod list;
 pub(crate) mod output;
+mod pilot_comment;
 mod publication;
 mod recheck_blocked;
 pub(crate) mod reconcile_review;

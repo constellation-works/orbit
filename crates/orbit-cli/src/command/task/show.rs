@@ -191,7 +191,7 @@ impl Execute for TaskShowArgs {
                         "  {} {}: {}",
                         dimmed(&format!("[{}]", format_task_show_timestamp(comment.at))),
                         comment.by,
-                        comment.message
+                        super::pilot_comment::comment_presentation(comment)
                     );
                 }
             }
