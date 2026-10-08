@@ -10,6 +10,9 @@ use super::convert::{fill_task_record_fields, lexical_task_hit};
 use super::filters::{SearchStatusFilters, resolve_task_statuses, task_has_all_tags};
 use super::{GlobalSearchHit, GlobalSearchParams, task_selectors_contain_path};
 
+/// Ranked any-term chunks read per requested result by the partial-match fill.
+const OR_SCAN_CHUNKS_PER_RESULT: usize = 20;
+
 /// The read-only inputs shared by each search-kind branch.
 #[derive(Clone, Copy)]
 pub(super) struct BranchContext<'a> {
@@ -110,6 +113,10 @@ impl OrbitRuntime {
     /// When fewer than `limit` full matches survive, append any-term indexed
     /// hits ordered by the best chunk's matched-term count, then BM25. Partial
     /// labels report that chunk's count; bundle-only fields stay substring-based.
+    /// This fill reads one window of [`OR_SCAN_CHUNKS_PER_RESULT`] chunks per
+    /// requested result, so a selective filter over common terms costs one
+    /// query and a bounded number of hydrations; partial hits ranked past the
+    /// window are not offered.
     ///
     /// Only tasks `accepts` admits count toward the candidate budget, so a
     /// status, tag or path filter cannot starve the page when the best
@@ -189,40 +196,27 @@ impl OrbitRuntime {
             && let Ok(index) = self.stores().lexical_index().store()
             && index.has_source_kind(SOURCE_KIND_TASK)?
         {
-            let page_size = limit.saturating_mul(5);
-            let mut offset = 0;
-            loop {
-                let page = bm25_or_page(
-                    index,
-                    query,
-                    Some(SOURCE_KIND_TASK),
-                    None,
-                    offset,
-                    page_size,
-                )?;
-                let exhausted = page.len() < page_size;
-                for hit in page {
-                    if !seen.insert(hit.source_id.clone()) {
-                        continue;
-                    }
-                    if let Some(task) = self.lexical_hit_task(&hit.source_id)
-                        && accepts(&task)
-                    {
-                        let mut result = lexical_task_hit(&task);
-                        result.matched_by = Some(vec![
-                            "partial".into(),
-                            format!("terms:{}/{term_count}", hit.matched_terms),
-                        ]);
-                        candidates.push((result, task));
-                        if candidates.len() == limit {
-                            return Ok(candidates);
-                        }
+            // One bounded query: the any-term ranking sorts its whole match
+            // set on every execution, so paging it with OFFSET would re-sort
+            // that set once per page whenever `accepts` rejects most hits.
+            let scan = limit.saturating_mul(OR_SCAN_CHUNKS_PER_RESULT);
+            for hit in bm25_or_page(index, query, Some(SOURCE_KIND_TASK), None, 0, scan)? {
+                if !seen.insert(hit.source_id.clone()) {
+                    continue;
+                }
+                if let Some(task) = self.lexical_hit_task(&hit.source_id)
+                    && accepts(&task)
+                {
+                    let mut result = lexical_task_hit(&task);
+                    result.matched_by = Some(vec![
+                        "partial".into(),
+                        format!("terms:{}/{term_count}", hit.matched_terms),
+                    ]);
+                    candidates.push((result, task));
+                    if candidates.len() == limit {
+                        return Ok(candidates);
                     }
                 }
-                if exhausted {
-                    break;
-                }
-                offset += page_size;
             }
         }
         Ok(candidates)
