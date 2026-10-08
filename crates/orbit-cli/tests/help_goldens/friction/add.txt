@@ -24,9 +24,6 @@ Options:
       --model <MODEL>
           Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)
 
-      --json
-          Output as JSON
-
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
@@ -35,6 +32,9 @@ Options:
           - table:  Aligned columns with a header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')

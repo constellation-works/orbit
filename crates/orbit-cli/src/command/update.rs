@@ -100,9 +100,6 @@ pub struct UpdateCommand {
         conflicts_with_all = ["candidate_manifest", "install_target", "allow_downgrade"]
     )]
     pub write_candidate_manifest: Option<PathBuf>,
-    /// Emit machine-readable JSON instead of the report.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl UpdateCommand {

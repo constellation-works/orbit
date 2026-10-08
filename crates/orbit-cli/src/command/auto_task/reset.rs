@@ -22,9 +22,6 @@ pub struct AutoTaskResetArgs {
     /// abandoned, not cancelled.
     #[arg(long)]
     pub force: bool,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskResetArgs {

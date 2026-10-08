@@ -27,10 +27,6 @@ pub struct DoctorCommand {
     #[command(subcommand)]
     pub command: Option<DoctorSubcommand>,
 
-    /// Emit machine-readable JSON instead of the table.
-    #[arg(long)]
-    pub json: bool,
-
     /// Scan every database page with SQLite quick_check; default checks only read the header and schema.
     #[arg(long)]
     pub deep: bool,
@@ -77,11 +73,7 @@ pub enum DoctorSubcommand {
 }
 
 #[derive(Args)]
-pub struct ProvidersArgs {
-    /// Emit machine-readable JSON instead of the table.
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct ProvidersArgs {}
 
 #[derive(Args)]
 pub struct FsAccessArgs {
@@ -89,9 +81,6 @@ pub struct FsAccessArgs {
     pub profile: String,
     /// Path to check, matched as written against the profile's workspace-relative rules
     pub path: String,
-    /// Emit machine-readable JSON instead of the detail view.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for DoctorCommand {

@@ -7,11 +7,7 @@ use crate::output::color::Domain;
 use super::support::{host_state, plugin_record, state_reason};
 
 #[derive(Args)]
-pub struct PluginListArgs {
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct PluginListArgs {}
 
 impl Execute for PluginListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {

@@ -8,9 +8,6 @@ use crate::command::{CommandOut, Execute, Payload};
 pub struct AutoTaskMintArgs {
     /// Definition name
     pub name: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskMintArgs {

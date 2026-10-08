@@ -8,8 +8,6 @@ use super::support::{job_catalog_to_json_with_last_run, write_v2_step};
 #[derive(Args)]
 pub struct JobShowArgs {
     pub job_id: String,
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for JobShowArgs {

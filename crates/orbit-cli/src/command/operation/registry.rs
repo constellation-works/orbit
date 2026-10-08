@@ -444,7 +444,7 @@ impl Commands {
                     Some("search"),
                     None,
                 )),
-                command.json.then_some(true),
+                None,
                 false,
                 runtime_dispatch!(Search),
             ),
@@ -467,7 +467,7 @@ impl Commands {
                         Some("friction"),
                         invocation.target_id(),
                     )),
-                    invocation.json.then_some(true),
+                    None,
                     false,
                     runtime_dispatch!(Friction),
                 )

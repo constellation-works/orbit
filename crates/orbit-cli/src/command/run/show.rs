@@ -35,10 +35,6 @@ pub struct RunShowArgs {
     #[arg(short = 's', long = "step")]
     pub step_id: Option<String>,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Report stored run records as-is: skip stale-run reconciliation, which
     /// finalizes an orphaned pending or running run as interrupted and
     /// releases its task reservations

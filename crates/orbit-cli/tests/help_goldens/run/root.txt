@@ -1,0 +1,67 @@
+Run workflows, drain the backlog, and inspect runs
+
+Usage: orbit run <COMMAND>
+
+Workflows:
+  auto        Drain the workspace backlog for a window; --stop ends new admissions
+  ship        Ship backlog or explicitly selected tasks through the gated task pipeline
+  ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
+  task-pilot  Preflight proposed/backlog tasks and persist validated selectors
+  job         Run an arbitrary job by ID
+  agent       Invoke an agent on the host for exploration or debugging (operator only)
+
+Audits:
+  history    Show recent job runs, optionally filtered to one job
+  show       Show structured state and step summary for a job run
+  logs       Print raw stdout/stderr captured for a job run
+  events     Show audit events recorded for a job run
+  trace      Show audit event parent/child trace for a job run
+
+Maintenance:
+  cancel       Cancel a pending or running job run
+  concurrency  Change how many tasks a running drain keeps in flight
+  readiness    Explain why backlog tasks are waiting in auto-drain
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+
+Workflow entrypoints:
+  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
+  orbit run auto --stop
+  orbit run ship [task_id ...] [--complete]
+  orbit run ship-sweep [--dry-run] [--json]
+  orbit run task-pilot [task_id ...]
+  orbit run job <job_id> [--input key=value] [--json]
+  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
+
+Run history:
+  orbit run history [--limit 50]
+  orbit run history -j <job_id>
+  orbit run show [run_id] [-s step_id] [--json]
+  orbit run logs [run_id] [-s step_id] [--json]
+  orbit run events [run_id] [-s step_id] [--type event_type] [--json]
+  orbit run trace [run_id] [--json]
+
+Maintenance:
+  orbit run cancel <run_id>
+  orbit run concurrency <run_id> --set 7

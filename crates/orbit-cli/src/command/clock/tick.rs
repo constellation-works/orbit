@@ -32,9 +32,6 @@ pub struct ClockTickArgs {
     /// Print every routine and auto-task row, including skipped/not-due ones.
     #[arg(long)]
     pub verbose: bool,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 fn report_is_noteworthy(action: &str) -> bool {

@@ -17,9 +17,6 @@ Options:
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
-      --json
-          Emit the complete report as JSON
-
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
@@ -28,6 +25,9 @@ Options:
           - table:  Aligned columns with a header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')

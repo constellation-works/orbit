@@ -21,9 +21,6 @@ pub struct TaskImportArgs {
     /// owner-wins for a repeatable cross-host sync of task mirrors.
     #[arg(long = "on-conflict", value_enum, default_value_t = ConflictArg::Renumber)]
     pub on_conflict: ConflictArg,
-    /// Emit machine-readable JSON instead of a human summary.
-    #[arg(long)]
-    pub json: bool,
 }
 
 /// CLI spelling of [`ImportConflictPolicy`].

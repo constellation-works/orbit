@@ -28,8 +28,6 @@ pub struct JobRunArgs {
     /// nonzero unless it succeeded.
     #[arg(long)]
     pub wait: bool,
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for JobRunArgs {
@@ -153,9 +151,6 @@ pub struct JobReplayArgs {
     /// Workspace claim token held by this caller.
     #[arg(long)]
     pub claim_token: Option<String>,
-    /// Output replay result as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for JobReplayArgs {
@@ -197,9 +192,6 @@ pub struct JobResumeArgs {
     /// Block until the detached run reaches a terminal state; exit nonzero unless it succeeded.
     #[arg(long)]
     pub wait: bool,
-    /// Output submission or waited result as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for JobResumeArgs {

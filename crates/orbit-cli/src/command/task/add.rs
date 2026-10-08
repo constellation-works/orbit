@@ -78,9 +78,6 @@ pub struct TaskAddArgs {
     /// Explicit agent model to persist on the task artifact
     #[arg(long)]
     pub model: Option<String>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskAddArgs {

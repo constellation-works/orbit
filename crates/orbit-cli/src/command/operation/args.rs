@@ -25,17 +25,12 @@ use orbit_common::governance::operation::{
 };
 use serde_json::{Map, Value};
 
-/// Clap arg id for the `--json` flag an operation may offer.
-pub(crate) const JSON_FLAG: &str = "json";
-
-/// One parsed operation invocation: which verb, its tool input, and `--json`.
+/// One parsed operation invocation: which verb and its tool input.
 pub(crate) struct Invocation<V: 'static> {
     /// The spec that was invoked.
     pub spec: &'static OperationSpec<V>,
     /// Tool input built from the spec's parameters.
     pub input: Value,
-    /// Whether `--json` was passed.
-    pub json: bool,
 }
 
 impl<V: 'static> Invocation<V> {
@@ -76,29 +71,18 @@ pub(crate) fn invocation_from_matches<V: 'static>(
     };
     Ok(Invocation {
         input: input_from_matches(spec, sub_matches),
-        json: spec.cli_json_flag && sub_matches.get_flag(JSON_FLAG),
         spec,
     })
 }
 
 /// Build one verb's clap subcommand from its spec.
 ///
-/// Arg construction order is the spec's parameter order, and `--json` goes
-/// last. clap assigns display order from the order args are added, so this is
-/// what keeps `--help` byte-identical to the `#[derive(Args)]` structs a
-/// migration replaces.
+/// Arg construction order is the spec's parameter order. Global output
+/// options are added to the assembled tree by the CLI entry point.
 fn subcommand_for<V: 'static>(spec: &'static OperationSpec<V>) -> Command {
     let mut cmd = Command::new(spec.name).about(spec.cli_about);
     for (param, binding) in spec.cli_params() {
         cmd = cmd.arg(arg_for(param, binding));
-    }
-    if spec.cli_json_flag {
-        cmd = cmd.arg(
-            Arg::new(JSON_FLAG)
-                .long(JSON_FLAG)
-                .action(ArgAction::SetTrue)
-                .help("Output as JSON"),
-        );
     }
     cmd
 }

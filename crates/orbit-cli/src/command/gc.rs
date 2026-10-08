@@ -47,10 +47,6 @@ pub struct TmpGcArgs {
     /// Explicitly request the default non-destructive mode
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TmpGcArgs {
@@ -112,10 +108,6 @@ pub struct WorktreeGcArgs {
     /// its task's status; combine with `--confirm` to delete.
     #[arg(long)]
     pub target_only: bool,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for WorktreeGcArgs {

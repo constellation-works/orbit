@@ -64,9 +64,6 @@ pub struct AutoTaskAddArgs {
     /// Dedupe policy (defaults to skip-if-open)
     #[arg(long, value_enum, default_value_t = DedupePolicy::SkipIfOpen)]
     pub dedupe: DedupePolicy,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskAddArgs {

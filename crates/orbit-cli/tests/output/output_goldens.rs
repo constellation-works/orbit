@@ -1135,16 +1135,16 @@ fn global_format_controls_tool_run_output() {
     let fixture = Fixture::new();
     let (task_id, title) = first_listed_task(&fixture);
 
-    let table_over_json = fixture.run(
+    let table_output = fixture.run(
         &[
-            "task", "show", &task_id, "--fields", "title", "--json", "--format", "table",
+            "task", "show", &task_id, "--fields", "title", "--format", "table",
         ],
         &[],
     );
-    let table_text = String::from_utf8_lossy(&table_over_json.stdout);
+    let table_text = String::from_utf8_lossy(&table_output.stdout);
     assert!(
-        serde_json::from_slice::<Value>(&table_over_json.stdout).is_err(),
-        "--format table must outrank --json:\n{table_text}"
+        serde_json::from_slice::<Value>(&table_output.stdout).is_err(),
+        "--format table must select the human view:\n{table_text}"
     );
     assert!(table_text.contains(&title), "{table_text}");
 

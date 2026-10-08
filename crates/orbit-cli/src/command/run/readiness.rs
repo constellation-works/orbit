@@ -29,9 +29,6 @@ pub struct ReadinessCommand {
     /// Repeatable and comma-separated; omitted, no crew restriction applies.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ReadinessCommand {

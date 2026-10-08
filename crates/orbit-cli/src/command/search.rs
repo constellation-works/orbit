@@ -52,9 +52,6 @@ pub struct SearchCommand {
     /// `--workspaces`.
     #[arg(long)]
     pub all_workspaces: bool,
-    /// Output as JSON.
-    #[arg(long, global = true)]
-    pub json: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]

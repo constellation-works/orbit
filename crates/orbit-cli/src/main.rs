@@ -52,13 +52,13 @@ use crate::output::sink::{FormatArg, OutputMode, OutputSink};
 /// Clap id and long name of the global output-format argument.
 const FORMAT_ARG_ID: &str = "format";
 
+/// Clap id and long name of the global JSON shorthand.
+const JSON_ARG_ID: &str = "json";
+
 /// The global `--format`, declared exactly once for the whole CLI.
 ///
-/// It is built here and grafted onto the parsed command rather than added as a
-/// field on [`command::Cli`] because the staged terminal-interface migration
-/// [ORB-10569] owns `main.rs` while concurrent work owns the `command/` tree.
-/// Either declaration site yields the same surface: one declaration, rendered
-/// under `Options:` in `orbit --help` and accepted after a subcommand.
+/// Installed beside [`json_arg`] throughout the assembled command tree,
+/// including plugin groups, so both options work after a subcommand.
 fn format_arg() -> Arg {
     Arg::new(FORMAT_ARG_ID)
         .long(FORMAT_ARG_ID)
@@ -67,20 +67,29 @@ fn format_arg() -> Arg {
         .help("Output format (default: auto — a table on a terminal, plain text when piped)")
 }
 
+/// The global `--json` shorthand, preserving its historical pretty output.
+fn json_arg() -> Arg {
+    Arg::new(JSON_ARG_ID)
+        .long(JSON_ARG_ID)
+        .action(clap::ArgAction::SetTrue)
+        .help("Output as JSON (shorthand for --format json; always pretty-printed)")
+}
+
 /// Whether this command already declares a `--format` of its own.
 ///
 /// `orbit audit export` does, naming its export file's serialization with its
 /// own value type. It keeps that meaning; the global flag is simply not
-/// offered there, and its help says so. `crate::tests::cli_format` pins the
-/// list of such commands.
+/// offered there, and its help says so. `--json` selects the sink mode independently of the exported
+/// file, leaving the existing export confirmation unchanged.
 fn declares_format(command: &Command) -> bool {
     command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(FORMAT_ARG_ID))
 }
 
-/// Add [`format_arg`] to the root and to every subcommand that does not
-/// declare its own `--format`.
+/// Add the output options wherever a local flag does not own their spelling.
+/// A plugin-derived `--json` tool-input flag keeps its meaning; output JSON
+/// remains available at the root/group or through `--format json` there.
 ///
 /// This walks the tree instead of using `Arg::global`, which would be the
 /// obvious spelling but panics here. A global arg is keyed by *id*: clap
@@ -92,7 +101,7 @@ fn declares_format(command: &Command) -> bool {
 /// `FormatArg` under the subcommand's — each one a downcast panic in the other
 /// reader. Declaring the argument per level keeps every value at the level it
 /// was parsed at, where its type is the one that level expects.
-fn install_format_arg(command: Command) -> Command {
+fn install_output_args(command: Command) -> Command {
     let subcommands: Vec<String> = command
         .get_subcommands()
         .map(|sub| sub.get_name().to_string())
@@ -103,8 +112,14 @@ fn install_format_arg(command: Command) -> Command {
     } else {
         command.arg(format_arg())
     };
+    if !command
+        .get_arguments()
+        .any(|arg| arg.get_long() == Some(JSON_ARG_ID))
+    {
+        command = command.arg(json_arg());
+    }
     for name in subcommands {
-        command = command.mut_subcommand(name, install_format_arg);
+        command = command.mut_subcommand(name, install_output_args);
     }
     command
 }
@@ -127,21 +142,17 @@ fn requested_format(matches: &ArgMatches) -> Option<FormatArg> {
     }
 }
 
-/// Clap ids of the per-command boolean flags that have always meant "emit the
-/// machine-readable form".
+/// Flags selecting the historical machine-readable output rung.
 ///
 /// `--ops` is here alongside `--json` because it is the same rung wearing a
 /// different name: on `task list` and `job list` it selects a narrower record
 /// shape and has always forced JSON. Leaving it out would make
 /// `orbit task list --ops` render a table on a terminal.
-const LEGACY_JSON_ARG_IDS: [&str; 2] = ["json", "ops"];
+const LEGACY_JSON_ARG_IDS: [&str; 2] = [JSON_ARG_ID, "ops"];
 
-/// Whether the invoked subcommand's own `--json`/`--ops` boolean was set.
+/// Whether `--json` or a command's `--ops` boolean was set at any level.
 ///
-/// Mode precedence rung 2 (spec §2), read the same way `--format` is: from the
-/// parsed matches rather than from 86 individual argument structs. The flags
-/// stay declared and accepted where they are [ADR-0306]; this is what makes
-/// them route through the resolver instead of each branching for itself.
+/// Both route through the sink's legacy rung to preserve pretty output.
 fn legacy_json(matches: &ArgMatches) -> bool {
     let mut level = matches;
     loop {
@@ -153,6 +164,31 @@ fn legacy_json(matches: &ArgMatches) -> bool {
         match level.subcommand() {
             Some((_, sub)) => level = sub,
             None => return false,
+        }
+    }
+}
+
+/// Resolve explicit output options once, rejecting contradictory spellings.
+///
+/// `--ops` retains its existing precedence behavior; only the global JSON
+/// shorthand conflicts with an explicit non-JSON output format. A local
+/// file-format argument (such as `audit export --format csv`) is unrelated.
+fn requested_output(matches: &ArgMatches) -> Result<(Option<FormatArg>, bool), clap::Error> {
+    let requested = requested_format(matches);
+    let legacy = legacy_json(matches);
+    let mut level = matches;
+    loop {
+        if matches!(level.try_get_one::<bool>(JSON_ARG_ID), Ok(Some(true)))
+            && requested.is_some_and(|format| format != FormatArg::Json)
+        {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--json cannot be combined with a non-JSON --format; use --format json",
+            ));
+        }
+        match level.subcommand() {
+            Some((_, sub)) => level = sub,
+            None => return Ok((requested, legacy)),
         }
     }
 }
@@ -321,7 +357,7 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
 }
 
 /// The command tree `orbit` parses argv against: the derived CLI, the given
-/// plugin groups, and the global `--format`.
+/// plugin groups, and the global output options.
 ///
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
@@ -338,7 +374,7 @@ fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Comma
             &format!("{}\nOptions:", plugin_cli::help_section(groups)),
         ))
     };
-    install_format_arg(root)
+    install_output_args(root)
 }
 
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
@@ -357,8 +393,8 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
             };
             usage_error::exit(err, requested, legacy)
         });
-    let requested = requested_format(&matches);
-    let legacy = legacy_json(&matches);
+    let (requested, legacy) = requested_output(&matches)
+        .unwrap_or_else(|err| usage_error::exit(err, Some(FormatArg::Json), true));
     let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
         // A plugin group is not a `Commands` variant clap can build, so the
         // two global arguments are read here and the rest of the invocation

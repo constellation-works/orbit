@@ -12,9 +12,6 @@ use crate::output::table::{Column, Table};
 
 #[derive(Args)]
 pub struct RoutineListArgs {
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
     /// Also list routines seeded by a plugin that is switched off in their
     /// workspace or on the host, marked inactive with the reason
     #[arg(long, visible_alias = "all")]

@@ -64,9 +64,6 @@ pub struct TaskFlowArgs {
     /// Number of buckets to report, most recent last. Default 6.
     #[arg(long, default_value_t = DEFAULT_BUCKETS, value_parser = parse_buckets)]
     pub buckets: usize,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 /// The task creation time and status changes the report reads. Reducing to

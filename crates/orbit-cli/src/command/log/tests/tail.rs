@@ -28,7 +28,7 @@ fn make_args(path: PathBuf) -> TailArgs {
         target: None,
         level: None,
         since: None,
-        json: false,
+        json_lines: false,
         path: Some(path),
     }
 }
@@ -45,7 +45,7 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
     let mut args = make_args(path.clone());
     args.lines = 2;
     args.follow = true;
-    args.json = true;
+    args.json_lines = true;
     args.target = Some("orbit.test".to_string());
     let mut follower =
         spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
@@ -87,7 +87,7 @@ fn rotation_during_initial_read_keeps_the_old_reader_and_restarts_the_new_file()
     let (resume_tx, resume_rx) = mpsc::channel();
     let mut args = make_args(path.clone());
     args.follow = true;
-    args.json = true;
+    args.json_lines = true;
     let mut follower =
         spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
     reached_rx

@@ -20,10 +20,6 @@ pub struct ConfigShowArgs {
     /// therefore collapse to a one-line summary by default.
     #[arg(long)]
     pub all: bool,
-    /// Emit JSON. For global/workspace scope, `source.exists` reports whether
-    /// the selected config file exists, not whether individual keys are set.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ConfigShowArgs {

@@ -9,9 +9,6 @@ use super::support::audit_event_to_json;
 pub struct AuditShowArgs {
     /// Audit event ID
     pub id: i64,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AuditShowArgs {

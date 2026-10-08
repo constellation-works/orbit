@@ -32,9 +32,6 @@ pub struct TaskLintArgs {
     /// Restrict the sweep to specific statuses (repeatable; sweep mode only)
     #[arg(long = "status", value_enum, conflicts_with = "id")]
     pub statuses: Vec<TaskStatus>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskLintArgs {

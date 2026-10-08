@@ -193,8 +193,6 @@ pub struct OperationSpec<V: 'static> {
     /// [`crate::governance::authorization::GOVERNED_OPERATIONS`] alone — see that module's
     /// "Placement is not permission" section.
     pub mcp_scope: Option<McpToolScope>,
-    /// Whether the CLI subcommand offers `--json`.
-    pub cli_json_flag: bool,
     /// Default (non-`--json`) CLI rendering.
     pub cli_render: CliRender,
 }

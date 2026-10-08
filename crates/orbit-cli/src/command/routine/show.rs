@@ -16,9 +16,6 @@ const RECENT_FIRE_LIMIT: usize = 10;
 pub struct RoutineShowArgs {
     /// Routine name.
     pub name: String,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl RoutineShowArgs {

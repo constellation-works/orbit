@@ -13,10 +13,6 @@ pub struct LogsCommand {
     /// Show only a specific step by target_id
     #[arg(long)]
     pub step: Option<String>,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for LogsCommand {

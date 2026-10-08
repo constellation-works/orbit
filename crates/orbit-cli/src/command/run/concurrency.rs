@@ -42,10 +42,6 @@ pub struct RunConcurrencyArgs {
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
     pub claim_token: Option<String>,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for RunConcurrencyArgs {
