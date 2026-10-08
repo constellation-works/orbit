@@ -401,10 +401,25 @@ impl TaskCommitBoundary {
                 || report["base_sha"] != handoff.candidate.base.commit
                 || !matches!(
                     report["decision"].as_str(),
-                    Some("verified_no_diff" | "verified_already_landed")
+                    Some(
+                        "verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected"
+                    )
                 )
             {
                 return Err(invalid("NoDiff verifier report identity or base mismatch"));
+            }
+            // [ORB-14791] A claimed `no-diff-expected` skip carries no report
+            // of its own: the owner's copy of the task must still be tagged.
+            if report["decision"] == "skipped_no_diff_expected"
+                && !self
+                    .bundle_store
+                    .read_bundle_lightweight(&handoff.task_id)?
+                    .envelope
+                    .tags
+                    .iter()
+                    .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+            {
+                return Err(invalid("NoDiff skip requires a no-diff-expected task"));
             }
         }
         if let HandoffDelivery::AlreadyLanded {

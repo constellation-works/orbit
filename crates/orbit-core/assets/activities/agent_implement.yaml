@@ -121,6 +121,8 @@ spec:
       attaches these bytes through the claim and runs the existing verifier;
       the sandboxed implementer does not call owner artifact tools. This
       replaces the artifact-attachment requirement in item 12 for claimed mode.
+      A task tagged `no-diff-expected` needs no such report: leave the
+      worktree clean, and the commit step hands off on the tag.
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
 

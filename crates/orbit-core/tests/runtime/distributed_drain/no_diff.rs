@@ -29,16 +29,22 @@ struct CleanLeaf {
 
 impl CleanLeaf {
     fn new(already_landed: bool, completion: &str) -> Self {
-        Self::build(already_landed, completion, false)
+        Self::build(already_landed, completion, false, true)
     }
 
     /// A clean leaf whose task carries the `no-diff-expected` tag, claimed by
     /// the follower through ordinary pull admission [ORB-14474].
     fn tagged(completion: &str) -> Self {
-        Self::build(false, completion, true)
+        Self::build(false, completion, true, true)
     }
 
-    fn build(already_landed: bool, completion: &str, tagged: bool) -> Self {
+    /// A tagged review whose implementer files findings and attaches its
+    /// coverage, but writes no clean-tree report [ORB-14791].
+    fn review_only(completion: &str) -> Self {
+        Self::build(false, completion, true, false)
+    }
+
+    fn build(already_landed: bool, completion: &str, tagged: bool, report: bool) -> Self {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{CHECK}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
@@ -143,6 +149,9 @@ impl CleanLeaf {
             base,
             input,
         };
+        if !report {
+            return fixture;
+        }
         fixture.write_evidence(
             "implementation-validation.json",
             json!({
@@ -213,7 +222,7 @@ impl CleanLeaf {
         assert!(
             matches!(
                 committed["decision"].as_str(),
-                Some("verified_no_diff" | "verified_already_landed")
+                Some("verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected")
             ),
             "{committed}"
         );
@@ -437,6 +446,158 @@ fn a_follower_claims_no_diff_expected_work_files_findings_and_completes_without_
     )
     .unwrap();
     assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
+    fixture.assert_no_blocked();
+}
+
+/// The delivery-code-review shape that blocked on a follower: a tagged task
+/// whose implementer attaches its coverage and writes no clean-tree report.
+/// The leaf skips its clean commit as the owner does and hands off `NoDiff`;
+/// the owner settles it to the status its own `promote_no_diff` and
+/// `complete_no_diff` reach, with no commit failure or already-landed proof
+/// [ORB-14791].
+#[test]
+fn a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_expected_review_without_a_report_settles_like_the_owner",
+    ) {
+        return;
+    }
+    for (completion, job, status) in [
+        ("done", "task_claimed_pr_pipeline", "done"),
+        ("done", "task_claimed_local_pipeline", "done"),
+        ("review", "task_claimed_pr_pipeline", "review"),
+    ] {
+        let fixture = CleanLeaf::review_only(completion);
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        let committed = fixture.action("git_commit", &fixture.input);
+        assert_eq!(
+            committed["decision"], "skipped_no_diff_expected",
+            "{committed}"
+        );
+        assert_eq!(committed["base_sha"], fixture.base, "{committed}");
+
+        let handoff = fixture.run_clean_pipeline(job);
+        let settled = fixture
+            .settle(&handoff)
+            .expect("owner settles a tagged clean base");
+        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        if completion == "done" {
+            let accepted = fixture
+                .pair
+                .wire
+                .owner
+                .accepted_task_handoff(&handoff.claim_id)
+                .unwrap();
+            let landed = engine_action(
+                &fixture.pair.wire.owner,
+                "handoff_land",
+                &json!({"handoff_id": accepted.handoff_id}),
+            )
+            .unwrap();
+            assert_eq!(landed["evidence"]["external_merge"], false, "{landed}");
+        }
+        assert_eq!(
+            fixture.pair.owner_status(&fixture.task),
+            status,
+            "{job} with {completion} completion"
+        );
+        let artifacts = RuntimeHost::get_task_artifacts(&fixture.pair.wire.owner, &fixture.task)
+            .unwrap()
+            .into_iter()
+            .map(|artifact| artifact.path)
+            .collect::<Vec<_>>();
+        assert!(
+            artifacts
+                .iter()
+                .any(|path| path == "automation-coverage.json"),
+            "the coverage evidence reaches the owner: {artifacts:?}"
+        );
+        assert!(
+            !artifacts
+                .iter()
+                .any(|path| path == "already-landed.json" || path == "no-diff.json"),
+            "a review writes no clean-tree report: {artifacts:?}"
+        );
+        fixture.assert_no_blocked();
+    }
+}
+
+/// A claimed tagged task hands off `NoDiff` and has no PR route for a change,
+/// so a pending diff or a commit of its own is refused by name, before the
+/// index is touched [ORB-14791].
+#[test]
+fn a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_expected_task_that_changed_the_worktree_is_refused",
+    ) {
+        return;
+    }
+    for committed in [false, true] {
+        let fixture = CleanLeaf::review_only("done");
+        let follower = &fixture.pair.follower_repo;
+        std::fs::write(follower.join("src/f0.rs"), "fn reviewed() {}\n").unwrap();
+        if committed {
+            git(follower, &["commit", "-q", "-am", "Review edits code"]);
+        }
+        let error = engine_action(&fixture.bound, "git_commit", &fixture.input).unwrap_err();
+        assert!(
+            error.to_string().contains("no_diff_expected_changed"),
+            "committed={committed}: {error}"
+        );
+        assert!(
+            git(follower, &["diff", "--cached", "--name-only"]).is_empty(),
+            "the refusal stages nothing"
+        );
+        if !committed {
+            assert_eq!(git(follower, &["rev-parse", "HEAD"]).trim(), fixture.base);
+        }
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+        fixture.assert_no_blocked();
+    }
+}
+
+/// The tag is the only authority a review's skip carries, and the owner's copy
+/// of the task holds it: a skip checkpoint pinned for an untagged task is
+/// refused at settlement, without blocking the task [ORB-14791].
+#[test]
+fn owner_refuses_a_no_diff_expected_skip_for_an_untagged_task() {
+    if !isolated(
+        module_path!(),
+        "owner_refuses_a_no_diff_expected_skip_for_an_untagged_task",
+    ) {
+        return;
+    }
+    let fixture = CleanLeaf::new(false, "done");
+    let mut handoff = fixture.prepare_handoff();
+    let skip = json!({
+        "phase": "commit", "decision": "skipped_no_diff_expected", "committed": false,
+        "skipped_no_diff_expected": true, "task_id": fixture.task,
+        "job_run_id": fixture.leaf, "base_sha": fixture.base,
+    });
+    let path = "no-diff-handoff/forged-skip.json";
+    fixture.attach(path, skip.clone());
+    handoff.candidate.delivery = HandoffDelivery::NoDiff {
+        evidence: HandoffArtifactRef {
+            path: path.into(),
+            sha256: sha256_hex(&serde_json::to_vec(&skip).unwrap()),
+        },
+    };
+    let error = fixture.settle(&handoff).unwrap_err();
+    assert!(
+        error.to_string().contains("no-diff-expected"),
+        "the refusal names the missing tag: {error}"
+    );
+    assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+    assert!(
+        fixture
+            .pair
+            .wire
+            .owner
+            .accepted_task_handoff(&handoff.claim_id)
+            .is_err()
+    );
     fixture.assert_no_blocked();
 }
 

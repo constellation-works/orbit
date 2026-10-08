@@ -19,9 +19,17 @@ use super::input::refused;
 use super::observe::{observe_with, require_clean_candidate};
 use super::validation::{attach_handoff_logs, claim_failure, passed_output};
 use crate::executor::automation::vcs::commit::{
-    verified_clean_tree_checkpoint, verify_clean_tree_handoff,
-    verify_clean_tree_handoff_at_revision,
+    claimed_clean_base_checkpoint, verify_clean_tree_handoff, verify_clean_tree_handoff_at_revision,
 };
+
+/// Whether the implementer returned clean-tree report scratch references.
+pub(in crate::executor::automation::vcs) fn carries_no_diff_artifacts(input: &Value) -> bool {
+    input
+        .get("implementation")
+        .and_then(|output| output.get("no_diff_artifacts"))
+        .and_then(Value::as_array)
+        .is_some_and(|artifacts| !artifacts.is_empty())
+}
 
 /// A sandboxed implementer cannot route artifacts to a remote owner. It
 /// returns scratch paths; the deterministic commit step reads bounded bytes
@@ -141,7 +149,9 @@ fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<
         || report["job_run_id"] != run
         || !matches!(
             report["decision"].as_str(),
-            Some("verified_no_diff" | "verified_already_landed")
+            // [ORB-14791] A claimed `no-diff-expected` skip pins its run and
+            // base; its verifier rechecks the owner's tag.
+            Some("verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected")
         )
     {
         return Err(refused(
@@ -157,7 +167,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let report = verified_clean_tree_checkpoint(input)
+    let report = claimed_clean_base_checkpoint(input)
         .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?;
     require_checkpoint_identity(report, &context.task_id, &context.run_id)?;
     let task = host.get_task(&context.task_id)?;

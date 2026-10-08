@@ -22,9 +22,10 @@ spec:
     runs nothing and records `skipped_no_required_commands` with no
     validation references. Task, claim, execution machine and bound run come
     from the trusted worker binding; a step input that disagrees is refused
-    rather than preferred. A verified clean-tree commit checkpoint takes the
-    NoDiff route: recheck the report, run required commands on the clean base,
-    and pin the verifier report for owner revalidation without publication.
+    rather than preferred. A verified clean-tree commit checkpoint, or a
+    claimed `no-diff-expected` skip naming this run and base, takes the
+    NoDiff route: recheck it, run required commands on the clean base,
+    and pin the checkpoint for owner revalidation without publication.
   input_schema_json:
     type: object
     required: [workspace_path]

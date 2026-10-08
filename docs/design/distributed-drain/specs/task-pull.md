@@ -207,11 +207,13 @@ for a pull drain as for a local one.
    (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
    `no-diff-expected` tasks are claimable by a remote executor: its claimed leaf hands off
-   `NoDiff` with a verified report, files findings on the owner through the claimed-owner
-   broker and opens no PR [ORB-14474]. Admission defers one to the owner, recording the reason
+   `NoDiff`, files findings on the owner through the claimed-owner broker and opens no PR
+   [ORB-14474]. Admission defers one to the owner, recording the reason
    in `deferred_conflicts`, only for a caller below revision 9, the first with the NoDiff
    handoff. The schema check refuses such a caller first, so the deferral guards a relaxed check.
-   The tag itself supplies no verified report; the leaf must still write one.
+   The leaf needs no agent-written report for a clean base: its commit step pins the tag's
+   skip to the run and base, and the owner rechecks the tag on its own copy of the task
+   [ORB-14791].
    `context_files` are optional: an otherwise eligible backlog task with empty context is
    admitted on this pass with an empty footprint and holds no context lock. A live pilot
    preparation checkpoint still defers its tasks until that run settles. Undeclared edit
@@ -560,8 +562,15 @@ clean-tree verifier checkpoint (`verified_no_diff` or `verified_already_landed`)
 required validation. The sandboxed implementer writes the report and every declared log beneath `.orbit/tmp/`
 and returns `no_diff_artifacts` entries with artifact `path` and scratch `source_path`.
 Commit confines and bounds those reads, imports only the report and its declared logs
-through the claim, and reuses the existing no-diff/already-landed verifier; a tag or skip
-flag alone refuses this route. Both claimed leaves support it, and the PR leaf skips branch
+through the claim, and reuses the existing no-diff/already-landed verifier; a skip flag
+alone refuses this route. A `no-diff-expected` task whose implementer returns no report
+(a review that files findings) instead commits to a `skipped_no_diff_expected` checkpoint
+naming its task, run and pinned base [ORB-14791]. The owner's own pipeline skips the same
+clean commit on the tag alone; the claimed checkpoint lets the owner recheck that its copy
+of the task still carries the tag. A claimed tagged leaf whose worktree changed or whose HEAD
+moved is refused at commit as `no_diff_expected_changed`, before the index is touched: it has
+no pull-request route for code, while the owner's own pipeline still commits such a change
+[ORB-14247]. Both claimed leaves support it, and the PR leaf skips branch
 preparation, rebase, push and PR creation. No before-PR reviewer runs because no PR exists.
 The owner resolves its live base independently, requires candidate and tested HEAD to equal
 that base, and rechecks the report, its underlying evidence and logs at acceptance and completion.
