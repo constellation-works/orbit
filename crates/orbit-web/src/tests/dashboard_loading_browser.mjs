@@ -11,6 +11,23 @@ const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 
+async function assertAccentFocusRing(control) {
+  const focused = await control.evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      active: document.activeElement === element,
+      focusVisible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineColor: style.outlineColor,
+    };
+  });
+  if (!focused.active || !focused.focusVisible || focused.outlineWidth !== '2px'
+    || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(138, 179, 255)') {
+    throw new Error(`Keyboard control must show a 2px accent focus ring: ${JSON.stringify(focused)}`);
+  }
+}
+
 // A friction's task may be outside both the active status filter and the
 // current server page. Follow its actual link and require the full detail.
 async function assertFrictionTaskLinks(page) {
@@ -38,7 +55,7 @@ async function assertFrictionTaskLinks(page) {
     };
   });
   try {
-    for (const status of ['done', 'archived', 'rejected', 'someday', 'in-progress']) {
+    for (const status of ['done', 'archived', 'rejected', 'someday', 'in-progress', 'backlog']) {
       await page.evaluate(async status => {
         Object.assign(globalThis.frictionLinkedTask, {
           status, title: `Linked ${status} task`, description: `Detail for linked ${status} task`,
@@ -46,6 +63,12 @@ async function assertFrictionTaskLinks(page) {
         const { setActiveTab } = await import('/js/router.js');
         setActiveTab('knowledge/frictions');
       }, status);
+      if (status === 'done') {
+        await page.keyboard.press('Tab');
+        const filter = page.locator('#friction-status-filter');
+        await filter.focus();
+        await assertAccentFocusRing(filter);
+      }
       await page.locator('#friction-detail .knowledge-link-row').click();
       const pinned = page.locator('#tasks-body [data-key="pinned-LINK-1"]');
       await pinned.waitFor({ state: 'visible', timeout: 5000 });
@@ -58,6 +81,18 @@ async function assertFrictionTaskLinks(page) {
       }
       if (await page.locator('#tasks-body .task-action-notice').count()) {
         throw new Error('Opening a friction task must not fall back to copying its ID');
+      }
+      if (status === 'backlog') {
+        for (const action of ['comment', 'reject']) {
+          const button = pinned.locator(`.actions > .action.${action}`);
+          await page.keyboard.press('Tab');
+          await button.focus();
+          await button.press('Enter');
+          // Textareas animate their focus styling for 200 ms.
+          await page.waitForTimeout(250);
+          await assertAccentFocusRing(pinned.locator(`.${action}-form textarea`));
+          await pinned.locator(`.${action}-form .action.cancel`).click();
+        }
       }
       await pinned.locator('button[title="Dismiss global task detail"]').click();
     }
@@ -824,6 +859,74 @@ async function assertNarrowTableLayouts(page) {
   });
 }
 
+async function assertSkipLinkAndFocusRings(page) {
+  await page.keyboard.press('Tab');
+  const firstFocus = await page.evaluate(() => {
+    const link = document.getElementById('skip-link');
+    const rect = link.getBoundingClientRect();
+    const style = getComputedStyle(link);
+    return {
+      active: document.activeElement === link,
+      visible: rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= window.innerHeight,
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineColor: style.outlineColor,
+    };
+  });
+  if (!firstFocus.active || !firstFocus.visible) throw new Error(`First Tab must reveal Skip to content: ${JSON.stringify(firstFocus)}`);
+  if (firstFocus.outlineWidth !== '2px' || firstFocus.outlineStyle !== 'solid' || firstFocus.outlineColor !== 'rgb(138, 179, 255)') {
+    throw new Error(`Skip link focus ring must be 2px accent: ${JSON.stringify(firstFocus)}`);
+  }
+
+  await page.keyboard.press('Enter');
+  const focusedMain = await page.evaluate(() => {
+    const pane = document.querySelector('.tab-pane.active');
+    return document.activeElement.tagName === 'MAIN' && pane.contains(document.activeElement);
+  });
+  if (!focusedMain) throw new Error('Skip to content must move focus into the active pane main');
+
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
+  const target = await page.evaluate(() => {
+    const pane = document.querySelector('.tab-pane.active');
+    const main = Array.from(pane.querySelectorAll('main')).find(node => !node.hidden && node.style.display !== 'none');
+    return { href: document.getElementById('skip-link').getAttribute('href'), mainId: main?.id };
+  });
+  if (!target.mainId || target.href !== `#${target.mainId}`) throw new Error(`Skip target must follow the active route: ${JSON.stringify(target)}`);
+  await page.locator('#skip-link').evaluate(link => link.click());
+  const focusedRoutedMain = await page.evaluate(() => {
+    const pane = document.querySelector('.tab-pane.active');
+    return document.activeElement.tagName === 'MAIN' && pane.contains(document.activeElement);
+  });
+  if (!focusedRoutedMain) throw new Error('Skip to content must focus the routed main after navigation');
+
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
+  await page.evaluate(() => document.activeElement.blur());
+  let sawSkipLink = false;
+  for (let stop = 0; stop < 160; stop += 1) {
+    const focused = await page.evaluate(() => {
+      const element = document.activeElement;
+      const style = getComputedStyle(element);
+      return {
+        id: element.id,
+        label: element.getAttribute('aria-label') || element.textContent.trim().slice(0, 50),
+        focusVisible: element.matches(':focus-visible'),
+        outlineWidth: style.outlineWidth,
+        outlineStyle: style.outlineStyle,
+        outlineColor: style.outlineColor,
+      };
+    });
+    if (stop > 0 && focused.id === 'skip-link') {
+      sawSkipLink = true;
+      break;
+    }
+    if (focused.focusVisible && (focused.outlineWidth !== '2px' || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(138, 179, 255)')) {
+      throw new Error(`Keyboard focus ring differs from the 2px accent ring: ${JSON.stringify(focused)}`);
+    }
+    await page.keyboard.press('Tab');
+  }
+  if (!sawSkipLink) throw new Error('Keyboard focus walk did not cycle through the dashboard controls');
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
@@ -851,6 +954,8 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  await assertSkipLinkAndFocusRings(page);
+  console.log('Dashboard skip link and keyboard focus checks passed.');
   await assertRunDetailActions(page, evidence);
   if (process.argv[4] === '--run-detail') {
     await assertRunDetailPresentation(page, evidence);

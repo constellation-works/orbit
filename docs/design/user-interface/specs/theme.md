@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-10-04
+last_validated: 2026-10-07
 ---
 
 # Spec: Canon Refined Theme
@@ -36,7 +36,8 @@ Borders delineate structure without heavy contrast.
 
 ### Semantic Colors
 Colors are muted but distinct, avoiding harsh neon tones while maintaining semantic meaning.
-- **Text:** `--fg` (`#ededf0`), `--fg-dim` (`#8f8f99`), `--fg-mute` (`#6b6b75`)
+- **Text:** `--fg` (`#ededf0`), `--fg-dim` (`#8f8f99`), `--fg-mute` (`#8a8a94`)
+- **Disabled text:** `--fg-disabled` (`#6b6b75`), reserved for disabled states. Muted text stays above 4.5:1 contrast on `--bg`, `--bg-rail` and `--bg-elev`; disabled plugin cards keep full text contrast so their status and diagnostics remain readable.
 - **Accent (Blue):** `--accent` (`#8ab3ff`)
 - **Success/Done (Green):** `--status-done` (`#5ad8a0`)
 - **In-Progress (Teal):** `--status-in-progress` (`#5cc8de`)
@@ -47,6 +48,7 @@ Colors are muted but distinct, avoiding harsh neon tones while maintaining seman
 Status colours are lighter than the Tailwind 500 steps they replaced so a 7px dot stays distinct on the near-black canvas; each is paired with a word, so colour is never the only signal.
 
 ### Structural Rules
+- **Keyboard focus:** Every focusable control uses a `2px solid var(--accent)` outline under `:focus-visible`, including filters and task-action textareas. Outline offsets may move the ring inside a clipped row or outside a control.
 - **Radii:** `12px` for panels, `8px` (`--radius`) for cards and segmented controls, `6–7px` for buttons, inputs and selects, and fully round for filter chips and status dots.
 - **Density:** Padding remains tight (e.g., `12px 16px` for headers, `8px` gaps), but text is allowed to breathe more than in the legacy terminal theme.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
