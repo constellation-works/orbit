@@ -172,10 +172,37 @@ body {
   width: 45%;
 }
 
+.sl-markdown-content table.orbit-config-keys code:not(pre code) {
+  overflow-x: visible;
+  font-size: 0.72em;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-config-keys .orbit-config-token {
+  white-space: nowrap;
+}
+
 @media (min-width: 1024px) {
   .sl-markdown-content table.orbit-config-keys th:first-child,
   .sl-markdown-content table.orbit-config-keys td:first-child {
-    width: 68%;
+    width: 66%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    padding-inline: 0.125rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    width: 40%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    padding-inline: 0.5rem;
   }
 }
 

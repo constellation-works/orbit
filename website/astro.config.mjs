@@ -29,6 +29,46 @@ function addClasses(node, ctx, ...classNames) {
   ctx.setProperty(node, 'className', list);
 }
 
+function wrapConfigCodeTokens(node, ctx) {
+  if (node.tagName === 'pre' || node.tagName === 'wbr') return;
+
+  const children = (node.children || []).flatMap((child) => {
+    if (child.type === 'text') {
+      return child.value.split(/(_)/).filter(Boolean).flatMap((part) => {
+        // Explicit wbr nodes provide allowed breaks; tokens themselves stay atomic,
+        // including hyphenated Purpose values that browsers normally split.
+        const token = {
+          type: 'element',
+          tagName: 'span',
+          properties: { className: ['orbit-config-token'] },
+          children: [{ type: 'text', value: part }],
+        };
+        return part === '_'
+          ? [token, { type: 'element', tagName: 'wbr', properties: {}, children: [] }]
+          : [token];
+      });
+    }
+    if (child.type === 'element') wrapConfigCodeTokens(child, ctx);
+    return [child];
+  });
+  ctx.setProperty(node, 'children', children);
+}
+
+function wrapConfigTableCodeTokens(table, ctx) {
+  function visit(node) {
+    if (node.tagName === 'code') {
+      wrapConfigCodeTokens(node, ctx);
+      return;
+    }
+    if (node.tagName === 'pre') return;
+    for (const child of node.children || []) {
+      if (child.type === 'element') visit(child);
+    }
+  }
+
+  visit(table);
+}
+
 const tablePlugin = defineHastPlugin({
   name: 'documentation-tables',
   element: {
@@ -50,6 +90,7 @@ const tablePlugin = defineHastPlugin({
           ctx.textContent(headers[1]).trim() === 'Type, default and purpose'
         ) {
           addClasses(node, ctx, 'orbit-config-keys');
+          wrapConfigTableCodeTokens(node, ctx);
         }
       }
     },

@@ -34,6 +34,8 @@ function inspectLayout() {
   let codes = 0;
   let wrappedCodes = 0;
   const tolerance = 1;
+  const configTable = document.querySelector('table.orbit-config-keys');
+  const isConfigPage = location.pathname === '/reference/config/';
   for (const code of document.querySelectorAll('code')) {
     if (code.closest('pre') || !code.getClientRects().length) continue;
     codes++;
@@ -55,31 +57,66 @@ function inspectLayout() {
     const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
     let previous;
     let wrapped = false;
+    const lineTops = [];
+    const isConfigCode = Boolean(code.closest('table.orbit-config-keys'));
+    let whitespaceSincePrevious = false;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       for (let offset = 0; offset < node.length; offset++) {
         const character = node.data[offset];
-        if (/\s/.test(character)) {
+        if (!isConfigCode && /\s/.test(character)) {
           previous = undefined;
           continue;
         }
         const range = document.createRange();
         range.setStart(node, offset);
         range.setEnd(node, offset + 1);
-        const rect = range.getBoundingClientRect();
-        if (!rect.width || !rect.height) continue;
-        if (previous && Math.abs(previous.top - rect.top) > tolerance) {
-          wrapped = true;
-          if (!/[/.=]/.test(previous.character)) {
-            failures.push({ kind: 'token-break', text, before: previous.character, after: character });
+        if (isConfigCode && /\s/.test(character)) whitespaceSincePrevious = true;
+        const rects = [...range.getClientRects()].filter((rect) => rect.width && rect.height);
+        for (const rect of rects) {
+          if (isConfigCode && !lineTops.some((top) => Math.abs(top - rect.top) <= tolerance)) lineTops.push(rect.top);
+          if (previous && Math.abs(previous.top - rect.top) > tolerance) {
+            wrapped = true;
+            const allowedBreak = isConfigCode
+              ? whitespaceSincePrevious || /\s/.test(character) || /[._/=]/.test(previous.character)
+              : /[/.=]/.test(previous.character);
+            if (!allowedBreak) {
+              failures.push({ kind: 'token-break', text, before: previous.character, after: character });
+            }
           }
+          previous = { character, top: rect.top };
+          if (isConfigCode && !/\s/.test(character)) whitespaceSincePrevious = false;
         }
-        previous = { character, top: rect.top };
       }
     }
     if (wrapped) wrappedCodes++;
+    if (isConfigCode && code.scrollWidth > code.clientWidth) {
+      failures.push({ kind: 'config-code-overflow', text,
+        clientWidth: code.clientWidth, scrollWidth: code.scrollWidth });
+    }
+    if (isConfigCode && innerWidth >= 1024 && code.closest('td')?.cellIndex === 0 && lineTops.length > 1) {
+      failures.push({ kind: 'config-key-wrapped-at-desktop', text, lines: lineTops.length, width: innerWidth });
+    }
   }
-  if (innerWidth === 375 && document.documentElement.scrollWidth > innerWidth) {
+  if ((isConfigPage || innerWidth === 375) && document.documentElement.scrollWidth !== innerWidth) {
     failures.push({ kind: 'page-overflow', scrollWidth: document.documentElement.scrollWidth, width: innerWidth });
+  }
+  let configMetrics;
+  if (isConfigPage) {
+    if (!configTable) {
+      failures.push({ kind: 'config-table-missing' });
+    } else {
+      const container = configTable.parentElement;
+      configMetrics = {
+        tableClientWidth: configTable.clientWidth,
+        tableScrollWidth: configTable.scrollWidth,
+        containerClientWidth: container.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: innerWidth,
+      };
+      if (configMetrics.tableScrollWidth !== configMetrics.containerClientWidth) {
+        failures.push({ kind: 'config-table-container-overflow', ...configMetrics });
+      }
+    }
   }
   let providerTable;
   if (location.pathname === '/concepts/agents/' && innerWidth === 1280) {
@@ -101,7 +138,7 @@ function inspectLayout() {
       }
     }
   }
-  return { codes, wrappedCodes, providerTable, failures };
+  return { codes, wrappedCodes, configMetrics, providerTable, failures };
 }
 
 const routes = await htmlRoutes(fileURLToPath(new URL('../dist/', import.meta.url)));
@@ -127,11 +164,13 @@ const preHTML = markdownToHtml(`\n\n<pre><code>${preText}</code></pre>`, { hastP
 const evidence = { routes, viewports: [], fixtures: [], failures: [] };
 const browser = await chromium.launch();
 try {
-  for (const width of [375, 768, 1280, 1440]) {
+  const standardWidths = [375, 768, 1280, 1440];
+  for (const width of [320, ...standardWidths, 1024, 1152, 1920]) {
     for (const colorScheme of ['dark', 'light']) {
       const page = await browser.newPage({ viewport: { width, height: 900 }, colorScheme });
       await page.addInitScript((theme) => localStorage.setItem('orbit-theme-choice', theme), colorScheme);
       for (const route of routes) {
+        if (route !== '/reference/config/' && !standardWidths.includes(width)) continue;
         const response = await page.goto(new URL(route, siteURL).href);
         assert.equal(response.status(), 200, `Built route ${route} must load`);
         await page.evaluate(async () => {
