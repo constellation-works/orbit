@@ -131,6 +131,11 @@ def main():
                       for target in package["targets"])
     target_flags = (["--lib"] if has_library else []) + ["--bins", "--tests"]
     test_environment = dict(os.environ)
+    # A claimed executor exports the worker-binding marker so the Orbit commands
+    # its agent runs refuse to start without the binding recorded for them. A
+    # test process has no binding: inherited, the marker makes every in-process
+    # fixture that opens a runtime fail closed. Tests of the refusal set it.
+    test_environment.pop("ORBIT_WORKER_CONTEXT_REQUIRED", None)
     temporary_root = Path(tempfile.gettempdir()).resolve()
     if temporary_root.is_relative_to(ROOT) and temporary_root != ROOT:
         # Non-Git fixtures must not discover the enclosing managed checkout.

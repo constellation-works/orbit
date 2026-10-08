@@ -473,6 +473,44 @@ fn parallel_repeated_fixtures_all_stay_off_the_ambient_authority() {
     sentinel.assert_unchanged(&before);
 }
 
+/// A claimed executor marks every `orbit` command its agent runs as a managed
+/// worker child. Without the binding its parent recorded, that child must not
+/// open a runtime. The affected-test gate drops the marker for test processes
+/// only; a real worker child keeps failing closed.
+#[test]
+fn a_managed_worker_child_without_a_binding_is_refused() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = home.join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    crate::git_repo::init(&work);
+    run_ok(
+        &mut isolated_orbit(&work, &home),
+        &["workspace", "init", "--name", "worker-binding"],
+        "initialize fixture workspace",
+    );
+    run_ok(
+        &mut isolated_orbit(&work, &home),
+        &["task", "list", "--json"],
+        "an unmarked child opens the runtime",
+    );
+
+    let output = isolated_orbit(&work, &home)
+        .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
+        .args(["task", "list", "--json"])
+        .output()
+        .expect("run orbit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "an unbound worker child must be refused:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("managed worker runtime binding unavailable"),
+        "the refusal must be the missing worker binding:\n{stderr}"
+    );
+}
+
 /// An `orbit` command with no inherited authority and no ambient sentinel —
 /// used to build the sentinel itself.
 fn isolated_orbit(cwd: &Path, home: &Path) -> Command {

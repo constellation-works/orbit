@@ -813,19 +813,23 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
 }
 
 /// Capture the pre-change stable timestamp independently of Orbit's probe.
+///
+/// `None` when the sandbox refuses to run `ps`: there is no pre-change token
+/// to capture, so the caller returns after this reports the skip on stderr.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn ps_lstart_utc(pid: u32) -> String {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
-        .env("TZ", "UTC")
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .output()
-        .expect("capture pre-change ps fixture");
+#[allow(clippy::print_stderr)]
+fn ps_lstart_utc(pid: u32) -> Option<String> {
+    let output = match test_env::ps_lstart_utc(pid) {
+        test_env::PsRun::Ran(output) => output,
+        test_env::PsRun::Denied(reason) => {
+            eprintln!("SKIP: {reason}");
+            return None;
+        }
+    };
     assert!(output.status.success(), "ps fixture: {output:?}");
     let raw = String::from_utf8(output.stdout).unwrap().trim().to_string();
     assert!(!raw.is_empty(), "ps must describe the live fixture process");
-    raw
+    Some(raw)
 }
 
 /// Re-execution clears PATH only in the child, without changing the parallel
@@ -866,7 +870,9 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
     }
 
     let pid = std::process::id();
-    let raw = ps_lstart_utc(pid);
+    let Some(raw) = ps_lstart_utc(pid) else {
+        return;
+    };
     let namespace = current_pid_namespace().expect("Linux PID namespace");
     let token = format!("{STABLE_TOKEN_PREFIX}pidns={namespace}:{raw}");
     assert_eq!(
@@ -911,7 +917,9 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
     let fixture = Fixture::init();
     for format in ["v2", "v1", "legacy"] {
         let owner = test_env::spawn_unrelated_process();
-        let raw = ps_lstart_utc(owner.pid());
+        let Some(raw) = ps_lstart_utc(owner.pid()) else {
+            return;
+        };
         let token = match format {
             "v2" => format!(
                 "{STABLE_TOKEN_PREFIX}pidns={}:{raw}",

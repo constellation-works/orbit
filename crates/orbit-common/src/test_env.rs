@@ -434,6 +434,42 @@ pub fn start_identity_probe_blocker() -> Option<String> {
     crate::process::identity::self_start_identity_probe_blocker()
 }
 
+/// A `ps` run from a test: its output, or why the sandbox refused to start it.
+#[derive(Debug)]
+pub enum PsRun {
+    /// `ps` started; its status and output are the caller's to assert.
+    Ran(std::process::Output),
+    /// An agent executor's sandbox refused to exec the setuid `ps`. The test
+    /// has nothing to compare: it reports this reason as a skip and returns.
+    Denied(String),
+}
+
+/// Run `ps -o lstart= -p <pid>` under the UTC / C locale that persisted owner
+/// tokens were captured in.
+///
+/// Only `PermissionDenied` while starting `ps` yields [`PsRun::Denied`]; any
+/// other failure to start it panics, and a `ps` that ran is returned whatever
+/// its status, so a sandbox can never turn a wrong rendering into a pass.
+pub fn ps_lstart_utc(pid: u32) -> PsRun {
+    let spawned = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output();
+    classify_ps(spawned)
+}
+
+pub(crate) fn classify_ps(spawned: std::io::Result<std::process::Output>) -> PsRun {
+    match spawned {
+        Ok(output) => PsRun::Ran(output),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            PsRun::Denied(format!("the sandbox denied running `ps`: {error}"))
+        }
+        Err(error) => panic!("run ps: {error}"),
+    }
+}
+
 /// A live process that is no part of this one: not this process, its parent,
 /// or its process group. Killed and reaped on drop.
 #[cfg(unix)]

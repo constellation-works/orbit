@@ -4,7 +4,9 @@
 
 use std::process::Command;
 
-use orbit_common::test_env::{assert_child_test_exists, assert_child_test_passed};
+use orbit_common::test_env::{
+    assert_child_test_exists, assert_child_test_passed, clear_inherited_authority,
+};
 
 const CHILD: &str = "guard_child";
 const MISSING: &str = "removed_child_entry_point";
@@ -50,6 +52,75 @@ fn reexec_guard_rejects_missing_ignored_and_failed_children() {
     assert_child_test_exists(CHILD);
     let error = std::panic::catch_unwind(|| assert_child_test_exists(MISSING)).unwrap_err();
     assert!(panic_message(error).contains(MISSING));
+}
+
+/// Every variable `clear_inherited_authority` removed when the claimed
+/// executor's affected gate stopped passing the worker-binding marker to test
+/// processes. Fixtures that spawn `orbit` still rely on this list; the gate
+/// change must not narrow it.
+const CLEARED_AUTHORITY: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "ORBIT_ROOT",
+    "ORBIT_REGISTRY_ROOT",
+    "ORBIT_WORKSPACE",
+    "ORBIT_WORKSPACE_CLAIM_TOKEN",
+    "ORBIT_WORKTREE_ROOT",
+    "ORBIT_JOB_DIR",
+    "ORBIT_ACTIVITY_DIR",
+    "ORBIT_MANAGED_RUN_CONTEXT",
+    "ORBIT_WORKER_CONTEXT_REQUIRED",
+    "ORBIT_RUN_ID",
+    "ORBIT_TASK_ID",
+    "ORBIT_ACTIVE_TASK_ID",
+    "ORBIT_SESSION_ID",
+    "ORBIT_ACTIVITY_ID",
+    "ORBIT_STEP_INDEX",
+    "ORBIT_AGENT_NAME",
+    "ORBIT_AGENT_MODEL",
+    "ORBIT_ACTOR",
+    "ORBIT_OPERATOR",
+    "ORBIT_TASK_ACTOR_KIND",
+    "ORBIT_ACTIVITY_TOOLS",
+    "ORBIT_ACTIVITY_TOOL_POLICY",
+    "ORBIT_ACTIVITY_TOOLS_DENY",
+    "ORBIT_ACTIVITY_NAME",
+    "ORBIT_ACTIVITY_FS_PROFILE",
+    "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
+    "ORBIT_BIN",
+    "ORBIT_PLUGIN_BROKER",
+];
+
+#[test]
+fn inherited_authority_is_removed_from_a_child_command() {
+    let mut command = Command::new("true");
+    for name in CLEARED_AUTHORITY {
+        command.env(name, "inherited");
+    }
+    command.env("ORBIT_SCRATCH_DIR", "kept");
+    clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+
+    let envs = command
+        .get_envs()
+        .map(|(name, value)| (name.to_string_lossy().into_owned(), value.is_some()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for name in CLEARED_AUTHORITY {
+        assert_eq!(
+            envs.get(*name),
+            Some(&false),
+            "inherited authority `{name}` must not reach a fixture's child"
+        );
+    }
+    assert_eq!(envs.get("ORBIT_SCRATCH_DIR"), Some(&true));
 }
 
 fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {
