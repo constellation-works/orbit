@@ -103,8 +103,8 @@ pub use plugin_enablement::{
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
-    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key, config_key_options,
-    describe as describe_config_key,
+    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
+    admit_settable_config_key, config_key_options, describe as describe_config_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig, disabled_crew_message,

@@ -443,6 +443,31 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             );
             assert_eq!(row["source"]["layer"], "workspace");
 
+            let effective_keys = read["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|section| section["keys"].as_array().unwrap())
+                .collect::<Vec<_>>();
+            for key in ["machine.id", "machine.task_prefix"] {
+                let row = effective_keys
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap_or_else(|| panic!("effective view includes {key}"));
+                assert_eq!(row["settable"], false, "effective write status for {key}");
+            }
+            let catalog =
+                super::support::json_ok(server.get("/api/config/keys?workspace=ws_http_fixture"));
+            for key in ["machine.id", "machine.task_prefix"] {
+                let row = catalog["keys"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap_or_else(|| panic!("key catalog includes {key}"));
+                assert_eq!(row["settable"], false, "catalog write status for {key}");
+            }
+
             // [ORB-13992] The Config tab reports both review switches with
             // their sources, as `orbit config show` and `orbit doctor` do.
             super::support::json_ok(server.send(

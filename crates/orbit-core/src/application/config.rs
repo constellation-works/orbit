@@ -20,7 +20,8 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigRoots, ConfigSection, ConfigStore,
     ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason, WorkspaceInitMode,
-    admit_config_key, config_key_options, describe_config_key, load_effective_config,
+    admit_config_key, admit_settable_config_key, config_key_options, describe_config_key,
+    load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
@@ -193,8 +194,8 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
     }))
 }
 
-/// The `orbit config keys` reference: every settable key with its type,
-/// section, description, and accepted choices.
+/// The `orbit config keys` reference: every registered key with its write
+/// availability, type, section, description, and accepted choices.
 pub fn key_catalog() -> JsonValue {
     let keys = CONFIG_KEY_REGISTRY
         .iter()
@@ -206,6 +207,7 @@ pub fn key_catalog() -> JsonValue {
                 "section": descriptor.section.token(),
                 "section_title": descriptor.section.title(),
                 "description": descriptor.description,
+                "settable": admit_settable_config_key(descriptor.key).is_ok(),
             })
         })
         .collect::<Vec<_>>();
@@ -772,6 +774,10 @@ fn base_row(
     let section = descriptor.map(|descriptor| descriptor.section);
     let mut row = Map::new();
     row.insert("key".to_string(), json!(key));
+    row.insert(
+        "settable".to_string(),
+        json!(admit_settable_config_key(key).is_ok()),
+    );
     row.insert("label".to_string(), json!(label_for(section, key)));
     row.insert("value".to_string(), value.clone());
     row.insert(

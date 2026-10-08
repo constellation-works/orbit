@@ -432,7 +432,6 @@ function sectionPanel(section, payload) {
   const header = el("header", {}, [
     el("span", {}, [
       el("span", { class: "config-section-title", text: section.title }),
-      section.key_prefix ? el("span", { class: "config-section-prefix mono", text: `${section.key_prefix}.*` }) : null,
       el("span", { class: "config-section-blurb", text: section.blurb }),
     ]),
     el("span", { class: "config-header-right" }, [
@@ -497,7 +496,7 @@ function matchesFilter(row) {
 function keyRow(row, payload) {
   const node = el("div", { class: `config-row state-${row.state}` });
   node.dataset.key = row.key;
-  if (editable(payload) && editing && editing.kind === "key" && editing.key === row.key) {
+  if (keyEditable(row, payload) && editing && editing.kind === "key" && editing.key === row.key) {
     node.classList.add("editing");
     node.appendChild(keyEditor(row, payload, node));
     return node;
@@ -508,6 +507,7 @@ function keyRow(row, payload) {
 
 function keyCells(row, payload, node) {
   const prefix = row.key.slice(0, row.key.length - String(row.label || row.key).length);
+  const canEdit = keyEditable(row, payload);
   const cells = el("div", { class: "config-row-main" }, [
     el("span", { class: "config-key mono" }, [
       prefix ? el("span", { class: "config-key-prefix", text: prefix }) : null,
@@ -521,9 +521,9 @@ function keyCells(row, payload, node) {
         el("span", { class: "config-shadow", text: shadow.note }),
       ),
     ]),
-    editable(payload) ? editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key") : null,
+    canEdit ? editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key") : null,
   ]);
-  if (editable(payload)) {
+  if (canEdit) {
     cells.classList.add("clickable");
     cells.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
@@ -533,6 +533,10 @@ function keyCells(row, payload, node) {
   const error = pendingError(node, row.key);
   if (error) cells.appendChild(error);
   return cells;
+}
+
+function keyEditable(row, payload) {
+  return editable(payload) && row.settable !== false;
 }
 
 function sourceChip(row) {
@@ -569,11 +573,17 @@ function displayValue(value) {
 /// operator authority ends it.
 function startEdit(next) {
   if (!editable(lastPayload)) return;
+  if (next.kind === "key" && !keySettable(next.key, lastPayload)) return;
   editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
   if (lastPayload) render(lastPayload);
   // The control that opened the editor is gone; land in the editor's first field.
   const field = $("config-body")?.querySelector(".config-editor input, .config-editor select, .config-editor textarea");
   if (field && typeof field.focus === "function") field.focus();
+}
+
+function keySettable(key, payload) {
+  const row = (payload?.sections || []).flatMap((section) => section.keys || []).find((entry) => entry.key === key);
+  return row?.settable !== false;
 }
 
 function cancelEdit() {
@@ -1278,7 +1288,7 @@ function pathsPanel(payload) {
 
 function renderKeyReference(body, payload) {
   const keys = (payload.keys || []).filter((key) =>
-    !filterText || String(key.key).toLowerCase().includes(filterText),
+    key.settable !== false && (!filterText || String(key.key).toLowerCase().includes(filterText)),
   );
   const panel = el("section", { class: "panel config-section" });
   panel.appendChild(

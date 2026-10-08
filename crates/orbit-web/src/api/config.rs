@@ -111,7 +111,7 @@ pub(super) async fn get_config_file(
     }
 }
 
-/// `GET /api/config/keys` — the settable-key reference.
+/// `GET /api/config/keys` — the registry key reference, including write availability.
 ///
 /// Workspace-scoped like the rest of the API so `?workspace=` selection keeps
 /// working, even though the registry itself is machine-wide.

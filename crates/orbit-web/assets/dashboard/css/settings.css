@@ -79,7 +79,6 @@
 
 .config-section.not-inherited { border-color: var(--status-open); }
 .config-section-title { color: var(--fg); }
-.config-section-prefix { color: var(--fg-mute); margin-left: 8px; text-transform: none; letter-spacing: 0; }
 .config-section-blurb { color: var(--fg-dim); margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .config-header-right { display: inline-flex; gap: 8px; align-items: center; }
 .config-badge { padding: 2px 8px; border-radius: 2px; font: 11px/1.4 var(--font-mono); }
