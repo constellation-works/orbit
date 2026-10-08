@@ -12,6 +12,14 @@ struct CachedRuntime {
     runtime: Arc<OrbitRuntime>,
 }
 
+/// Test override for native clock status reads.
+#[cfg(test)]
+pub(crate) type ClockStatusHook = Arc<dyn Fn() -> Result<ClockStatus, OrbitError> + Send + Sync>;
+
+/// Test override for a successful native clock mutation.
+#[cfg(test)]
+pub(crate) type ClockMutationHook = Arc<dyn Fn() -> Result<(), OrbitError> + Send + Sync>;
+
 pub(super) struct StateInner {
     /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
     /// `global_root` when building per-workspace runtimes and observing host resources.
@@ -64,6 +72,11 @@ pub(super) struct StateInner {
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
+    /// Test-only fault injection for clock observations and changes.
+    #[cfg(test)]
+    clock_status_hook: Mutex<Option<ClockStatusHook>>,
+    #[cfg(test)]
+    clock_mutation_hook: Mutex<Option<ClockMutationHook>>,
 }
 
 impl StateInner {
@@ -393,6 +406,10 @@ impl DashboardState {
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
+                #[cfg(test)]
+                clock_status_hook: Mutex::new(None),
+                #[cfg(test)]
+                clock_mutation_hook: Mutex::new(None),
             }),
         }
     }
@@ -487,7 +504,48 @@ impl DashboardState {
 
     /// Observe the native host clock.
     pub(crate) fn clock_status(&self) -> Result<ClockStatus, OrbitError> {
+        #[cfg(test)]
+        if let Some(hook) = self
+            .inner
+            .clock_status_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            return hook();
+        }
         orbit_core::application::routines::clock_status(&self.inner.global_root)
+    }
+
+    /// Install a test-only override for native clock observations.
+    #[cfg(test)]
+    pub(crate) fn set_clock_status_hook(&self, hook: ClockStatusHook) {
+        *self
+            .inner
+            .clock_status_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Install a test-only override for the native clock mutation.
+    #[cfg(test)]
+    pub(crate) fn set_clock_mutation_hook(&self, hook: ClockMutationHook) {
+        *self
+            .inner
+            .clock_mutation_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Run the test-only clock mutation override, if one is installed.
+    #[cfg(test)]
+    pub(crate) fn test_clock_mutation(&self) -> Option<Result<(), OrbitError>> {
+        self.inner
+            .clock_mutation_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .map(|hook| hook())
     }
 
     /// Resolve (and lazily build + cache) the runtime for workspace `id` against
