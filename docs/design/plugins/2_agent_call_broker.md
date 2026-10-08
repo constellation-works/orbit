@@ -406,7 +406,11 @@ service side regardless.
   Rows written before this change read back as not brokered.
 - `secret_updates` are applied by compare-and-swap inside the dispatch, and the response
   carries only `output`. A backend's own structured error keeps its code, message, `retryable`
-  and `detail`. Host refusals map to `plugin_broker_refused`, schema failures to
+  and `detail`, unless its code is one the listener answers before dispatch
+  (`plugin_broker_busy`, `plugin_broker_invalid_request`, `plugin_broker_request_too_large`):
+  that becomes `plugin_broker_call_failed`, non-retryable. The client reads those three codes
+  as "no broker audit row" and audits them itself, so a dispatched call must never answer
+  with one. Host refusals map to `plugin_broker_refused`, schema failures to
   `plugin_broker_invalid_input`, and any other failure to `plugin_broker_call_failed`, all
   non-retryable.
 - The worker watches the connection while dispatch runs. A disconnect or broker shutdown

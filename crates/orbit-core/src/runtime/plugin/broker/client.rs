@@ -12,8 +12,7 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::protocol::{
-    BUSY, FrameError, INVALID_REQUEST, MAX_REQUEST_BYTES, REQUEST_TOO_LARGE, SCHEMA_VERSION,
-    read_frame, write_frame,
+    FrameError, MAX_REQUEST_BYTES, SCHEMA_VERSION, is_listener_code, read_frame, write_frame,
 };
 
 const UNAVAILABLE: &str = "plugin_broker_unavailable";
@@ -187,10 +186,11 @@ pub(crate) fn forward_call_with_status(
                 message: format!("{kind} '{tool}' failed: {message}"),
                 payload,
             };
-            if matches!(code, BUSY | INVALID_REQUEST | REQUEST_TOO_LARGE) {
+            if is_listener_code(code) {
                 // These are rejected by the listener before dispatch enters
                 // the broker's audit boundary, so the nested caller owns the
-                // only durable failure row.
+                // only durable failure row. The broker rewrites a dispatched
+                // call's colliding code, so a backend cannot answer with one.
                 Err(ForwardCallError::CallerAudit(error))
             } else {
                 Err(ForwardCallError::BrokerAudit(error))
