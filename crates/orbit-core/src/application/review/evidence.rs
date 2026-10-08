@@ -121,14 +121,25 @@ pub(crate) fn evidence_hold(
     runtime: &OrbitRuntime,
     task_id: &str,
 ) -> Result<Option<ReviewEvidenceHold>, OrbitError> {
-    runtime
-        .get_task_artifact(task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)?
-        .map(|artifact| {
-            serde_json::from_slice::<ReviewEvidenceHold>(&artifact.content).map_err(|error| {
-                OrbitError::Execution(format!("review evidence hold is unreadable: {error}"))
-            })
-        })
-        .transpose()
+    let Some(artifact) = runtime.get_task_artifact(task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)? else {
+        return Ok(None);
+    };
+    match serde_json::from_slice::<ReviewEvidenceHold>(&artifact.content) {
+        Ok(hold) => Ok(Some(hold)),
+        Err(error) => {
+            tracing::warn!(
+                task_id,
+                artifact = REVIEW_EVIDENCE_HOLD_ARTIFACT,
+                %error,
+                "ignoring unreadable review evidence hold"
+            );
+            // Artifact upserts call `resume_evidence_hold` after they have
+            // committed. Treat a partial or agent-written hold as absent so
+            // that a malformed artifact cannot turn a successful write into
+            // a reported failure, or make later review admission fail.
+            Ok(None)
+        }
+    }
 }
 
 /// Re-read evidence rather than trusting a tag, task comment or summary.

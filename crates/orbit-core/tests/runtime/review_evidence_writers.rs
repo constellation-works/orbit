@@ -61,6 +61,63 @@ fn last_event(fixture: &Fixture) -> String {
 }
 
 #[test]
+fn malformed_hold_does_not_fail_later_artifact_writes_or_review_admission() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_writers::malformed_hold_does_not_fail_later_artifact_writes_or_review_admission",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let source = fixture
+        .repo
+        .join(".orbit/tmp")
+        .join(REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, "{").unwrap();
+
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": fixture.task_id,
+                "model": "codex",
+                "path": REVIEW_EVIDENCE_HOLD_ARTIFACT,
+                "source_path": source,
+            }),
+        )
+        .expect("a malformed hold must not report failure after its artifact was stored");
+
+    let later_artifact = fixture.repo.join(".orbit/tmp/later-evidence.json");
+    std::fs::write(&later_artifact, "{\"result\":\"ready\"}").unwrap();
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": fixture.task_id,
+                "model": "codex",
+                "path": "evidence/later.json",
+                "source_path": later_artifact,
+            }),
+        )
+        .expect("a malformed hold must not make a later artifact write fail");
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "evidence/later.json")
+            .unwrap()
+            .unwrap()
+            .content,
+        b"{\"result\":\"ready\"}"
+    );
+
+    fixture.admit();
+    assert_eq!(fixture.input["admission"]["applies"], true);
+    assert_eq!(fixture.input["admission"]["decision"], "admitted");
+}
+
+#[test]
 fn agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold() {
     if !super::dispatch_admission::isolated(
         "review_evidence_writers::agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold",
