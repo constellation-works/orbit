@@ -653,6 +653,14 @@ fn explained(record: &ReviewValidation) -> bool {
 
 /// One check: both records carry the same record id, or they share an
 /// effective identity.
+///
+/// Without a shared record id, identical commands are not enough when either
+/// record has a non-empty `check`: that identity takes precedence. For example,
+/// a superseded `cargo test -p x` with `check: "unit"` is not replaced by a
+/// required pass of `cargo test -p x` that omits `check`. The replacement must
+/// carry `check: "unit"` or normalize to the command `unit`. Conversely, an
+/// explicit `check: "cargo test -p x"` matches that command without a check.
+/// This rule also governs retained obligations and diagnostic contradictions.
 fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
     if matches!(
         (left.record_id(), right.record_id()),

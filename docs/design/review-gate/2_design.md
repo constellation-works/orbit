@@ -256,6 +256,13 @@ a passing required check of the same effective identity anywhere in the report.
 A record's effective
 identity is its non-empty, trimmed `check`, falling back to its normalized
 command. Explicit identities take precedence even when command text matches.
+Without a shared record id, a superseded `cargo test -p x` attempt with
+`check: "unit"` is therefore not replaced by a required pass of the identical
+command that omits `check`: their effective identities are `unit` and
+`cargo test -p x`. Preserve `check: "unit"` on the replacement to link them.
+The same refusal applies when only the replacement carries that identity.
+An explicit identity equal to the other record's normalized command still
+matches; omitting `check` is safe only when that effective identity stays equal.
 This also applies to retained obligations across report revisions: an earlier
 `not_run` record with command `make ci-fast` and no `check` is satisfied by a
 passed record with `check: "make ci-fast"` and a shell-wrapped command, and the
@@ -266,6 +273,13 @@ identity ignores whitespace and leading `NAME=value` assignments, so a required
 diagnostic, exclusion, negative control, omission, or unrelated pass
 cannot satisfy a host-required command. Certificates retain that snapshot;
 legacy certificates without it cannot be spent as coverage.
+
+Diagnostic contradictions use the same identity rule. A failed diagnostic
+with `check: "unit"` and a required pass of the same command without `check`
+are different checks, so command equality alone does not trigger
+`CheckContradicted`. The diagnostic must still explain itself and name failure
+sources entirely outside the candidate's scope; an in-scope failure remains
+invalid regardless of identity.
 
 | `role` | Meaning | Passing requires |
 | --- | --- | --- |
