@@ -854,7 +854,9 @@ ordered ladder (`orbit_store::admission_refusal`).
   Matching crate versions alone are insufficient on development branches. This is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
 - The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the
-  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)); its
+  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)), plus
+  `orbit run settlements`, which lists only settled claims' failure and release settlements and
+  needs no operator capability ([ORB-14439]); its
   executor lifecycle is `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
   ([ORB-13625]). MCP and `orbit tool run` reach them through one registry and
   `application::distributed`. All six are `control_plane`, so a replica refuses them. Approval,
@@ -1142,5 +1144,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14338] — carried an unpublished claimed candidate to a durable ref on `origin` so any host resumes it, gave claimed-local leaves candidate continuation, and recorded a typed reason in task history when a kept candidate is set aside.
 - [ORB-14261] — added one automatic repair of a handoff whose landing stopped on its base.
 - [ORB-14603] — made an owner-local run after a failed claim continue the kept candidate, and stopped resolving a follower's run id in the owner's own run store.
+- [ORB-14439] — kept each claimed leaf's failure or release settlement on the owner's claim state and listed settled claims through `orbit run settlements`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

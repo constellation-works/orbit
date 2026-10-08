@@ -238,6 +238,11 @@ impl TaskCommitBoundary {
                         }
                         state.claim.phase = ExecutionClaimPhase::Failed;
                         state.landing_invalidated = true;
+                        state.settlement = Some(ClaimSettlementRecord::of(
+                            ClaimSettlementKind::Fail,
+                            &value.evidence,
+                            Utc::now().to_rfc3339(),
+                        ));
                         params.status = Some(status);
                         release = true;
                     } else if status != expected_status {
@@ -377,6 +382,11 @@ impl TaskCommitBoundary {
                     params.status = Some(TaskStatus::Blocked);
                     release = true;
                     state.last_event = "claim_failed".into();
+                    state.settlement = Some(ClaimSettlementRecord::of(
+                        ClaimSettlementKind::Fail,
+                        value,
+                        Utc::now().to_rfc3339(),
+                    ));
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                 }
             }
@@ -411,6 +421,11 @@ impl TaskCommitBoundary {
                     budget_exhausted: matches!(blocked, Some(Some(_))),
                     forge_unavailable: value.forge_hold.is_some(),
                 });
+                state.settlement = Some(ClaimSettlementRecord::of(
+                    ClaimSettlementKind::Release,
+                    value,
+                    released_at.to_rfc3339(),
+                ));
                 state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                 state.landing_invalidated = true;
                 release = true;

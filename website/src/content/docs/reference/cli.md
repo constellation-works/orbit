@@ -117,6 +117,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit run logs [run_id]` | Raw stdout and stderr captured for a run. `--follow` streams until the run ends. |
 | `orbit run events [run_id]` | Audit events recorded for a run. |
 | `orbit run trace [run_id]` | Parent/child tree of a run's audit events. |
+| `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it, newest first, with each one's evidence class. Those leaves never appear in the owner's `run history`. `--since <time\|duration>`, `--json`, `--no-reconcile`. |
 
 ### Maintenance
 

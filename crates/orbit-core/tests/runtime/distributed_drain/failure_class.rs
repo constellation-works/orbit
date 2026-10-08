@@ -3,6 +3,7 @@
 //! or the task's; every other class releases it, within a per-task budget.
 
 use orbit_core::application::distributed::PullCrewWindow;
+use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::workflow::{
     BaselineRedHold, ClaimFailureClass, CrewExclusion, CrewExclusionSource,
     FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold,
@@ -368,6 +369,51 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
     }
 }
 
+/// [ORB-14439] The owner's run history never holds a follower's leaf, so the
+/// owner keeps what the leaf's settlement said: a failure scan on the owner
+/// reads a follower's provider outage, typed, from the owner's own store.
+#[test]
+fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
+    if !isolated(
+        module_path!(),
+        "the_owner_lists_a_follower_leaf_release_with_its_evidence_class",
+    ) {
+        return;
+    }
+    let (pair, _, _) = a_released_failure(
+        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+        "provider",
+    );
+    let leaf = pair.leaf_runs()[0].clone();
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let [settlement] = settlements.as_slice() else {
+        panic!("one settled claim: {settlements:?}");
+    };
+    assert_eq!(settlement.task_id, pair.tasks[0]);
+    assert_eq!(settlement.machine_id, pair.wire.caller);
+    assert_eq!(settlement.leaf_run_id.as_deref(), Some(leaf.as_str()));
+    assert_eq!(settlement.kind, Some(ClaimSettlementKind::Release));
+    assert_eq!(settlement.evidence, "provider_unavailable");
+    assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Provider));
+    assert_eq!(settlement.crew.as_deref(), Some("sol"));
+    assert!(
+        settlement
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("HTTP 401")),
+        "{settlement:?}"
+    );
+    let later = chrono::Utc::now() + chrono::Duration::minutes(1);
+    assert!(
+        pair.wire
+            .owner
+            .leaf_settlements(Some(later), false)
+            .unwrap()
+            .is_empty(),
+        "`since` bounds the scan window"
+    );
+}
+
 /// A failure of the host itself — its validation environment, or its route
 /// to the owner — releases the claim and suppresses the host for the drain's
 /// window, whatever crew a task names: the drain asks the owner for nothing
@@ -600,6 +646,12 @@ fn a_candidate_failure_still_blocks_the_task() {
     let failed = &settlement_of(&pair, &leaf)["Fail"];
     assert_eq!(failed["failure"]["class"], "candidate", "{failed}");
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+    let owner_record = &pair.wire.owner.leaf_settlements(None, false).unwrap()[0];
+    assert_eq!(
+        (owner_record.kind, owner_record.evidence),
+        (Some(ClaimSettlementKind::Fail), "failure"),
+        "the owner keeps the failure settlement typed: {owner_record:?}"
+    );
     assert_eq!(
         pair.follower
             .pull_leaf_claim(&leaf)

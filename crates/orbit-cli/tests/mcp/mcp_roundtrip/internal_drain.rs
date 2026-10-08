@@ -430,6 +430,22 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
         1,
         "one durable admission/effect: {claims}"
     );
+    // [ORB-14439] The follower's leaf never enters the owner's run history;
+    // a read-only failure scan on the owner, which holds no operator grant,
+    // still reads the leaf's failure settlement.
+    let settlements = orbit_ok(McpWorkspace::orbit_command(&owner.work, &owner.home).args([
+        "run",
+        "settlements",
+        "--no-reconcile",
+        "--json",
+    ]));
+    let settlements: Value = serde_json::from_slice(&settlements.stdout).unwrap();
+    let settlement = &settlements["settlements"][0];
+    assert_eq!(settlement["task_id"], id, "{settlements}");
+    assert_eq!(settlement["machine_id"], "hm_follower", "{settlements}");
+    assert_eq!(settlement["leaf_run_id"], "leaf-1", "{settlements}");
+    assert_eq!(settlement["kind"], "fail", "{settlements}");
+    assert_eq!(settlement["reason"], "Fixture failed", "{settlements}");
     let wrong_workspace = follower
         .call_internal_drain(
             "orbit.drain.probe",

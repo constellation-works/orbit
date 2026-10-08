@@ -12,6 +12,7 @@ use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
 use super::readiness::ReadinessCommand;
+use super::settlements::RunSettlementsArgs;
 use super::ship;
 use super::show::RunShowArgs;
 use super::sweep;
@@ -35,6 +36,7 @@ Run history:
   orbit run logs [run_id] [-s step_id] [--json]
   orbit run events [run_id] [-s step_id] [--type event_type] [--json]
   orbit run trace [run_id] [--json]
+  orbit run settlements [--since 7d] [--json]
 
 Maintenance:
   orbit run cancel <run_id>
@@ -67,6 +69,7 @@ Audits:
   logs       Print raw stdout/stderr captured for a job run
   events     Show audit events recorded for a job run
   trace      Show audit event parent/child trace for a job run
+  settlements  Show failure and release settlements claimed leaves sent this owner
 
 Maintenance:
   cancel       Cancel a pending or running job run
@@ -115,6 +118,8 @@ pub enum RunSubcommand {
     Events(RunEventsArgs),
     /// Show audit event parent/child trace for a job run
     Trace(RunTraceArgs),
+    /// Show failure and release settlements claimed leaves sent this owner
+    Settlements(RunSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
     /// Change how many tasks a running drain keeps in flight
@@ -141,6 +146,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::Logs(command) => command.execute(runtime),
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
+            RunSubcommand::Settlements(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),

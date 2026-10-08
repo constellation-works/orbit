@@ -13,6 +13,7 @@ mod lock_holders;
 mod logs;
 mod readiness;
 mod security_summary;
+mod settlements;
 pub mod ship;
 mod show;
 mod steps;

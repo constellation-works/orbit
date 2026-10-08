@@ -43,6 +43,7 @@ mod contract;
 mod entry;
 mod final_recovery;
 mod follower;
+mod leaf_settlements;
 mod probe;
 mod pull_waiting;
 mod serve;
@@ -55,6 +56,7 @@ pub use contract::{
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
+pub use leaf_settlements::LeafSettlement;
 pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
