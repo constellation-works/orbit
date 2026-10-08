@@ -166,6 +166,7 @@ impl Judgement {
                     control: None,
                     sources: Vec::new(),
                     mutation_target: Vec::new(),
+                    deferred: Vec::new(),
                     baseline: None,
                 });
             }

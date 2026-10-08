@@ -1,12 +1,15 @@
 # Owner fulfilment of a review evidence hold whose every requirement is a
-# Linux CodeQL run, so a candidate reviewed on a host that cannot complete
-# `scripts/codeql-rust-local.sh` (a Mac pull leaf) lands without an operator.
+# Linux CodeQL run or a Linux host sandbox test, so a candidate reviewed on a
+# host that cannot complete `scripts/codeql-rust-local.sh` (a Mac pull leaf),
+# or inside an agent sandbox where Orbit's own sandbox tests cannot nest,
+# lands without an operator.
 #
 # Trigger
 # - A Linux owner's sweep tick submits one run per in-progress task whose
-#   latest decision is an evidence hold with only `codeql` requirements and
-#   no matching result yet. It defers when Bubblewrap namespaces are
-#   unavailable. Followers, worker processes and other platforms never submit.
+#   latest decision is an evidence hold with only `codeql` and Linux
+#   `host_sandbox_test` requirements and no matching result yet. It defers
+#   when Bubblewrap namespaces are unavailable. Followers, worker processes
+#   and other platforms never submit.
 # - Admission is keyed by `attempt_key` (the hold's attempt, candidate and
 #   attempt number), and at most one run is active at once. A hold gets one
 #   run, plus up to two more only after a refusal that can clear on its own
@@ -14,15 +17,19 @@
 #   an outcome.
 #
 # Step
-# - `fulfil` re-checks the hold, the host and free disk, fetches the held
-#   commit from origin when needed, and runs each named command at it in a
-#   standalone shallow checkout, holding its own Git metadata, confined by
-#   Bubblewrap. The host filesystem is read-only and the checkout is the only
-#   writable task-controlled path. It
-#   attaches each run's log, and the `codeql` results only when every run
-#   completed with no findings; receipt of every result queues a fresh review.
-#   A refusal leaves the hold in place with a typed reason. Every attempt is audited as
-#   `review.evidence_fulfilment` and commented on the task.
+# - `fulfil` admits every command against its kind's allowlist first, so a
+#   command outside it runs nothing and leaves only its refusal log. It then
+#   re-checks the hold, the host and free disk, fetches the held commit from
+#   origin when needed, and runs each command at it without a shell. CodeQL
+#   runs in a standalone shallow checkout, holding its own Git metadata,
+#   confined by Bubblewrap: the host filesystem is read-only and the checkout
+#   is the only writable task-controlled path. A sandbox test runs in a
+#   detached worktree with a run-local build target, outside any sandbox, as
+#   required validation does. It attaches each run's log, and the results
+#   only when every run passed; receipt of every result queues a fresh
+#   review. A refusal leaves the hold in place with a typed reason. Every
+#   attempt is audited as `review.evidence_fulfilment` and commented on the
+#   task.
 #
 # Disk: `min_free_mib` is the free space the state directory's filesystem
 # needs (a CodeQL database, toolchain and build). The tick defers while it is

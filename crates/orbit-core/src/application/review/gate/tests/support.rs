@@ -177,6 +177,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             control: None,
             sources: Vec::new(),
             mutation_target: Vec::new(),
+            deferred: Vec::new(),
             baseline: None,
         }],
         retired_validation: Vec::new(),
@@ -199,6 +200,7 @@ pub(super) fn counterfactual(sources: &[&str], targets: &[&str]) -> ReviewValida
         control: Some(NegativeControl::Counterfactual),
         sources: sources.iter().map(|source| (*source).to_string()).collect(),
         mutation_target: targets.iter().map(|target| (*target).to_string()).collect(),
+        deferred: Vec::new(),
         baseline: None,
     }
 }

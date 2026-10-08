@@ -232,6 +232,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             control: None,
             sources: Vec::new(),
             mutation_target: Vec::new(),
+            deferred: Vec::new(),
             baseline: None,
         }],
         required_validation_commands: Some(vec![]),

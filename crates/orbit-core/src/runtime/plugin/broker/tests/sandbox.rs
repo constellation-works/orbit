@@ -8,6 +8,7 @@
 //! cannot run (no Bubblewrap user namespaces, e.g. inside another sandbox).
 
 use std::fs;
+#[cfg(not(target_os = "linux"))]
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -135,6 +136,9 @@ fn scratch_or_skip(test: &str) -> Option<Scratch> {
     match platform_sandbox() {
         Ok(kind) => Some(Scratch::new(kind)),
         Err(reason) => {
+            #[cfg(target_os = "linux")]
+            orbit_exec::report_bwrap_deferral(test, &reason);
+            #[cfg(not(target_os = "linux"))]
             let _ = writeln!(
                 std::io::stderr(),
                 "skipped {test}: the agent sandbox is unavailable: {reason}"

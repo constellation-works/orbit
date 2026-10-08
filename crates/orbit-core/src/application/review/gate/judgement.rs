@@ -454,6 +454,8 @@ impl Judgement {
             for record in &mut self.validation {
                 if record.command == required.command && record.role == ValidationRole::Required {
                     record.outcome = ValidationOutcome::Passed;
+                    // The external run executed any path the reviewer's run deferred.
+                    record.deferred.clear();
                     let carried = via_carry
                         .map(|carry| {
                             format!(

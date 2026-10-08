@@ -24,6 +24,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(target_os = "macos")]
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -65,6 +66,12 @@ const PRIVATE_KEY_SECRET: &str =
 #[test]
 fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
     if let Some(reason) = sandbox_unavailable() {
+        #[cfg(target_os = "linux")]
+        orbit_exec::report_bwrap_deferral(
+            "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
+            &reason,
+        );
+        #[cfg(target_os = "macos")]
         let _ = writeln!(
             std::io::stderr(),
             "skipped claimed-review bridge sandbox integration: {reason}"

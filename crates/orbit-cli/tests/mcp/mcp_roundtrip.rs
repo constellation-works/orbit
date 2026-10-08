@@ -4907,10 +4907,15 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
-    if !bubblewrap_mount_namespaces_available() {
-        // Some nested container runners deny user/mount namespaces. The
-        // production behavior remains covered by the focused store and
-        // dispatch tests; an unrestricted Linux CI runner executes this path.
+    if let Some(detail) = bubblewrap_mount_namespaces_unavailable() {
+        // Some nested container runners and agent lanes deny user/mount
+        // namespaces. The production behavior remains covered by the focused
+        // store and dispatch tests; an unrestricted Linux host executes this
+        // path.
+        orbit_exec::report_bwrap_deferral(
+            "readonly_state_mount_keeps_cli_and_mcp_reads_observational",
+            &detail,
+        );
         return;
     }
 
@@ -5235,7 +5240,11 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
-    if !bubblewrap_mount_namespaces_available() {
+    if let Some(detail) = bubblewrap_mount_namespaces_unavailable() {
+        orbit_exec::report_bwrap_deferral(
+            "readonly_orbit_command_scrubs_inherited_managed_run_authority",
+            &detail,
+        );
         return;
     }
 
@@ -5564,9 +5573,10 @@ fn main_registry_file_has_task(registry: &Path, task_id: &str) -> bool {
     bindings > 0
 }
 
+/// Why Bubblewrap cannot create a mount namespace here, or `None` when it can.
 #[cfg(target_os = "linux")]
-fn bubblewrap_mount_namespaces_available() -> bool {
-    Command::new("bwrap")
+fn bubblewrap_mount_namespaces_unavailable() -> Option<String> {
+    match Command::new("bwrap")
         .args([
             "--die-with-parent",
             "--ro-bind",
@@ -5576,9 +5586,17 @@ fn bubblewrap_mount_namespaces_available() -> bool {
             "/bin/true",
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => Some(format!(
+            "bwrap exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Some(format!("bwrap could not start: {error}")),
+    }
 }
 
 #[cfg(target_os = "linux")]

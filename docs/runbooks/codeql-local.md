@@ -201,8 +201,10 @@ matching path, owes nothing
 
 A Linux owner fulfils such a hold without an operator. Its clock sweep
 dispatches `review_evidence_fulfilment_pipeline` for each in-progress task
-whose latest decision is a hold with only `codeql` requirements and no result
-yet, one run at a time. A claimed leaf's hold reaches the owner too: the leaf
+whose latest decision is a hold with only `codeql` (and Linux
+`host_sandbox_test`) requirements and no result yet, one run at a time. A
+held sandbox test is admitted, run and judged as the
+[review gate runbook](review-gate.md#host-sandbox-tests) describes. A claimed leaf's hold reaches the owner too: the leaf
 pushes the held candidate to `orbit-evidence/<branch>` on `origin`, and its
 settlement keeps the owner's task in progress under the hold.
 

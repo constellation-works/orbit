@@ -1,59 +1,74 @@
 //! Owner-side fulfilment of a review evidence hold whose every requirement is
-//! a Linux CodeQL run.
+//! a Linux CodeQL run or a Linux `host_sandbox_test`.
 //!
 //! A non-Linux reviewer cannot complete `scripts/codeql-rust-local.sh` (it
-//! exits 3), so it holds the review for a `codeql` result instead. On a Linux
-//! owner, each clock tick finds those holds and dispatches
-//! `review_evidence_fulfilment_pipeline`, whose one step runs the named
-//! command at the held commit in a standalone scratch checkout and attaches the
-//! result and its log. Receipt of every matching result then queues the task
-//! for a fresh review through [`super::evidence::resume_evidence_hold`]; a
-//! fulfilment never approves a candidate.
+//! exits 3), so it holds the review for a `codeql` result instead. A reviewer
+//! inside a Linux agent lane cannot run a test of Orbit's Bubblewrap paths:
+//! the lane's own sandbox refuses a nested one, so the test defers. It holds
+//! the review for a `host_sandbox_test` result on `linux` [ORB-14334]. On a
+//! Linux owner, each clock tick finds those holds and dispatches
+//! `review_evidence_fulfilment_pipeline`, whose one step runs each named
+//! command at the held commit and attaches the result and its log. Receipt of
+//! every matching result then queues the task for a fresh review through
+//! [`super::evidence::resume_evidence_hold`]; a fulfilment never approves a
+//! candidate.
 //!
 //! A hold is fulfilled only when:
 //!
 //! - it is still the in-progress task's latest decision
 //!   ([`super::evidence::hold_is_current`]) and its evidence has not arrived;
-//! - every requirement is kind `codeql` and names the local CodeQL script
-//!   with nothing but its own options and one query selector, so a hold can
-//!   never make the owner run another command;
+//! - every command is admitted before anything runs: a `codeql` requirement
+//!   names the local CodeQL script with nothing but its own options and one
+//!   query selector; a `host_sandbox_test` is
+//!   `cargo test -p <crate> --test <target> [<filter>]` or an exact owner
+//!   `workflow.required_validation_commands` entry
+//!   ([`HostSandboxCommand::admit`]). So a hold can never make the owner run
+//!   another command;
 //! - the host is Linux with working Bubblewrap namespaces, and the filesystem
 //!   holding the scratch checkout has at least the run's `min_free_mib` free;
 //! - the held commit, fetched from `origin` when the owner lacks it, has the
 //!   held tree.
 //!
-//! A run that exits nonzero, reports incomplete extraction, times out, leaves
-//! no complete SARIF, or reports any result attaches its log but no result,
-//! so the hold stays in place with a typed reason. Every attempt is audited
-//! under [`EVIDENCE_FULFILMENT_AUDIT`] and commented on the task. At most
+//! A CodeQL run executes without a shell in a standalone shallow checkout,
+//! confined by Bubblewrap to that checkout. A host sandbox test cannot run
+//! under that confinement: on a host that restricts unprivileged user
+//! namespaces, AppArmor runs every Bubblewrap child under a profile that
+//! denies the capabilities a nested Bubblewrap needs, so the test would defer
+//! exactly as it did in the agent lane. Landlock likewise forbids the mounts
+//! Bubblewrap makes. It therefore runs like the owner's required validation,
+//! under the same host trust: in a fresh detached worktree of the held
+//! commit, with the validation environment and a run-owned Cargo target
+//! directory, removed afterwards ([`run_host_sandbox_test`]).
+//!
+//! A CodeQL run that exits nonzero, reports incomplete extraction, times out,
+//! leaves no complete SARIF, or reports any result attaches its log but no
+//! result. A host test run that fails, defers or skips itself, runs no test,
+//! or meets an unavailable sandbox does too. Either way the hold stays in
+//! place with a typed reason. Every attempt is audited under
+//! [`EVIDENCE_FULFILMENT_AUDIT`] and commented on the task. At most
 //! [`MAX_ACTIVE_EVIDENCE_FULFILMENTS`] run at once; a hold gets one run
 //! unless a run refused it for a reason that can clear (disk, fetch) or ended
 //! without an outcome, up to [`MAX_FULFILMENT_ATTEMPTS`].
 
-use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use std::process::{Child, Stdio};
+mod codeql;
+
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::{
-    GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GIT_REMOTE_TIMEOUT, run_git_within,
-};
-use orbit_common::text::ceil_char_boundary;
 use orbit_engine::DispatchError;
-#[cfg(target_os = "linux")]
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process};
+use orbit_engine::review_gate::run_host_sandbox_test;
 use orbit_store::contracts::JobRunQuery;
-#[cfg(target_os = "linux")]
-use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunState, JobRunTrigger, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewEvidenceRequirement, ReviewExternalEvidence, ValidationOutcome,
+    EvidenceHostOs, HostEvidenceReason, HostSandboxCommand, JobRun, JobRunState, JobRunTrigger,
+    ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewExternalEvidence,
+    ValidationOutcome,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
+use self::codeql::admitted_codeql_args;
 use super::evidence::{evidence_artifact_path, evidence_hold, evidence_ready, hold_is_current};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
@@ -65,21 +80,16 @@ use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskUpdateParams, recovery_ch
 pub const REVIEW_EVIDENCE_FULFILMENT_JOB: &str = "review_evidence_fulfilment_pipeline";
 /// Audit command name every fulfilment decision is recorded under.
 pub const EVIDENCE_FULFILMENT_AUDIT: &str = "review.evidence_fulfilment";
-/// Fulfilment runs live at once; a CodeQL run is heavy on memory and disk.
+/// Fulfilment runs live at once; a CodeQL run or a test build is heavy on
+/// memory and disk.
 pub(crate) const MAX_ACTIVE_EVIDENCE_FULFILMENTS: usize = 1;
 /// Runs one hold may have: the first, plus reruns after a refusal that can
 /// clear without a decision (not enough disk, an unreachable candidate).
 pub(crate) const MAX_FULFILMENT_ATTEMPTS: usize = 3;
-/// Free space the scratch checkout's filesystem needs before a run starts,
+/// Free space the state directory's filesystem needs before a run starts,
 /// when neither the job's `default_input` nor the run input names one: a
-/// database, toolchain and Cargo build.
+/// CodeQL database, toolchain and Cargo build, or a test target's build.
 pub(crate) const DEFAULT_FULFILMENT_MIN_FREE_MIB: u64 = 30 * 1024;
-/// The only command a fulfilment runs, relative to the held checkout.
-const CODEQL_SCRIPT: &str = "scripts/codeql-rust-local.sh";
-/// Ceiling for one CodeQL run: toolchain preparation, extraction, analysis.
-const CODEQL_TIMEOUT_MS: u64 = 3 * 60 * 60 * 1000;
-/// Captured output kept per stream in the log artifact.
-const MAX_CAPTURED_STREAM_BYTES: usize = 128 * 1024;
 /// Run-input field naming the hold; every attempt for it shares the value.
 const HOLD_KEY_FIELD: &str = "hold_key";
 /// Run-input field the keyed admission matches: the hold key and attempt.
@@ -90,18 +100,23 @@ const RUN_SCAN_LIMIT: usize = 200;
 const FULFIL_STEP: &str = "fulfil";
 const TRIGGER_NAME: &str = "review-evidence-fulfilment";
 const TRIGGER_CONSUMER: &str = "clock-sweep";
-/// The script's own markers: where it keeps this run, and that analysis ran.
-const RUN_DIRECTORY_MARKER: &str = "codeql-rust-local: run directory: ";
-const ANALYSIS_COMPLETED_MARKER: &str = "codeql-rust-local: analysis completed";
 
 /// Why a fulfilment did not attach a result. The hold stays in place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FulfilmentRefusal {
     /// The hold is gone, superseded, already satisfied, not this run's, or
-    /// names evidence other than `codeql`.
+    /// names evidence other than `codeql` or a Linux `host_sandbox_test`.
     HoldNotCurrent,
-    /// A requirement names a command other than the CodeQL script's.
+    /// A requirement names a program or command shape outside its kind's
+    /// allowlist: anything but the CodeQL script for `codeql`, anything but
+    /// `cargo test` or an owner-required command for `host_sandbox_test`.
     CommandNotAllowed,
+    /// A `host_sandbox_test` command contains a shell metacharacter, quote,
+    /// escape or control character. Never run.
+    ShellMetacharacter,
+    /// A `host_sandbox_test` argument is outside the `cargo test` grammar.
+    /// Never run.
+    ArgumentNotAllowed,
     /// An evidence or log locator is invalid or names a reserved review artifact.
     ArtifactNotAllowed,
     /// This process is not the task owner that should fulfil its evidence.
@@ -128,6 +143,13 @@ pub(crate) enum FulfilmentRefusal {
     ResultsUnreadable,
     /// The analysis reported results, which a fresh review must judge.
     FindingsReported,
+    /// A host sandbox test passed but reported that it skipped or deferred
+    /// its confined path, so it is no evidence of that path.
+    SelfSkipped,
+    /// A `cargo test` host run passed without executing a single test.
+    NoTestsRan,
+    /// A host sandbox test ran and failed.
+    TestFailed,
 }
 
 impl FulfilmentRefusal {
@@ -136,6 +158,8 @@ impl FulfilmentRefusal {
         match self {
             Self::HoldNotCurrent => "hold_not_current",
             Self::CommandNotAllowed => "command_not_allowed",
+            Self::ShellMetacharacter => "shell_metacharacter",
+            Self::ArgumentNotAllowed => "argument_not_allowed",
             Self::ArtifactNotAllowed => "artifact_not_allowed",
             Self::NotOwner => "not_owner",
             Self::HostNotLinux => "host_not_linux",
@@ -149,6 +173,28 @@ impl FulfilmentRefusal {
             Self::TimedOut => "timed_out",
             Self::ResultsUnreadable => "results_unreadable",
             Self::FindingsReported => "findings_reported",
+            Self::SelfSkipped => "self_skipped",
+            Self::NoTestsRan => "no_tests_ran",
+            Self::TestFailed => "test_failed",
+        }
+    }
+
+    /// The refusal a host sandbox test's typed reason is here. An OS
+    /// mismatch cannot reach a run: only Linux requirements are fulfilled.
+    fn of_host(reason: HostEvidenceReason) -> Self {
+        match reason {
+            HostEvidenceReason::ShellMetacharacter => Self::ShellMetacharacter,
+            HostEvidenceReason::CommandNotAllowed => Self::CommandNotAllowed,
+            HostEvidenceReason::ArgumentNotAllowed => Self::ArgumentNotAllowed,
+            HostEvidenceReason::OsMismatch => Self::HoldNotCurrent,
+            HostEvidenceReason::CandidateChanged => Self::CandidateUnreachable,
+            HostEvidenceReason::SandboxUnavailable => Self::SandboxUnavailable,
+            HostEvidenceReason::SelfSkipped => Self::SelfSkipped,
+            HostEvidenceReason::NoTestsRan => Self::NoTestsRan,
+            HostEvidenceReason::ToolMissing => Self::ToolMissing,
+            HostEvidenceReason::TimedOut => Self::TimedOut,
+            HostEvidenceReason::RunFailed => Self::CommandFailed,
+            HostEvidenceReason::TestFailed => Self::TestFailed,
         }
     }
 
@@ -167,144 +213,47 @@ pub struct EvidenceFulfilmentTick {
     pub dispatched: Vec<(String, String)>,
 }
 
-/// One CodeQL requirement's run at the held commit.
-struct CodeqlRun {
+/// A requirement's command as fulfilment admitted it.
+enum AdmittedCommand {
+    /// The CodeQL script's arguments.
+    Codeql(Vec<String>),
+    HostSandboxTest(HostSandboxCommand),
+}
+
+/// One requirement's run at the held commit, or its refusal.
+struct EvidenceRun {
     requirement: ReviewEvidenceRequirement,
     exit_code: Option<i32>,
     timed_out: bool,
-    stdout: String,
-    stderr: String,
-    sarif: Option<Value>,
     refusal: Option<FulfilmentRefusal>,
     detail: String,
+    /// The kind's own log fields: CodeQL's streams and SARIF summary, or a
+    /// host test's command line, output and validation environment.
+    log: Map<String, Value>,
 }
 
-/// Bubblewrap confines candidate-controlled CodeQL scripts to the disposable
-/// evidence checkout. The checkout is the only writable task-controlled path;
-/// Cargo's ambient download caches are remounted read-only because this script
-/// uses a run-local `CARGO_HOME`.
-#[cfg(target_os = "linux")]
-struct EvidenceCodeqlSandbox {
-    checkout: PathBuf,
-    profile: ResolvedFsProfile,
-}
-
-#[cfg(target_os = "linux")]
-impl EvidenceCodeqlSandbox {
-    fn new(checkout: &Path) -> Self {
-        let checkout = checkout.to_path_buf();
-        let mut modify = vec![checkout.display().to_string()];
-        for cargo_home in cargo_home_candidates() {
-            for relative in ["registry", "git"] {
-                let path = cargo_home.join(relative);
-                if path.exists() {
-                    modify.push(format!("!{}/**", path.display()));
-                }
-            }
-            for relative in [".package-cache", ".package-cache-mutate"] {
-                let path = cargo_home.join(relative);
-                if path.exists() {
-                    modify.push(format!("!{}", path.display()));
-                }
-            }
-        }
+impl EvidenceRun {
+    fn new(requirement: &ReviewEvidenceRequirement) -> Self {
         Self {
-            profile: ResolvedFsProfile {
-                name: "review-evidence-fulfilment".to_string(),
-                read: Vec::new(),
-                modify,
-            },
-            checkout,
+            requirement: requirement.clone(),
+            exit_code: None,
+            timed_out: false,
+            refusal: None,
+            detail: String::new(),
+            log: Map::new(),
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn cargo_home_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("CARGO_HOME").filter(|home| !home.is_empty()) {
-        candidates.push(PathBuf::from(home));
-    }
-    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
-        candidates.push(PathBuf::from(home).join(".cargo"));
-    }
-    let current_dir = std::env::current_dir().ok();
-    let mut canonical = std::collections::BTreeSet::new();
-    candidates
-        .into_iter()
-        .filter_map(|path| {
-            let absolute = if path.is_absolute() {
-                path
-            } else {
-                current_dir.as_ref()?.join(path)
-            };
-            let path = absolute.canonicalize().ok()?;
-            path.is_dir().then_some(path)
-        })
-        .filter(|path| canonical.insert(path.clone()))
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-impl Sandbox for EvidenceCodeqlSandbox {
-    fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
-        if request.current_dir.as_deref() != Some(self.checkout.to_string_lossy().as_ref()) {
-            return Err(OrbitError::PolicyDenied(
-                "CodeQL must run from its evidence checkout".to_string(),
-            ));
-        }
-        if request.program != self.checkout.join(CODEQL_SCRIPT).to_string_lossy().as_ref() {
-            return Err(OrbitError::PolicyDenied(
-                "CodeQL program must be the admitted checkout script".to_string(),
-            ));
-        }
-        Ok(())
     }
 
-    fn spawn(&self, request: &ExecRequest) -> Result<Child, OrbitError> {
-        let environment = match &request.environment_mode {
-            EnvironmentMode::ClearAndSet(environment) => environment.clone(),
-            EnvironmentMode::Inherit => {
-                return Err(OrbitError::PolicyDenied(
-                    "CodeQL sandbox requires an explicit environment".to_string(),
-                ));
-            }
-        };
-        let stdin = match &request.stdin_mode {
-            StdinMode::Inherit => Stdio::inherit(),
-            StdinMode::Null => Stdio::null(),
-            StdinMode::Bytes(_) => Stdio::piped(),
-        };
-        let mut plan = orbit_exec::compile_linux_bwrap_argv(
-            &self.profile,
-            &request.program,
-            &request.args,
-            Some(&self.checkout),
-            true,
-        )?;
-        if !plan.dropped_grants.is_empty() {
-            return Err(OrbitError::PolicyDenied(format!(
-                "CodeQL sandbox could not enforce writable checkout grants: {:?}",
-                plan.dropped_grants
-            )));
+    fn refused(
+        requirement: &ReviewEvidenceRequirement,
+        refusal: FulfilmentRefusal,
+        detail: String,
+    ) -> Self {
+        Self {
+            refusal: Some(refusal),
+            detail,
+            ..Self::new(requirement)
         }
-        if let Some(guard) = plan.take_post_run_guard() {
-            // This profile has only exact subtree rules whose writable roots
-            // exist, so no post-run check is expected. Refuse instead of
-            // silently dropping a future policy boundary.
-            return Err(OrbitError::PolicyDenied(format!(
-                "CodeQL sandbox unexpectedly needs a post-run guard: {guard:?}"
-            )));
-        }
-        let child = orbit_exec::spawn_under_linux_bwrap(orbit_exec::LinuxBwrapSpawnRequest {
-            plan: &plan,
-            env: &environment,
-            cwd: Some(&self.checkout),
-            stdin,
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
-        })?;
-        Ok(child)
     }
 }
 
@@ -316,6 +265,12 @@ impl OrbitRuntime {
     }
 
     fn fulfilment_disabled_refusal(&self) -> Option<(FulfilmentRefusal, String)> {
+        self.fulfilment_owner_refusal()
+            .or_else(|| self.fulfilment_host_refusal())
+    }
+
+    /// Why this process is not the owner that fulfils its tasks' evidence.
+    fn fulfilment_owner_refusal(&self) -> Option<(FulfilmentRefusal, String)> {
         if self.worker_invocation().is_some() {
             return Some((
                 FulfilmentRefusal::NotOwner,
@@ -331,11 +286,18 @@ impl OrbitRuntime {
                 ),
             ));
         }
+        None
+    }
+
+    /// Why this host cannot produce Linux evidence: another platform, or no
+    /// Bubblewrap namespaces, which both CodeQL's confinement and every
+    /// sandbox-gated test need.
+    fn fulfilment_host_refusal(&self) -> Option<(FulfilmentRefusal, String)> {
         if std::env::consts::OS != "linux" {
             return Some((
                 FulfilmentRefusal::HostNotLinux,
                 format!(
-                    "host platform {} cannot run a complete Rust CodeQL extraction",
+                    "host platform {} cannot run Linux CodeQL or Linux sandbox tests",
                     std::env::consts::OS
                 ),
             ));
@@ -479,9 +441,9 @@ impl OrbitRuntime {
         Ok((attempts < MAX_FULFILMENT_ATTEMPTS).then_some(attempts + 1))
     }
 
-    /// The fulfilment step: re-check the hold, gate on host and disk, run
-    /// each named CodeQL command at the held commit, and attach the logs —
-    /// plus the results, when every run passed. Always audited.
+    /// The fulfilment step: re-check the hold, admit every command, gate on
+    /// host and disk, run each named command at the held commit, and attach
+    /// the logs — plus the results, when every run passed. Always audited.
     pub(crate) fn fulfil_review_evidence(
         &self,
         input: &Value,
@@ -559,22 +521,44 @@ impl OrbitRuntime {
         Ok(output)
     }
 
-    /// Gate, fetch, check out and run. `Err` is a refusal before any command
-    /// ran; `Ok` holds each command's run, refused or not.
+    /// Admit, gate, fetch, check out and run. `Err` is a refusal before any
+    /// command ran; `Ok` holds each command's run, refused or not. A command
+    /// outside its allowlist refuses the whole hold before any host gate, so
+    /// nothing runs and only the refused commands' logs are attached.
     fn fulfil_hold(
         &self,
         task: &Task,
         hold: &ReviewEvidenceHold,
         run_id: &str,
         min_free_mib: u64,
-    ) -> Result<Vec<CodeqlRun>, (FulfilmentRefusal, String)> {
+    ) -> Result<Vec<EvidenceRun>, (FulfilmentRefusal, String)> {
         // Persisted holds can predate review admission's path guards. Refuse
         // unsafe locators before running any candidate-controlled script.
         for requirement in &hold.requirements {
             fulfilment_artifact_paths(&requirement.artifact)
                 .map_err(|error| (FulfilmentRefusal::ArtifactNotAllowed, error.to_string()))?;
         }
-        if let Some((refusal, reason)) = self.fulfilment_disabled_refusal() {
+        if let Some((refusal, reason)) = self.fulfilment_owner_refusal() {
+            return Err((refusal, reason));
+        }
+        let owner_required = self.workflow_required_validation_commands();
+        let admitted = hold
+            .requirements
+            .iter()
+            .map(|requirement| admit_requirement(requirement, owner_required))
+            .collect::<Vec<_>>();
+        if admitted.iter().any(Result::is_err) {
+            return Ok(hold
+                .requirements
+                .iter()
+                .zip(admitted)
+                .filter_map(|(requirement, admitted)| {
+                    let (refusal, detail) = admitted.err()?;
+                    Some(EvidenceRun::refused(requirement, refusal, detail))
+                })
+                .collect());
+        }
+        if let Some((refusal, reason)) = self.fulfilment_host_refusal() {
             return Err((refusal, reason));
         }
         let free = free_mib(&self.paths().state_dir)
@@ -602,100 +586,57 @@ impl OrbitRuntime {
             }
             Err(error) => return Err((FulfilmentRefusal::CandidateUnreachable, error.to_string())),
         }
+        let admitted = admitted.into_iter().flatten().collect::<Vec<_>>();
         let checkout_id = format!("{run_id}-evidence");
-        let checkout = self
-            .create_evidence_checkout(&checkout_id, commit)
-            .map_err(|error| (FulfilmentRefusal::CandidateUnreachable, error.to_string()))?;
+        let checkout = if admitted
+            .iter()
+            .any(|admitted| matches!(admitted, AdmittedCommand::Codeql(_)))
+        {
+            Some(
+                self.create_evidence_checkout(&checkout_id, commit)
+                    .map_err(|error| {
+                        (FulfilmentRefusal::CandidateUnreachable, error.to_string())
+                    })?,
+            )
+        } else {
+            None
+        };
+        let target_id = format!("{run_id}-evidence-target");
         let runs = hold
             .requirements
             .iter()
-            .map(|requirement| self.run_codeql(&checkout, requirement))
+            .zip(admitted)
+            .map(|(requirement, admitted)| match (admitted, &checkout) {
+                (AdmittedCommand::Codeql(args), Some(checkout)) => {
+                    self.run_codeql(checkout, requirement, args)
+                }
+                (AdmittedCommand::Codeql(_), None) => EvidenceRun::refused(
+                    requirement,
+                    FulfilmentRefusal::CandidateUnreachable,
+                    "no evidence checkout was prepared".to_string(),
+                ),
+                (AdmittedCommand::HostSandboxTest(command), _) => {
+                    self.run_host_test(hold, run_id, &target_id, requirement, &command)
+                }
+            })
             .collect::<Vec<_>>();
-        // The checkout is this run's own scratch, database included; remove
-        // it whatever happened so a held host never accumulates them.
-        if let Err(error) = self.remove_evidence_checkout(&checkout_id) {
-            tracing::warn!(
-                target: "orbit.core.review",
-                task_id = %task.id,
-                "failed to remove the evidence checkout {}: {error}",
-                checkout.display()
-            );
+        // The checkout and test target are this run's own scratch, database
+        // and build included; remove them whatever happened so a held host
+        // never accumulates them.
+        for scratch in [&checkout_id, &target_id] {
+            if let Err(error) = self.remove_evidence_checkout(scratch) {
+                tracing::warn!(
+                    target: "orbit.core.review",
+                    task_id = %task.id,
+                    "failed to remove the evidence scratch {scratch}: {error}"
+                );
+            }
         }
         Ok(runs)
     }
 
-    /// Check `commit` out into a standalone shallow repository fetched from
-    /// the owner's checkout, replacing a leftover of the same run. Its Git
-    /// metadata lives inside it, unlike a linked worktree's, whose gitdir is
-    /// in the owner's `.git`: the confined script resolves `HEAD` and
-    /// `ls-files` from the one writable tree it is given, and never needs,
-    /// or writes, the owner's repository, which the sandbox does not show
-    /// when it sits under the `/tmp` the sandbox replaces.
-    fn create_evidence_checkout(
-        &self,
-        checkout_id: &str,
-        commit: &str,
-    ) -> Result<PathBuf, OrbitError> {
-        self.remove_evidence_checkout(checkout_id)?;
-        let path = recovery_checkout_path(&self.paths().state_dir, checkout_id)?;
-        std::fs::create_dir_all(&path).map_err(|error| {
-            OrbitError::Execution(format!(
-                "create evidence checkout {}: {error}",
-                path.display()
-            ))
-        })?;
-        let git_dir = format!("--git-dir={}", path.join(".git").display());
-        let source = self.paths().repo_root.to_string_lossy().into_owned();
-        // Every command after `init` names the new repository explicitly, so
-        // a failed `init` can never fall through to an enclosing one.
-        for (args, deadline) in [
-            (vec!["init", "--quiet", "--template="], GIT_LOCAL_TIMEOUT),
-            (
-                vec![
-                    &git_dir,
-                    "fetch",
-                    "--quiet",
-                    "--depth=1",
-                    "--no-tags",
-                    "--end-of-options",
-                    &source,
-                    commit,
-                ],
-                GIT_REMOTE_TIMEOUT,
-            ),
-            (
-                vec![
-                    &git_dir,
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "checkout",
-                    "--quiet",
-                    "--detach",
-                    commit,
-                ],
-                GIT_CHECKOUT_TIMEOUT,
-            ),
-        ] {
-            let output = run_git_within(&path, &args, deadline)?;
-            if !output.success {
-                return Err(OrbitError::Execution(format!(
-                    "prepare evidence checkout {} at {commit}: git {}: {}",
-                    path.display(),
-                    args.join(" "),
-                    output.stderr.trim()
-                )));
-            }
-        }
-        path.canonicalize().map_err(|error| {
-            OrbitError::Execution(format!(
-                "resolve evidence checkout {}: {error}",
-                path.display()
-            ))
-        })
-    }
-
-    /// Remove a fulfilment run's checkout, if it exists. It is the run's own
-    /// directory, registered nowhere else.
+    /// Remove a fulfilment run's checkout or test target, if it exists. It is
+    /// the run's own directory, registered nowhere else.
     fn remove_evidence_checkout(&self, checkout_id: &str) -> Result<(), OrbitError> {
         let path = recovery_checkout_path(&self.paths().state_dir, checkout_id)?;
         match std::fs::remove_dir_all(&path) {
@@ -708,122 +649,61 @@ impl OrbitRuntime {
         }
     }
 
-    /// Run one admitted CodeQL command in `checkout` and judge its result.
-    fn run_codeql(&self, checkout: &Path, requirement: &ReviewEvidenceRequirement) -> CodeqlRun {
-        let mut run = CodeqlRun {
-            requirement: requirement.clone(),
-            exit_code: None,
-            timed_out: false,
-            stdout: String::new(),
-            stderr: String::new(),
-            sarif: None,
-            refusal: None,
-            detail: String::new(),
-        };
-        let args = match admitted_codeql_args(&requirement.command) {
-            Ok(args) => args,
-            Err(detail) => {
-                run.refusal = Some(FulfilmentRefusal::CommandNotAllowed);
-                run.detail = detail;
-                return run;
-            }
-        };
-        let scratch = checkout.join(".orbit/tmp");
-        if let Err(error) = std::fs::create_dir_all(&scratch) {
-            run.refusal = Some(FulfilmentRefusal::CommandFailed);
-            run.detail = format!("prepare scratch {}: {error}", scratch.display());
-            return run;
-        }
-        let mut env = self.validation_environment().env;
-        env.retain(|(name, _)| name != "ORBIT_SCRATCH_DIR");
-        env.push((
-            "ORBIT_SCRATCH_DIR".to_string(),
-            scratch.to_string_lossy().into_owned(),
-        ));
-        #[cfg(target_os = "linux")]
-        let outcome = {
-            let request = ExecRequest {
-                program: checkout.join(CODEQL_SCRIPT).to_string_lossy().into_owned(),
-                args,
-                current_dir: Some(checkout.to_string_lossy().into_owned()),
-                timeout_ms: Some(CODEQL_TIMEOUT_MS),
-                stdin_mode: StdinMode::Null,
-                environment_mode: EnvironmentMode::ClearAndSet(env),
-                debug: false,
-            };
-            run_process(&request, &EvidenceCodeqlSandbox::new(checkout))
-        };
-        #[cfg(not(target_os = "linux"))]
-        let outcome: Result<orbit_types::tool::ExecutionResult, OrbitError> = {
-            let _ = (args, env);
-            Err(OrbitError::PolicyDenied(
-                "CodeQL fulfilment requires Linux Bubblewrap".to_string(),
-            ))
-        };
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
+    /// Run one admitted host sandbox test at the held commit, outside any
+    /// sandbox, and judge it with the contract a claimed leaf uses.
+    fn run_host_test(
+        &self,
+        hold: &ReviewEvidenceHold,
+        run_id: &str,
+        target_id: &str,
+        requirement: &ReviewEvidenceRequirement,
+        command: &HostSandboxCommand,
+    ) -> EvidenceRun {
+        let target = match recovery_checkout_path(&self.paths().state_dir, target_id) {
+            Ok(target) => target,
             Err(error) => {
-                run.refusal = Some(FulfilmentRefusal::CommandFailed);
-                run.detail = error.to_string();
-                return run;
+                return EvidenceRun::refused(
+                    requirement,
+                    FulfilmentRefusal::CommandFailed,
+                    error.to_string(),
+                );
             }
         };
-        run.exit_code = outcome.exit_code;
-        run.timed_out = outcome.timed_out;
-        run.stdout = tail(&outcome.stdout);
-        run.stderr = tail(&outcome.stderr);
-        let output = format!("{}\n{}", outcome.stdout, outcome.stderr);
-        let problem = |pattern: &str| {
-            output
-                .lines()
-                .find(|line| line.contains(pattern))
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        };
-        let judged = if outcome.timed_out {
-            Err((
-                FulfilmentRefusal::TimedOut,
-                format!("exceeded {CODEQL_TIMEOUT_MS} ms"),
-            ))
-        } else if outcome.exit_code == Some(3) {
-            Err((
-                FulfilmentRefusal::PlatformRefused,
-                problem("codeql-rust-local:"),
-            ))
-        } else if !outcome.success && output.contains("is required on PATH") {
-            Err((
-                FulfilmentRefusal::ToolMissing,
-                problem("is required on PATH"),
-            ))
-        } else if !outcome.success && output.contains("incomplete Rust extraction") {
-            Err((
-                FulfilmentRefusal::AnalysisIncomplete,
-                problem("incomplete Rust extraction"),
-            ))
-        } else if !outcome.success {
-            Err((
-                FulfilmentRefusal::CommandFailed,
-                format!(
-                    "exit {:?}: {}",
-                    outcome.exit_code,
-                    problem("codeql-rust-local:")
-                ),
-            ))
-        } else if !output.contains(ANALYSIS_COMPLETED_MARKER) {
-            Err((
-                FulfilmentRefusal::AnalysisIncomplete,
-                "the run exited zero without reporting completed analysis".to_string(),
-            ))
-        } else {
-            judge_sarif(checkout, &output)
-        };
-        match judged {
-            Ok(sarif) => run.sarif = Some(sarif),
-            Err((refusal, detail)) => {
-                run.refusal = Some(refusal);
-                run.detail = detail;
+        let ran = run_host_sandbox_test(
+            self,
+            &self.paths().repo_root,
+            &hold.candidate,
+            command,
+            run_id,
+            &target,
+        );
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(error) => {
+                return EvidenceRun::refused(
+                    requirement,
+                    FulfilmentRefusal::CommandFailed,
+                    error.to_string(),
+                );
             }
+        };
+        let mut run = EvidenceRun::new(requirement);
+        run.exit_code = ran.exit_code;
+        run.timed_out = ran.timed_out;
+        run.log.extend([
+            ("kind".to_string(), json!(requirement.kind)),
+            ("os".to_string(), json!(requirement.os)),
+            ("host_command".to_string(), json!(ran.host_command)),
+            (
+                "tests_passed".to_string(),
+                json!(ran.judgement.as_ref().ok()),
+            ),
+            ("output".to_string(), json!(ran.output)),
+            ("validation_env".to_string(), ran.environment),
+        ]);
+        if let Err(refusal) = ran.judgement {
+            run.refusal = Some(FulfilmentRefusal::of_host(refusal.reason));
+            run.detail = refusal.detail;
         }
         run
     }
@@ -836,7 +716,7 @@ impl OrbitRuntime {
         task: &Task,
         hold: &ReviewEvidenceHold,
         run_id: &str,
-        runs: &[CodeqlRun],
+        runs: &[EvidenceRun],
         refusal: Option<FulfilmentRefusal>,
         detail: &str,
     ) -> Result<(), OrbitError> {
@@ -845,7 +725,7 @@ impl OrbitRuntime {
             // Check both final store keys at the system-authority write boundary.
             // Build the whole batch first, so a refusal cannot partially write it.
             let (artifact, log_artifact) = fulfilment_artifact_paths(&run.requirement.artifact)?;
-            let log = json!({
+            let mut log = json!({
                 "schema_version": 1,
                 "run_id": run_id,
                 "task_id": task.id,
@@ -858,12 +738,12 @@ impl OrbitRuntime {
                 "outcome": if run.refusal.is_none() { "passed" } else { "failed" },
                 "reason": run.refusal.map(FulfilmentRefusal::as_str),
                 "detail": run.detail,
-                "sarif": run.sarif,
-                "stdout": run.stdout,
-                "stderr": run.stderr,
                 "host_os": std::env::consts::OS,
                 "recorded_at": Utc::now().to_rfc3339(),
             });
+            if let Some(log) = log.as_object_mut() {
+                log.extend(run.log.clone());
+            }
             artifacts.push(json_artifact(&log_artifact, &log)?);
             if refusal.is_none() {
                 let evidence = ReviewExternalEvidence {
@@ -875,16 +755,16 @@ impl OrbitRuntime {
                     command: run.requirement.command.clone(),
                     outcome: ValidationOutcome::Passed,
                     log_artifact,
-                    os: orbit_types::workflow::EvidenceHostOs::current(),
+                    os: EvidenceHostOs::current(),
                 };
                 artifacts.push(json_artifact(&artifact, &evidence)?);
             }
         }
         let comment = match refusal {
             None => format!(
-                "Owner evidence fulfilment run={run_id} ran every named CodeQL check at held \
-                 candidate `{}` on this Linux host and attached the results and logs. A fresh \
-                 review verifies them; nothing was approved.",
+                "Owner evidence fulfilment run={run_id} ran every named check at held candidate \
+                 `{}` on this Linux host and attached the results and logs. A fresh review \
+                 verifies them; nothing was approved.",
                 hold.candidate.commit
             ),
             Some(refusal) => format!(
@@ -937,8 +817,9 @@ pub(crate) fn fulfil_review_evidence(
         .map_err(|error| failed(error.to_string()))
 }
 
-/// The hold on `task` this owner can fulfil: current, every requirement kind
-/// `codeql`, and its evidence not yet arrived.
+/// The hold on `task` this owner can fulfil: current, every requirement a
+/// `codeql` run or a Linux `host_sandbox_test`, and its evidence not yet
+/// arrived.
 fn fulfilable_hold(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -950,16 +831,44 @@ fn fulfilable_hold(
         return Ok(None);
     };
     if hold.requirements.is_empty()
-        || hold
-            .requirements
-            .iter()
-            .any(|requirement| requirement.kind != ReviewEvidenceKind::CodeQl)
+        || !hold.requirements.iter().all(owner_fulfils)
         || !hold_is_current(runtime, task, &hold)?
         || evidence_ready(runtime, &task.id, &hold)?
     {
         return Ok(None);
     }
     Ok(Some(hold))
+}
+
+/// Whether a Linux owner produces this requirement's evidence.
+fn owner_fulfils(requirement: &ReviewEvidenceRequirement) -> bool {
+    match requirement.kind {
+        ReviewEvidenceKind::CodeQl => true,
+        ReviewEvidenceKind::HostSandboxTest => requirement.os == Some(EvidenceHostOs::Linux),
+        ReviewEvidenceKind::HostedCi | ReviewEvidenceKind::NativeOs => false,
+    }
+}
+
+/// Admit `requirement`'s command or refuse it with a typed reason. Nothing
+/// outside its kind's closed allowlist ever runs.
+fn admit_requirement(
+    requirement: &ReviewEvidenceRequirement,
+    owner_required: &[String],
+) -> Result<AdmittedCommand, (FulfilmentRefusal, String)> {
+    match requirement.kind {
+        ReviewEvidenceKind::CodeQl => admitted_codeql_args(&requirement.command)
+            .map(AdmittedCommand::Codeql)
+            .map_err(|detail| (FulfilmentRefusal::CommandNotAllowed, detail)),
+        ReviewEvidenceKind::HostSandboxTest if requirement.os == Some(EvidenceHostOs::Linux) => {
+            HostSandboxCommand::admit(&requirement.command, owner_required)
+                .map(AdmittedCommand::HostSandboxTest)
+                .map_err(|refusal| (FulfilmentRefusal::of_host(refusal.reason), refusal.detail))
+        }
+        _ => Err((
+            FulfilmentRefusal::HoldNotCurrent,
+            format!("a Linux owner does not fulfil `{}`", requirement.name),
+        )),
+    }
 }
 
 /// One hold's identity: its attempt and exact candidate.
@@ -969,128 +878,6 @@ fn hold_key(hold: &ReviewEvidenceHold) -> String {
 
 fn run_input_field<'a>(run: &'a JobRun, field: &str) -> Option<&'a str> {
     run.input.as_ref()?.get(field)?.as_str()
-}
-
-/// The script's arguments when `command` is exactly the CodeQL script with
-/// its own options and one query selector. Every word is restricted to
-/// characters with no shell meaning, so no hold can name another program.
-fn admitted_codeql_args(command: &str) -> Result<Vec<String>, String> {
-    let refuse = |why: &str| {
-        Err(format!(
-            "`{command}` is not an admitted CodeQL command: {why}"
-        ))
-    };
-    let plain = |word: &str| {
-        !word.is_empty()
-            && word.chars().all(|c| {
-                c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '@' | '+' | '-')
-            })
-    };
-    if command.chars().any(|c| c.is_whitespace() && c != ' ') {
-        return refuse("only single spaces may separate words");
-    }
-    let mut words = command.split(' ').filter(|word| !word.is_empty());
-    if words.next() != Some(CODEQL_SCRIPT) {
-        return refuse(&format!("it must run `{CODEQL_SCRIPT}`"));
-    }
-    let mut args = Vec::new();
-    let mut selector = false;
-    while let Some(word) = words.next() {
-        if !plain(word) {
-            return refuse(&format!(
-                "`{word}` has characters outside [A-Za-z0-9._/:@+-]"
-            ));
-        }
-        match word {
-            "--ram" | "--toolchain" => {
-                let Some(value) = words
-                    .next()
-                    .filter(|value| plain(value) && !value.starts_with('-'))
-                else {
-                    return refuse(&format!("`{word}` needs a value"));
-                };
-                args.push(word.to_string());
-                args.push(value.to_string());
-            }
-            _ if word.starts_with('-') => {
-                return refuse(&format!("option `{word}` is not admitted"));
-            }
-            _ if selector => return refuse("it names more than one query selector"),
-            _ => {
-                selector = true;
-                args.push(word.to_string());
-            }
-        }
-    }
-    if !selector {
-        return refuse("it names no query selector");
-    }
-    Ok(args)
-}
-
-/// The run's SARIF, from the run directory the script printed inside
-/// `checkout`. Any result is refused: a fresh review must judge findings.
-fn judge_sarif(checkout: &Path, output: &str) -> Result<Value, (FulfilmentRefusal, String)> {
-    let incomplete = |detail: String| (FulfilmentRefusal::AnalysisIncomplete, detail);
-    let run_dir = output
-        .lines()
-        .rev()
-        .find_map(|line| line.trim().strip_prefix(RUN_DIRECTORY_MARKER))
-        .map(|path| PathBuf::from(path.trim()))
-        .ok_or_else(|| incomplete("the run printed no run directory".to_string()))?;
-    let canonical_checkout = checkout
-        .canonicalize()
-        .map_err(|error| incomplete(error.to_string()))?;
-    let sarif_path = run_dir
-        .join("results.sarif")
-        .canonicalize()
-        .map_err(|error| {
-            incomplete(format!(
-                "results.sarif under {}: {error}",
-                run_dir.display()
-            ))
-        })?;
-    if !sarif_path.starts_with(&canonical_checkout) {
-        return Err(incomplete(format!(
-            "{} is outside the evidence checkout",
-            sarif_path.display()
-        )));
-    }
-    let unreadable = |detail: String| (FulfilmentRefusal::ResultsUnreadable, detail);
-    let bytes = std::fs::read(&sarif_path).map_err(|error| unreadable(error.to_string()))?;
-    let sarif: Value =
-        serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
-    let runs = sarif
-        .get("runs")
-        .and_then(Value::as_array)
-        .filter(|runs| !runs.is_empty())
-        .ok_or_else(|| unreadable("SARIF has no runs".to_string()))?;
-    let mut results = 0usize;
-    let mut rules = std::collections::BTreeSet::new();
-    for run in runs {
-        let found = run
-            .get("results")
-            .and_then(Value::as_array)
-            .ok_or_else(|| unreadable("a SARIF run has no results array".to_string()))?;
-        results += found.len();
-        rules.extend(
-            found
-                .iter()
-                .filter_map(|result| result.get("ruleId").and_then(Value::as_str))
-                .map(str::to_string),
-        );
-    }
-    let summary = json!({"runs": runs.len(), "results": results, "rules": rules});
-    if results > 0 {
-        return Err((
-            FulfilmentRefusal::FindingsReported,
-            format!(
-                "{results} result(s) for rule(s) {}",
-                rules.into_iter().collect::<Vec<_>>().join(", ")
-            ),
-        ));
-    }
-    Ok(summary)
 }
 
 /// `evidence/x.json` logs to `evidence/x.log.json`.
@@ -1135,13 +922,4 @@ fn free_mib(path: &Path) -> Result<u64, OrbitError> {
     fs2::available_space(path)
         .map(|bytes| bytes / (1024 * 1024))
         .map_err(|error| OrbitError::Io(format!("free space under {}: {error}", path.display())))
-}
-
-/// The last [`MAX_CAPTURED_STREAM_BYTES`] of a stream.
-fn tail(stream: &str) -> String {
-    if stream.len() <= MAX_CAPTURED_STREAM_BYTES {
-        return stream.to_string();
-    }
-    let start = ceil_char_boundary(stream, stream.len() - MAX_CAPTURED_STREAM_BYTES);
-    format!("[… truncated]\n{}", &stream[start..])
 }

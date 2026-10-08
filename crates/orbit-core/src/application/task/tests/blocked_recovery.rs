@@ -706,7 +706,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
                 guard.verify().expect("allowed source and scratch writes");
             } else {
-                println!("SKIP: recovery agent kernel launch: {}", probe.detail);
+                orbit_exec::report_bwrap_deferral("recovery agent kernel launch", &probe.detail);
             }
             std::fs::write(prepared.checkout.join("new.env"), "forbidden")
                 .expect("simulate an agent write");

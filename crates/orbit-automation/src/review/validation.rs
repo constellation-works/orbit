@@ -36,6 +36,15 @@
 //! [ORB-14370]: the final report carries it forward, whatever its command now
 //! reads, or retires it with a reason. Records written without ids keep the
 //! command-identity rules.
+//!
+//! A run that passed only by deferring a sandbox-confined path executed
+//! nothing there [ORB-14334]. Inside an agent lane a test of Orbit's own
+//! sandbox prints `DEFERRED: …` and returns, because the lane's sandbox
+//! refuses a nested one; the reviewer lists those notices in the record's
+//! `deferred`. Such a record reads as `not_run` wherever a pass counts: it is
+//! no required pass, no replacement of a superseded attempt and no pass of a
+//! host-required command. A result from a host that executed the path, such
+//! as owner-fulfilled `host_sandbox_test` evidence, takes its place.
 
 use orbit_common::fs::selector::overlaps;
 use orbit_types::workflow::{
@@ -54,6 +63,9 @@ pub enum ValidationDefect {
         command: String,
         outcome: ValidationOutcome,
     },
+    /// [ORB-14334] A required check whose run passed only by deferring a
+    /// sandbox-confined path, so the path never executed.
+    RequiredDeferred { command: String, notice: String },
     /// The outcome contradicts the classification the record was filed
     /// under: a negative control that passed, an excluded action that ran.
     RoleContradicted {
@@ -166,6 +178,11 @@ impl ValidationDefect {
             ValidationDefect::RequiredNotPassed { command, outcome } => format!(
                 "validation_incomplete: required check `{command}` is {} on the final candidate",
                 outcome.as_str()
+            ),
+            ValidationDefect::RequiredDeferred { command, notice } => format!(
+                "validation_incomplete: required check `{command}` passed only by deferring a \
+                 sandbox-confined path (`{notice}`), so that path never executed; name it as \
+                 `host_sandbox_test` evidence for a host that can run it"
             ),
             ValidationDefect::RoleContradicted {
                 command,
@@ -295,7 +312,8 @@ impl Default for ValidationContext<'_> {
 /// Read a reviewer's validation records as evidence about the final
 /// candidate.
 ///
-/// Every required check must have passed and at least one must exist; a
+/// Every required check must have passed, without deferring a confined path,
+/// and at least one must exist; a
 /// declared negative control must have failed, name its kind and sources in
 /// the candidate's scope, and, when it runs on the candidate, not share its
 /// check with a required pass; an excluded action must have stayed
@@ -334,6 +352,12 @@ pub fn validation_evidence(
                     return Err(ValidationDefect::RequiredNotPassed {
                         command: record.command.clone(),
                         outcome: record.outcome,
+                    });
+                }
+                if let Some(notice) = record.deferral() {
+                    return Err(ValidationDefect::RequiredDeferred {
+                        command: record.command.clone(),
+                        notice: notice.to_string(),
                     });
                 }
                 required_passed = true;
@@ -389,7 +413,9 @@ pub fn validation_evidence(
         let established = records.iter().any(|record| {
             same_host_command(record, command)
                 && match record.role {
-                    ValidationRole::Required => record.outcome == ValidationOutcome::Passed,
+                    ValidationRole::Required => {
+                        record.executed_outcome() == ValidationOutcome::Passed
+                    }
                     ValidationRole::Superseded => passes_as_required(record, records),
                     ValidationRole::ExpectedFailure
                     | ValidationRole::Excluded
@@ -662,7 +688,8 @@ pub fn in_scope(source: &str, scope: &[String]) -> bool {
     scope.iter().any(|selector| overlaps(selector, &source))
 }
 
-/// Whether a required record of the same check passed.
+/// Whether a required record of the same check passed, executing every
+/// path it covers (a deferred-only pass does not).
 ///
 /// Required passes describe the final candidate, so their position in the
 /// report does not affect replacement. Effective identities remain strict:
@@ -671,7 +698,7 @@ pub fn in_scope(source: &str, scope: &[String]) -> bool {
 fn passes_as_required(record: &ReviewValidation, records: &[ReviewValidation]) -> bool {
     records.iter().any(|other| {
         other.role == ValidationRole::Required
-            && other.outcome == ValidationOutcome::Passed
+            && other.executed_outcome() == ValidationOutcome::Passed
             && same_check(record, other)
     })
 }

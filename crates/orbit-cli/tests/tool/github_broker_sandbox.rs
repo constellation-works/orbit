@@ -9,7 +9,6 @@
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -30,10 +29,9 @@ const HOST_TOKEN: &str = "ghp_host_token_never_in_the_sandbox";
 fn github_reads_from_a_confined_worker_run_on_the_host() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
-        let _ = writeln!(
-            std::io::stderr(),
-            "skipped github broker sandbox integration: {}",
-            probe.detail
+        orbit_exec::report_bwrap_deferral(
+            "github_reads_from_a_confined_worker_run_on_the_host",
+            &probe.detail,
         );
         return;
     }

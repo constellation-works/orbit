@@ -37,7 +37,10 @@ use regex::Regex;
 pub use argv::{compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority};
 #[cfg(target_os = "linux")]
 pub use probe::probe_bwrap_fresh_for_user;
-pub use probe::{bwrap_path, bwrap_program_for_audit, probe_bwrap, probe_bwrap_fresh};
+pub use probe::{
+    bwrap_deferral_notice, bwrap_path, bwrap_program_for_audit, probe_bwrap, probe_bwrap_fresh,
+    report_bwrap_deferral,
+};
 pub use spawn::spawn_under_linux_bwrap;
 pub use types::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,

@@ -205,6 +205,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                deferred: Vec::new(),
                 baseline: None,
             }],
             retired_validation: Vec::new(),
@@ -304,6 +305,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                deferred: Vec::new(),
                 baseline: None,
             })
             .collect(),
@@ -795,7 +797,12 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     let tick = owner
         .run_review_evidence_fulfilment_tick(Utc::now())
         .unwrap();
-    if !orbit_exec::probe_bwrap().available {
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "owner CodeQL fulfilment of a claimed hold",
+            &probe.detail,
+        );
         assert!(tick.dispatched.is_empty(), "{tick:?}");
         assert!(
             tick.skipped

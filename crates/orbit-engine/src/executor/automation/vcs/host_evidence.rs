@@ -2,10 +2,12 @@
 //! agent sandbox, at an exact candidate [ORB-14478].
 //!
 //! The command runs in a fresh detached worktree of the candidate commit, so
-//! nothing the leaf's checkout holds beyond that commit can reach it and
-//! nothing the run writes reaches the leaf. It shares the target directory
-//! of the leaf's checkout unless the validation environment names one, so a
-//! single test target does not rebuild every dependency. On macOS
+//! nothing the checkout holds beyond that commit can reach it and nothing the
+//! run writes reaches the checkout. Its Cargo target directory is the one the
+//! caller names unless the validation environment names one: a claimed leaf
+//! shares its checkout's, so a single test target does not rebuild every
+//! dependency; a Linux owner fulfilling a hold [ORB-14334] uses one of its
+//! own, never the operator checkout's. On macOS
 //! `ORBIT_REQUIRE_SANDBOX_EXEC=1` turns a Seatbelt test's visible skip into a
 //! failure, which the judgement then names as the host's condition.
 //!
@@ -64,15 +66,17 @@ impl HostEvidenceRun {
     }
 }
 
-/// Run `command` at `candidate` and judge it. Only call this with a command
-/// [`HostSandboxCommand::admit`] admitted: it runs on the host, outside any
-/// agent sandbox.
+/// Run `command` at `candidate`, in a worktree of `workspace_path`'s
+/// repository building into `target_dir`, and judge it. Only call this with a
+/// command [`HostSandboxCommand::admit`] admitted: it runs on the host,
+/// outside any agent sandbox.
 pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     candidate: &SourceRevision,
     command: &HostSandboxCommand,
     run_id: &str,
+    target_dir: &Path,
 ) -> Result<HostEvidenceRun, OrbitError> {
     match super::review_gate::revision(workspace_path, &candidate.commit) {
         Ok(found) if found == *candidate => {}
@@ -97,9 +101,8 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     let worktree = git_common_dir(workspace_path)?
         .join(WORKTREE_DIR)
         .join(&key[..16]);
-    let shared_target = workspace_path.join("target");
     let ran = in_detached_worktree(workspace_path, &worktree, &candidate.commit, |checkout| {
-        execute(host, checkout, &shared_target, command, &host_command)
+        execute(host, checkout, target_dir, command, &host_command)
     });
     Ok(match ran {
         Ok(run) => run,

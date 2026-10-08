@@ -239,6 +239,13 @@ pub struct ReviewValidation {
     /// byte-identical in the final candidate to the reviewed candidate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mutation_target: Vec<String>,
+    /// [ORB-14334] Deferral notices the run printed (`DEFERRED: …`), one per
+    /// sandbox-confined path it returned from without executing, as a test
+    /// does when the agent lane's own sandbox refuses a nested one. A
+    /// passing run with any notice executed nothing on those paths, so it
+    /// reads as `not_run` ([`ReviewValidation::executed_outcome`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred: Vec<String>,
     /// [ORB-14434] On a failed `required` record: the reviewer's claim that
     /// the pinned base fails the check the same way, so the candidate did not
     /// cause it. `sources` then names where the failures lie, every one

@@ -339,10 +339,16 @@ spec:
          not pass: record it `not_run` or `denied` and, when it is the only
          remaining work, list it with kind `host_sandbox_test` and `os`
          (`linux` or `macos`, the OS it needs). On a claimed leaf the host
-         runs it outside this sandbox at settlement: either an exact
+         runs it outside this sandbox at settlement; otherwise a Linux owner
+         whose host can create namespaces runs a `linux` one at the held
+         commit and requeues review. Either way the command is an exact
          owner-required command, or
          `cargo test -p <crate> --test <target> [<filter>]` with no other
          options and no shell syntax. Any other command is refused.
+         A run that passed but printed `DEFERRED: …` lines deferred a
+         sandbox-confined path it never executed: list each such line in
+         the record's `deferred`; that pass does not count as running the
+         path, so name the path's test as `host_sandbox_test` evidence.
          Failed checks, ambiguous intent, stale candidates
          and unnamed missing checks do not qualify for an evidence hold.
     6. Write the report under `.orbit/tmp/` and attach it with
@@ -396,6 +402,8 @@ spec:
                          "description":"repository-relative paths the outcome is about; required for expected_failure, a failed diagnostic and a baseline claim"},
               "mutation_target":{"type":"array","items":{"type":"string"},
                          "description":"counterfactual only: repository-relative paths the control temporarily changed and restored byte-identical; may lie outside the task's scope"},
+              "deferred":{"type":"array","items":{"type":"string"},
+                          "description":"each DEFERRED: line a passing run printed for a sandbox-confined path it did not execute"},
               "baseline":{"type":"object","required":["base_commit","outcome"],
                           "description":"on a failed required record only: the same command rerun on base.commit",
                 "properties":{

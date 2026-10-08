@@ -159,6 +159,7 @@ impl Judgement {
                 candidate,
                 &command,
                 &context.run_id,
+                &context.workspace_path.join("target"),
             )?;
             record.host_command = (!run.host_command.is_empty()).then(|| run.host_command.clone());
             let log = json!({

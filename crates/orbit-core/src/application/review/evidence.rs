@@ -58,7 +58,9 @@ pub(super) fn evidence_only(
 }
 
 /// Check the requirement shape and simulate receipt, without hiding failures
-/// or treating an unnamed missing check as an external requirement.
+/// or treating an unnamed missing check as an external requirement. A
+/// required record whose pass deferred its confined path ran nothing there,
+/// so external evidence may stand in for it like a `not_run` one [ORB-14334].
 pub(super) fn with_external_checks_passed(
     records: &[ReviewValidation],
     requirements: &[ReviewEvidenceRequirement],
@@ -69,12 +71,13 @@ pub(super) fn with_external_checks_passed(
         for record in &mut validation {
             if record.command == required.command && record.role == ValidationRole::Required {
                 if !matches!(
-                    record.outcome,
+                    record.executed_outcome(),
                     ValidationOutcome::NotRun | ValidationOutcome::Denied
                 ) {
                     return None;
                 }
                 record.outcome = ValidationOutcome::Passed;
+                record.deferred.clear();
                 matched = true;
             }
         }
@@ -164,16 +167,20 @@ pub(crate) fn evidence_ready(
 }
 
 /// [ORB-14530] Whether `writer` may supply a result of `kind`, or its log.
-/// An operator may supply every kind; Orbit's own machinery only CodeQL, the
-/// one check owner fulfilment runs. An agent's put, a claimed worker's
-/// evidence and an unclassified artifact never count, so the agent whose
-/// candidate is held can never satisfy the check that holds it. A claimed
-/// leaf's own `host_sandbox_test` runs [ORB-14478] count only in the
-/// settlement that ran them, never through a later read of the artifact.
+/// An operator may supply every kind; Orbit's own machinery only the checks
+/// owner fulfilment runs: CodeQL and, on a Linux owner, `host_sandbox_test`
+/// [ORB-14334]. An agent's put, a claimed worker's evidence and an
+/// unclassified artifact never count, so the agent whose candidate is held
+/// can never satisfy the check that holds it. A claimed leaf's own
+/// `host_sandbox_test` runs [ORB-14478] count only in the settlement that ran
+/// them, never through a later read of the artifact.
 fn accepted_writer(kind: ReviewEvidenceKind, writer: Option<ArtifactWriter>) -> bool {
     match writer {
         Some(ArtifactWriter::Operator) => true,
-        Some(ArtifactWriter::System) => kind == ReviewEvidenceKind::CodeQl,
+        Some(ArtifactWriter::System) => matches!(
+            kind,
+            ReviewEvidenceKind::CodeQl | ReviewEvidenceKind::HostSandboxTest
+        ),
         None => false,
     }
 }

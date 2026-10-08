@@ -60,8 +60,8 @@ pub use final_recovery::{
     MAX_DECISION_TEXT_CHARS,
 };
 pub use host_evidence::{
-    EvidenceHostOs, HostEvidenceReason, HostEvidenceRecord, HostEvidenceRefusal,
-    HostSandboxCommand, judge_host_test_output,
+    EvidenceHostOs, HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord,
+    HostEvidenceRefusal, HostSandboxCommand, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
