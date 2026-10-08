@@ -153,6 +153,12 @@ the Events API's explicit `workspace_id` equality filter further narrows rows
 and is not a filter supported by the summary. Diagnostic lifecycle surfaces
 and unnamed tools are excluded from callable-tool rates.
 
+`orbit doctor` exits 1 when a check fails, so its audit row is a `failure`.
+A run that completed its checks records `doctor reported findings: <n> failure(s)
+(<check names>), <m> warning(s)` as the row's `error_message`, and Incidents
+classes it as expected rather than unexpected; a doctor that errors before
+finishing records the error itself and stays unexpected.
+
 ```sh
 orbit audit export --output /tmp/audit.json
 jq -r '.[] | select(.status=="failure")

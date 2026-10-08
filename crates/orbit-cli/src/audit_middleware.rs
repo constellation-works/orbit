@@ -60,7 +60,7 @@ impl<'a> AuditGuard<'a> {
             Ok(output) if output.exit_code() != 0 => {
                 self.status = AuditEventStatus::Failure;
                 self.exit_code = output.exit_code();
-                self.error_message = None;
+                self.error_message = output.audit_message().map(redact_sensitive_env_text);
             }
             Ok(_) => self.mark_success(),
             Err(OrbitError::PolicyDenied(msg) | OrbitError::CapabilityDenied(msg)) => {

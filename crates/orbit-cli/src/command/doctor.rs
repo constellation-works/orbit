@@ -3,7 +3,7 @@ use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
 };
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
@@ -276,10 +276,34 @@ impl Execute for DoctorCommand {
         // Unlike `skill doctor` / `tool doctor`, a failed check exits nonzero
         // so unattended callers (cron, CI, systemd) can alert on it.
         let exit_code = i32::from(failures > 0);
-        Ok(Payload::blocks(Value::Array(values), blocks)
-            .with_exit_code(exit_code)
-            .into())
+        let mut payload = Payload::blocks(Value::Array(values), blocks).with_exit_code(exit_code);
+        if failures > 0 {
+            payload = payload.with_audit_message(findings_audit_message(&results, warnings));
+        }
+        Ok(payload.into())
     }
+}
+
+/// The audit message for a completed run that reported failed checks, e.g.
+/// `doctor reported findings: 1 failure (review), 3 warnings`. The prefix is
+/// what lets the incident classifier tell this verdict from a crash.
+fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) -> String {
+    let failed = results
+        .iter()
+        .filter(|row| row.status == WorkspaceDoctorStatus::Error)
+        .map(|row| row.check_name.as_str())
+        .collect::<Vec<_>>();
+    format!(
+        "{DOCTOR_FINDINGS_MESSAGE_PREFIX}{} {} ({}), {warnings} {}",
+        failed.len(),
+        if failed.len() == 1 {
+            "failure"
+        } else {
+            "failures"
+        },
+        failed.join(", "),
+        if warnings == 1 { "warning" } else { "warnings" },
+    )
 }
 
 /// Check only crews that normal workflow routing can select. A disabled crew

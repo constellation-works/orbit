@@ -325,6 +325,14 @@ function incidentEvidenceTable(events, ctx) {
   return table;
 }
 
+// The grouping signature is an internal key (`unexpected|role=…|msg=…`), so a
+// row with no recorded message says so rather than showing it; the signature
+// stays in the expanded details.
+function incidentMessageText(row) {
+  const message = typeof row.message === "string" ? row.message.trim() : "";
+  return message || `${row.surface || "unknown surface"} failed; no message recorded`;
+}
+
 function incidentDetailNode(incident, ctx) {
   const detail = el("div", { class: "incident-detail" });
 
@@ -362,7 +370,7 @@ function incidentDetailNode(incident, ctx) {
         el("span", { class: "chain-mark", text: "↳" }),
         el("span", { class: "chain-surface mono", text: link.surface || "-" }),
         el("span", { class: "chain-count", text: eventCountLabel(link.event_count) }),
-        el("span", { class: "chain-message", text: truncateValue(ctx, link.message || link.signature || "", 140) }),
+        el("span", { class: "chain-message", text: truncateValue(ctx, incidentMessageText(link), 140) }),
       ]));
     }
     detail.appendChild(chain);
@@ -453,7 +461,7 @@ function incidentRowNode(incident, ctx) {
   article.appendChild(header);
   article.appendChild(el("div", {
     class: "incident-message",
-    text: truncateValue(ctx, incident.message || incident.signature || "", 220),
+    text: truncateValue(ctx, incidentMessageText(incident), 220),
   }));
   if (expanded) article.appendChild(incidentDetailNode(incident, ctx));
   return article;
