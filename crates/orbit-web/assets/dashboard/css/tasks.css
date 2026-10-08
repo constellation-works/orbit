@@ -56,9 +56,7 @@
   display: flex;
   flex: 1 1 100%;
   gap: 2px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+  flex-wrap: wrap;
   max-width: none;
 }
 
