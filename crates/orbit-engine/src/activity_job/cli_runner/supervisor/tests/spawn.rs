@@ -2,8 +2,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::super::super::tests::test_support::sh_args;
-use super::super::{SpawnTraceContext, SpawnWithTimeoutRequest, spawn_with_timeout};
-use super::test_support::{process_is_live, read_pid, spawn_test_request, stdin_trace, wait_until};
+#[cfg(target_os = "linux")]
+use super::super::SpawnTraceContext;
+use super::super::{SpawnWithTimeoutRequest, spawn_with_timeout};
+#[cfg(target_os = "linux")]
+use super::test_support::{process_is_live, read_pid, wait_until};
+use super::test_support::{spawn_test_request, stdin_trace};
 
 const STDIN_CHILD: &str =
     "activity_job::cli_runner::supervisor::tests::spawn::stdin_lifecycle_child";

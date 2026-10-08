@@ -11,7 +11,9 @@
 //! through [`compare_with_base`]:
 //!
 //! - the command is rerun on the candidate's synchronized base in a clean,
-//!   detached worktree of that commit;
+//!   detached worktree of that commit, under the managed worktree root and
+//!   never inside the Git common directory, whose Linux protection scan
+//!   refuses the symlinks a checkout can hold;
 //! - the base result is cached in the repository's Git common directory per
 //!   `(base, command)` behind an exclusive file lock, so concurrent
 //!   candidates on one host share a single base run;
@@ -45,6 +47,7 @@ use crate::context::RuntimeHost;
 
 use super::git::{fetch_remote_base, git_output, git_run};
 use super::required_command::{RequiredCommandRun, run_required_command};
+use super::worktree::scratch_checkout_path;
 
 /// Reruns of a network-inconclusive failure, after the first attempt.
 pub(super) const NETWORK_RETRIES: u32 = 2;
@@ -58,7 +61,12 @@ const BASE_LOCK_TIMEOUT: Duration = Duration::from_secs(50 * 60);
 const HOLD_FETCH_INTERVAL: Duration = Duration::from_secs(120);
 /// Directory under the Git common directory holding base results.
 const CACHE_DIR: &str = "orbit-baseline";
-const CACHE_SCHEMA_VERSION: u32 = 1;
+/// Version 2 moved the base checkout out of the common directory, so a
+/// version 1 result's output names paths under the old checkout root.
+const CACHE_SCHEMA_VERSION: u32 = 2;
+/// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
+/// there trips the Linux Git protection scan until it is removed.
+const LEGACY_WORKTREES_DIR: &str = "worktrees";
 
 /// Evidence that a failed command could not reach the network.
 fn network_inconclusive(output: &str) -> Option<String> {
@@ -240,6 +248,7 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
             cached: true,
         };
     }
+    remove_legacy_checkouts(workspace_path, &cache.legacy_worktrees);
     match run_on_base(host, workspace_path, &cache.worktree, base_sha, command) {
         Ok(run) => {
             if run.missing_tool.is_some() {
@@ -289,6 +298,7 @@ struct CachePaths {
     result: PathBuf,
     lock: PathBuf,
     worktree: PathBuf,
+    legacy_worktrees: PathBuf,
 }
 
 fn cache_paths(repo: &Path, base_sha: &str, command: &str) -> Result<CachePaths, OrbitError> {
@@ -297,7 +307,8 @@ fn cache_paths(repo: &Path, base_sha: &str, command: &str) -> Result<CachePaths,
     Ok(CachePaths {
         result: dir.join(format!("{key}.json")),
         lock: dir.join(format!("{key}.lock")),
-        worktree: dir.join("worktrees").join(&key),
+        worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}"))?,
+        legacy_worktrees: dir.join(LEGACY_WORKTREES_DIR),
     })
 }
 
@@ -358,6 +369,23 @@ pub(super) fn in_detached_worktree<T>(
     let result = f(worktree);
     remove_worktree(workspace_path, worktree);
     Ok(result)
+}
+
+/// Best-effort removal of every checkout an older Orbit left under the Git
+/// common directory, then of the directory itself.
+fn remove_legacy_checkouts(workspace_path: &Path, legacy: &Path) {
+    let Ok(entries) = std::fs::read_dir(legacy) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        remove_worktree(workspace_path, &entry.path());
+    }
+    if let Err(error) = std::fs::remove_dir(legacy) {
+        tracing::warn!(
+            path = %legacy.display(),
+            "could not remove the legacy base checkout directory: {error}"
+        );
+    }
 }
 
 /// Best-effort removal of a base worktree and its registration.

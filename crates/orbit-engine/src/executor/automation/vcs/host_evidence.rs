@@ -18,7 +18,6 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::git::git_common_dir;
 use orbit_common::security::release::sha256_hex;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::workflow::automation::SourceRevision;
@@ -31,8 +30,9 @@ use crate::context::RuntimeHost;
 
 use super::baseline::in_detached_worktree;
 use super::required_command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
+use super::worktree::scratch_checkout_path;
 
-/// Directory under the Git common directory holding host-evidence worktrees.
+/// Name prefix of a host-evidence checkout under the managed worktree root.
 const WORKTREE_DIR: &str = "orbit-host-evidence";
 /// The switch macOS sandbox tests read to fail rather than skip.
 const REQUIRE_SANDBOX_EXEC: &str = "ORBIT_REQUIRE_SANDBOX_EXEC";
@@ -98,9 +98,8 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     }
     let host_command = command.host_command();
     let key = sha256_hex(format!("{run_id}\0{}\0{host_command}", candidate.commit).as_bytes());
-    let worktree = git_common_dir(workspace_path)?
-        .join(WORKTREE_DIR)
-        .join(&key[..16]);
+    let worktree =
+        scratch_checkout_path(workspace_path, &format!("{WORKTREE_DIR}-{}", &key[..16]))?;
     let ran = in_detached_worktree(workspace_path, &worktree, &candidate.commit, |checkout| {
         execute(host, checkout, target_dir, command, &host_command)
     });

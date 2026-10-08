@@ -20,9 +20,12 @@ use super::review_gate_audit::Fixture;
 
 /// The check the workspace requires beyond the host-required commands. It
 /// fails `suite::broken` wherever `broken` is set, and `suite::regressed`
-/// wherever the candidate's file says so.
+/// wherever the candidate's file says so. The red check also logs each
+/// directory it ran in to [`CHECK_CWD_LOG`] in the Git common directory.
 const CHECK: &str = "sh check.sh";
-const RED: &str = "#!/bin/sh\necho 'test suite::broken ... FAILED'\n\
+const CHECK_CWD_LOG: &str = "check-cwd.log";
+const RED: &str = "#!/bin/sh\npwd -P >> \"$(git rev-parse --path-format=absolute --git-common-dir)/check-cwd.log\"\n\
+                   echo 'test suite::broken ... FAILED'\n\
                    if grep -q regressed candidate.txt; then echo 'test suite::regressed ... FAILED'; fi\n\
                    exit 1\n";
 const GREEN_ON_BASE: &str = "#!/bin/sh\n\
@@ -143,6 +146,22 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
     assert!(
         is_baseline_red_failure(None, Some(&failure)),
         "the refusal is typed for the red base: {failure}"
+    );
+    // [ORB-14805] The base rerun ran in a checkout outside the Git common
+    // directory: the Linux Git protection scan refuses every symlink under
+    // it, so a base checkout there failed every sandboxed Git consumer.
+    let common = fixture.repo.join(".git").canonicalize().unwrap();
+    let ran_in = std::fs::read_to_string(common.join(CHECK_CWD_LOG)).unwrap();
+    let repo = fixture.repo.canonicalize().unwrap();
+    assert!(
+        ran_in.lines().any(|cwd| Path::new(cwd) != repo),
+        "the check reran on a base checkout: {ran_in}"
+    );
+    assert!(
+        ran_in
+            .lines()
+            .all(|cwd| !Path::new(cwd).starts_with(&common)),
+        "no check ran inside the Git common directory: {ran_in}"
     );
     let hold = BaselineRedHold::from_text(&failure).expect("the refusal names its hold");
     assert_eq!(
