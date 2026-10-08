@@ -72,13 +72,16 @@ retained instant.
 
 The Tasks dock's Log mode and the bottom status bar put the message before
 structured context. Agent relays show the provider event kind (or the stream
-name for plain output) and a compact run identifier first. Targets show their
-last segment; hover to see the complete target. Home paths use `~`, and managed
+name for plain output), its item kind when it has one, and a compact run
+identifier first; the raw provider line is omitted when the kind is known.
+Targets show their last segment; hover to see the complete target. Home paths use `~`, and managed
 worktree paths show the run and relative path; shortened values retain the full
 value in their tooltip. The **agent** toggle hides stdout relays independently
 of the severity filters and remembers the choice in this browser. Stderr and
-orchestration events remain subject to the severity filters, and the status bar
-continues to show the latest event.
+orchestration events remain subject to the severity filters. The status bar
+follows the same toggle: while stdout relays are hidden it holds the newest
+event that is not one, so a drain's agent traffic does not replace an Orbit
+warning.
 
 To validate the dashboard with a prepared Playwright module and Chromium, run
 the isolated browser fixture (1440 px, snapshot, live and paused relays, paths,

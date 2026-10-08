@@ -376,7 +376,30 @@ function wireDockModeToggle() {
 // just the Tasks tab where the dock is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
 // enough to keep the bar live everywhere.
-function updateLogStatusBar(ev) {
+//
+// The bar follows the dock's agent toggle: while agent stdout is hidden, relays
+// never replace the line, so an operator glancing at it sees the newest Orbit
+// event rather than a drain's raw agent traffic. Both candidates are kept so
+// flipping the toggle can redraw the bar without waiting for another event.
+let statusNewestEvent = null;
+let statusQuietEvent = null;
+
+function trackLogStatusEvent(ev) {
+  statusNewestEvent = ev;
+  if (ev.agent_stdout !== true) statusQuietEvent = ev;
+}
+
+function noteLogStatusEvent(ev) {
+  if (!ev) return;
+  trackLogStatusEvent(ev);
+  refreshLogStatusBar();
+}
+
+function refreshLogStatusBar() {
+  writeLogStatusBar(logPanelPrefs.showAgent ? statusNewestEvent : statusQuietEvent);
+}
+
+function writeLogStatusBar(ev) {
   const bar = $("log-statusbar");
   if (!bar || !ev) return;
   const { text: timeStr, title: timeTitle } = logTime(ev.ts);
@@ -496,7 +519,10 @@ function applyLogSnapshot(payload) {
     logRows.push(row);
   });
   applyLogFilters();
-  if (events.length > 0) updateLogStatusBar(events[events.length - 1]);
+  statusNewestEvent = null;
+  statusQuietEvent = null;
+  events.forEach(trackLogStatusEvent);
+  refreshLogStatusBar();
   connectLogStream();
   return true;
 }
@@ -553,6 +579,7 @@ export function initLogTail() {
       saveLogPanelPrefs(logPanelPrefs);
       syncLogFilterPills();
       applyLogFilters();
+      refreshLogStatusBar();
     });
   }
 
@@ -760,7 +787,7 @@ function connectLogStream() {
     rememberStreamOffset(e.lastEventId);
     try {
       const ev = JSON.parse(e.data);
-      updateLogStatusBar(ev);
+      noteLogStatusEvent(ev);
       if (logFollowTail) {
         const inner = $("logInner");
         const row = renderLogEvent(ev, true);

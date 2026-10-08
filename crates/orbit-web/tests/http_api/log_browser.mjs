@@ -36,7 +36,7 @@ const emit = (kind) => fs.appendFileSync(logPath, `${JSON.stringify({
 const visible = async () => page.locator('#logInner .log-line:visible').count();
 const agent = page.locator('#log-show-agent');
 const stdoutRows = page.locator('#logInner .log-line[data-agent-stdout="true"]');
-const checkOrder = async (kind) => {
+const checkOrder = async (kind, barShowsRow = true) => {
   const result = await page.evaluate(() => {
     const row = document.querySelector('#logInner .log-line[data-agent-stdout="true"]');
     const message = row.querySelector('.m');
@@ -71,10 +71,14 @@ const checkOrder = async (kind) => {
   }
   assert.equal(result.source, 'supervisor');
   assert.equal(result.target, target);
-  assert.equal(result.statusSource, 'supervisor');
-  assert.equal(result.statusTarget, target);
   assert.equal(result.fullRun, run);
-  assert.ok(result.sameHtml, 'dock and status bar must use the same message/context order');
+  assert.ok(!result.message.includes('{"type"'), `relay rows must show the event kind, not the provider JSON: ${result.message}`);
+  assert.ok(!result.statusBar.includes('{"type"'), `the status bar must not show raw provider JSON: ${result.statusBar}`);
+  if (barShowsRow) {
+    assert.equal(result.statusSource, 'supervisor');
+    assert.equal(result.statusTarget, target);
+    assert.ok(result.sameHtml, 'dock and status bar must use the same message/context order');
+  }
   assert.ok(result.paths.some(value => value.full === relay.fields.cwd && value.text === `${run}/src`), 'worktree path must shorten to the run while retaining its full title');
   assert.ok(!result.pageOverflow, 'log context must scroll inside its dock');
   return result;
@@ -99,7 +103,8 @@ try {
   emit('item.completed');
   await page.waitForFunction(() => document.querySelectorAll('#logInner .log-line[data-agent-stdout="true"]').length === 2);
   assert.equal(await visible(), 2, 'the saved choice must also hide live stdout');
-  await checkOrder('item.completed');
+  await checkOrder('item.completed', false);
+  assert.ok((await page.locator('#log-statusbar-message').textContent()).startsWith('agent stderr'), 'hidden stdout relays must not replace the status bar');
   await page.click('[data-filter="err"]');
   assert.equal(await visible(), 1, 'severity filters must still select stderr errors');
   await page.click('[data-filter="all"]');
@@ -108,7 +113,7 @@ try {
   await page.click('#log-follow-tail');
   emit('item.updated');
   await page.waitForFunction(() => document.getElementById('log-buffered-count').textContent.startsWith('1 buffered'));
-  assert.ok((await page.locator('#log-statusbar-message').textContent()).startsWith('item.updated'), 'paused relays must still update the status bar');
+  assert.ok((await page.locator('#log-statusbar-message').textContent()).startsWith('agent stderr'), 'paused, hidden stdout relays must not replace the status bar');
   await page.click('#log-follow-tail');
   assert.equal(await stdoutRows.count(), 3);
   assert.equal(await visible(), 2, 'flushed stdout must respect the filter');
@@ -136,6 +141,28 @@ try {
   await agent.click();
   assert.equal(await visible(), 5);
   const final = await checkOrder('item.updated');
+
+  // With stdout hidden, a relay arriving after an orbit WARN must leave the
+  // bar on the WARN; showing agent output again redraws the newest relay.
+  const bar = page.locator('#log-statusbar-message');
+  await agent.click();
+  fs.appendFileSync(logPath, `${JSON.stringify({
+    timestamp: '2026-10-07T01:05:00Z', level: 'WARN', target: 'orbit.job.step_started',
+    fields: { job_run_id: 'http-log-fixture', step_id: 'throttle-warning' },
+  })}\n`);
+  await page.waitForFunction(() => document.getElementById('log-statusbar-message').textContent.includes('throttle-warning'));
+  assert.equal(await bar.getAttribute('data-level'), 'warn');
+  const stdoutBefore = await stdoutRows.count();
+  for (const kind of ['item.completed', 'item.started']) emit(kind);
+  await page.waitForFunction((count) => document.querySelectorAll('#logInner .log-line[data-agent-stdout="true"]').length === count + 2, stdoutBefore);
+  assert.ok((await bar.textContent()).includes('throttle-warning'), 'relays must leave the status bar on the WARN');
+  assert.equal(await bar.getAttribute('data-level'), 'warn');
+  assert.ok(!(await bar.textContent()).includes('{"type"'));
+  await page.screenshot({ path: path.join(evidence, 'statusbar-warn-1440.png'), clip: { x: 0, y: 940, width: 1440, height: 60 } });
+  await agent.click();
+  assert.ok((await bar.textContent()).startsWith('item.started'), 'enabling agent output must redraw the newest relay');
+  assert.ok(!(await bar.textContent()).includes('{"type"'), `relay line must be shortened to its kind: ${await bar.textContent()}`);
+  await page.screenshot({ path: path.join(evidence, 'statusbar-relay-1440.png'), clip: { x: 0, y: 940, width: 1440, height: 60 } });
   assert.deepEqual(errors, [], 'dashboard log module must not raise browser errors');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, chromium: browser.version(), viewport: { width: 1440, height: 1000 }, initial, final, errors }, null, 2));
   console.log('PASS: real log API, 1440px message priority, path and target titles, snapshot/live/paused filtering, severity composition, and reload persistence');
