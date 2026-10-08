@@ -23,6 +23,7 @@ const RUN_FILTERS = new Set(["all", "active", "failed"]);
 const RUN_SORT_DEFAULT_DIR = {
   when: "desc",
   job: "asc",
+  task: "asc",
   run_id: "asc",
   denials: "desc",
   tool_fails: "desc",
@@ -666,6 +667,8 @@ function runSortValue(run, key) {
       return runTimestampValue(run);
     case "job":
       return run.job_id || "";
+    case "task":
+      return (run.task_ids || []).join(" ");
     case "run_id":
       return run.run_id || "";
     case "denials":
@@ -897,6 +900,26 @@ function runDurationCell(run) {
   ]);
 }
 
+// Keep workspace scope in the URL, including when an aggregate row opens a task.
+export function runTaskLinks(run) {
+  const tasks = Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }));
+  const cell = el("span", { class: "run-tasks" });
+  if (tasks.length === 0) cell.textContent = "—";
+  for (const task of tasks) {
+    const link = el("a", { class: "run-task-link", title: task.title ? `${task.id}: ${task.title}` : task.id }, [
+      el("span", { class: "run-task-id", text: task.id }),
+      task.title ? el("span", { class: "run-task-title", text: task.title }) : null,
+    ]);
+    const url = new URL(window.location.href);
+    url.searchParams.set("workspace", run.workspace_id || getWorkspace() || "");
+    url.hash = `tasks?status=all&q=${encodeURIComponent(task.id)}`;
+    link.href = `${url.search}${url.hash}`;
+    link.addEventListener("click", event => event.stopPropagation());
+    cell.appendChild(link);
+  }
+  return cell;
+}
+
 export function renderRuns(runs) {
   if (!panelCanRender("runs-body")) return;
   const body = $("runs-body");
@@ -949,6 +972,7 @@ export function renderRuns(runs) {
     runHeaderCell("State", "state"),
     attributed ? el("span", { class: "runs-workspace-header", text: "Workspace" }) : null,
     runHeaderCell("Job", "job"),
+    runHeaderCell("Task", "task"),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
     runHeaderCell("Denials", "denials", { num: true }),
@@ -1000,6 +1024,7 @@ export function renderRuns(runs) {
       el("span", { class: "state" }, [stateCell(r.state)]),
       attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
       openButton,
+      runTaskLinks(r),
       runIdCell,
       el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
       runCountCell(friction.denials, "denials"),
@@ -1014,6 +1039,7 @@ export function renderRuns(runs) {
     row.dataset.key = `run-${runIdentity(r)}`;
     row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}`;
     row.style.cursor = "pointer";
+    row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
     // A run row opens the run detail view rather than disclosing inline, so its
     // button has no expansion state.
     makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });

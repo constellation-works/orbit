@@ -162,7 +162,15 @@ fn job_runs_page(
     let runs = list_job_runs_for_state(runtime, query, state, limit)?;
     let total = count_job_runs_for_state(runtime, query, state)?;
     let truncated = total > runs.len() as u64;
-    let items: Vec<Value> = runs.iter().map(|run| job_run_to_json(run, None)).collect();
+    let titles = super::run_tasks::task_titles(runtime, &runs)?;
+    let items: Vec<Value> = runs
+        .iter()
+        .map(|run| {
+            let mut value = job_run_to_json(run, None);
+            super::run_tasks::add_tasks(&mut value, run, &titles);
+            value
+        })
+        .collect();
     Ok(json!({
         "items": items,
         "total": total,

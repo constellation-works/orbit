@@ -50,6 +50,7 @@
 .run-hold p { margin: 0; font-size: 13px; line-height: 1.55; }
 .run-meta-grid .value { color: var(--fg); }
 .run-meta-grid .duration { white-space: nowrap; }
+.run-meta-task { grid-column: 1 / -1; }
 
 /* Child-run lineage (ORB-10971) */
 .child-dispatch-panel {

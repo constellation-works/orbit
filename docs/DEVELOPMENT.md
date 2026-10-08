@@ -254,7 +254,9 @@ distributed browser scenarios remain part of the QA sweep, and the Operations
 browser scenario remains available with its shared fixtures under
 `crates/orbit-web/src/tests/`.
 
-The loading browser fixture also renders run detail at 1440px: held-state
+The loading browser fixture checks the Runs Task column, title truncation,
+workspace-scoped task navigation, run-header task labels and coordinator child
+task labels, including mobile layout and text-safe titles. It also renders run detail at 1440px: held-state
 color and hold reason, one-based step numbering and singular counts, empty
 log feedback, omitted empty knowledge metrics, disabled active replay,
 timeline legend and column labels, and formatted stream-JSON stdout. It
