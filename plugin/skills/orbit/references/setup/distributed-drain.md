@@ -151,11 +151,19 @@ with this machine's `binary_version` and `protocol_fingerprint`) and the same
 both sides runs no required check; the drain starts and notes it):
 
 ```bash
+orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 8h --concurrency 3
 orbit run auto --pull <selector> --for 8h --concurrency 3
 ```
 
-`<selector>` is the owner's host-qualified selector (`<owner-machine>/<ws_id>`)
-from federated `orbit.workspace.list`. The command refuses before submitting
+`--host` takes the registered owner's exact name or `machine_id`; `--pull`
+then takes a workspace name or `ws_*` ID from that host's live workspace list.
+Orbit copies the matching descriptor's selector. Without `--host`, `<selector>`
+must be the full owner-qualified selector from federated `orbit.workspace.list`;
+copy it unchanged rather than spelling it by hand. A bare workspace without
+`--host` is refused with `unknown_selector`, and the local host is refused as
+a pull owner. Host-resolution errors and remedies are in
+[tool-surface.md](../tool-surface.md#routing-failures-and-remedies).
+The command refuses before submitting
 unless the checkout is a replica of that owner and workspace and the owner's
 probe admits this executor. It prints a `workspace_pull_pipeline` run ID and
 returns.

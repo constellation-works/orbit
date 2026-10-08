@@ -41,6 +41,16 @@ remains visible in discovery rather than disappearing. `orbit host list` flags a
 host whose `binary_version` or `protocol_fingerprint` differs from this
 machine's, and `orbit doctor` reports it in its `hosts` row.
 
+The doctor's `hosts` row warns on unreachable hosts, missing replica owners,
+legacy membership and version/protocol differences on other hosts. Invalid
+or conflicting host files, identity mismatch and version/protocol skew on a
+replica's owner are errors. Use `orbit host list` for live details, register
+missing owners, restore SSH reachability and deploy matching builds where
+needed. `host list` is a report and exits zero when the registry loads even
+if a host is down; doctor is the health gate.
+
+### Legacy migration (one release)
+
 An older `~/.orbit/mcp-destinations.toml` is still read while it is the only
 file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
 retained row must answer; `remove` never contacts the row it drops) and deletes
@@ -48,14 +58,36 @@ it, and `orbit host add <ssh-target of a listed host>` is the direct way to
 migrate. If both files exist every consumer refuses with
 `host_file_conflict`, naming each legacy row the host file lacks; delete the
 legacy file, then run the `orbit host add` the error names for each of them.
+Legacy rows contribute no task prefix until migrated. The next release drops
+the legacy reader and retains the both-files conflict check one release longer.
+
+### Registration failures and remedies
+
+| Code | Remedy |
+|---|---|
+| `host_exists` | Use the existing entry; use `orbit host rename` to change its display name. |
+| `host_name_conflict` | Pick an unused `--name`, or rename the conflicting registered entry. |
+| `task_prefix_conflict` | Reach the intended host or initialize a distinct host with an unused prefix; existing prefixes are immutable. |
+| `host_is_local` | Use the automatically listed local host; it needs no registration. |
+| `host_too_old` | Upgrade the remote to a build that reports its machine identity and task prefix, then add it again. |
+| `host_identity_mismatch` | Verify the SSH alias reaches the intended machine. If replacing a host deliberately, reconcile its dependents before removing and re-adding the entry. |
+| `host_in_use` | Inspect `orbit host show` and reconcile the named replica checkouts or pull drains before removal. `--force` deliberately leaves those dependents without a route. |
+| `legacy_host_unreachable` | Restore the named retained host, or remove a decommissioned legacy row with `orbit host remove <host>`; the removed row is not probed. |
+| `host_file_conflict` | Follow the migration diagnostic above; every consumer refuses while both files exist. |
+
+Routing and reachability errors have their own remedies in
+[tool-surface.md](../../orbit/references/tool-surface.md#routing-failures-and-remedies).
 
 ```bash
 orbit mcp init --federated --client codex
 ```
 
 This creates a separate client integration and preserves the ordinary one.
-Federation is session-unbound: call `orbit_workspace_list` and pass each
-returned host-qualified `selector` unchanged. Do not pass `--workspace` or a
+Federation is session-unbound: for workspace-scoped calls, use
+`orbit_workspace_list` and pass its host-qualified `selector` unchanged.
+Single-task calls can instead omit the selector and route by task prefix;
+see [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection).
+Do not pass `--workspace` or a
 positional SSH destination to federated mode. On a direct server, a session
 binding via `--workspace` is valid, and explicit per-call selectors take
 precedence. `--root` is not an MCP workspace-routing mechanism.
