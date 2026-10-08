@@ -722,6 +722,58 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
 }
 
 #[test]
+fn clock_sweep_caps_successful_upgrade_resumes_per_tick() {
+    let test_name = "upgrade_resume::clock_sweep_caps_successful_upgrade_resumes_per_tick";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker; resumed substitutes
+    // exit at once, so each submission completes without starting another run.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let ctx = setup_context();
+    let now = Utc::now();
+    let runs = (0..40)
+        .map(|_| upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {}))
+        .collect::<Vec<_>>();
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    let tick = || {
+        let sweep = run_sweep_at_with_providers(
+            &ctx.global,
+            SweepOptions::default(),
+            machine.clone(),
+            &provider,
+        )
+        .expect("sweep runs");
+        assert!(!sweep.lock_busy);
+    };
+
+    tick();
+    let resumed_after_first_tick = runs
+        .iter()
+        .filter(|run_id| !ctx.jobs.job_run_retries(run_id, 1).unwrap().is_empty())
+        .count();
+    assert!(
+        resumed_after_first_tick > 0 && resumed_after_first_tick < runs.len(),
+        "one sweep must resume only part of a backlog larger than its cap"
+    );
+
+    tick();
+    for run_id in &runs {
+        assert_eq!(
+            ctx.jobs.job_run_retries(run_id, 1).unwrap().len(),
+            1,
+            "every run is resumed exactly once across ticks"
+        );
+        assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");
+    }
+}
+
+#[test]
 fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable() {
     let test_name = "upgrade_resume::clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable";
     if run_isolated_test(test_name) {
