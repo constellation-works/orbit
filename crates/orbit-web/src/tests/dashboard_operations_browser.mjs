@@ -37,7 +37,8 @@ try {
   await page.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   // Serve the actual markup/styles with only the Operations module initialized.
   // All API traffic is fixture data; no live scheduler or dashboard is contacted.
-  page.on('pageerror', error => console.error(error));
+  const pageErrors = [];
+  page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
   await page.addScriptTag({ type: 'module', url: '/test.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
@@ -766,6 +767,7 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
+  if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
   console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
