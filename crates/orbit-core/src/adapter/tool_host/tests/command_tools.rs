@@ -286,3 +286,99 @@ fn working_directory_symlink_that_escapes_is_refused() {
         "a refused working_directory must not spawn the command"
     );
 }
+
+/// Whether `pid` still names a process that can run (a zombie awaiting its
+/// reaper does not count).
+#[cfg(unix)]
+fn process_is_alive(pid: i32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .and_then(|(_, tail)| tail.split_whitespace().next().map(|state| state != "Z"))
+            .unwrap_or(false),
+        // No procfs: fall back to a signal-0 probe.
+        Err(_) => unsafe { libc::kill(pid, 0) == 0 },
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn command_past_its_timeout_is_killed_with_its_process_group() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+    let pid_file = repo_root.join("grandchild.pid");
+
+    let started = std::time::Instant::now();
+    let result = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            // The grandchild shares the command's process group; the shell
+            // waits on it, so only a group kill ends both.
+            "argv": [
+                "sh",
+                "-c",
+                format!("sleep 600 & echo $! > '{}'; wait", pid_file.display()),
+            ],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "timeout_ms": 500,
+            "model": "claude",
+        }),
+    )
+    .expect("a timed-out command is a result, not a tool error");
+    let elapsed = started.elapsed();
+
+    assert_eq!(result["timed_out"], json!(true), "{result}");
+    assert_eq!(result["success"], json!(false), "{result}");
+    assert!(
+        result["exit_code"].is_null(),
+        "a killed command has no exit code: {result}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the call must return near its 500ms bound, took {elapsed:?}"
+    );
+
+    let grandchild: i32 = std::fs::read_to_string(&pid_file)
+        .expect("the command recorded its background child")
+        .trim()
+        .parse()
+        .expect("pid");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while process_is_alive(grandchild) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        !process_is_alive(grandchild),
+        "pid {grandchild} survived in the command's process group"
+    );
+}
+
+#[test]
+fn zero_timeout_is_refused_before_the_command_runs() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let marker = repo_root.join("must-not-run");
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["touch", marker.display().to_string()],
+            "working_directory": repo_root.display().to_string(),
+            "timeout_ms": 0,
+            "model": "claude",
+        }),
+    )
+    .expect_err("a zero deadline cannot be honoured");
+    assert!(
+        invalid_input_message::<Value>(Err(error)).contains("timeout_ms"),
+        "refusal must name the field"
+    );
+    assert!(
+        !marker.exists(),
+        "a refused call must not spawn the command"
+    );
+}

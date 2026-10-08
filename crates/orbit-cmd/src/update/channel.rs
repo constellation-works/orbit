@@ -11,8 +11,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::process::run_bounded_capped;
 
 /// Environment variable `install.sh` reads for the managed install directory.
 pub const INSTALL_DIR_ENV: &str = "ORBIT_INSTALL_DIR";
@@ -164,6 +166,12 @@ pub trait HomebrewInventory {
     fn installed_full_names(&self) -> Result<Vec<String>, OrbitError>;
 }
 
+/// `brew list` reads the Cellar; one that takes longer is wedged, and the
+/// remediation text it feeds falls back to the canonical upgrade command.
+const BREW_LIST_TIMEOUT: Duration = Duration::from_secs(30);
+/// One line per installed formula.
+const BREW_LIST_OUTPUT_LIMIT: usize = 1024 * 1024;
+
 /// Asks the real `brew` on the caller's `PATH`.
 ///
 /// Tests construct this directly with `command` pointed at a fake `brew`
@@ -183,9 +191,9 @@ impl SystemHomebrewInventory {
 
 impl HomebrewInventory for SystemHomebrewInventory {
     fn installed_full_names(&self) -> Result<Vec<String>, OrbitError> {
-        let output = Command::new(&self.command)
-            .args(["list", "--formula", "--full-name"])
-            .output()
+        let mut command = Command::new(&self.command);
+        command.args(["list", "--formula", "--full-name"]);
+        let output = run_bounded_capped(&mut command, BREW_LIST_TIMEOUT, BREW_LIST_OUTPUT_LIMIT)
             .map_err(|error| {
                 OrbitError::Execution(format!(
                     "failed to run '{} list --formula --full-name': {error}",

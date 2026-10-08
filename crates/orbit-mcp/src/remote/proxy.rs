@@ -50,6 +50,10 @@ pub fn serve_mcp_remote_proxy(args: RemoteProxyArgs) -> Result<(), OrbitError> {
         "starting direct SSH MCP proxy"
     );
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "long-lived SSH stdio relay: it inherits this process's stdio and ends only when the session does, so no deadline applies"
+    )]
     let status = command.status().map_err(|error| {
         OrbitError::Execution(format!(
             "could not start SSH MCP proxy to '{}': {error}",

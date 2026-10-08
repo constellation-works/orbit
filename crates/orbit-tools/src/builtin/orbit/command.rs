@@ -46,6 +46,15 @@ impl Tool for OrbitCommandExecTool {
                 required: true,
             },
             ToolParam {
+                name: "timeout_ms".to_string(),
+                description: "Deadline in milliseconds (default 120000, at most 600000; larger \
+                     values are clamped). When it passes, the command and its whole process \
+                     group are killed and the result reports `timed_out: true`."
+                    .to_string(),
+                param_type: "u64".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "claim_token".to_string(),
                 description: "Token for this workspace's exclusive claim, required when \
                      another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
@@ -59,7 +68,7 @@ impl Tool for OrbitCommandExecTool {
             name: "orbit.command.exec".to_string(),
             description:
                 "Execute a command as an explicit argv array in an explicit working directory \
-                 and return its stdout, stderr, and exit status. Requires operator capability \
+                 and return its stdout, stderr, and exit status, within a deadline. Requires operator capability \
                  and the workspace claim; withheld from managed runs."
                     .to_string(),
             parameters,

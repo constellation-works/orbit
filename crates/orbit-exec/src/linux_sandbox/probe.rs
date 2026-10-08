@@ -2,9 +2,19 @@ use super::*;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 
+use std::time::Duration;
+
+use orbit_common::process::{BoundedRunError, CapturedOutput, run_bounded_capped_typed};
+
 use super::wrapper::{
     BUNDLED_BWRAP_PATH, BwrapSource, HOST_BWRAP_PATH, trusted_wrapper, verify_root_owned_wrapper,
 };
+
+/// Namespace setup and `--help` answer in milliseconds; a probe still running
+/// after this is a wedged wrapper, which is not usable either.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A probe reads a help page at most; its stderr names a failed mount.
+const PROBE_OUTPUT_LIMIT: usize = 256 * 1024;
 
 /// The process's settled capability probe, shared by dispatch and the plan
 /// compiler so a plan names the wrapper the probe selected.
@@ -146,15 +156,8 @@ fn probe_bwrap_now_for(identity: Option<(u32, u32)>) -> BwrapProbeMemo {
     let trusted_path = source.path().to_string();
     let args = base_namespace_args();
     let mut capability_command = probe_command(source.path(), identity);
-    let output = match capability_command
-        .args(&args)
-        .arg("--")
-        .arg("/bin/true")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-    {
+    capability_command.args(&args).arg("--").arg("/bin/true");
+    let output = match run_probe(&mut capability_command) {
         Ok(output) => output,
         Err(error) => {
             return BwrapProbeMemo::Unsettled(could_not_execute(source, error));
@@ -237,10 +240,7 @@ fn advertises_bind_fd(
     source: BwrapSource,
     identity: Option<(u32, u32)>,
 ) -> Result<bool, BwrapProbeOutcome> {
-    let help = probe_command(source.path(), identity)
-        .arg("--help")
-        .stdin(Stdio::null())
-        .output()
+    let help = run_probe(probe_command(source.path(), identity).arg("--help"))
         .map_err(|error| could_not_execute(source, error))?;
     let capabilities = String::from_utf8_lossy(&help.stdout);
     Ok(help.status.success()
@@ -251,10 +251,7 @@ fn advertises_bind_fd(
 /// `bubblewrap 0.12.0` → `0.12.0`. Diagnostic only; a missing version never
 /// changes readiness.
 fn wrapper_version(path: &str, identity: Option<(u32, u32)>) -> Option<String> {
-    let output = probe_command(path, identity)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
+    let output = run_probe(probe_command(path, identity).arg("--version"))
         .ok()
         .filter(|output| output.status.success())?;
     String::from_utf8_lossy(&output.stdout)
@@ -274,6 +271,20 @@ fn probe_command(path: &str, identity: Option<(u32, u32)>) -> Command {
     #[cfg(not(target_os = "linux"))]
     let _ = identity;
     command
+}
+
+/// Run one probe to completion within [`PROBE_TIMEOUT`]. A probe that cannot
+/// start keeps its `io::ErrorKind`; one that does not finish in time is killed
+/// with its process group and reported as an error.
+fn run_probe(command: &mut Command) -> std::io::Result<CapturedOutput> {
+    run_bounded_capped_typed(command, PROBE_TIMEOUT, PROBE_OUTPUT_LIMIT).map_err(
+        |error| match error {
+            BoundedRunError::Spawn(error) => error,
+            BoundedRunError::Run(error) => {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, error.to_string())
+            }
+        },
+    )
 }
 
 fn could_not_execute(source: BwrapSource, error: std::io::Error) -> BwrapProbeOutcome {

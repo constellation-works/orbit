@@ -1,8 +1,10 @@
 //! The native unit manager (launchd or systemd) and how Orbit runs its commands.
 
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::process::run_bounded_capped;
 
 use super::status::manager_probe_failure;
 
@@ -69,13 +71,42 @@ pub(super) struct ManagerCommandOutput {
 
 pub(super) struct NativeClockCommandRunner;
 
+/// How long one `launchctl` or `systemctl` call may take. These answer in
+/// milliseconds; a manager that does not is wedged, and clock status, repair
+/// and `orbit update` convergence must report that instead of hanging.
+pub(super) const MANAGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Unit properties and `list` output are far smaller than this.
+const MANAGER_OUTPUT_LIMIT: usize = 1024 * 1024;
+
+impl NativeClockCommandRunner {
+    pub(super) fn execute(
+        command: &ManagerCommand,
+        timeout: Duration,
+    ) -> Result<ManagerCommandOutput, OrbitError> {
+        let mut process = Command::new(command.program);
+        process.args(&command.args);
+        let output =
+            run_bounded_capped(&mut process, timeout, MANAGER_OUTPUT_LIMIT).map_err(|error| {
+                match error {
+                    OrbitError::ProcessTimeout { timeout_ms, .. } => OrbitError::ProcessTimeout {
+                        timeout_ms,
+                        detail: format!("run {}", command.display()),
+                    },
+                    other => OrbitError::Execution(format!("run {}: {other}", command.display())),
+                }
+            })?;
+        Ok(ManagerCommandOutput {
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
 impl ClockCommandRunner for NativeClockCommandRunner {
     fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError> {
-        Command::new(command.program)
-            .args(&command.args)
-            .output()
-            .map(|output| output.status.success())
-            .map_err(|error| OrbitError::Execution(format!("run {}: {error}", command.display())))
+        Self::execute(command, MANAGER_COMMAND_TIMEOUT).map(|output| output.success)
     }
 
     fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError> {
@@ -88,15 +119,6 @@ impl ClockCommandRunner for NativeClockCommandRunner {
     }
 
     fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
-        Command::new(command.program)
-            .args(&command.args)
-            .output()
-            .map(|output| ManagerCommandOutput {
-                success: output.status.success(),
-                exit_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            })
-            .map_err(|error| OrbitError::Execution(format!("run {}: {error}", command.display())))
+        Self::execute(command, MANAGER_COMMAND_TIMEOUT)
     }
 }

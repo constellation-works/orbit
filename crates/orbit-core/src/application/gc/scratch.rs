@@ -261,14 +261,32 @@ mod filesystem {
         Ok(held)
     }
 
+    /// A whole-machine `lsof` is slow but finite. Past this the probe fails
+    /// closed and every stale entry is kept.
+    #[cfg(target_os = "macos")]
+    const LSOF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    /// Retained `lsof -F n` output, one line per open file on the host.
+    #[cfg(target_os = "macos")]
+    const LSOF_OUTPUT_LIMIT: usize = 128 * 1024 * 1024;
+
     #[cfg(target_os = "macos")]
     fn find_holders(prefixes: &[&Path]) -> Result<BTreeSet<usize>, String> {
-        let output = std::process::Command::new("lsof")
-            .args(["-nP", "-w", "-F", "n"])
-            .output()
+        use orbit_common::process::output_capture::OUTPUT_TRUNCATED_MARKER;
+        use orbit_common::process::run_bounded_capped;
+
+        let mut command = std::process::Command::new("lsof");
+        command.args(["-nP", "-w", "-F", "n"]);
+        let output = run_bounded_capped(&mut command, LSOF_TIMEOUT, LSOF_OUTPUT_LIMIT)
             .map_err(|error| format!("open files could not be listed with lsof: {error}"))?;
         if !output.status.success() && output.stdout.is_empty() {
             return Err("open files could not be listed: lsof produced no output".to_string());
+        }
+        // A listing cut short could omit the very file that holds an entry.
+        if output.stdout.ends_with(OUTPUT_TRUNCATED_MARKER) {
+            return Err(
+                "open files could not be listed: lsof output exceeded the capture limit"
+                    .to_string(),
+            );
         }
         let mut held = BTreeSet::new();
         for line in output.stdout.split(|byte| *byte == b'\n') {

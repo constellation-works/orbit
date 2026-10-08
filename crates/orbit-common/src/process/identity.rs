@@ -170,6 +170,19 @@ pub enum ProbeOutcome {
 use std::io;
 #[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
+use std::time::Duration;
+
+#[cfg(unix)]
+use super::bounded::{BoundedRunError, run_bounded_capped_typed};
+
+/// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
+/// is unreadable identity, which callers already treat as unavailable.
+#[cfg(unix)]
+const PS_TIMEOUT: Duration = Duration::from_secs(5);
+/// One `lstart` line is under 40 bytes.
+#[cfg(unix)]
+const PS_OUTPUT_LIMIT: usize = 4096;
 
 #[cfg(unix)]
 fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
@@ -186,7 +199,12 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     if stable_env {
         cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
     }
-    let output = cmd.output()?;
+    let output = run_bounded_capped_typed(&mut cmd, PS_TIMEOUT, PS_OUTPUT_LIMIT).map_err(
+        |error| match error {
+            BoundedRunError::Spawn(error) => error,
+            BoundedRunError::Run(error) => io::Error::other(error.to_string()),
+        },
+    )?;
     if !output.status.success() {
         return Ok(None);
     }
