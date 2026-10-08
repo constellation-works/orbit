@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::input::{input_string_field, required_input_string};
+use super::absorbed::{AbsorbedReason, AbsorbedRefusal, verify_absorbed_candidate};
 use super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_failure_error,
     git_output, git_output_raw, git_run, git_success, git_timeout_error,
@@ -180,6 +181,14 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
     } else {
         RecoveredRewrite::Absent
     };
+    // [ORB-14668] A certified absorbed continuation left nothing to deliver,
+    // whatever the base did since: re-observe it and hand the step to
+    // verified no-diff settlement, or name why it is refused.
+    if let RecoveredRewrite::Current(checkpoint) = &recovery
+        && checkpoint.get("absorbed").is_some()
+    {
+        return Err(absorbed_outcome(host, input, context, head, checkpoint));
+    }
     let base_sha = match &recovery {
         RecoveredRewrite::Current(checkpoint) => required_input_string(checkpoint, "base_sha")?,
         RecoveredRewrite::Overtaken(_)
@@ -285,6 +294,46 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         "remote_sha_before": input_string_field(input, "remote_sha"),
         "rewritten": rewritten,
     }))
+}
+
+/// The step failure for a recovered HEAD whose certified checkpoint says the
+/// pinned base absorbed the candidate: the settlement marker once
+/// [`verify_absorbed_candidate`] re-observes it, otherwise today's empty-branch
+/// refusal with the typed reason.
+fn absorbed_outcome<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+    head: &str,
+    checkpoint: &Value,
+) -> OrbitError {
+    let step_id = checkpoint
+        .get("step_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let verified = match context.tasks.as_slice() {
+        [task] => verify_absorbed_candidate(
+            host,
+            recovery_run_id(input, context),
+            step_id,
+            &task.id,
+            &context.workspace_path,
+        ),
+        _ => Err(AbsorbedRefusal::new(
+            AbsorbedReason::StaleCheckpoint,
+            "an absorbed candidate settles exactly one task",
+        )),
+    };
+    match verified {
+        Ok(candidate) => OrbitError::Execution(candidate.failure_text(head)),
+        Err(refusal) => OrbitError::Execution(format!(
+            "git_rebase: recovered branch '{head}' no longer contains a candidate ahead of target base '{}'; {refusal}",
+            checkpoint
+                .get("base_sha")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        )),
+    }
 }
 
 /// Run the deterministic rebase itself, from `head_sha_before` (which the
@@ -829,7 +878,7 @@ enum RecoveryCheckpointLookup {
 /// of the very same directory must not be discarded as foreign. Two spellings
 /// match when they name one existing directory; anything unresolvable does
 /// not match, so a checkpoint for another checkout is still refused.
-fn recorded_workspace_matches(recorded: Option<&str>, workspace: &Path) -> bool {
+pub(super) fn recorded_workspace_matches(recorded: Option<&str>, workspace: &Path) -> bool {
     let Some(recorded) = recorded else {
         return false;
     };

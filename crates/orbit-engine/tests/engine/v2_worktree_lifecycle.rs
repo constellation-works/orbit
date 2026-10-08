@@ -31,7 +31,8 @@ use chrono::Utc;
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    DispatchError, RebaseRecoveryAttemptScope, ResolvedCliExecutor, RuntimeHost,
+    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+    FinalRecoveryApplied, RebaseRecoveryAttemptScope, ResolvedCliExecutor, RuntimeHost,
     TaskAutomationUpdate, V2AuditWriter, V2DispatchInput, WorktreeGcTaskLookup,
     dispatch_v2_activity, execute_deterministic_action,
 };
@@ -41,7 +42,9 @@ use orbit_types::task::{
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
-use orbit_types::workflow::{FailureActivityCheckpoint, JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState, PipelineState,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -50,6 +53,9 @@ const CHILD_ENV: &str = "ORBIT_WORKTREE_LIFECYCLE_CHILD";
 /// Upper bound on one isolated test body, Git calls included.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const BASE: &str = "agent-main";
+
+#[cfg(unix)]
+mod absorbed_candidate;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -3713,6 +3719,14 @@ struct LifecycleHost {
     kept_claim: Mutex<Option<KeptClaimCandidate>>,
     /// Deterministically model an operator write immediately before landing.
     landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
+    /// Scripted answers of host-run deterministic actions, by action name.
+    stubs: Mutex<BTreeMap<String, Result<Value, String>>>,
+    /// Every stubbed action call, as (action, input), in order.
+    stub_calls: Mutex<Vec<(String, Value)>>,
+    /// Final recovery admissions requested, in order.
+    final_recovery_admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
+    /// Final recovery decisions handed to the host, in order.
+    final_recovery_applications: Mutex<Vec<FinalRecoveryApplication>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -4120,12 +4134,72 @@ impl RuntimeHost for LifecycleHost {
         &self,
         action: &str,
         _config: &Value,
-        _input: &Value,
+        input: &Value,
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            action.to_string(),
-        ))
+        let Some(reply) = self.stubs.lock().unwrap().get(action).cloned() else {
+            return Err(DispatchError::DeterministicActionNotRegistered(
+                action.to_string(),
+            ));
+        };
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .push((action.to_string(), input.clone()));
+        reply.map_err(|message| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message,
+        })
+    }
+
+    /// Conflict recovery dispatched by a job runs on the system route, whose
+    /// crew keeps the activity's inline provider settings.
+    fn system_crew_for_dispatch(&self) -> Option<String> {
+        Some("system".to_string())
+    }
+
+    fn agent_crew_config_for_input(
+        &self,
+        _input: &Value,
+    ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
+        Ok(None)
+    }
+
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    fn admit_final_recovery(
+        &self,
+        _run_id: &str,
+        request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        self.final_recovery_admissions
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        Ok(FinalRecoveryAdmission::Admitted)
+    }
+
+    /// Settles every decision but `escalate`, leaving the task as it is: the
+    /// runtime's applier, not this host, owns the lifecycle change.
+    fn apply_final_recovery(
+        &self,
+        _run_id: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        self.final_recovery_applications
+            .lock()
+            .unwrap()
+            .push(application.clone());
+        Ok(match &application.decision {
+            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
+                outcome: "blocked for a human".to_string(),
+            },
+            other => FinalRecoveryApplied::Settled {
+                outcome: other.kind().to_string(),
+            },
+        })
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
@@ -4332,6 +4406,11 @@ fn path_str(path: &Path) -> &str {
 /// Run `body` in a copy of this test binary that sees only the environment
 /// the fixture sets, and fail if it fails or outlives [`CHILD_DEADLINE`].
 fn isolated(test: &str, body: impl FnOnce()) {
+    isolated_in(module_path!(), test, body);
+}
+
+/// [`isolated`] for a test defined in `module`, a submodule of this one.
+fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
     if std::env::var_os(CHILD_ENV).is_some() {
         body();
         return;
@@ -4347,7 +4426,7 @@ fn isolated(test: &str, body: impl FnOnce()) {
     // libtest names a test by its module path below the crate root.
     let qualified = format!(
         "{}::{test}",
-        module_path!().split_once("::").expect("test module").1
+        module.split_once("::").expect("test module").1
     );
     let mut command = Command::new(std::env::current_exe().unwrap());
     command

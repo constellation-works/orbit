@@ -182,6 +182,9 @@ spec:
 
     - id: sync_base
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
+      # ORB-14668: an absorbed candidate settles through final recovery's
+      # `complete_no_diff` without its agent, as in task_pr_pipeline; the
+      # owner applies the recorded decision with `review` completion.
       recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
