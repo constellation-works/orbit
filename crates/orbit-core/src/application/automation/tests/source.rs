@@ -115,6 +115,95 @@ fn diverged(orphans: usize, canonical: usize) -> Diverged {
     Diverged { root, old, new }
 }
 
+/// Tree of the base with `.orbit/n` set to `n` plus each of `files`.
+fn tree_with(repo: &Path, base_tree: &str, n: usize, files: &[&str]) -> String {
+    git(repo, &["read-tree", base_tree]);
+    std::fs::write(repo.join(".orbit/n"), format!("{n}\n")).expect("orbit file");
+    git(repo, &["add", ".orbit"]);
+    for file in files {
+        std::fs::write(repo.join(file), "side\n").expect("side file");
+        git(repo, &["add", file]);
+    }
+    git(repo, &["write-tree"])
+}
+
+/// Two first-parent chains from one base, each one `.orbit` commit followed by
+/// one `--no-ff` back-merge per name in `orphan_sides` / `canonical_sides`. A
+/// merge brings in its named file from a side branch, so its first-parent patch
+/// is that file and its `.orbit` tree equals every other commit's in the chain.
+fn diverged_with_back_merges(orphan_sides: &[&str], canonical_sides: &[&str]) -> Diverged {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = root.path();
+    git(repo, &["init"]);
+    std::fs::create_dir(repo.join(".orbit")).expect("orbit dir");
+    std::fs::write(repo.join(".orbit/n"), "0\n").expect("base file");
+    git(repo, &["add", ".orbit"]);
+    let base_tree = git(repo, &["write-tree"]);
+    let base = git(repo, &["commit-tree", &base_tree, "-m", "base"]);
+
+    let chain = |sides: &[&str], message: &str| {
+        let tree = tree_with(repo, &base_tree, 1, &[]);
+        let mut parent = git(
+            repo,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &base,
+                "-m",
+                &format!("{message} orbit"),
+            ],
+        );
+        let mut commits = vec![parent.clone()];
+        let mut merged = Vec::new();
+        for side in sides {
+            let side_tree = tree_with(repo, &base_tree, 0, &[side]);
+            let side_commit = git(
+                repo,
+                &[
+                    "commit-tree",
+                    &side_tree,
+                    "-p",
+                    &base,
+                    "-m",
+                    &format!("side {side}"),
+                ],
+            );
+            merged.push(*side);
+            let merge_tree = tree_with(repo, &base_tree, 1, &merged);
+            parent = git(
+                repo,
+                &[
+                    "commit-tree",
+                    &merge_tree,
+                    "-p",
+                    &parent,
+                    "-p",
+                    &side_commit,
+                    "-m",
+                    &format!("{message} back-merge {side}"),
+                ],
+            );
+            commits.push(parent.clone());
+        }
+        commits
+    };
+
+    let old = chain(orphan_sides, "old");
+    let new = chain(canonical_sides, "new");
+    git(
+        repo,
+        &[
+            "update-ref",
+            "refs/heads/main",
+            new.last().expect("canonical tip"),
+        ],
+    );
+    git(repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+    Diverged { root, old, new }
+}
+
 fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState) {
     let source = Source::new(repo);
     let repository = source.repository().expect("repository");
@@ -483,6 +572,49 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             ),
             other => panic!("expected history_traversal_limit, got {other:?}"),
         }
+    }
+}
+
+#[test]
+fn back_merges_with_equal_orbit_trees_map_by_their_first_parent_patch() {
+    let history = diverged_with_back_merges(&["a.txt", "b.txt"], &["a.txt", "b.txt"]);
+    let repo = history.root.path();
+    let (source, state) = state_for(repo, history.old.last().expect("old tip"));
+
+    let (_page, record) = replay(&source, &state)
+        .expect("back-merges with distinct first-parent patches are not ambiguous");
+
+    assert_eq!(record.mappings.len(), history.old.len());
+    for (index, mapping) in record.mappings.iter().enumerate() {
+        assert_eq!(mapping.orphan.commit, history.old[index], "orphan {index}");
+        assert_eq!(
+            mapping.canonical.commit, history.new[index],
+            "each orphan maps to its own canonical commit, merges included"
+        );
+        assert_eq!(
+            mapping.proof_digest,
+            direct_signature(repo, &history.old[index]),
+            "batched signature of commit {index} matches the first-parent `<commit>^1 <commit>` signature"
+        );
+    }
+    assert_ne!(
+        record.mappings[1].proof_digest, record.mappings[2].proof_digest,
+        "two merges with one `.orbit` tree still carry their own patch"
+    );
+}
+
+#[test]
+fn back_merge_with_a_different_first_parent_patch_is_not_mapped() {
+    let history = diverged_with_back_merges(&["a.txt"], &["b.txt"]);
+    let (source, state) = state_for(history.root.path(), history.old.last().expect("old tip"));
+
+    match replay(&source, &state) {
+        Err(AutomationError::Refused(reason)) => assert_eq!(
+            reason,
+            refusal::HISTORY_MAPPING_AMBIGUOUS,
+            "an orphan merge whose patch no canonical merge shares has no mapping"
+        ),
+        other => panic!("expected history_mapping_ambiguous, got {other:?}"),
     }
 }
 
