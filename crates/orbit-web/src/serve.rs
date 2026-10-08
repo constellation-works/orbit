@@ -16,7 +16,7 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
 
-use crate::{api, assets, health, state};
+use crate::{api, assets, health, heap, state};
 
 /// Conventional loopback port for the dashboard. Shared by `web serve`'s
 /// `--port` default and `web connect`'s local/remote port preference so the
@@ -67,6 +67,7 @@ pub struct ServeArgs {
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
 pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
+    heap::configure();
     let state = state::DashboardState::single(Arc::new(runtime.clone()));
     state.set_operator_session(args.operator);
     run_server(&args, state)
@@ -88,6 +89,7 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// nothing from the machine-global registry (ORB-11388). Which workspace the
 /// dropdown opens on is a separate question, answered by `--workspace`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
+    heap::configure();
     let state = build_state(root_override, args.workspace.as_deref())?;
     state.set_operator_session(args.operator);
     run_server(&args, state)
@@ -329,6 +331,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             api::request_shutdown();
             notify_on_signal.notify_one();
         };
+        let app = heap::trim_after_requests(app);
         let drain = axum::serve(listener, app)
             .with_graceful_shutdown(shutdown)
             .into_future();

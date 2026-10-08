@@ -43,6 +43,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Recover Stuck Job Runs](./runbooks/stuck-job-runs.md) | Diagnose, cancel, resume, or replay pending and running Orbit job runs. |
 | [Publish Orbit Tasks to a Dedicated Repository](./runbooks/task-publication.md) | Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository. |
 | [Upgrade Orbit Safely](./runbooks/upgrades.md) | Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace. |
+| [Soak-Test Dashboard Memory](./runbooks/web-memory-soak.md) | Measure orbit web serve resident memory under the dashboard polling mix on a large disposable store (Linux). |
 | [Validate Website Changes in a Job-Run Sandbox](./runbooks/website-validation.md) | Build, preview, and validate Orbit website changes with Playwright inside a job-run sandbox. |
 | [Run Orbit on Windows through WSL2](./runbooks/windows-wsl2.md) | Run Orbit on Windows inside a WSL2 Linux distribution, with sandbox, MCP, clock and filesystem limits and an explicit not-verified-on-Windows matrix. |
 

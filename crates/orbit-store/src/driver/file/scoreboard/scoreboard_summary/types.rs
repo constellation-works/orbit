@@ -1,11 +1,10 @@
 //! Scoreboard summary document types, windows and generation inputs.
 
 use super::{NotableCompletions, ScoreboardCoverage};
-use crate::contracts::FrictionReportedCount;
+use crate::contracts::{FrictionReportedCount, JobRunCompletion};
 use crate::{AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::JobRun;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -269,7 +268,7 @@ pub struct ScoreboardSummary {
     pub generated_at: String,
     pub agents: BTreeMap<String, AgentSummary>,
     /// Top jobs by completed-run count, descending. Empty when the runtime
-    /// passed no JobRun records (e.g. backward-compat callers).
+    /// passed no run completions (e.g. backward-compat callers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows_run: Vec<WorkflowRunCount>,
     /// Top (role, tool_name) pairs across the audit log, restricted to
@@ -318,9 +317,9 @@ pub struct ScoreboardInputs<'a> {
     /// [`RECENT_WINDOW_DAYS`]. Drives the `recent_7d.tool_calls_by_surface`
     /// totals.
     pub audit_tool_calls_by_surface_recent: &'a [AuditToolCallCountsBySurfaceAndRole],
-    /// All persisted JobRun records — successful ones populate the
-    /// `workflows_run` rollup; the lot drives the 7d workflows count.
-    pub job_runs: &'a [JobRun],
+    /// Every successful run's job and completion time. Populates the
+    /// `workflows_run` rollup and the 7d workflows count.
+    pub job_runs: &'a [JobRunCompletion],
     /// Top (role, tool_name) pairs across the audit log, sorted desc by
     /// count. Drives the "most-called tools" leaderboard.
     pub top_tool_calls: &'a [AuditTopToolCall],
@@ -349,7 +348,7 @@ impl<'a> Default for ScoreboardInputs<'a> {
     fn default() -> Self {
         static EMPTY_AUDIT: [AuditToolCallCountsByRole; 0] = [];
         static EMPTY_SURFACE: [AuditToolCallCountsBySurfaceAndRole; 0] = [];
-        static EMPTY_JOB: [JobRun; 0] = [];
+        static EMPTY_JOB: [JobRunCompletion; 0] = [];
         static EMPTY_TOP: [AuditTopToolCall; 0] = [];
         Self {
             audit_tool_calls: &EMPTY_AUDIT,

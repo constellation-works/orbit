@@ -13,6 +13,7 @@ use orbit_cmd::DiagnosticsCommands;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::{InvocationQuery, InvocationRecord, OrbitRuntime, V2AuditEventFilter};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::runs::{RUN_LOG_PREVIEW_MAX_BYTES, bounded_preview};
@@ -319,30 +320,49 @@ pub(super) fn diagnostics_friction_row<'a>(
     }
 }
 
-fn enclosing_step_id_for_event<'a>(
-    event: &'a Value,
-    events_by_id: &HashMap<&'a str, &'a Value>,
+fn enclosing_step_id_for_event<'a, E: EnvelopeLinks>(
+    event: &'a E,
+    events_by_id: &HashMap<&'a str, &'a E>,
 ) -> Option<String> {
-    if let Some(step_id) = event.get("step_id").and_then(Value::as_str) {
+    if let Some(step_id) = event.step_id() {
         return Some(step_id.to_string());
     }
 
-    let mut parent_id = event.get("parent_event_id").and_then(Value::as_str);
+    let mut parent_id = event.parent_event_id();
     let mut seen = HashSet::new();
     while let Some(id) = parent_id {
         if !seen.insert(id) {
             return None;
         }
         let parent = events_by_id.get(id)?;
-        if parent.get("body_kind").and_then(Value::as_str) == Some("step_started") {
-            return parent
-                .get("step_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+        if parent.body_kind() == Some("step_started") {
+            return parent.step_id().map(str::to_string);
         }
-        parent_id = parent.get("parent_event_id").and_then(Value::as_str);
+        parent_id = parent.parent_event_id();
     }
     None
+}
+
+/// The envelope links a step attribution walk reads, from either a full
+/// event payload or a [`StderrScanEvent`].
+trait EnvelopeLinks {
+    fn step_id(&self) -> Option<&str>;
+    fn parent_event_id(&self) -> Option<&str>;
+    fn body_kind(&self) -> Option<&str>;
+}
+
+impl EnvelopeLinks for Value {
+    fn step_id(&self) -> Option<&str> {
+        self.get("step_id").and_then(Value::as_str)
+    }
+
+    fn parent_event_id(&self) -> Option<&str> {
+        self.get("parent_event_id").and_then(Value::as_str)
+    }
+
+    fn body_kind(&self) -> Option<&str> {
+        self.get("body_kind").and_then(Value::as_str)
+    }
 }
 
 fn read_blob_preview_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
@@ -592,8 +612,11 @@ fn agent_stderr_error_rows(
 ) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     // Ancestors can precede the selected window. Keep them for step attribution,
     // but only read stderr blobs belonging to invocations in the requested range.
-    let events = v2_audit_values(runtime, None, Some(range.until), 50_000)?;
-    let by_id = events_by_id(&events);
+    let events = stderr_scan_events(runtime, range.until)?;
+    let by_id: HashMap<&str, &StderrScanEvent> = events
+        .iter()
+        .filter_map(|event| event.event_id.as_deref().map(|id| (id, event)))
+        .collect();
     let step_index_by_id = step_index_by_id(&events);
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
@@ -605,22 +628,23 @@ fn agent_stderr_error_rows(
     // execution order; the row scan walks newest-first because it stops at
     // `2 * limit` rows and the caller keeps only the newest `limit` of them.
     for event in events.iter().rev() {
-        if event.get("body_kind").and_then(Value::as_str) != Some("cli_invocation_finished") {
+        if event.body_kind() != Some("cli_invocation_finished") {
             continue;
         }
-        let Some(invoked_at) = event["ts"]
-            .as_str()
+        let Some(invoked_at) = event
+            .ts
+            .as_deref()
             .and_then(|ts| ts.parse::<DateTime<Utc>>().ok())
             .filter(|ts| range.contains(*ts))
         else {
             continue;
         };
-        if let Some(id) = event["event_id"].as_str()
-            && !seen.insert(id.to_string())
+        if let Some(id) = event.event_id.as_deref()
+            && !seen.insert(id)
         {
             continue;
         }
-        let Some(blob_ref) = event.get("stderr_blob_ref").and_then(Value::as_str) else {
+        let Some(blob_ref) = event.stderr_blob_ref.as_deref() else {
             continue;
         };
         if blobs_read >= MAX_STDERR_BLOBS_PER_REQUEST {
@@ -630,18 +654,11 @@ fn agent_stderr_error_rows(
         blobs_read += 1;
         oldest_read = Some(invoked_at);
         let stderr = read_blob_text_best_effort(&blob_store, blob_ref);
-        let fallback_ts = event
-            .get("ts")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let fallback_ts = event.ts.clone().unwrap_or_default();
         let step = enclosing_step_id_for_event(event, &by_id);
-        let step_index = step.as_ref().and_then(|step| {
+        let step_index = step.as_deref().and_then(|step| {
             step_index_by_id
-                .get(&(
-                    event["run_id"].as_str().unwrap_or("").to_string(),
-                    step.clone(),
-                ))
+                .get(&(event.run_id.as_deref().unwrap_or(""), step))
                 .copied()
         });
         let parsed = parse_structured_error_lines(&stderr, &fallback_ts);
@@ -671,13 +688,13 @@ fn agent_stderr_error_rows(
             "ts": timestamps.into_iter().max().map(|ts| ts.to_rfc3339()).unwrap_or(fallback_ts),
             "source": "agent-stderr",
             "message": messages.join("\n"),
-            "job_run": event.get("run_id").and_then(Value::as_str),
+            "job_run": event.run_id.as_deref(),
             "step": step,
             "step_index": step_index,
-            "task_id": event.get("task_id").and_then(Value::as_str),
-            "provider": event.get("provider").and_then(Value::as_str),
+            "task_id": event.task_id.as_deref(),
+            "provider": event.provider.as_deref(),
             "blob_ref": blob_ref,
-            "event_id": event.get("event_id").and_then(Value::as_str),
+            "event_id": event.event_id.as_deref(),
             "target": targets.join(", "),
         }));
         if rows.len() >= limit.saturating_mul(2) {
@@ -730,27 +747,116 @@ pub(super) fn parse_structured_error_line(
     })
 }
 
-fn step_index_by_id(events: &[Value]) -> HashMap<(String, String), u32> {
+fn step_index_by_id(events: &[StderrScanEvent]) -> HashMap<(&str, &str), u32> {
     let mut result = HashMap::new();
     let mut next_by_run = HashMap::new();
     for event in events {
-        if event.get("body_kind").and_then(Value::as_str) != Some("step_started") {
+        if event.body_kind() != Some("step_started") {
             continue;
         }
-        let Some(step_id) = event.get("step_id").and_then(Value::as_str) else {
+        let Some(step_id) = event.step_id() else {
             continue;
         };
-        let run = event["run_id"].as_str().unwrap_or("");
+        let run = event.run_id.as_deref().unwrap_or("");
         let next = next_by_run.entry(run).or_insert(0);
-        result
-            .entry((run.to_string(), step_id.to_string()))
-            .or_insert_with(|| {
-                let index = *next;
-                *next += 1;
-                index
-            });
+        result.entry((run, step_id)).or_insert_with(|| {
+            let index = *next;
+            *next += 1;
+            index
+        });
     }
     result
+}
+
+/// Newest v2 envelope events the Errors feed scans for agent stderr.
+const STDERR_SCAN_EVENTS: usize = 50_000;
+
+/// Store rows read per page of that scan.
+const STDERR_SCAN_PAGE: usize = 5_000;
+
+/// The fields the Errors feed reads from one v2 envelope event. A full JSON
+/// tree per event made the 50,000-event scan the largest allocation of a
+/// dashboard poll; these fields take a small fraction of that.
+#[derive(Deserialize)]
+struct StderrScanEvent {
+    #[serde(default, deserialize_with = "string_field")]
+    event_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    parent_event_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    body_kind: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    run_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    ts: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    stderr_blob_ref: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    task_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    provider: Option<String>,
+}
+
+impl EnvelopeLinks for StderrScanEvent {
+    fn step_id(&self) -> Option<&str> {
+        self.step_id.as_deref()
+    }
+
+    fn parent_event_id(&self) -> Option<&str> {
+        self.parent_event_id.as_deref()
+    }
+
+    fn body_kind(&self) -> Option<&str> {
+        self.body_kind.as_deref()
+    }
+}
+
+/// A string payload field, or `None` for any other JSON type, matching the
+/// `Value::as_str` reads this view replaced.
+fn string_field<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(value) => Some(value),
+        _ => None,
+    })
+}
+
+/// The newest [`STDERR_SCAN_EVENTS`] v2 envelope events up to `until`, oldest
+/// first. Pages through the store so one page of rows is alive at a time.
+fn stderr_scan_events(
+    runtime: &OrbitRuntime,
+    until: DateTime<Utc>,
+) -> Result<Vec<StderrScanEvent>, orbit_core::OrbitError> {
+    let mut events = Vec::new();
+    let mut scanned = 0;
+    while scanned < STDERR_SCAN_EVENTS {
+        let requested = STDERR_SCAN_PAGE.min(STDERR_SCAN_EVENTS - scanned);
+        let page = OrbitRuntime::list_v2_audit_events(
+            runtime,
+            V2AuditEventFilter {
+                workspace_id: String::new(),
+                until: Some(until),
+                source: Some("v2_envelope".to_string()),
+                limit: Some(requested),
+                offset: Some(scanned),
+                ..Default::default()
+            },
+        )?;
+        let fetched = page.len();
+        scanned += fetched;
+        events.extend(
+            page.into_iter()
+                .filter_map(|row| serde_json::from_str(&row.payload_json).ok()),
+        );
+        if fetched < requested {
+            break;
+        }
+    }
+    events.reverse();
+    Ok(events)
 }
 
 fn strip_htmlish(raw: &str) -> String {
