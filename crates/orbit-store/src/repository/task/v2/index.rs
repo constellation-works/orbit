@@ -107,6 +107,12 @@ impl TaskV2Store {
     /// comparison — a reused envelope that disagrees with its index row still
     /// sends the caller to a rebuild.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_index_freshness",
+            workspace_id = %self.workspace_id,
+        )
+        .entered();
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
             .registry
@@ -227,6 +233,12 @@ impl TaskV2Store {
         &self,
         task_id: &str,
     ) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_envelope_selection",
+            task_id,
+        )
+        .entered();
         if let Some(envelope) = self.envelope_cache.cached(task_id) {
             return Ok(Some(envelope));
         }
@@ -377,6 +389,12 @@ impl TaskV2Store {
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_bundle_materialization",
+            task_id = %bundle.envelope.id,
+        )
+        .entered();
         Ok(Task::from_envelope_parts(
             bundle.envelope,
             bundle.description,

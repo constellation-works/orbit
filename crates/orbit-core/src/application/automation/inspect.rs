@@ -257,19 +257,39 @@ pub fn inspect_auto_task(
     definition: &AutoTaskDefinition,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    inspect_auto_task_inner(runtime, definition, now, || {
+        super::auto_task_admission_deferral(runtime, definition).map(|value| value.is_some())
+    })
+}
+
+/// Inspect a delivery auto-task using the shared open-instance rule's already
+/// computed result. Batch dashboard inspection reuses its request's metadata
+/// listing rather than querying task state again for every definition.
+pub fn inspect_auto_task_with_open_instance(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    now: DateTime<Utc>,
+    has_open_instance: bool,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    inspect_auto_task_inner(runtime, definition, now, || Ok(has_open_instance))
+}
+
+fn inspect_auto_task_inner(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    now: DateTime<Utc>,
+    has_open_instance: impl FnOnce() -> Result<bool, OrbitError>,
+) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));
     };
-
     let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
     let trigger = ownership::with_resolved_owner(declared, &ownership);
     let epoch = ownership::auto_task_epoch(definition, &trigger)?;
-
-    let admission_deferred = matches!(definition.dedupe, DedupePolicy::SkipIfOpen)
-        && super::auto_task_admission_deferral(runtime, definition)?.is_some();
+    let admission_deferred = definition.dedupe == DedupePolicy::SkipIfOpen && has_open_instance()?;
 
     inspect(
         runtime,

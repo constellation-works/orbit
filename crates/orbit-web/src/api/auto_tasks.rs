@@ -1,5 +1,6 @@
 //! Auto-task inspection, toggle, and manual mint for the dashboard [ORB-10876].
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,13 +11,14 @@ use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
+use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
 use orbit_core::application::auto_tasks::{
     AutoTaskCursor, ListedAutoTask, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
 use orbit_core::application::plugin::is_listed;
 use orbit_core::application::routines::ScheduleDisplayState;
+use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -408,6 +410,26 @@ fn list_json(
         .iter()
         .filter(|listed| listed.inactive_plugin.is_some())
         .count();
+    // One freshness pass for the request, with no task-body hydration. The
+    // metadata listing is newest first, exactly as the per-tag listing was.
+    let tags = listed
+        .iter()
+        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
+        .map(|listed| (auto_task_tag(&listed.definition.name), Vec::new()))
+        .collect::<BTreeMap<_, Vec<&Task>>>();
+    let tasks = if tags.is_empty() {
+        Ok(Vec::new())
+    } else {
+        runtime.list_task_metadata()
+    };
+    let mut instances = tags;
+    for task in tasks.as_ref().map_or(&[][..], Vec::as_slice) {
+        for tag in &task.tags {
+            if let Some(group) = instances.get_mut(tag) {
+                group.push(task);
+            }
+        }
+    }
     let definitions = listed
         .iter()
         .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
@@ -415,6 +437,11 @@ fn list_json(
             definition_json(
                 runtime,
                 listed,
+                tasks.as_ref().map(|_| {
+                    instances
+                        .get(&auto_task_tag(&listed.definition.name))
+                        .map_or(&[][..], Vec::as_slice)
+                }),
                 cursors.and_then(|state| state.definitions.get(&listed.definition.name)),
                 cursor_state_error.is_some(),
                 now,
@@ -461,25 +488,38 @@ fn list_json(
 fn definition_json(
     runtime: &OrbitRuntime,
     listed: &ListedAutoTask,
+    minted: Result<&[&Task], &orbit_core::OrbitError>,
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
     cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
     let definition = &listed.definition;
+    let open_duplicate = minted.as_ref().is_ok_and(|tasks| {
+        open_auto_task_instances_from_tasks(tasks.iter().copied())
+            .next()
+            .is_some()
+    });
     let automation = match &definition.schedule {
         AutoTaskSchedule::Deliveries { .. } => Some(
-            match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
-                Ok(diagnostic) => super::automation::summary(&json!(diagnostic)),
-                Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
+            if let Err(error) = minted
+                && definition.dedupe == DedupePolicy::SkipIfOpen
+            {
+                json!({"reason":"state_unavailable","error":error.to_string()})
+            } else {
+                match orbit_core::application::automation::inspect_auto_task_with_open_instance(
+                    runtime,
+                    definition,
+                    now,
+                    open_duplicate,
+                ) {
+                    Ok(diagnostic) => super::automation::summary(&json!(diagnostic)),
+                    Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
+                }
             },
         ),
         _ => None,
     };
-    let minted = tagged_instances(runtime, &definition.name);
-    let open_duplicate = runtime
-        .open_auto_task_instance(definition)
-        .is_ok_and(|id| id.is_some());
-    let last_minted = minted.as_ref().ok().and_then(|tasks| tasks.first());
+    let last_minted = minted.ok().and_then(|tasks| tasks.first());
     let last_minted_task_id = last_minted
         .map(|task| task.id.to_string())
         .or_else(|| cursor.and_then(|cursor| cursor.last_task_id.clone()));
@@ -542,14 +582,6 @@ fn definition_json(
         "inactive_plugin": listed.inactive_plugin,
         "skipped_reason": listed.skipped_reason,
     })
-}
-
-fn tagged_instances(
-    runtime: &OrbitRuntime,
-    name: &str,
-) -> Result<Vec<orbit_core::Task>, orbit_core::OrbitError> {
-    let tag = auto_task_tag(name);
-    runtime.list_tasks_by_tags(std::slice::from_ref(&tag))
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
