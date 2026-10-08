@@ -61,7 +61,10 @@ mod worker;
 pub(crate) use admission::input_hash;
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
-pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_success};
+pub use wait::{
+    PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_held,
+    pipeline_wait_status_is_success,
+};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;

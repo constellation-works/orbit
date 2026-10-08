@@ -7,6 +7,9 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{
+    pipeline_wait_status_is_held, pipeline_wait_status_is_success,
+};
 
 use super::action_failed;
 
@@ -32,12 +35,14 @@ pub(in super::super) fn pipeline_success_guard(
         .and_then(Value::as_str)
         .unwrap_or("pipeline child run");
     let mut checked_count = 0usize;
+    let mut held_count = 0usize;
     let mut failures = Vec::new();
 
     if let Some(result) = input.get("result")
         && !result.is_null()
     {
         checked_count += 1;
+        held_count += usize::from(entry_is_held(result));
         if let Some(failure) = pipeline_wait_entry_failure("result", result) {
             failures.push(failure);
         }
@@ -55,6 +60,7 @@ pub(in super::super) fn pipeline_success_guard(
                 })?;
         for (idx, entry) in entries.iter().enumerate() {
             checked_count += 1;
+            held_count += usize::from(entry_is_held(entry));
             if let Some(failure) = pipeline_wait_entry_failure(&format!("results[{idx}]"), entry) {
                 failures.push(failure);
             }
@@ -78,7 +84,17 @@ pub(in super::super) fn pipeline_success_guard(
     Ok(serde_json::json!({
         "succeeded": true,
         "checked_count": checked_count,
+        "held_count": held_count,
     }))
+}
+
+/// A held child is awaiting evidence or a forge, not failing: the parent
+/// guard passes and the held run's own task state carries the wait [ORB-14748].
+fn entry_is_held(entry: &Value) -> bool {
+    entry
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(pipeline_wait_status_is_held)
 }
 
 /// Validate and retain terminal child results without converting a child
@@ -105,6 +121,7 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
 
     let mut succeeded_count = 0usize;
     let mut non_success_count = 0usize;
+    let mut held_count = 0usize;
     for (idx, entry) in results.iter().enumerate() {
         let label = format!("results[{idx}]");
         let run_id = entry
@@ -128,11 +145,8 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
             ));
         }
         match status {
-            status
-                if crate::application::job::pipeline::pipeline_wait_status_is_success(status) =>
-            {
-                succeeded_count += 1
-            }
+            status if pipeline_wait_status_is_success(status) => succeeded_count += 1,
+            status if pipeline_wait_status_is_held(status) => held_count += 1,
             "failed" | "cancelled" | "interrupted" | "timeout" => non_success_count += 1,
             other => {
                 return Err(action_failed(
@@ -148,6 +162,7 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
         "checked_count": results.len(),
         "succeeded_count": succeeded_count,
         "non_success_count": non_success_count,
+        "held_count": held_count,
         "results": results,
     }))
 }
@@ -177,6 +192,7 @@ pub(in super::super) fn record_pipeline_results_audit(
         "checked_count": output.get("checked_count"),
         "succeeded_count": output.get("succeeded_count"),
         "non_success_count": output.get("non_success_count"),
+        "held_count": output.get("held_count"),
         "results": output.get("results"),
     });
     let arguments_json = serde_json::to_string(&payload).map_err(|error| {
@@ -233,7 +249,7 @@ fn pipeline_wait_entry_failure(label: &str, entry: &Value) -> Option<String> {
     let Some(status) = entry.get("status").and_then(Value::as_str) else {
         return Some(format!("{label} missing string status"));
     };
-    if crate::application::job::pipeline::pipeline_wait_status_is_success(status) {
+    if pipeline_wait_status_is_success(status) || pipeline_wait_status_is_held(status) {
         return None;
     }
 

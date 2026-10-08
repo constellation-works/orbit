@@ -19,6 +19,7 @@ mod drain_approval;
 mod drain_cancel;
 mod final_recovery;
 mod forge_hold_resume;
+mod held_child_guard;
 mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod retired_stubs;
