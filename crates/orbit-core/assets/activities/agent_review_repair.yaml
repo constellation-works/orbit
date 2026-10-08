@@ -260,6 +260,10 @@ spec:
          failures lie in, every one outside the task's selectors and the paths
          the candidate changes; a failure inside them is the task's own and
          must be `required`. It cannot share its check with a required pass.
+         A check the manifest lists in `required_validation_commands` or
+         `baseline_commands` (matched like `check`) is never a diagnostic
+         when it fails: record it `required`, with a `baseline` claim when
+         the base fails the same way, or the review settles `incomplete`.
 
        When a `required` check fails on the final candidate and the failures
        lie outside the task's selectors and the paths the candidate changes,
@@ -272,9 +276,9 @@ spec:
        Keep the record `required` and `failed`; never relabel it `diagnostic`
        to clear it. Settlement reruns the check on the candidate and the base
        itself, and only a check the host already runs (a manifest
-       `required_validation_commands` entry or a configured
-       `review.baseline_commands` entry, matched like `check`) can be
-       confirmed. When the base fails exactly as the candidate does and
+       `required_validation_commands` or `baseline_commands` entry, matched
+       like `check`) can be confirmed. When the base fails exactly as the
+       candidate does and
        nothing else is open, the candidate is kept and the task waits in the
        backlog until the base passes, then is reviewed afresh. A candidate
        that fails beyond the base still rejects; a claim the host cannot

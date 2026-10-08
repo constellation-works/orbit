@@ -110,6 +110,12 @@ pub struct ReviewAdmission {
     /// contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The workspace owner's `review.baseline_commands` captured with this
+    /// run [ORB-14684]: checks settlement may rerun on the pinned base, and
+    /// whose failure the reviewer cannot file as a `diagnostic`. Absent on
+    /// admissions captured before the snapshot: no trusted baseline commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_commands: Vec<String>,
     /// The workspace's `review.host_evidence` rules: checks a claimed leaf's
     /// host owes for the paths it changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

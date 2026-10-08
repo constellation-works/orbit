@@ -42,6 +42,11 @@ pub struct ReviewManifest {
     /// Owner-captured checks that the report must establish as required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The owner's `review.baseline_commands` captured with the run: further
+    /// checks settlement may rerun on the pinned base. A failure of one of
+    /// these, or of a required command, is never a `diagnostic` [ORB-14684].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_commands: Vec<String>,
     pub task_meaning_digest: String,
     pub repository: String,
     pub base: SourceRevision,
@@ -105,6 +110,12 @@ pub struct ReviewCertificate {
     /// denotes a legacy certificate without an authoritative check snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_validation_commands: Option<Vec<String>>,
+    /// The owner's `review.baseline_commands` captured with the run
+    /// [ORB-14684]: with `required_validation_commands`, the trusted checks
+    /// whose failure cannot be filed as a `diagnostic`. Absent on certificates
+    /// issued before the snapshot, which read as no trusted baseline commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_commands: Vec<String>,
     /// Whether the records establish the final candidate: every required
     /// check passed, every other record is consistent with its role, and no
     /// obligation an earlier report revision recorded was dropped. Failed

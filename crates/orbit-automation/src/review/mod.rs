@@ -94,6 +94,7 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
         obligations: &certificate.retained_obligations,
         retired: &certificate.retired_validation,
         required_validation_commands: certificate.required_validation_commands.as_deref(),
+        baseline_commands: &certificate.baseline_commands,
     };
     if !certificate.validation_complete
         || validation_evidence(&certificate.validation, &context).is_err()

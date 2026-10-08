@@ -1074,6 +1074,7 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
         task_ids: vec![task.to_string()],
         task_digests: BTreeMap::from([(task.to_string(), "digest".to_string())]),
         required_validation_commands: Some(vec!["make ci-fast".to_string()]),
+        baseline_commands: Vec::new(),
         task_meaning_digest: "digest".to_string(),
         repository: "owner/repository".to_string(),
         base: SourceRevision {
