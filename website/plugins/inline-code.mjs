@@ -3,6 +3,11 @@ import { defineHastPlugin } from 'satteri';
 // CSS nowrap keeps flags and identifiers atomic, while wbr still permits
 // explicit breaks after spaces, path, key and assignment delimiters. Unlike
 // zero-width characters, wbr adds nothing to selectable/copied code text.
+//
+// Each inline code sits in a nowrap span. The code is an inline-block that
+// scrolls locally, and Chromium takes the white-space of an atomic inline's
+// parent to decide whether a line may break after it. A nowrap parent keeps
+// the punctuation that follows on the code's last line.
 function segments(text) {
   return text.match(/\s+|[^\s/.=]*[/.=]|[^\s/.=]+/g) || [];
 }
@@ -36,9 +41,16 @@ function wrapRawHtml(html) {
         return segments(text).map((segment) =>
           `${segment}${/[\s/.=]$/.test(segment) ? '<wbr>' : ''}`).join('');
       }).join('');
-      return `${open}${wrapped}${close}`;
+      return `<span class="${CODE_BOX_CLASS}">${open}${wrapped}${close}</span>`;
     });
   }).join('');
+}
+
+const CODE_BOX_CLASS = 'orbit-code-box';
+
+function isCodeBox(node) {
+  const className = node?.properties?.className;
+  return node?.tagName === 'span' && [].concat(className || []).includes(CODE_BOX_CLASS);
 }
 
 export const inlineCodeWrap = defineHastPlugin({
@@ -54,7 +66,13 @@ export const inlineCodeWrap = defineHastPlugin({
       for (let parent = ctx.parent(node); parent; parent = ctx.parent(parent)) {
         if (parent.tagName === 'pre') return;
       }
-      ctx.setProperty(node, 'children', wrapChildren(node));
+      if (isCodeBox(ctx.parent(node))) return;
+      ctx.replaceNode(node, {
+        type: 'element',
+        tagName: 'span',
+        properties: { className: [CODE_BOX_CLASS] },
+        children: [{ ...node, children: wrapChildren(node) }],
+      });
     },
   },
 });
