@@ -56,11 +56,31 @@ Agent: provider=codex pid=154953 step=agent_implement liveness=alive started_at=
 - `liveness=exited` — the child is gone (or its PID was recycled by an unrelated process)
   while the step never recorded an exit. This is the lost-child case worth acting on.
 - `liveness=unknown` — the host cannot probe liveness. Never read this as dead.
+- `liveness=alive blocked=stopped-descendant` — the child is alive but waiting on a
+  descendant that has stayed stopped (state `T`) past the supervisor's threshold and is still
+  stopped, because the supervisor could not end it. The `stopped descendant:` line under it
+  names the pid, command, how long it was stopped and why it was not ended. The agent makes no
+  progress until that process goes: `kill -KILL <pid>` it (never the agent pid), after checking
+  that the pid still names that command.
+
+A descendant that stops itself — an interactive shell probe such as `bash -i` in a sandbox
+without a terminal, or `kill -STOP $$` — would otherwise hold its parent's wait until the
+activity's wall clock ends. The agent supervisor samples the child's process tree, and ends
+with `SIGKILL` any descendant that stayed stopped for the whole threshold (10 minutes by
+default; `ORBIT_STOPPED_DESCENDANT_THRESHOLD_MS` in the worker's environment overrides it).
+It never ends the agent itself, anything while the agent is stopped too (an operator stopped
+the whole group), a running or merely idle process, or a process outside the agent's tree.
+Each one it ends is recorded as a `cli.invocation.stopped_descendant` event and printed under
+the `Agent:` line as `stopped descendant: ... ended by the supervisor`; nested commands
+supervised by `orbit-exec` (`proc.spawn`, host shell steps) append the same note to their
+stderr. The watch reads `/proc`, so it is Linux only: on macOS a stopped descendant still
+holds the agent until its wall clock ends, and `blocked=` is never shown there.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
 the host that ran the child; a historical run inspected elsewhere may report `exited` or
 `unknown` depending on what that host can observe. Use
-`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`),
+`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`,
+`stopped_descendants`, `blocked_on_stopped_descendant`),
 or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
 
 ## A submitted run outlives its command

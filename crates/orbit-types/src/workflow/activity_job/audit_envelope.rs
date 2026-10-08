@@ -318,6 +318,27 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         latest_message_truncated: bool,
     },
+    /// A descendant of the provider child stayed stopped (state `T`) past the
+    /// supervisor's threshold, so the supervisor sent it `SIGKILL` and the
+    /// child's wait on it returns instead of holding the step until its wall
+    /// clock ends. Never the child itself.
+    ///
+    /// Pairs with `cli.invocation.process` the same way
+    /// `cli.invocation.finished` does. `ended` is false when the signal could
+    /// not be delivered; `error` then says why. `command` is bounded and
+    /// redacted, and `stopped_ms` counts from the first sample that saw the
+    /// descendant stopped.
+    CliInvocationStoppedDescendant {
+        provider: String,
+        pid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid_start_time: Option<String>,
+        command: String,
+        stopped_ms: u64,
+        ended: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// §7.6 — CLI backend subprocess finished (either naturally or by
     /// wall-clock timeout). `timed_out == true` iff the subprocess was killed
     /// because it exceeded `wall_clock_timeout_ms`.
@@ -378,6 +399,9 @@ impl V2AuditEventKind {
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
             V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",
+            V2AuditEventKind::CliInvocationStoppedDescendant { .. } => {
+                "cli.invocation.stopped_descendant"
+            }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }

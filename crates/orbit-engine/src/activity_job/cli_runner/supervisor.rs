@@ -74,6 +74,7 @@ use std::os::unix::net::UnixStream;
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::{SpawnError, SpawnedChild, spawn_child_with_optional_sandbox};
 use orbit_common::process::output_capture::capture_limit_from_env;
+use orbit_common::process::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::text::floor_char_boundary;
 use wait_timeout::ChildExt;
@@ -265,6 +266,13 @@ pub(super) struct ProgressReporter<'a> {
     pub(super) report: &'a dyn Fn(&OutputProgress),
 }
 
+/// Ends descendants of the child that stay stopped past `threshold`, and
+/// reports each one it ended or failed to end.
+pub(super) struct StoppedDescendantReporter<'a> {
+    pub(super) threshold: Duration,
+    pub(super) report: &'a dyn Fn(&StoppedDescendant),
+}
+
 pub(super) struct SpawnTraceContext<'a> {
     pub(super) provider: &'a str,
     pub(super) job_run_id: &'a str,
@@ -290,6 +298,9 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// Called on the supervising thread between waits on the child, so only
     /// before supervision has seen it exit.
     pub(super) on_progress: Option<ProgressReporter<'a>>,
+    /// Without it, a descendant that stops itself holds the child until the
+    /// deadline. Checked between waits on the child, like `on_progress`.
+    pub(super) stopped_descendants: Option<StoppedDescendantReporter<'a>>,
     /// Test seam for exercising wait failures without depending on another
     /// thread reaping the child between wait calls. Injected hooks are
     /// try_wait-style (non-blocking); production blocks in `wait_timeout`.
@@ -416,6 +427,7 @@ pub(super) fn spawn_with_timeout(
         output_capture_limit,
         on_spawn,
         on_progress,
+        stopped_descendants,
         wait,
         live_readers,
         spawned_child,
@@ -519,6 +531,10 @@ pub(super) fn spawn_with_timeout(
             (progress.report)(&sample);
         }
     };
+    let mut stopped_watch = stopped_descendants.map(|reporter| StoppedWatch {
+        watch: StoppedDescendantWatch::new(reporter.threshold),
+        report: reporter.report,
+    });
     let wait_result = wait_until_exit_or_deadline(
         &mut child,
         deadline,
@@ -526,6 +542,7 @@ pub(super) fn spawn_with_timeout(
         on_progress
             .as_ref()
             .map(|progress| (progress.interval, &sample_progress as &dyn Fn())),
+        stopped_watch.as_mut(),
     );
     // `wait` failures are host-side and not clearly deterministic — leave
     // them retryable after the common cleanup below.
@@ -571,6 +588,11 @@ pub(super) fn spawn_with_timeout(
     Ok((stdout, stderr, exit_code, duration, timed_out))
 }
 
+struct StoppedWatch<'a> {
+    watch: StoppedDescendantWatch,
+    report: &'a dyn Fn(&StoppedDescendant),
+}
+
 /// Block until the child exits or `deadline` elapses.
 ///
 /// Production uses `wait_timeout` for the remaining wall-clock budget so a
@@ -578,16 +600,22 @@ pub(super) fn spawn_with_timeout(
 /// is try_wait-style and may still poll.
 ///
 /// With `progress`, production waits in slices of its interval and samples
-/// between them, so sampling stops once a wait reports the exit.
+/// between them, so sampling stops once a wait reports the exit. `stopped`
+/// slices the wait the same way, and samples the child's process tree only
+/// while the child is unreaped.
 fn wait_until_exit_or_deadline(
     child: &mut Child,
     deadline: Instant,
     wait: Option<WaitHook<'_>>,
     progress: Option<(Duration, &dyn Fn())>,
+    mut stopped: Option<&mut StoppedWatch<'_>>,
 ) -> io::Result<Option<ExitStatus>> {
     let mut next_sample = progress.map(|(interval, _)| Instant::now() + interval);
     loop {
-        let slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
+        let mut slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
+        if let Some(stopped) = stopped.as_ref() {
+            slice_end = slice_end.min(stopped.watch.next_sample_at());
+        }
         let remaining = slice_end.saturating_duration_since(Instant::now());
         let result = match wait {
             Some(wait) => wait(child),
@@ -605,6 +633,11 @@ fn wait_until_exit_or_deadline(
                 {
                     sample();
                     next_sample = Some(now + interval);
+                }
+                if let Some(stopped) = stopped.as_deref_mut() {
+                    for descendant in stopped.watch.poll(child.id()) {
+                        (stopped.report)(&descendant);
+                    }
                 }
                 if wait.is_some() {
                     thread::sleep(Duration::from_millis(25));

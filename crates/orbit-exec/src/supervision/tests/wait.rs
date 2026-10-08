@@ -413,3 +413,218 @@ sleep 60"#
         supervise();
     }
 }
+
+/// A descendant that stops itself (state `T`) is ended once it has stayed
+/// stopped across the threshold, so the child's wait on it returns; nothing
+/// else is ever signalled. The threshold seam keeps each case to seconds.
+/// Kernel process states are only observable on a real process tree.
+#[cfg(target_os = "linux")]
+mod stopped_descendants {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    use orbit_common::process::identity::linux_process_stat;
+
+    use super::super::super::wait::{
+        WaitResult, wait_with_cancellation, wait_with_timeout_and_output_limit,
+        with_stopped_descendant_threshold,
+    };
+    use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
+
+    /// Writes the stopped shell's pid, then reports how `wait` on it ended.
+    const SELF_STOPPING_CHILD: &str = "sh -c 'kill -STOP $$; echo resumed' & child=$!; echo \"child=$child\"; \
+         wait $child; echo \"wait=$?\"; exit 0";
+
+    fn spawn(script: &str) -> Child {
+        crate::process::spawn(&ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            current_dir: None,
+            timeout_ms: None,
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::Inherit,
+            debug: false,
+        })
+        .expect("spawn supervised shell")
+    }
+
+    fn supervise(script: &str, threshold: Duration, timeout_ms: u64) -> (WaitResult, Duration) {
+        let child = spawn(script);
+        let started = Instant::now();
+        let result = with_stopped_descendant_threshold(threshold, || {
+            wait_with_timeout_and_output_limit(child, Some(timeout_ms), false, None, 1024 * 1024)
+        })
+        .expect("supervised wait");
+        (result, started.elapsed())
+    }
+
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    fn assert_nothing_ended(result: &WaitResult, case: &str) {
+        let stderr = text(&result.stderr);
+        assert!(
+            !stderr.contains("stopped descendant"),
+            "{case}: the supervisor must not end anything: {stderr:?}"
+        );
+    }
+
+    /// A process outside the supervised tree, in its own group, reaped on drop.
+    struct Bystander(Child);
+
+    impl Drop for Bystander {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn wait_for_state(pid: u32, state: char) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if linux_process_stat(pid).is_some_and(|stat| stat.state == state) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn a_descendant_stopped_past_the_threshold_is_ended_and_the_child_finishes() {
+        let (result, elapsed) = supervise(SELF_STOPPING_CHILD, Duration::from_secs(1), 60_000);
+
+        let stdout = text(&result.stdout);
+        let stderr = text(&result.stderr);
+        let child_pid = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("child="))
+            .expect("the shell names its stopped child");
+        assert!(
+            result.exit_success && result.exit_code == Some(0),
+            "the supervised shell exits 0 once its wait returns: {result:?}",
+            result = (result.exit_code, &stdout, &stderr)
+        );
+        assert!(
+            stdout.contains("wait=137") && !stdout.contains("resumed"),
+            "the stopped child is killed, never resumed: {stdout:?}"
+        );
+        assert!(!result.timed_out);
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "the stop must not hold the child until its deadline: {elapsed:?}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "supervisor: stopped descendant pid={child_pid} command=`sh -c kill -STOP $$; echo resumed` stopped for at least 1s: ended"
+            )),
+            "the diagnostic names the pid, command and stop time: {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn a_stopped_supervised_child_leaves_its_stopped_descendants_alone() {
+        let child = spawn("sleep 1 & wait $!; echo \"wait=$?\"; exit 0");
+        let group = child.id() as libc::pid_t;
+        let operator = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            // SAFETY: signals only the fixture's own unreaped process group.
+            unsafe { libc::killpg(group, libc::SIGSTOP) };
+            std::thread::sleep(Duration::from_millis(1_500));
+            // SAFETY: as above.
+            unsafe { libc::killpg(group, libc::SIGCONT) };
+        });
+        let result = with_stopped_descendant_threshold(Duration::from_millis(400), || {
+            wait_with_timeout_and_output_limit(child, Some(30_000), false, None, 1024 * 1024)
+        })
+        .expect("supervised wait");
+        operator.join().expect("operator thread");
+
+        assert_nothing_ended(&result, "whole group stopped");
+        assert!(
+            text(&result.stdout).contains("wait=0") && result.exit_success,
+            "the group resumes and finishes as if never watched: {:?}",
+            text(&result.stdout)
+        );
+    }
+
+    #[test]
+    fn a_descendant_resumed_before_the_threshold_is_untouched() {
+        let (result, _) = supervise(
+            "sh -c 'kill -STOP $$; echo resumed' & child=$!; sleep 1; kill -CONT $child; \
+             wait $child; echo \"wait=$?\"",
+            Duration::from_secs(3),
+            30_000,
+        );
+
+        assert_nothing_ended(&result, "short stop");
+        let stdout = text(&result.stdout);
+        assert!(
+            stdout.contains("resumed") && stdout.contains("wait=0"),
+            "the briefly stopped child resumes and exits normally: {stdout:?}"
+        );
+    }
+
+    #[test]
+    fn an_idle_running_descendant_is_untouched() {
+        let (result, _) = supervise(
+            "sleep 2 & wait $!; echo \"wait=$?\"",
+            Duration::from_millis(400),
+            30_000,
+        );
+
+        assert_nothing_ended(&result, "idle sleeper");
+        assert!(text(&result.stdout).contains("wait=0"));
+    }
+
+    #[test]
+    fn a_stopped_process_outside_the_supervised_tree_is_never_signalled() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "kill -STOP $$"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let bystander = Bystander(command.spawn().expect("spawn bystander"));
+        let pid = bystander.0.id();
+        assert!(wait_for_state(pid, 'T'), "bystander must stop itself");
+
+        let (result, _) = supervise("sleep 2", Duration::from_millis(400), 30_000);
+
+        assert_nothing_ended(&result, "bystander outside the tree");
+        assert!(
+            linux_process_stat(pid).is_some_and(|stat| stat.state == 'T'),
+            "a stopped process outside the tree stays stopped"
+        );
+    }
+
+    #[test]
+    fn deadline_and_cancellation_end_the_child_as_before() {
+        // The deadline lands before the threshold: a timeout, not an ended
+        // descendant.
+        let (result, elapsed) = supervise(SELF_STOPPING_CHILD, Duration::from_secs(30), 500);
+        assert!(result.timed_out && result.exit_code.is_none());
+        assert!(text(&result.stderr).ends_with("process timed out"));
+        assert_nothing_ended(&result, "deadline");
+        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+
+        let cancelled = AtomicBool::new(false);
+        let child = spawn(SELF_STOPPING_CHILD);
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            with_stopped_descendant_threshold(Duration::from_secs(30), || {
+                wait_with_cancellation(child, Some(30_000), None, Some(&cancelled))
+            })
+        })
+        .expect("cancelled wait");
+        assert!(!result.exit_success && result.exit_code.is_none() && !result.timed_out);
+        assert_nothing_ended(&result, "cancellation");
+    }
+}

@@ -22,7 +22,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable` or `leaf_released`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",\"stopped_descendants\":[...],\"blocked_on_stopped_descendant\":<descendant|null>,...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable` or `leaf_released`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped; `.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -644,24 +644,55 @@ fn display_value(value: &Value) -> String {
 ///
 /// Finished children are omitted: their outcome is already in the step table,
 /// and the question this answers is "is the agent still running or is the child
-/// lost", which only applies to an open invocation.
+/// lost", which only applies to an open invocation. A live child blocked on a
+/// descendant that stayed stopped past the supervisor's threshold is marked
+/// `blocked=stopped-descendant`, not shown as plainly alive, and every stopped
+/// descendant the supervisor reported follows on its own line.
 fn live_provider_process_lines(processes: &[RunProviderProcess]) -> String {
     processes
         .iter()
         .filter(|process| !process.finished)
         .map(|process| {
-            format!(
-                "\n{} provider={} pid={} step={} liveness={} started_at={}",
+            let blocked = process.blocked_on_stopped_descendant();
+            let mut lines = format!(
+                "\n{} provider={} pid={} step={} liveness={}{} started_at={}",
                 crate::output::color::bold("Agent:"),
                 process.provider.as_deref().unwrap_or("-"),
                 process.pid,
                 process.step_id.as_deref().unwrap_or("-"),
                 process.liveness.as_str(),
+                if blocked.is_some() {
+                    " blocked=stopped-descendant"
+                } else {
+                    ""
+                },
                 process
                     .ts
                     .map(|ts| ts.to_rfc3339())
                     .unwrap_or_else(|| "-".to_string()),
-            )
+            );
+            for descendant in &process.stopped_descendants {
+                let outcome = if descendant.ended {
+                    "ended by the supervisor".to_string()
+                } else {
+                    format!(
+                        "the supervisor could not end it ({})",
+                        descendant.error.as_deref().unwrap_or("no reason recorded")
+                    )
+                };
+                lines.push_str(&format!(
+                    "\n  stopped descendant: pid={} command=`{}` stopped for at least {}s; {outcome}{}",
+                    descendant.pid,
+                    descendant.command.as_deref().unwrap_or("-"),
+                    descendant.stopped_ms.unwrap_or(0) / 1000,
+                    if descendant.still_stopped {
+                        "; still stopped"
+                    } else {
+                        ""
+                    },
+                ));
+            }
+            lines
         })
         .collect()
 }

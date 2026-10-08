@@ -4,14 +4,14 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use orbit_common::process::identity::ProcessLiveness;
+use orbit_common::process::identity::{ProcessLiveness, probe_process_stopped};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
 use super::run::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunProviderProcess, RunRecoveryAttempt,
-    RunRecoveryAttempts, RunRecoveryDecision,
+    RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
 };
 
 const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
@@ -192,6 +192,46 @@ where
                     latest_message: None,
                     latest_message_truncated: false,
                     stdout_blob_ref: None,
+                    stopped_descendants: Vec::new(),
+                });
+            }
+            Some("cli_invocation_stopped_descendant") => {
+                let Some(pid) = event
+                    .raw
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok())
+                else {
+                    continue;
+                };
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                let text = |key: &str| {
+                    event
+                        .raw
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                };
+                record.stopped_descendants.push(RunStoppedDescendant {
+                    ts: event.timestamp,
+                    pid,
+                    pid_start_time: text("pid_start_time"),
+                    command: text("command"),
+                    stopped_ms: event.raw.get("stopped_ms").and_then(Value::as_u64),
+                    ended: event
+                        .raw
+                        .get("ended")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    error: text("error"),
+                    // Probed below, for open children only.
+                    still_stopped: false,
                 });
             }
             Some("cli_invocation_activity") => {
@@ -244,6 +284,10 @@ where
     for record in &mut records {
         if !record.finished {
             record.liveness = probe(record.pid, record.pid_start_time.as_deref());
+            for descendant in &mut record.stopped_descendants {
+                descendant.still_stopped =
+                    probe_process_stopped(descendant.pid, descendant.pid_start_time.as_deref());
+            }
         }
     }
 

@@ -106,6 +106,8 @@ After [ORB-10496] (see [Provider subprocess liveness is a separate audit event p
 
 While the child runs, the supervisor samples its stdout every ten seconds and, when it grew, emits `CliInvocationActivity` (`cli.invocation.activity`) with the observed byte count and the newest assistant message in the output tail, bounded to 4 KiB and redacted [ORB-13899]. It correlates with its process exactly as `cli.invocation.finished` does; the projection carries the newest event time as `last_activity_at` and its message as `latest_message`. A quiet child emits nothing, so the event count is bounded by the invocation's wall clock.
 
+When the supervisor ends a descendant of the child that stayed stopped (state `T`) past its threshold, it emits `CliInvocationStoppedDescendant` (`cli.invocation.stopped_descendant`) with the descendant's `pid`, `pid_start_time`, bounded and redacted `command`, `stopped_ms`, and whether `SIGKILL` was delivered (`ended`, with `error` when it was not). It correlates with its process like `cli.invocation.finished`. The projection lists these as `stopped_descendants` and, for an open live child, re-probes each one: a descendant still stopped under the same start identity sets `blocked_on_stopped_descendant`, and `orbit run show` marks the `Agent:` line `blocked=stopped-descendant` instead of plainly alive.
+
 ---
 
 ## 5. Loop-Level Provider and Tool Events

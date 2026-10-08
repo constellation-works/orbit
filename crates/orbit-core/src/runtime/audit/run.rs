@@ -189,9 +189,56 @@ pub struct RunProviderProcess {
     /// The complete captured stdout, once the child finished. Readable after a
     /// failed step too, whose output never reaches the pipeline state.
     pub stdout_blob_ref: Option<String>,
+    /// Descendants the supervisor found stopped past its threshold, from
+    /// `cli.invocation.stopped_descendant` events, oldest first.
+    pub stopped_descendants: Vec<RunStoppedDescendant>,
+}
+
+/// A descendant of a provider child that stayed stopped (state `T`) past the
+/// supervisor's threshold, and what the supervisor did about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunStoppedDescendant {
+    pub ts: Option<DateTime<Utc>>,
+    pub pid: u32,
+    pub pid_start_time: Option<String>,
+    pub command: Option<String>,
+    pub stopped_ms: Option<u64>,
+    /// The supervisor delivered `SIGKILL` to it.
+    pub ended: bool,
+    pub error: Option<String>,
+    /// The same process was still stopped when this projection was read.
+    pub still_stopped: bool,
+}
+
+impl RunStoppedDescendant {
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "ts": self.ts.map(|ts| ts.to_rfc3339()),
+            "pid": self.pid,
+            "pid_start_time": self.pid_start_time,
+            "command": self.command,
+            "stopped_ms": self.stopped_ms,
+            "ended": self.ended,
+            "error": self.error,
+            "still_stopped": self.still_stopped,
+        })
+    }
 }
 
 impl RunProviderProcess {
+    /// The stopped descendant an open, live child is blocked on: one the
+    /// supervisor found stopped past its threshold that is still stopped now.
+    /// Such a child is alive but not making progress.
+    pub fn blocked_on_stopped_descendant(&self) -> Option<&RunStoppedDescendant> {
+        if self.finished || self.liveness != ProcessLiveness::Alive {
+            return None;
+        }
+        self.stopped_descendants
+            .iter()
+            .rev()
+            .find(|descendant| descendant.still_stopped)
+    }
+
     /// The operator-facing projection of one provider child.
     ///
     /// Shared by the CLI and the registered/MCP run-show surfaces so both
@@ -217,6 +264,14 @@ impl RunProviderProcess {
             "latest_message": self.latest_message,
             "latest_message_truncated": self.latest_message_truncated,
             "stdout_blob_ref": self.stdout_blob_ref,
+            "stopped_descendants": self
+                .stopped_descendants
+                .iter()
+                .map(RunStoppedDescendant::to_json)
+                .collect::<Vec<_>>(),
+            "blocked_on_stopped_descendant": self
+                .blocked_on_stopped_descendant()
+                .map(RunStoppedDescendant::to_json),
         })
     }
 }

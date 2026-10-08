@@ -2163,3 +2163,169 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
         "{shown}"
     );
 }
+
+/// A live agent whose supervisor reported a descendant stopped past its
+/// threshold, which is still stopped, reads as blocked rather than plainly
+/// alive; the same agent without that report reads plainly alive. The agent
+/// and its stopped child are real processes so both liveness probes answer.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    use orbit_common::process::identity::{linux_process_stat, process_start_identity_token};
+
+    const BLOCKED: &str = "jrun-20261008-0100";
+    const ALIVE: &str = "jrun-20261008-0200";
+
+    /// The agent's process group, killed and reaped on drop.
+    struct AgentTree(std::process::Child);
+
+    impl Drop for AgentTree {
+        fn drop(&mut self) {
+            // SAFETY: signals only the fixture's own unreaped process group.
+            unsafe { libc::killpg(self.0.id() as libc::pid_t, libc::SIGKILL) };
+            let _ = self.0.wait();
+        }
+    }
+
+    let fixture = Fixture::init();
+    let pid_file = fixture.home.join("stopped-child.pid");
+    let mut agent = std::process::Command::new("/bin/sh");
+    agent
+        .arg("-c")
+        .arg(format!(
+            "sh -c 'kill -STOP $$' & echo $! > '{}'; wait",
+            pid_file.display()
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let agent = AgentTree(agent.spawn().expect("spawn agent"));
+    let agent_pid = agent.0.id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let child_pid = loop {
+        let child = fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok())
+            .filter(|pid| linux_process_stat(*pid).is_some_and(|stat| stat.state == 'T'));
+        match child {
+            Some(pid) => break pid,
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            None => panic!("the agent's child never stopped"),
+        }
+    };
+
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut events = Vec::new();
+    for run_id in [BLOCKED, ALIVE] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                 scheduled_at, started_at, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'running', ?3, ?3, ?3)",
+            params![run_id, workspace_id, now],
+        )
+        .expect("seed running leaf");
+        events.push((
+            run_id,
+            serde_json::json!({
+                "event_id": format!("{run_id}-process"),
+                "parent_event_id": format!("{run_id}-invocation"),
+                "body_kind": "cli_invocation_process",
+                "provider": "antigravity",
+                "pid": agent_pid,
+                "pid_start_time": process_start_identity_token(agent_pid),
+            }),
+        ));
+    }
+    events.push((
+        BLOCKED,
+        serde_json::json!({
+            "event_id": format!("{BLOCKED}-stopped"),
+            "parent_event_id": format!("{BLOCKED}-invocation"),
+            "body_kind": "cli_invocation_stopped_descendant",
+            "provider": "antigravity",
+            "pid": child_pid,
+            "pid_start_time": process_start_identity_token(child_pid),
+            "command": "sh -c kill -STOP $$",
+            "stopped_ms": 612_000,
+            "ended": false,
+            "error": "Operation not permitted (os error 1)",
+        }),
+    ));
+    for (run_id, mut event) in events {
+        event["ts"] = Value::String(now.clone());
+        event["run_id"] = Value::String(run_id.to_string());
+        event["step_id"] = Value::String("implement_one".to_string());
+        db.execute(
+            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                 event_type, ts, run_id, agent_identity, parent_event_id, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5, ?6)",
+            params![
+                workspace_id,
+                event["event_id"].as_str().unwrap(),
+                now,
+                run_id,
+                event["parent_event_id"].as_str().unwrap(),
+                event.to_string(),
+            ],
+        )
+        .expect("seed audit event");
+    }
+
+    let text = |run_id: &str| {
+        let output = fixture
+            .orbit()
+            .args(["run", "show", run_id, "--no-reconcile"])
+            .output()
+            .expect("spawn orbit");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let agent_line = |shown: &str| {
+        shown
+            .lines()
+            .find(|line| line.starts_with("Agent:"))
+            .unwrap_or_else(|| panic!("no Agent: line in {shown}"))
+            .to_string()
+    };
+
+    let blocked = text(BLOCKED);
+    assert!(
+        agent_line(&blocked).contains(&format!(
+            "pid={agent_pid} step=implement_one liveness=alive blocked=stopped-descendant "
+        )),
+        "{blocked}"
+    );
+    assert!(
+        blocked.contains(&format!(
+            "  stopped descendant: pid={child_pid} command=`sh -c kill -STOP $$` stopped for at least 612s; the supervisor could not end it (Operation not permitted (os error 1)); still stopped"
+        )),
+        "{blocked}"
+    );
+    let json = fixture.json(&["run", "show", BLOCKED, "--no-reconcile", "--json"]);
+    let process = &json["provider_processes"][0];
+    assert_eq!(process["liveness"], "alive");
+    assert_eq!(process["blocked_on_stopped_descendant"]["pid"], child_pid);
+    assert_eq!(
+        process["blocked_on_stopped_descendant"]["still_stopped"],
+        true
+    );
+    assert_eq!(process["stopped_descendants"][0]["ended"], false);
+
+    let alive = text(ALIVE);
+    let line = agent_line(&alive);
+    assert!(
+        line.contains("liveness=alive started_at=") && !line.contains("blocked="),
+        "{alive}"
+    );
+    let json = fixture.json(&["run", "show", ALIVE, "--no-reconcile", "--json"]);
+    assert!(json["provider_processes"][0]["blocked_on_stopped_descendant"].is_null());
+    drop(agent);
+}

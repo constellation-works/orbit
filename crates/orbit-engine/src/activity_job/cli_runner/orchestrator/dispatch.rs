@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
 use orbit_common::process::identity::process_start_identity_token;
+use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_descendant_threshold};
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
@@ -35,7 +36,7 @@ use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV, SpawnErro
 use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
     OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    spawn_for_supervision, spawn_with_timeout,
+    StoppedDescendantReporter, spawn_for_supervision, spawn_with_timeout,
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
@@ -549,6 +550,31 @@ pub(crate) fn run_cli_backend_for_step(
         });
     };
 
+    // A descendant the supervisor ended because it stayed stopped: the
+    // operator's record of what was killed and why the agent moved on.
+    let stopped_audit = Arc::clone(&audit);
+    let stopped_provider = provider.clone();
+    let report_stopped = |stopped: &StoppedDescendant| {
+        tracing::warn!(
+            target: "orbit.engine.cli_runner",
+            provider = %stopped_provider,
+            job_run_id = %run_id,
+            pid = stopped.pid,
+            ended = stopped.ended(),
+            "{}",
+            stopped.describe()
+        );
+        stopped_audit.emit_lossy(V2AuditEventKind::CliInvocationStoppedDescendant {
+            provider: stopped_provider.clone(),
+            pid: stopped.pid,
+            pid_start_time: stopped.pid_start_time.clone(),
+            command: stopped.command.clone(),
+            stopped_ms: u64::try_from(stopped.stopped_for.as_millis()).unwrap_or(u64::MAX),
+            ended: stopped.ended(),
+            error: stopped.end_error.clone(),
+        });
+    };
+
     // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
     // mounts cannot cover while compiling those mounts; take that snapshot off
     // the spawned child rather than walking the worktree a second time.
@@ -599,6 +625,10 @@ pub(crate) fn run_cli_backend_for_step(
             on_progress: Some(ProgressReporter {
                 interval: PROVIDER_PROGRESS_INTERVAL,
                 report: &report_progress,
+            }),
+            stopped_descendants: Some(StoppedDescendantReporter {
+                threshold: stopped_descendant_threshold(),
+                report: &report_stopped,
             }),
             wait: None,
             live_readers: None,

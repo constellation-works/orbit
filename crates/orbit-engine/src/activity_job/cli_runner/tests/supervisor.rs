@@ -374,6 +374,7 @@ fn spawn_test_request<'a>(
         output_capture_limit: None,
         on_spawn: None,
         on_progress: None,
+        stopped_descendants: None,
         wait: None,
         live_readers: None,
         spawned_child: None,
@@ -635,4 +636,68 @@ fn process_is_live(pid: u32) -> bool {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// A provider whose shell tool stops itself: the supervisor ends the stopped
+/// descendant once the threshold passes, reports it, and the provider's wait
+/// returns so the invocation finishes long before its wall clock.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_provider_blocked_on_a_stopped_descendant_finishes_once_the_supervisor_ends_it() {
+    use super::super::supervisor::StoppedDescendantReporter;
+    use orbit_common::process::stopped_descendants::StoppedDescendant;
+
+    let script = "sh -c 'kill -STOP $$; echo resumed' & child=$!; echo \"child=$child\"; \
+                  wait $child; echo \"wait=$?\"; exit 0";
+    let run = |threshold: Duration, timeout: Duration| {
+        let args = sh_args(script);
+        let reports = std::cell::RefCell::new(Vec::<StoppedDescendant>::new());
+        let report = |stopped: &StoppedDescendant| reports.borrow_mut().push(stopped.clone());
+        let outcome = spawn_with_timeout(SpawnWithTimeoutRequest {
+            stopped_descendants: Some(StoppedDescendantReporter {
+                threshold,
+                report: &report,
+            }),
+            ..spawn_test_request(
+                "/bin/sh",
+                &args,
+                None,
+                timeout,
+                SpawnTraceContext {
+                    provider: "fixture",
+                    job_run_id: "job-stopped-descendant",
+                    task_id: None,
+                    cwd: None,
+                },
+            )
+        })
+        .expect("spawn succeeds");
+        (outcome, reports.into_inner())
+    };
+
+    let ((stdout, _, exit_code, duration, timed_out), reports) =
+        run(Duration::from_secs(1), Duration::from_secs(60));
+    let stdout = String::from_utf8_lossy(stdout.bytes()).into_owned();
+    let child_pid: u32 = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("child="))
+        .and_then(|pid| pid.parse().ok())
+        .expect("the provider names its stopped child");
+    assert_eq!(exit_code, Some(0), "{stdout}");
+    assert!(!timed_out);
+    assert!(stdout.contains("wait=137"), "{stdout}");
+    assert!(duration < Duration::from_secs(30), "{duration:?}");
+    let [stopped] = reports.as_slice() else {
+        panic!("exactly the stopped child is reported: {reports:?}");
+    };
+    assert_eq!(stopped.pid, child_pid);
+    assert_eq!(stopped.command, "sh -c kill -STOP $$; echo resumed");
+    assert!(stopped.ended() && stopped.stopped_for >= Duration::from_secs(1));
+    assert!(stopped.pid_start_time.is_some());
+
+    // A deadline that lands first is a timeout, exactly as without the watch.
+    let ((_, _, exit_code, _, timed_out), reports) =
+        run(Duration::from_secs(30), Duration::from_millis(500));
+    assert!(timed_out && exit_code.is_none());
+    assert!(reports.is_empty(), "{reports:?}");
 }
