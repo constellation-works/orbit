@@ -94,6 +94,7 @@ On Linux, see [sandbox readiness and distro coverage](docs/runbooks/linux-sandbo
 | Inspect a task or run | `orbit task show <ID>` · `orbit run show <RUN_ID>` |
 | Open the dashboard | `orbit web serve` (remote: `orbit web connect <host>`) |
 | Pick the default crew (provider and model) | `orbit config set workflow.default_crew <crew>` |
+| Route tasks to crews by complexity | `orbit config set --global workflow.hard_complexity_crews '["opus"]'` ([more](#crews-and-complexity-routing)) |
 | Upgrade | `npm install -g @orbit-tools/cli@latest` (`orbit update --check` shows what's new) |
 
 <details>
@@ -126,7 +127,7 @@ orbit task update "$TASK_ID" --approve   # after merging the PR: review → done
 - **Isolated, sandboxed runs.** Each run gets its own git worktree and runs its agent CLI under `sandbox-exec` on macOS or Bubblewrap on Linux. On Linux, worker runs are also memory-bounded in a cgroup.
 - **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later.
 - **Gated pipeline.** Each run goes plan → execute → review, with repair budgets and failure recovery. Dependencies gate admission, so you declare the order once and the queue enforces it.
-- **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them.
+- **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](#crews-and-complexity-routing)).
 
 ### Run unattended
 - **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
@@ -141,6 +142,28 @@ orbit task update "$TASK_ID" --approve   # after merging the PR: review → done
 - **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.
 
 You can adopt these one at a time. The task layer and audit log work from day one. Parallel drains, auto-tasks, and plugins switch on when you want them.
+
+---
+
+## Crews and complexity routing
+
+A crew is a named provider, model and effort level, for example `opus`, `sonnet` or `haiku` on Claude Code, or `astra`, `sol` or `luna` on Codex. Every task has a complexity: `low`, `medium`, `hard` or `xhard`. You set it when you file the task, or the task pilot assesses it. A task filed without a crew draws one from the pool for its complexity:
+
+```toml
+# ~/.orbit/config.toml, as `orbit init` writes it when it detects Codex and Claude Code
+[workflow]
+low_complexity_crews    = ["haiku", "luna"]
+medium_complexity_crews = ["sol", "sonnet"]
+hard_complexity_crews   = ["opus"]
+xhard_complexity_crews  = ["opus", "astra"]
+```
+
+- **Seeded from your CLIs.** `orbit init` fills the pools from the agent CLIs it detects, so a Claude-only or Codex-only machine gets pools of its own crews.
+- **Redrawn when the tier changes.** If the task pilot or `orbit task update --complexity` moves a task to another tier, a crew drawn from a pool is drawn again from the new tier's pool. A crew you name yourself (`--crew opus`) stays pinned.
+- **Weighted or empty.** Pools can be weighted (`["sol:70", "sonnet:30"]`). An empty pool falls back to `workflow.default_crew`.
+- **Changed per machine or per drain.** Edit a pool with `orbit config set --global workflow.hard_complexity_crews '["opus", "sol"]'`, or replace one for a single drain with `orbit run auto --hard-complexity-crews opus`.
+
+[docs/CONFIG.md](docs/CONFIG.md) covers the details: [what `orbit init` seeds](docs/CONFIG.md#workflow--branch-and-crew-defaults) for each combination of CLIs, [crew definitions](docs/CONFIG.md#crewsname--which-provider-model-runs-the-task), and [complexity pools](docs/CONFIG.md#automatic-crew-pools-by-complexity), including weighting, admission-time checks and provider failure holds.
 
 ---
 
