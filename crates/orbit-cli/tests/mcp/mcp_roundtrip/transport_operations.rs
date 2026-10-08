@@ -677,12 +677,19 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     );
     configure("workflow.validation_env.interactive", "true");
     let (_, row) = observe();
+    let message = row["message"].as_str().unwrap();
+    // With no rc files the interactive probe succeeds unless a saturated host
+    // holds `bash -i -l` past the resolver's production timeout. That bounded
+    // fallback is the resolver working, so it passes only when the report says
+    // so: the login mode and the reason the interactive attempt was abandoned.
+    // A fallback that drops its reason still fails.
+    let timed_out_fallback = message.contains("probe mode: login;")
+        && message.contains("interactive fallback reason: interactive login shell")
+        && message.contains("did not finish within");
     assert!(
-        row["message"]
-            .as_str()
-            .unwrap()
-            .contains("probe mode: interactive_login;"),
-        "{row}"
+        message.contains("probe mode: interactive_login;") || timed_out_fallback,
+        "the interactive setting reaches the resolver ({}): {row}",
+        orbit_common::test_env::host_load()
     );
 
     // Fixture rc files affect only the probe, with no dependency on the

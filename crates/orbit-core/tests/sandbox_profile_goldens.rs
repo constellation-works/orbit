@@ -46,7 +46,7 @@ const OUTPUT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_OUTPUT";
 /// Set on the child only: the fixture root, which also holds its `HOME`.
 const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_resolved_sandboxes_in_a_pinned_environment";
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const CASES: &[&str] = &["leaf_worker", "reviewer", "redirected_global_runtime_store"];
 
 #[test]

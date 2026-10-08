@@ -40,10 +40,23 @@ overlap gates, assign each a separate `CARGO_TARGET_DIR`. Concurrent gates in
 one target can rebuild `target/debug/orbit` while generation-bound fixtures
 are running, causing spurious CLI fixture failures; F2026-10-118 records this
 failure mode.
+
 When the temporary directory is inside the checkout, the runner adds that
 directory to `GIT_CEILING_DIRECTORIES` for test execution. This prevents
 non-Git fixtures from discovering the managed checkout above them; existing
 caller boundaries and sandbox permissions are preserved.
+
+To check whether a failure is pre-existing, replay the same command on the
+unmodified base. Extract it into its own directory under `.orbit/tmp/` (for
+example `git archive <base> | tar -x -C .orbit/tmp/base`), refresh its
+timestamps, and give it its own `CARGO_TARGET_DIR`. Set
+`GIT_CEILING_DIRECTORIES` to `.orbit/tmp` so its fixtures cannot discover the
+managed checkout around the extract. Any target path works:
+the `orbit update` fixtures that need a checkout build copy the tested binary
+to a `target/debug/orbit` path of their own instead of relying on the shape of
+Cargo's output directory. Replay the same nextest selection the gate ran;
+fixture deadlines and the host's load are the same inputs on both arms only
+when the runs are close together.
 
 By default the comparison base is the merge base of `HEAD` with
 `origin/agent-main`, or local `agent-main` when the remote ref is absent.
@@ -146,8 +159,10 @@ over loopback HTTP. All cases share one integration binary; helpers and cases
 live under `crates/orbit-web/tests/http_api/`. Each mutable fixture re-executes
 its exact test with inherited authority cleared, then launches the public
 `serve_from_env` entry point against a disposable registry and workspace.
-Child tests have a 60-second deadline, server readiness has a 10-second
-deadline, and HTTP requests (including SSE reads) have a 5-second timeout.
+Child tests run under the shared child-test hang guard (see
+[Fixtures on a loaded host](#fixtures-on-a-loaded-host)), server readiness has
+a 10-second deadline, and HTTP requests (including SSE reads) have a 5-second
+timeout.
 Process guards kill and reap servers even after an assertion fails.
 
 HTTP fixture servers bind port zero and the launcher reads the actual address
@@ -496,6 +511,40 @@ gates that fail CI:
 When touching those crates, check the coverage summary in the CI job log (or
 run `cargo llvm-cov nextest -p <crate> --summary-only` locally) and prefer adding
 tests that close the gap toward the target.
+
+### Fixtures on a loaded host
+
+`make ci-test-affected` runs at nextest's default concurrency, often beside a
+busy drain. On a CPU-saturated host a fixture's wall-clock time stretches by
+an order of magnitude, so a deadline sized from an idle run fails a passing
+fixture. Keep fixture outcomes independent of host load:
+
+- Re-execute a child test through `orbit_common::test_env::run_child_test`,
+  then verify it with `assert_child_test_passed`. Its `CHILD_TEST_DEADLINE`
+  (300 seconds) is a hang guard below nextest's ten-minute termination. An
+  overrun kills the child's process group and fails with the host's load
+  averages and everything the child printed, instead of a bare `exceeded`.
+- A wait for an observable event ends when the event arrives. Size its ceiling
+  for a saturated host, not the idle duration, and report what it saw and
+  `orbit_common::test_env::host_load()` when it expires.
+- Admission reads the host resource monitor. A fixture whose subject is not
+  throttling installs a pinned calm sample with
+  `OrbitRuntime::with_host_resource_probe` on every runtime it opens, including
+  one reopened over the same roots; otherwise a loaded test host throttles
+  the admissions it counts. A throttling test injects and drives its own probe.
+- Bound work, not elapsed time: measure a cost guard in CPU time where the
+  platform allows, so scheduling delay cannot fail it.
+- A fallback that production takes under load (an interactive login probe
+  past its timeout, for example) may satisfy a fixture only when the result
+  reports that fallback and its reason; a silent fallback still fails.
+
+A refusal fixture asserts the exact authorization cause it guards: the
+refusal kind and the denied tool, grant or ceiling it names. Asserting only a
+non-zero exit or a generic error lets a bootstrap or sandbox failure (a global
+root that is not a workspace, `Permission denied` from the fixture's own
+path) pass as the policy refusal. For example, a global-scope plugin
+callback leaves the tool context's workspace root unset, so a fixture that
+reuses the workspace CLI callback path fails before any policy runs.
 
 ### Tests that depend on host process visibility
 

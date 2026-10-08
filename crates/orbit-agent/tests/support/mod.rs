@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -41,8 +41,6 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
         return;
     }
     let fixture = scratch();
-    let log = fixture.path().join("child.log");
-    let output = File::create(&log).expect("child log");
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     command
         .env_clear()
@@ -54,9 +52,7 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
         .env("ORBIT_RUN_ID", "fixture-run")
         .env("COPILOT_HOME", fixture.path())
         .env("EXPLICIT_PROVIDER_SETTING", "opted-in")
-        .args(["--exact", name, "--nocapture", "--test-threads=1"])
-        .stdout(output.try_clone().expect("child stdout"))
-        .stderr(output);
+        .args(["--exact", name, "--nocapture", "--test-threads=1"]);
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
     });
@@ -65,13 +61,14 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
     for key in HOSTILE_ENV {
         command.env(key, format!("synthetic-{key}"));
     }
-    let mut child = ChildGuard(command.spawn().expect("isolated test child"));
-    let status = child.wait(Duration::from_secs(30));
-    let output = fs::read_to_string(log).expect("read child output");
-    assert!(status.success(), "isolated {name} failed:\n{output}");
-    assert!(
-        output.contains("1 passed"),
-        "isolated case `{name}` must actually run: {output}"
+    // A case such as the 52-iteration loop policy runs in one child; the
+    // shared hang guard replaces a fixed 30 s wait that a loaded host exceeded.
+    let output = orbit_common::test_env::run_child_test(&mut command, name, fixture.path());
+    orbit_common::test_env::assert_child_test_passed(
+        name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 }
 
@@ -84,7 +81,11 @@ impl ChildGuard {
             if let Some(status) = self.0.try_wait().expect("poll child") {
                 return status;
             }
-            assert!(Instant::now() < deadline, "child exceeded {timeout:?}");
+            assert!(
+                Instant::now() < deadline,
+                "child exceeded {timeout:?} ({})",
+                orbit_common::test_env::host_load()
+            );
             thread::sleep(Duration::from_millis(10));
         }
     }

@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -12,7 +12,6 @@ use orbit_types::workspace::{
 };
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
-use wait_timeout::ChildExt;
 
 const CHILD_TEST: &str = "ORBIT_HTTP_TEST_CHILD";
 const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
@@ -24,8 +23,6 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
         return;
     }
     let home = tempfile::tempdir().expect("isolated test home");
-    let stdout = home.path().join("stdout.log");
-    let stderr = home.path().join("stderr.log");
     let mut command = fixture_command(home.path());
     command
         // Explicitly selected browser fixtures are ignored in the ordinary
@@ -37,29 +34,16 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
             "--nocapture",
             "--test-threads=1",
         ])
-        .env(CHILD_TEST, name)
-        .stdout(File::create(&stdout).unwrap())
-        .stderr(File::create(&stderr).unwrap());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = Process(command.spawn().expect("spawn isolated HTTP test"), true);
-    let status = child
-        .0
-        .wait_timeout(Duration::from_secs(60))
-        .expect("wait for isolated HTTP test")
-        .unwrap_or_else(|| panic!("isolated HTTP test {name} exceeded 60 seconds"));
-    let output = fs::read_to_string(stdout).unwrap();
-    assert!(
-        status.success(),
-        "{name}:\n{output}\n{}",
-        fs::read_to_string(stderr).unwrap()
-    );
-    assert!(
-        output.contains("test result: ok. 1 passed;"),
-        "the isolated child must execute exactly `{name}`: {output}"
+        .env(CHILD_TEST, name);
+    // The child leads its own process group and servers inherit it, so the
+    // shared hang guard's group kill cannot orphan a server.
+    let logs = tempfile::tempdir().expect("isolated test logs");
+    let output = orbit_common::test_env::run_child_test(&mut command, name, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 }
 
@@ -79,19 +63,11 @@ fn fixture_command(home: &Path) -> Command {
     command
 }
 
-struct Process(Child, bool);
+struct Process(Child);
 
 impl Drop for Process {
     fn drop(&mut self) {
         // Also runs on assertion failure or timeout. Always reap the direct child.
-        if self.1 {
-            #[cfg(unix)]
-            // SAFETY: the isolated child was spawned into its own process group;
-            // servers inherit it, so a child-test timeout cannot orphan a server.
-            unsafe {
-                libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-            }
-        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -270,7 +246,7 @@ impl Fixture {
             .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
             .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
         let mut server = Server {
-            process: Process(command.spawn().unwrap(), false),
+            process: Process(command.spawn().unwrap()),
             client: Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(5))

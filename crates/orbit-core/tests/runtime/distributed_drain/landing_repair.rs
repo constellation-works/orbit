@@ -251,6 +251,7 @@ impl OwnerLocal {
         )
         .expect("owner bound to a local-mode workspace")
         .with_automation_machine_identity(Some(OWNER.into()));
+        let owner = calm_host(owner);
         // No provider runs here, but the drain's window preflight still
         // refuses a host whose crews have no launchable provider.
         launchable_providers(&owner);

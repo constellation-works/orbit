@@ -46,15 +46,17 @@ fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
         ship_mode: orbit_core::ShipMode::Local,
         base_branch: Some("main".to_string()),
     };
-    let follower = OrbitRuntime::from_roots_with_binding(
-        &pair.follower.global_root(),
-        &pair.follower_repo.join(".orbit"),
-        binding,
-    )
-    .expect("bound replica runtime")
-    .with_automation_machine_identity(Some(FOLLOWER.into()))
-    .with_coordination_write_owner(Some(OWNER.into()))
-    .with_drain_owner_transport(pair.wire.clone());
+    let follower = calm_host(
+        OrbitRuntime::from_roots_with_binding(
+            &pair.follower.global_root(),
+            &pair.follower_repo.join(".orbit"),
+            binding,
+        )
+        .expect("bound replica runtime")
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone()),
+    );
     (follower, format!("{OWNER}/{logical}"))
 }
 

@@ -44,4 +44,3 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber.workspace = true
-wait-timeout.workspace = true

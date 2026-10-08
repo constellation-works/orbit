@@ -6,7 +6,6 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use orbit_common::{OrbitError, process, test_env};
 use orbit_store::Store;
@@ -32,8 +31,9 @@ fn isolated(test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let output = process::run_bounded_capped(&mut command, Duration::from_secs(120), 256 * 1024)
-        .expect("run isolated readiness fixture");
+    let output =
+        process::run_bounded_capped(&mut command, test_env::CHILD_TEST_DEADLINE, 256 * 1024)
+            .expect("run isolated readiness fixture");
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }

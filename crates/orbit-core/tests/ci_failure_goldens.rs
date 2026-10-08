@@ -2,7 +2,6 @@
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;
@@ -15,22 +14,12 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ci_failure_goldens")
 }
 
-struct ChildGuard(std::process::Child);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_CI_LOG_GOLDEN_CHILD";
     if std::env::var_os(MARKER).is_some() {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout = home.path().join("stdout");
-    let stderr = home.path().join("stderr");
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -40,24 +29,14 @@ fn isolated(test: &str) -> bool {
         .env(MARKER, "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout).unwrap())
-        .stderr(std::fs::File::create(&stderr).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break status;
-        }
-        assert!(Instant::now() < deadline, "CI fixture child exceeded 120s");
-        std::thread::sleep(Duration::from_millis(20));
-    };
+        .current_dir(home.path());
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, test, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         test,
-        status,
-        std::fs::read(stdout).unwrap(),
-        std::fs::read(stderr).unwrap(),
+        output.status,
+        output.stdout,
+        output.stderr,
     );
     false
 }

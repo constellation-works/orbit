@@ -266,9 +266,11 @@ impl Delivery {
             },
         )
         .expect("seed the shipped reconciliation job and activities");
-        let owner = OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &repo.join(".orbit"))
-            .unwrap()
-            .with_automation_machine_identity(Some(OWNER.into()));
+        let owner = calm_host(
+            OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &repo.join(".orbit"))
+                .unwrap()
+                .with_automation_machine_identity(Some(OWNER.into())),
+        );
         // The real dispatcher runs the reviewer on the configured crew; only
         // the provider's answer is fixed: the report in `review.json`, naming
         // the reconciliation its prompt carries.
@@ -449,12 +451,14 @@ impl Delivery {
     /// over the same roots reads the new file.
     fn reconfigured(&self, config: &str) -> OrbitRuntime {
         std::fs::write(self.repo.join(".orbit/config.toml"), config).unwrap();
-        OrbitRuntime::from_roots(
-            &self.pair.wire.owner.global_root(),
-            &self.repo.join(".orbit"),
+        calm_host(
+            OrbitRuntime::from_roots(
+                &self.pair.wire.owner.global_root(),
+                &self.repo.join(".orbit"),
+            )
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.into())),
         )
-        .unwrap()
-        .with_automation_machine_identity(Some(OWNER.into()))
     }
 
     /// Call the reconciliation tool as an operator session of `owner`.

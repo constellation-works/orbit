@@ -77,6 +77,7 @@ fn cold_search_hits_skip_artifact_payloads() {
 
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let started = Instant::now();
+    let work_before = work_clock();
     let response = runtime
         .global_search(GlobalSearchParams {
             query: Some(TERM.into()),
@@ -85,6 +86,7 @@ fn cold_search_hits_skip_artifact_payloads() {
             ..Default::default()
         })
         .unwrap();
+    let work = work_clock().saturating_sub(work_before);
     let elapsed = started.elapsed();
     let titles: Vec<_> = response
         .results
@@ -97,9 +99,36 @@ fn cold_search_hits_skip_artifact_payloads() {
         "only matching tasks: {titles:?}"
     );
     assert!(
-        elapsed < Duration::from_millis(300),
-        "cold search over {TASKS} tasks took {elapsed:?}"
+        work < Duration::from_millis(300),
+        "cold search over {TASKS} tasks used {work:?} of CPU ({elapsed:?} wall, {})",
+        orbit_common::test_env::host_load()
     );
+}
+
+/// The clock the search's cost is bounded on. Reading and hashing 20 MB of
+/// payloads is work, so on Unix this is the process's user and system CPU
+/// time: a saturated host stretches wall-clock time without changing the work
+/// done. Elsewhere it is wall-clock time since first use.
+#[cfg(unix)]
+fn work_clock() -> Duration {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // Safety: `getrusage` fills the `rusage` it is handed and reads nothing else.
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    // Safety: a zero return means the kernel filled `usage`.
+    let usage = unsafe { usage.assume_init() };
+    let time = |value: libc::timeval| {
+        Duration::from_secs(value.tv_sec as u64) + Duration::from_micros(value.tv_usec as u64)
+    };
+    time(usage.ru_utime) + time(usage.ru_stime)
+}
+
+#[cfg(not(unix))]
+fn work_clock() -> Duration {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
 }
 
 /// The stored artifact payloads, wherever and however the bundle layout

@@ -6,7 +6,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration as WaitDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::{Europe::Berlin, Tz, UTC};
@@ -28,7 +27,7 @@ use orbit_automation::routines::loader::{RoutineCatalogLookup, RoutineSource, co
 use orbit_automation::routines::sweep::{
     RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
 };
-use orbit_common::{OrbitError, process::run_bounded_capped, test_env};
+use orbit_common::{OrbitError, test_env};
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::{
     AutomationDiagnostic, AutomationState, SourceRevision,
@@ -54,7 +53,7 @@ fn at(value: &str) -> DateTime<Utc> {
 }
 
 /// Re-exec only the requested test, without the enclosing managed run's authority.
-/// The shared supervisor drains both pipes and kills/reaps the child on timeout.
+/// The shared child-test hang guard kills and reaps the child on overrun.
 fn isolated(test: &str) -> bool {
     if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() == Ok(test) {
         return false;
@@ -81,8 +80,8 @@ fn run_child(test: &str, dir: &Path) {
         .env_remove("ORBIT_HOME")
         .env("TZ", "UTC")
         .env("ORBIT_AUTOMATION_TEST_CHILD", test);
-    let output = run_bounded_capped(&mut command, WaitDuration::from_secs(30), 64 * 1024)
-        .expect("isolated automation fixture completes within its deadline");
+    let logs = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut command, test, logs.path());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("1 passed; 0 failed"),

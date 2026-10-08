@@ -18,23 +18,25 @@ fn gc_pair(tasks: usize) -> Pair {
         .unwrap()
         .set_task_prefix("DANI")
         .unwrap();
-    pair.follower = OrbitRuntime::from_roots_with_binding(
-        &global,
-        &pair.follower_repo.join(".orbit"),
-        orbit_core::WorkspaceRuntimeBinding {
-            logical_workspace_id: pair.wire.owner.workspace_id().unwrap(),
-            task_partition_id: pair.follower.workspace_id().unwrap(),
-            owner_machine_id: Some(OWNER.into()),
-            checkout_role: None,
-            repo_root: pair.follower_repo.clone(),
-            ship_mode: orbit_core::ShipMode::Local,
-            base_branch: None,
-        },
-    )
-    .unwrap()
-    .with_automation_machine_identity(Some(FOLLOWER.into()))
-    .with_coordination_write_owner(Some(OWNER.into()))
-    .with_drain_owner_transport(pair.wire.clone());
+    pair.follower = calm_host(
+        OrbitRuntime::from_roots_with_binding(
+            &global,
+            &pair.follower_repo.join(".orbit"),
+            orbit_core::WorkspaceRuntimeBinding {
+                logical_workspace_id: pair.wire.owner.workspace_id().unwrap(),
+                task_partition_id: pair.follower.workspace_id().unwrap(),
+                owner_machine_id: Some(OWNER.into()),
+                checkout_role: None,
+                repo_root: pair.follower_repo.clone(),
+                ship_mode: orbit_core::ShipMode::Local,
+                base_branch: None,
+            },
+        )
+        .unwrap()
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone()),
+    );
     pair
 }
 

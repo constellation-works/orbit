@@ -22,7 +22,7 @@
 #![allow(missing_docs)]
 
 use std::collections::BTreeSet;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,12 +49,10 @@ use tempfile::TempDir;
 mod replay_crew;
 mod reservation_grants;
 
-/// How long one isolated test may run before it is killed and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
-
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
-/// waits up to [`CHILD_DEADLINE`] and reaps the child on any exit.
+/// waits under the shared child-test hang guard and reaps the child on any
+/// exit.
 pub(super) fn isolated(test: &str) -> bool {
     isolated_with_ignored(test, false)
 }
@@ -71,8 +69,6 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout_path = home.path().join("stdout.log");
-    let stderr_path = home.path().join("stderr.log");
     // libtest names a test by its module path below the crate root.
     let qualified = if test.contains("::") {
         test.to_string()
@@ -91,51 +87,22 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
         .env(MARKER, test)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).unwrap())
-        .stderr(std::fs::File::create(&stderr_path).unwrap());
+        .current_dir(home.path());
     if ignored {
         command.arg("--ignored");
     }
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .unwrap()
-            .read_to_string(&mut text)
-            .unwrap();
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    orbit_common::test_env::assert_child_test_passed(&qualified, status, &stdout, &stderr);
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
     if ignored {
-        std::io::stdout().write_all(stdout.as_bytes()).unwrap();
+        std::io::stdout().write_all(&output.stdout).unwrap();
     }
     false
-}
-
-/// Kills and reaps the isolated child however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
@@ -1578,8 +1545,8 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     let mut warm = std::process::Command::new(std::env::current_exe().unwrap());
     warm.args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(WARM_ROOT, root.path());
-    let output = orbit_common::process::run_bounded_capped(&mut warm, CHILD_DEADLINE, 64 * 1024)
-        .expect("bounded independent probe process");
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut warm, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
         output.status,
