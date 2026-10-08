@@ -1,7 +1,10 @@
 mod cursor;
 mod definition;
 
-pub use cursor::{AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim, AutoTaskSkipRecord};
+pub use cursor::{
+    AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim, AutoTaskSkipRecord,
+    InactivePluginWarning,
+};
 pub use definition::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
     AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,

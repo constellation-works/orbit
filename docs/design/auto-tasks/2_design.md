@@ -134,6 +134,9 @@ absolute and need no cursor.
 last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
 runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
 definition YAML and a definition edit never races the scheduler's cursor writes.
+The same file records `inactive_plugin_warnings`, the (definition, plugin, version)
+keys a plugin-inactive skip has already warned about, so each clock-tick process
+does not warn again.
 
 Admission and persistence share one stable sidecar lock,
 `.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is

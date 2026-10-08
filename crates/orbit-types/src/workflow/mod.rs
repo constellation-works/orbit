@@ -45,9 +45,9 @@ pub use activity_job::{
 pub use auto_task::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskCursor, AutoTaskCursorState,
     AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
-    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,
-    SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord, SweepCursorSelector,
-    auto_task_tag, is_valid_auto_task_name,
+    AutoTaskTemplate, DedupePolicy, InactivePluginWarning, MAX_AUTO_TASK_INTERVAL_MINUTES,
+    SWEEP_CURSOR_ARTIFACT, SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord,
+    SweepCursorSelector, auto_task_tag, is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
