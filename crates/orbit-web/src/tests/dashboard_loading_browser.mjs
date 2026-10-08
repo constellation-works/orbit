@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
+import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -1098,6 +1099,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
+  if (!locksOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const failures = [];
   page.on('pageerror', error => failures.push(error.message));

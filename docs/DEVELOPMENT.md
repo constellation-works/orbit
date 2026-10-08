@@ -225,6 +225,14 @@ node crates/orbit-web/src/tests/dashboard_loading_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/loading-browser --run-detail
 ```
 
+The loading browser fixture also opens fresh single- and multi-workspace
+dashboards. It checks that the sole Audit workspace chip has no remove control,
+other Audit filters remain removable, and Operations, Drain start/stop and
+distributed approve/revoke/recover succeed with explicit workspace scope.
+With multiple workspaces, removing the chip selects the aggregate view and
+the picker restores a concrete scope. These scenarios run with both the full
+suite and `--run-detail`.
+
 Omit `--run-detail` to include the full loading and responsive-layout suite,
 which also checks row keyboard access: no task, run or friction row nests a
 control inside a button, each row list is one Tab stop with Up/Down between

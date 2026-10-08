@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
+import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -193,20 +193,22 @@ function syncAuditControls() {
   renderScopeChips();
 }
 
-function removableChip(label, value, onRemove) {
-  const chip = el("button", {
+function scopeChip(label, value, onRemove) {
+  const chip = el(onRemove ? "button" : "span", {
     class: "scope-chip",
-    title: `Remove ${label} filter`,
+    title: onRemove ? `Remove ${label} filter` : `${label}: ${value}`,
   });
-  chip.type = "button";
+  if (onRemove) chip.type = "button";
   chip.dataset.chip = label;
   chip.appendChild(el("span", { class: "scope-chip-k", text: label }));
   chip.appendChild(el("span", { class: "scope-chip-v", text: value }));
-  chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
-  chip.addEventListener("click", (event) => {
-    event.preventDefault();
-    onRemove();
-  });
+  if (onRemove) {
+    chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
+    chip.addEventListener("click", (event) => {
+      event.preventDefault();
+      onRemove();
+    });
+  }
   return chip;
 }
 
@@ -216,17 +218,18 @@ function renderScopeChips() {
   host.innerHTML = "";
   const workspace = getWorkspace();
   if (workspace) {
-    host.appendChild(removableChip("workspace", workspace, () => {
+    // Single-workspace mode has no picker to restore a cleared action scope.
+    host.appendChild(scopeChip("workspace", workspace, isMultiWorkspace() ? () => {
       setWorkspace(null);
       persistScopeToUrl();
       const select = $("workspace-select");
       if (select) select.value = "";
       window.location.hash = buildAuditHash();
-    }));
+    } : null));
   }
   const windowLabel = effectiveAuditWindow();
   if (windowLabel) {
-    const chip = removableChip("window", windowLabel, () => {
+    const chip = scopeChip("window", windowLabel, () => {
       auditFilter.since = null;
       setWindow(DEFAULT_DASHBOARD_WINDOW);
       persistScopeToUrl();
@@ -236,31 +239,31 @@ function renderScopeChips() {
     host.appendChild(chip);
   }
   if (auditFilter.role) {
-    host.appendChild(removableChip("actor", auditFilter.role, () => {
+    host.appendChild(scopeChip("actor", auditFilter.role, () => {
       auditFilter.role = null;
       window.location.hash = buildAuditHash();
     }));
   }
   if (auditFilter.agent_family) {
-    host.appendChild(removableChip("agent family", auditFilter.agent_family, () => {
+    host.appendChild(scopeChip("agent family", auditFilter.agent_family, () => {
       auditFilter.agent_family = null;
       window.location.hash = buildAuditHash();
     }));
   }
   if (auditFilter.status) {
-    host.appendChild(removableChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {
+    host.appendChild(scopeChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {
       auditFilter.status = null;
       window.location.hash = buildAuditHash();
     }));
   }
   if (auditFilter.eventIds.length > 0) {
-    host.appendChild(removableChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
+    host.appendChild(scopeChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
       auditFilter.eventIds = [];
       window.location.hash = buildAuditHash();
     }));
   }
   if (auditFilter.metric) {
-    host.appendChild(removableChip("metric", auditFilter.metric, () => {
+    host.appendChild(scopeChip("metric", auditFilter.metric, () => {
       auditFilter.metric = null;
       window.location.hash = buildAuditHash();
     }));

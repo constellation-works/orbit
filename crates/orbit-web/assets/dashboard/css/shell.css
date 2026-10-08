@@ -478,10 +478,12 @@
   border-radius: 2px;
   background: var(--bg-elev);
   color: var(--fg);
-  cursor: pointer;
   max-width: 100%;
 }
-.scope-chip:hover {
+button.scope-chip {
+  cursor: pointer;
+}
+button.scope-chip:hover {
   border-color: var(--accent);
 }
 .scope-chip-k {

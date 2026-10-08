@@ -217,6 +217,10 @@ export function setMultiWorkspace(value) {
   multiWorkspace = !!value;
 }
 
+export function isMultiWorkspace() {
+  return multiWorkspace;
+}
+
 export function isAggregateView() {
   return multiWorkspace && !currentWorkspace;
 }
