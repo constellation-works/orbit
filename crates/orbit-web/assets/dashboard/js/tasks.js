@@ -397,6 +397,16 @@ function taskDetailState(task, context) {
   };
 }
 
+function taskHistoryEventLabel(entry) {
+  if (entry && entry.event === "status_changed" && entry.from_status && entry.to_status) {
+    return `status ${entry.from_status} → ${entry.to_status}`;
+  }
+  if (entry && entry.event === "started" && entry.from_status && entry.to_status) {
+    return `started ${entry.from_status} → ${entry.to_status}`;
+  }
+  return entry && entry.event ? entry.event : "";
+}
+
 // Drop the recorded read so the next render issues a fresh one.
 function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
@@ -2041,7 +2051,7 @@ function buildTaskDetail(task, context) {
         const line = el("div", { class: "history-line" }, [
           document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
           el("span", { class: "actor", text: h.by || "?" }),
-          document.createTextNode(`: ${h.event}${note}`),
+          document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
         ]);
         wrap.appendChild(line);
       }

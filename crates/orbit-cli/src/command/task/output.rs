@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_core::{
     OrbitError, OrbitRuntime, TaskCrewRead, TaskStatus, resolve_task_dependencies,
     resolve_task_relations,
@@ -19,6 +19,22 @@ use crate::output::color::Domain;
 /// history projections keep every event for backward compatibility.
 pub(crate) fn is_human_visible_history_event(event: &str) -> bool {
     event != "commented"
+}
+
+pub(super) fn format_task_show_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+pub(super) fn format_task_history_event(entry: &TaskHistoryEntry) -> String {
+    match (
+        entry.event.as_str(),
+        entry.from_status.as_ref(),
+        entry.to_status.as_ref(),
+    ) {
+        ("status_changed", Some(from), Some(to)) => format!("status {from} → {to}"),
+        ("started", Some(from), Some(to)) => format!("started {from} → {to}"),
+        _ => entry.event.clone(),
+    }
 }
 
 pub(crate) fn task_to_signal_json(task: &orbit_core::Task) -> Value {
@@ -399,7 +415,7 @@ fn write_single_task_field(
                 let _ = writeln!(
                     text,
                     "{} {}: {}",
-                    dimmed(&format!("[{}]", comment.at.to_rfc3339())),
+                    dimmed(&format!("[{}]", format_task_show_timestamp(comment.at))),
                     comment.by,
                     comment.message
                 );
@@ -480,18 +496,18 @@ fn write_single_task_field(
                     let _ = writeln!(
                         text,
                         "{} {}: {} ({})",
-                        dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                         entry.by,
-                        entry.event,
+                        format_task_history_event(&entry),
                         note
                     );
                 } else {
                     let _ = writeln!(
                         text,
                         "{} {}: {}",
-                        dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                         entry.by,
-                        entry.event
+                        format_task_history_event(&entry)
                     );
                 }
             }

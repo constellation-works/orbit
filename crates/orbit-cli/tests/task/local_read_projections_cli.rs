@@ -87,3 +87,108 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
     assert_eq!(manifest[0]["size"], 17);
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), before);
 }
+
+#[test]
+fn task_show_formats_status_history_and_whole_second_timestamps_without_changing_json() {
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let changed = fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    assert!(changed["history"].as_array().unwrap().iter().any(|entry| {
+        entry["event"] == "status_changed"
+            && entry["from_status"] == "proposed"
+            && entry["to_status"] == "backlog"
+    }));
+    fixture.json(&[
+        "task",
+        "update",
+        &id,
+        "--comment",
+        "timestamp comment",
+        "--json",
+    ]);
+
+    let before = fixture
+        .command(&["task", "show", &id, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("status proposed → backlog"), "{human}");
+    assert!(human.contains("timestamp comment"), "{human}");
+    assert!(
+        human
+            .lines()
+            .any(|line| line.starts_with("Created: ") && line.ends_with('Z'))
+    );
+    assert!(
+        human
+            .lines()
+            .any(|line| line.starts_with("Updated: ") && line.ends_with('Z'))
+    );
+    assert!(
+        human
+            .lines()
+            .any(|line| line.starts_with("  [") && line.contains("timestamp comment"))
+    );
+    for line in human.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix('[')
+            && let Some((stamp, _)) = rest.split_once(']')
+        {
+            assert_eq!(
+                stamp.len(),
+                20,
+                "timestamp must have seconds and a zone: {line}"
+            );
+            assert!(
+                !stamp.contains('.'),
+                "timestamp must not have fractions: {line}"
+            );
+            assert!(
+                stamp.ends_with('Z'),
+                "timestamp must include a zone: {line}"
+            );
+        }
+        for label in ["Created: ", "Updated: "] {
+            if let Some(stamp) = line.strip_prefix(label) {
+                assert_eq!(
+                    stamp.len(),
+                    20,
+                    "timestamp must have seconds and a zone: {line}"
+                );
+                assert!(
+                    !stamp.contains('.'),
+                    "timestamp must not have fractions: {line}"
+                );
+                assert!(
+                    stamp.ends_with('Z'),
+                    "timestamp must include a zone: {line}"
+                );
+            }
+        }
+    }
+
+    let after = fixture
+        .command(&["task", "show", &id, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        before, after,
+        "human rendering must leave the JSON bytes unchanged"
+    );
+}
