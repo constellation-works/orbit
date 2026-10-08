@@ -503,17 +503,51 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     assert!(probe["diagnostics"].to_string().contains(&format!(
         "caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
     )));
-    let request = json!({"request_id": "old-request", "caller_version": probe["binary_version"],
-        "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
-        "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
-    let failure = pair.wire.call("", "orbit.task.pull", request).unwrap_err();
+}
+
+/// A pre-fingerprint follower pulls with an older `caller_schema` and no
+/// fingerprint. Its build closes a request only on `invalid_input`, so the
+/// owner must keep that code for it; a fingerprinted older build is skew.
+#[test]
+fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
+    if !isolated(
+        module_path!(),
+        "fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let pull = |request_id: &str, caller_fingerprint: Option<&str>| {
+        let mut request = json!({"request_id": request_id, "caller_version": probe["binary_version"],
+            "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
+            "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
+        if let Some(fingerprint) = caller_fingerprint {
+            request["caller_fingerprint"] = json!(fingerprint);
+        }
+        pair.wire.call("", "orbit.task.pull", request).unwrap_err()
+    };
+
+    let legacy = pull("old-request", None);
     assert!(
-        failure.to_string().contains(&format!(
-            "protocol_skew: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
-        )),
-        "{failure}"
+        matches!(
+            &legacy,
+            OrbitError::InvalidInput(message)
+                if message == &format!(
+                    "protocol_mismatch: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
+                )
+        ),
+        "a fingerprint-less older revision must keep the invalid_input refusal: {legacy}"
+    );
+
+    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let fingerprinted = pull("old-fingerprinted-request", Some(current));
+    assert!(
+        matches!(fingerprinted, OrbitError::ProtocolSkew(_)),
+        "a fingerprinted older revision is a different build and stays skew: {fingerprinted}"
     );
     assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
 }
 
 /// The incident's same-version builds must differ as soon as an admission

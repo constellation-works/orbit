@@ -471,10 +471,13 @@ impl PullDrain<'_> {
     /// request is closed: a retry can be refused (say, after the owner was
     /// upgraded) even though an earlier send of the same ID committed a claim,
     /// and that claim must be carried forward, not abandoned. Only when the
-    /// owner holds no live receipt is the request closed. Protocol skew of an
-    /// obsolete persisted fingerprint is then reconciled successfully: it says
-    /// nothing about this build's compatibility with the owner. Other refusals
-    /// are returned, so this pass allocates nothing further against that owner.
+    /// owner holds no live receipt is the request closed. A refusal of an
+    /// obsolete persisted request is then reconciled successfully: it says
+    /// nothing about this build's compatibility with the owner. That covers
+    /// protocol skew of a fingerprint this build would not send, and an owner
+    /// refusal of an older revision, which an owner answers as `invalid_input`
+    /// for a fingerprint-less caller. Other refusals are returned, so this pass
+    /// allocates nothing further against that owner.
     fn request(&self, record: &LocalPullAdmission) -> Result<LocalPullAdmission, OrbitError> {
         let refusal = match self.peer.request(&record.destination, &record.request) {
             Ok(receipt) => {
@@ -492,9 +495,13 @@ impl PullDrain<'_> {
             }
             AdmissionLookup::Expired | AdmissionLookup::NotFound => {
                 let closed = self.update(record, LocalPullMutation::Refuse(refusal.to_string()))?;
-                if matches!(refusal, OrbitError::ProtocolSkew(_))
-                    && record.request.caller_fingerprint.as_deref()
-                        != Some(orbit_store::contracts::distributed_drain_protocol_fingerprint())
+                let obsolete = record.request.caller_fingerprint.as_deref()
+                    != Some(orbit_store::contracts::distributed_drain_protocol_fingerprint());
+                let older_revision = record.request.caller_schema
+                    != orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
+                if obsolete
+                    && (matches!(refusal, OrbitError::ProtocolSkew(_))
+                        || (older_revision && is_owner_refusal(&refusal)))
                 {
                     Ok(closed)
                 } else {

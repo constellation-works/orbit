@@ -627,6 +627,16 @@ fn validate_request(
                 .unwrap_or("unavailable"),
             crate::contracts::distributed_drain_protocol_fingerprint(),
         ))),
+        // A caller that sends no fingerprint predates fingerprint negotiation.
+        // Its build classifies only `invalid_input` as an owner refusal, so it
+        // keeps that code; `protocol_skew` would read as a transport failure
+        // and leave its request open.
+        Some(AdmissionRefusal::ProtocolMismatch) if request.caller_fingerprint.is_none() => {
+            Err(OrbitError::InvalidInput(format!(
+                "protocol_mismatch: caller revision {}; owner revision {}",
+                request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+            )))
+        }
         Some(AdmissionRefusal::ProtocolMismatch) => Err(OrbitError::ProtocolSkew(format!(
             "caller revision {}; owner revision {}",
             request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
