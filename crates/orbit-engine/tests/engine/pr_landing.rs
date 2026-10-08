@@ -2707,32 +2707,26 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
                 (TASK_ID.into(), "review-evidence-hold.json".into()),
                 "system".into(),
             );
+            // Settlement never reaches the handoff with a hold: it ends the run
+            // held. The hold reaches the handoff only as an admission refusal.
             let mut input = json!({
-                "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
-                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                    "review_gate_admit": {"attempt_id": "rvw-held", "lineage_key": "lineage"}},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE}},
             });
             let held = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(held["decision"], "awaiting_review_evidence");
             assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
             assert_eq!(fx.forge_state("pr-head"), None);
-            let mut stale_hold = hold.clone();
-            stale_hold["attempt_id"] = json!("rvw-stale");
-            host.artifacts.lock().unwrap().insert(
-                (TASK_ID.into(), "review-evidence-hold.json".into()),
-                serde_json::to_vec(&stale_hold).unwrap(),
-            );
-            let stale = action(&host, "pr_failure_handoff", &input).unwrap();
-            assert_eq!(
-                stale["decision"], "blocked_review_gate",
-                "a system hold must match the admitted attempt"
-            );
+            input["failed_step_id"] = json!("review_gate_settle");
             input["error_message"] = json!("review_gate_blocked: changes_required; wrong approach");
             let rejected = action(&host, "pr_failure_handoff", &input).unwrap();
-            assert_eq!(rejected["decision"], "blocked_review_gate");
+            assert_eq!(
+                rejected["decision"], "blocked_review_gate",
+                "a substantive settlement rejection blocks even while a hold exists"
+            );
             assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
 
             let forged_fx = Fixture::new(sandbox);
@@ -2748,16 +2742,15 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
                 serde_json::to_vec(&forged_hold).unwrap(),
             );
             let forged = action(&forged_host, "pr_failure_handoff", &json!({
-                "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": forged_fx.repo},
-                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                    "review_gate_admit": {"attempt_id": "rvw-forged", "lineage_key": "lineage"}},
+                    "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE}},
             })).unwrap();
             assert_eq!(
                 forged["decision"], "blocked_review_gate",
-                "attached holds are not settlement evidence"
+                "a hold the system did not write is not evidence"
             );
             assert_eq!(forged_host.status(TASK_ID), TaskStatus::Blocked);
         },
