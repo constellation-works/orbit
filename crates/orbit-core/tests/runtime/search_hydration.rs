@@ -3,12 +3,15 @@
 //! artifacts neither reads nor verifies those payloads.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime};
 use serde_json::json;
 use tempfile::TempDir;
+use tracing_subscriber::{Layer, layer::Context};
 
 /// Tasks in the workspace; only [`MATCHING`] of them carry the query term.
 const TASKS: usize = 4_000;
@@ -151,6 +154,17 @@ fn find_payloads(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Counts the FTS page queries the lexical store executes.
+struct Queries(Arc<AtomicU64>);
+
+impl<S: tracing::Subscriber> Layer<S> for Queries {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() == "orbit.search.fts" {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Observe actual SQLite page executions at the composed-runtime boundary.
 /// This guards the fallback's scan cost without replacing the store with a mock.
 #[test]
@@ -160,20 +174,8 @@ fn full_search_page_skips_any_term_scan() {
     ) {
         return;
     }
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
-    use tracing_subscriber::{Layer, layer::Context, prelude::*};
+    use tracing_subscriber::prelude::*;
 
-    struct Queries(Arc<AtomicU64>);
-    impl<S: tracing::Subscriber> Layer<S> for Queries {
-        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-            if event.metadata().target() == "orbit.search.fts" {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
     let root = TempDir::new().unwrap();
     let runtime = OrbitRuntime::from_roots(
         &root.path().join("global"),
@@ -228,6 +230,72 @@ fn full_search_page_skips_any_term_scan() {
             queries.load(Ordering::Relaxed),
             3,
             "the short page executes both AND and OR queries"
+        );
+    });
+}
+
+/// A status filter that rejects every any-term hit must not make the partial
+/// fill page through the whole match set: each FTS page re-sorts all matching
+/// chunks, so the query count has to stay constant as the match set grows.
+#[test]
+fn rejecting_filter_does_not_page_the_any_term_match_set() {
+    if !super::dispatch_admission::isolated(
+        "search_hydration::rejecting_filter_does_not_page_the_any_term_match_set",
+    ) {
+        return;
+    }
+    use tracing_subscriber::prelude::*;
+
+    const COMMON: usize = 60;
+    let root = TempDir::new().unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    // No task carries both terms, so the full-match pass finds nothing and
+    // every task matches only through the any-term pass.
+    for index in 0..COMMON {
+        let term = if index % 2 == 0 {
+            "alphaterm"
+        } else {
+            "betaterm"
+        };
+        runtime
+            .add_task(TaskAddParams {
+                title: format!("Fixture {index} {term}"),
+                description: "Any-term fixture.".into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let queries = Arc::new(AtomicU64::new(0));
+    let subscriber = tracing_subscriber::registry().with(Queries(Arc::clone(&queries)));
+    tracing::subscriber::with_default(subscriber, || {
+        let search = |statuses: Vec<String>| {
+            runtime
+                .global_search(GlobalSearchParams {
+                    query: Some("alphaterm betaterm".into()),
+                    kind: GlobalSearchKind::Task,
+                    status: statuses,
+                    limit: 1,
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        let rejected = search(vec!["task:done".into()]);
+        assert!(rejected.results.is_empty(), "no task is done");
+        assert!(
+            queries.load(Ordering::Relaxed) <= 2,
+            "one AND query and one bounded OR query, not a page per five chunks: {} queries",
+            queries.load(Ordering::Relaxed)
+        );
+
+        let unfiltered = search(Vec::new());
+        assert_eq!(unfiltered.results.len(), 1);
+        assert_eq!(
+            unfiltered.results[0].matched_by.as_ref().unwrap(),
+            &["partial", "terms:1/2"]
         );
     });
 }
