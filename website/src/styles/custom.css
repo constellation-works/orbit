@@ -139,7 +139,9 @@ body {
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   display: inline-block;
-  max-width: 100%;
+  /* Leave room on a full-width code's last line for the punctuation after it;
+     the nowrap box below forbids a break there. */
+  max-width: calc(100% - 3ch);
   /* A single identifier wider than its container stays intact and scrolls
      locally. Commands and paths wrap at the transform's token boundaries. */
   overflow-x: auto;
@@ -147,6 +149,19 @@ body {
   white-space: nowrap;
   overflow-wrap: normal;
   word-break: normal;
+}
+
+/* See plugins/inline-code.mjs: the nowrap box keeps trailing punctuation with
+   the code, and the code's max-width above reserves room for it. Text decoration does not reach an inline-block's text, so a code
+   inside a link repeats the link underline itself. */
+.sl-markdown-content .orbit-code-box {
+  white-space: nowrap;
+}
+
+.sl-markdown-content a code:not(pre code) {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--sl-color-text-accent) 45%, transparent);
+  text-underline-offset: 0.2em;
 }
 
 .sl-markdown-content table {

@@ -92,12 +92,15 @@ node website/scripts/check-inline-code.mjs \
   /absolute/path/to/playwright/index.mjs http://localhost:4321 .orbit/tmp/inline-code-browser
 ```
 
-The script discovers every built HTML page and checks 375, 768, 1280 and 1440px
-in both site themes with web fonts loaded. It also checks
-`/reference/config/` at 320, 1024, 1152 and 1920px in both themes, including
+The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
+1440px in both site themes with web fonts loaded. It also checks
+`/reference/config/` at 320, 1152 and 1920px in both themes, including
 code clipping, delimiter-only line breaks, single-line desktop keys, and table
 and page width. It opens disclosures, selects each provider panel, measures
-glyph line breaks and code/container bounds, checks mobile page overflow, and
+glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
+`)` after a code stays on the code's last line, checks that links containing
+only code keep their underline (painted, for four known links at 1280px),
+checks mobile page overflow, and
 verifies the agents provider table's width and borders. It saves measurements
 and failure screenshots in the evidence directory.
 
@@ -109,3 +112,6 @@ Inline commands wrap at spaces and after `/`, `.` or `=`. Flags and identifiers
 stay intact regardless of length; a single token wider than its container gets
 local horizontal scrolling. The shared Markdown transform also handles raw HTML
 code examples, preserves their selectable text, and leaves `pre` blocks alone.
+It wraps each inline code in a `nowrap` box so punctuation after it cannot start
+a line, and the stylesheet leaves room for that punctuation and repeats the link
+underline on code inside links.

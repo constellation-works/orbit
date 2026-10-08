@@ -89,6 +89,44 @@ function inspectLayout() {
       }
     }
     if (wrapped) wrappedCodes++;
+    // Punctuation directly after a code stays on the code's last line. Glyph
+    // heights differ between the code and body fonts, so compare line overlap
+    // rather than exact tops.
+    const block = (el) => el.closest('p, li, td, th, dd, dt, summary, h1, h2, h3, h4, h5, h6, div');
+    let lastGlyph;
+    const codeWalker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    for (let node = codeWalker.nextNode(); node; node = codeWalker.nextNode()) {
+      for (let offset = node.length - 1; offset >= 0; offset--) {
+        if (/\s/.test(node.data[offset])) continue;
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const glyphs = [...range.getClientRects()].filter((rect) => rect.width && rect.height);
+        if (glyphs.length) lastGlyph = glyphs[glyphs.length - 1];
+        break;
+      }
+    }
+    const afterWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    afterWalker.currentNode = code;
+    let after = afterWalker.nextNode();
+    while (after && code.contains(after)) after = afterWalker.nextNode();
+    if (lastGlyph && after && /^[.,;:)]/.test(after.data) && block(after.parentElement) === block(code)) {
+      const range = document.createRange();
+      range.setStart(after, 0);
+      range.setEnd(after, 1);
+      const [mark] = [...range.getClientRects()].filter((rect) => rect.width && rect.height);
+      const middle = mark && (mark.top + mark.bottom) / 2;
+      if (mark && (middle < lastGlyph.top - tolerance || middle > lastGlyph.bottom + tolerance)) {
+        failures.push({ kind: 'stranded-punctuation', text, punctuation: after.data[0],
+          codeTop: lastGlyph.top, punctuationTop: mark.top });
+      }
+    }
+    // A link whose only content is code keeps the link underline.
+    const link = code.parentElement?.closest('a');
+    if (link && link.textContent === code.textContent &&
+        !getComputedStyle(code).textDecorationLine.includes('underline')) {
+      failures.push({ kind: 'code-link-underline', text, decoration: getComputedStyle(code).textDecorationLine });
+    }
     if (isConfigCode && code.scrollWidth > code.clientWidth) {
       failures.push({ kind: 'config-code-overflow', text,
         clientWidth: code.clientWidth, scrollWidth: code.scrollWidth });
@@ -141,6 +179,26 @@ function inspectLayout() {
   return { codes, wrappedCodes, configMetrics, providerTable, failures };
 }
 
+// The links whose only content is code, with the page that holds each.
+const codeLinks = [
+  { route: '/concepts/scheduling/', text: '--complete' },
+  { route: '/contributing/local-dev/', text: 'CONTRIBUTING.md' },
+  { route: '/how-to/dashboard/', text: 'orbit web connect' },
+  { route: '/privacy/', text: 'security.txt' },
+];
+
+// Paint check: the code's pixels differ once its underline is suppressed.
+async function codeLinkUnderlinePainted(page, text) {
+  const code = page.locator('main a code', { hasText: text }).first();
+  await code.scrollIntoViewIfNeeded();
+  const box = await code.boundingBox();
+  const clip = { x: box.x, y: box.y, width: box.width, height: box.height + 6 };
+  const underlined = await page.screenshot({ clip });
+  await page.addStyleTag({ content: 'main a code { text-decoration: none !important; }' });
+  const plain = await page.screenshot({ clip });
+  return !underlined.equals(plain);
+}
+
 const routes = await htmlRoutes(fileURLToPath(new URL('../dist/', import.meta.url)));
 assert.ok(routes.length, 'Build the website before running the browser check');
 const fixtures = [
@@ -164,8 +222,8 @@ const preHTML = markdownToHtml(`\n\n<pre><code>${preText}</code></pre>`, { hastP
 const evidence = { routes, viewports: [], fixtures: [], failures: [] };
 const browser = await chromium.launch();
 try {
-  const standardWidths = [375, 768, 1280, 1440];
-  for (const width of [320, ...standardWidths, 1024, 1152, 1920]) {
+  const standardWidths = [375, 768, 1024, 1280, 1440];
+  for (const width of [320, ...standardWidths, 1152, 1920]) {
     for (const colorScheme of ['dark', 'light']) {
       const page = await browser.newPage({ viewport: { width, height: 900 }, colorScheme });
       await page.addInitScript((theme) => localStorage.setItem('orbit-theme-choice', theme), colorScheme);
@@ -195,6 +253,16 @@ try {
           result.providerPanels.push({ selected, codes: panelResult.codes, wrappedCodes: panelResult.wrappedCodes });
           evidence.failures.push(...panelResult.failures.map((failure) =>
             ({ route, width, colorScheme, selected, ...failure })));
+        }
+        for (const link of codeLinks.filter((entry) => entry.route === route && width === 1280)) {
+          if (!await codeLinkUnderlinePainted(page, link.text)) {
+            evidence.failures.push({ route, width, colorScheme, kind: 'code-link-underline-unpainted', text: link.text });
+          }
+          await page.reload();
+          await page.evaluate(async () => {
+            await document.fonts.ready;
+            for (const details of document.querySelectorAll('main details')) details.open = true;
+          });
         }
         if (route === '/reference/cli/') {
           const rendered = await page.evaluate(({ html, pre }) => {
