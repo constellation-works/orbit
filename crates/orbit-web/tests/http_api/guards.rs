@@ -299,6 +299,83 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
 }
 
 #[test]
+fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
+    isolated(
+        "guards::effective_config_lists_every_crew_setting_and_enabled_auto_task",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let mut global = std::fs::read_to_string(&global_path).unwrap();
+            global.push_str(concat!(
+                "\n[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"sol\"\n",
+                "final_recovery_crews = [\"opus:20\", \"sol:100\"]\n",
+                "low_complexity_crews = [\"haiku\", \" haiku \"]\n",
+                "medium_complexity_crews = [\" sol : 2 \"]\n",
+                "hard_complexity_crews = [\"opus\"]\n",
+                "xhard_complexity_crews = [\"opus:3\"]\n",
+                "\n[operation]\nreview_crew = \"opus\"\n",
+                "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
+                "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture-sol\"\n",
+                "\n[crews.haiku]\nprovider = \"claude\"\nmodel = \"haiku\"\n",
+                "\n[crews.grok]\nprovider = \"grok\"\nmodel = \"fixture-grok\"\n",
+            ));
+            std::fs::write(global_path, global).unwrap();
+            std::fs::write(
+                fixture.work.join("config.toml"),
+                "[operation]\nreview_crew = \"haiku\"\n",
+            )
+            .unwrap();
+            let definitions = fixture.work.join("auto_tasks");
+            std::fs::create_dir_all(&definitions).unwrap();
+            for (name, enabled) in [("skill-validation", true), ("disabled-validation", false)] {
+                std::fs::write(
+                    definitions.join(format!("{name}.yaml")),
+                    format!(
+                        "schemaVersion: 1\nname: {name}\nenabled: {enabled}\nschedule:\n  every_minutes: 60\ntemplate:\n  title: Validate fixture\n  crew: ' grok '\n"
+                    ),
+                )
+                .unwrap();
+            }
+            let server = fixture.server(false);
+            let view = super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            );
+            let crews = view["crews"].as_array().unwrap();
+            for (name, expected) in [
+                (
+                    "haiku",
+                    json!(["operation.review_crew", "workflow.low_complexity_crews"]),
+                ),
+                (
+                    "opus",
+                    json!([
+                        "workflow.default_crew",
+                        "workflow.final_recovery_crews",
+                        "workflow.hard_complexity_crews",
+                        "workflow.xhard_complexity_crews"
+                    ]),
+                ),
+                (
+                    "sol",
+                    json!([
+                        "workflow.final_recovery_crews",
+                        "workflow.medium_complexity_crews",
+                        "workflow.system_crew"
+                    ]),
+                ),
+                ("grok", json!(["auto-task skill-validation"])),
+            ] {
+                let crew = crews.iter().find(|crew| crew["name"] == name).unwrap();
+                assert_eq!(
+                    crew["referenced_by"], expected,
+                    "effective references for {name}"
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn workspace_file_views_and_writes_admit_global_crews() {
     isolated(
         "guards::workspace_file_views_and_writes_admit_global_crews",

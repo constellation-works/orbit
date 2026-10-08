@@ -323,8 +323,10 @@ node crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs \
 The dashboard polish browser fixture checks every Settings, Health and
 Automation deep link on load and reload at 375px, plus hash changes. Long view
 lists scroll within the space beside their destination so both selections stay
-visible. It also checks Crews header geometry, column alignment and consistent
-empty values at 1280, 1440 and 1920px, and full-name Audit tooltips for tools
+visible. It also checks visible inline labels before every crew value and
+complete server-provided usage references at 390 and 768px, in editable and
+read-only views. Crews header geometry, column alignment and consistent empty
+values are checked at 1280, 1440 and 1920px, and full-name Audit tooltips for tools
 with shared prefixes. It saves screenshots and `measurements.json`:
 
 ```bash
