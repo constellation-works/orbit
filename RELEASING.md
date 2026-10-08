@@ -74,7 +74,7 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 ```
 
 - Use the last tag whose version files actually match it. A recovery tag (e.g. `v0.10.1`, whose files still said `0.10.0`) is not a baseline.
-- With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. [docs/runbooks/release-survey.md](docs/runbooks/release-survey.md) is an example.
+- With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. The survey lands as an artifact on that task, not as a file in `docs/`.
 - The survey is for understanding and breaking-change triage, not a CHANGELOG inventory.
 - Don't start the bump until in-flight delivery has landed or the human says the queue is settled.
 

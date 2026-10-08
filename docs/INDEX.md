@@ -35,8 +35,6 @@ CLI behavior, state layout, or recovery semantics change.
 | [Linux sandbox onboarding and diagnostics](./runbooks/linux-sandbox.md) | Explain automatic Linux Bubblewrap onboarding, distro eligibility, readiness, and native validation status. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
-| [Post-v0.24.0 release survey](./runbooks/release-survey-v0.24.0.md) | Post-v0.24.0 release survey and breaking-change handoff. |
-| [Post-v0.18.0 release survey](./runbooks/release-survey.md) | Post-v0.18.0 release survey and breaking-change handoff. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
 | [Operate the Before-PR Review Gate](./runbooks/review-gate.md) | Inspect before-PR review verdicts, findings, and evidence holds, then decide how to resume a task. |
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
