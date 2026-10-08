@@ -364,6 +364,19 @@ node crates/orbit-web/src/tests/dashboard_refresh_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/refresh-browser
 ```
 
+The host switcher browser fixture serves a dashboard with several registered
+hosts behind a fake forward. It checks that every request made after choosing a
+host goes through `/api/on/<host>/…` (only `/api/hosts…` stays local), the
+`?host=` and remembered-host precedence, workspaces rebuilt per host, the
+host-level failure state and its way back, the skew and read-only notes,
+remote-run links and keyboard focus. It saves 1440px and 768px screenshots and
+`host-switch-assertions.json`:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_host_switch_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/host-switch
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

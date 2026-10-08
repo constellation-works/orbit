@@ -25,11 +25,11 @@ use hyper_util::rt::TokioIo;
 use orbit_common::governance::authorization::DASHBOARD_HOST_FORWARD;
 use orbit_registry::hosts::ResolvedHost;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::host::{host_error_code, status_for};
-use super::routines::{authorization_denied, authorized_caller};
+use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::host_tunnels::{ForwardError, HostTarget, Lease, RemoteIdentity};
 use crate::ssh_tunnel::TunnelOrigin;
 use crate::state::DashboardState;
@@ -149,6 +149,7 @@ pub(super) async fn connection(
     UrlPath(host): UrlPath<String>,
 ) -> Response {
     let operator = authorized_caller(&DASHBOARD_HOST_FORWARD, state.operator_session()).is_ok();
+    let forward_writes = action_capability(&DASHBOARD_HOST_FORWARD, state.operator_session());
     let addressed = match resolve(&state, &host).await {
         Ok(addressed) => addressed,
         Err(error) => return failure(&host, &error.code, error.message),
@@ -187,7 +188,10 @@ pub(super) async fn connection(
     })
     .await;
     match report {
-        Ok(report) => Json(report).into_response(),
+        Ok(mut report) => {
+            report.forward_writes = forward_writes;
+            Json(report).into_response()
+        }
         Err(join) => failure(
             &host,
             "internal_error",
@@ -213,6 +217,9 @@ struct ConnectionState {
     skew: bool,
     skew_fields: Vec<&'static str>,
     error: Option<ForwardError>,
+    /// Whether this session may forward unsafe methods (`host.forward`), as
+    /// `{authorized, reason}`, so a dashboard disables writes it would refuse.
+    forward_writes: Value,
 }
 
 impl ConnectionState {
@@ -243,6 +250,7 @@ impl ConnectionState {
             skew: !skew_fields.is_empty(),
             skew_fields,
             error: None,
+            forward_writes: Value::Null,
         }
     }
 
@@ -258,6 +266,7 @@ impl ConnectionState {
             skew: false,
             skew_fields: Vec::new(),
             error: Some(error),
+            forward_writes: Value::Null,
         }
     }
 }

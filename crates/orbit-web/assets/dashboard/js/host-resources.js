@@ -1,5 +1,6 @@
-// These live chips always observe the HTTP serving host, independently of workspace scope.
-import { el } from './common.js';
+// These live chips observe the selected host (the serving host unless the host
+// picker names another), independently of workspace scope.
+import { el, isHostUnavailable, withHost } from './common.js';
 
 /// The throttle verdict as the topbar chips and the Settings System tab both
 /// state it: `held`, `open`, `disabled`, or `unknown` (stale or no payload).
@@ -76,14 +77,14 @@ export function onHostResources(listener) {
   return () => listeners.delete(listener);
 }
 
-/// The serving host, with no workspace or window query. Bounded like
+/// The selected host, with no workspace or window query. Bounded like
 /// `fetchJson`: a stalled snapshot (hung mount, half-open connection) rejects
 /// instead of pending for the rest of the page's life.
 export async function fetchHostResourcePayload() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch('/api/host/resources', { signal: controller.signal });
+    const response = await fetch(withHost('/api/host/resources'), { signal: controller.signal });
     if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
     return await response.json();
   } catch (error) {
@@ -117,11 +118,20 @@ export async function fetchAndRenderHostResources() {
   }
 }
 
+/// Forget the last reading when the selected host changes, so one host's
+/// readings never show under another's name; a reading still in flight for
+/// the previous host is dropped with it.
+export function resetHostResources() {
+  sequence += 1;
+  lastPayload = null;
+  renderHostResources(null);
+  for (const listener of listeners) listener(null);
+}
 
 export function initHostResources() {
   let pending = false;
   setInterval(async () => {
-    if (document.hidden || pending) return;
+    if (document.hidden || pending || isHostUnavailable()) return;
     pending = true;
     try { await fetchAndRenderHostResources(); }
     catch (error) { console.error(error); }

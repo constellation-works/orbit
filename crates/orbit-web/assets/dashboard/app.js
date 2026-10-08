@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -15,6 +15,7 @@ import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations }
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
+import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -851,7 +852,7 @@ function wireTaskIdResolver() {
   function taskDetailPath(id, workspaceId) {
     const base = `/api/tasks/${encodeURIComponent(id)}`;
     if (workspaceId) {
-      return `${base}?workspace=${encodeURIComponent(workspaceId)}`;
+      return withHost(`${base}?workspace=${encodeURIComponent(workspaceId)}`);
     }
     return withWorkspace(base);
   }
@@ -1181,20 +1182,27 @@ function fetchAndRenderTasks() {
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
 // header selector. Runs before the first refresh so the initial fetches target
-// the right workspace. Failures are non-fatal (single-workspace fallback).
+// the right workspace, and again for each host selected [ORB-14680]: a
+// workspace id the new host also lists stays selected, "All workspaces" stays
+// the aggregate of that host's workspaces, and anything else becomes that
+// host's default. Failures are non-fatal (single-workspace fallback) and
+// resolve false so the next refresh tries again.
 async function initWorkspaceSelector() {
+  const wasAggregate = isAggregateView() || isAggregateLinked();
   let entries;
   try {
     entries = await fetchJson("/api/workspaces");
   } catch (e) {
     console.error(e);
-    return;
+    return false;
   }
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
+    const railWorkspace = $("rail-workspace");
+    if (railWorkspace) railWorkspace.replaceChildren();
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
     if (only) {
       const linkedAll = isAggregateLinked();
@@ -1202,7 +1210,7 @@ async function initWorkspaceSelector() {
       // A link asking for "all" has nothing to aggregate here; repair the address.
       if (linkedAll) persistScopeToUrl();
     }
-    return; // single mode: selected implicitly, no selector needed
+    return true; // single mode: selected implicitly, no selector needed
   }
 
   // Default to the workspace flagged by the server (the cwd workspace, if the
@@ -1213,7 +1221,7 @@ async function initWorkspaceSelector() {
   // recover from the selector. Treat it like no workspace and repair the URL.
   // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
   const linked = getWorkspace();
-  const linkedIsServable = isAggregateLinked() || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  const linkedIsServable = (wasAggregate && !linked) || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
   if (!linkedIsServable) {
     const def = dashboardWorkspaces.find((w) => w.is_default);
     const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
@@ -1222,6 +1230,7 @@ async function initWorkspaceSelector() {
     if (linked) persistScopeToUrl();
   }
   buildWorkspaceSelector();
+  return true;
 }
 
 function buildWorkspaceSelector() {
@@ -1609,17 +1618,75 @@ function markRefreshStale(stale) {
   }
 }
 
+// ORB-14680: the selected host's workspaces are read once it is reachable, and
+// again after it has failed, so a host that comes back gets its own list.
+let workspacesWanted = false;
+let workspaceRebuild = null;
+
+/// True once the selected host can be shown and its workspaces are loaded. A
+/// remote host's connection state is read on every refresh while it stays
+/// selected; the serving host has none to read.
+async function ensureHostScope() {
+  if (getHost() && !(await checkHostConnection())) {
+    workspacesWanted = true;
+    return false;
+  }
+  if (workspacesWanted && !workspaceRebuild) {
+    workspacesWanted = false;
+    workspaceRebuild = initWorkspaceSelector()
+      .then((loaded) => { if (!loaded) workspacesWanted = true; })
+      .finally(() => { workspaceRebuild = null; });
+  }
+  if (workspaceRebuild) await workspaceRebuild;
+  return true;
+}
+
+function selectHost(name) {
+  if (!chooseHost(name)) {
+    refreshDashboard();
+    return;
+  }
+  persistScopeToUrl();
+  workspacesWanted = true;
+  refreshDashboard();
+}
+
+function showHostUnavailable(now) {
+  $("conn-status").className = "status-dot red";
+  $("meta-text").textContent = `host unavailable · ${formatClock(now)}`;
+  markRefreshStale(true);
+}
+
 async function refreshDashboard() {
   const sequence = ++refreshSequence;
-  const revision = getWorkspaceRevision();
+  const host = getHost();
   $("meta-text").textContent = "fetching…";
   $("conn-status").className = "status-dot orange";
+  if (host || workspacesWanted || workspaceRebuild) {
+    const ready = await ensureHostScope();
+    if (sequence !== refreshSequence || host !== getHost()) return null;
+    if (!ready) {
+      showHostUnavailable(new Date());
+      return false;
+    }
+  }
+  const revision = getWorkspaceRevision();
   // Refresh stays available so a slow request never locks navigation or retry.
   const jobs = activeRefreshJobs();
   const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
   const errors = results.flatMap((result, index) => result.status === "rejected"
     ? [{ panel: jobs[index].panel, error: result.reason }] : []);
+  // A failure the forward reports for the host itself is one host-level
+  // state, not one failed panel per request.
+  const hostFailure = errors.map(({ error }) => hostLevelFailure(error)).find(Boolean);
+  if (hostFailure) {
+    for (const { error } of errors) console.error(error);
+    showHostFailure(hostFailure);
+    workspacesWanted = true;
+    showHostUnavailable(new Date());
+    return false;
+  }
   const offline = errors.some(({ error }) => error.networkFailure);
   for (const { error } of errors) console.error(error);
   const now = new Date();
@@ -1691,9 +1758,13 @@ initRuns(runsContext());
 initRunDetail(runDetailContext());
 const rctx = routerContext();
 initRouter(rctx);
-// Resolve workspaces before the router fires its first refresh so the initial
-// fetches carry the right workspace (top-level await; app.js is an ES module).
-await initWorkspaceSelector();
+// Resolve the host, then its workspaces, before the router fires its first
+// refresh so the initial fetches carry the right scope (top-level await;
+// app.js is an ES module). An unavailable host defers its workspaces to the
+// refresh that finds it reachable.
+await initHostSwitcher({ select: selectHost });
+workspacesWanted = true;
+await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
 iT();

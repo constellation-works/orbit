@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -181,12 +181,15 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 // `workspace_id`, so that's an explicit, workspace-qualified target; anything
 // else is refused rather than silently applied to the wrong (or no) workspace.
 function canMutateTask(task) {
-  return !isAggregateView() || Boolean(task && task.workspace_id);
+  return (!isAggregateView() || Boolean(task && task.workspace_id)) && !hostWriteRefusal();
 }
 
-// One sentence for every inline control that cannot write in the aggregate
-// view, so the refusal reads the same whichever control the operator hovers.
+// One sentence for every inline control that cannot write, so the refusal
+// reads the same whichever control the operator hovers: a selected host that
+// refuses forwarded writes, or the aggregate view.
 function aggregateRefusalTitle(label, action) {
+  const host = hostWriteRefusal();
+  if (host) return `${label} — ${host}`;
   return `${label} — select a specific workspace to ${action} in aggregate view`;
 }
 
@@ -195,7 +198,7 @@ function aggregateRefusalTitle(label, action) {
 function taskWorkspacePath(task, path) {
   if (!task.workspace_id) return withWorkspace(path);
   const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`;
+  return withHost(`${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`);
 }
 
 function taskMutationPath(task, suffix = "") {
@@ -2037,6 +2040,7 @@ function buildTaskDetail(task, context) {
           machine && machine.machine_id
             ? { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null }
             : { known: false },
+          { runId: display, workspace: task.workspace_id },
         ),
       );
     } else {
@@ -2216,6 +2220,8 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
+  const refusal = hostWriteRefusal();
+  if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
   return actions;
 }
 
@@ -2914,7 +2920,7 @@ function buildQuickAction(task, context) {
     }
     const location = summaryExecutionLocation(task.job_run_machine);
     if (location.known) {
-      cell.appendChild(buildExecutionProvenance(location));
+      cell.appendChild(buildExecutionProvenance(location, { runId: task.job_run_id, workspace: task.workspace_id }));
       return cell;
     }
   }

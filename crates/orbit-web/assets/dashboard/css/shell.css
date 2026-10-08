@@ -150,7 +150,9 @@
   gap: 8px;
 }
 
-.rail-workspace { display: flex; flex-direction: column; gap: 6px; }
+.rail-host, .rail-workspace { display: flex; flex-direction: column; gap: 6px; }
+.rail-host:not(:empty) { margin-bottom: 8px; }
+.rail-host .workspace-select,
 .rail-workspace .workspace-select {
   max-width: 100%;
   width: 100%;
@@ -174,7 +176,9 @@
   color: var(--fg-dim);
 }
 .rail-conn .status-dot { flex: none; margin-top: 5px; }
-.rail-conn #meta-text { min-width: 0; overflow-wrap: anywhere; }
+.rail-conn .conn-text { min-width: 0; overflow-wrap: anywhere; }
+.rail-conn .conn-host:not(:empty) { color: var(--fg); font-weight: 600; }
+.rail-conn .conn-host:not(:empty)::after { content: " · "; color: var(--fg-dim); font-weight: 400; }
 
 .main-col {
   display: flex;
@@ -216,6 +220,20 @@
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
 .topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
 
+.host-resource-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+/* The selected host's name, so the readings are never read as another host's. */
+.host-resource-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+.host-resource-group.remote .host-resource-name { color: var(--accent); }
 .host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 0 0 auto; }
 /* One chip per resource, sized so a new reading does not resize it.
    Throttling changes the held chip's colour and outline, never its size. */
@@ -270,7 +288,7 @@
     row-gap: 6px;
     padding: 8px 12px;
   }
-  .topbar .host-resource-chips { order: 1; flex: 1 1 100%; overflow-x: auto; }
+  .topbar .host-resource-group { order: 1; flex: 1 1 100%; overflow-x: auto; }
   .topbar-spacer { order: 0; }
 }
 
@@ -313,7 +331,7 @@
   }
   .rail {
     display: grid;
-    grid-template-columns: 68px minmax(0, 1fr) 34px 34px;
+    grid-template-columns: 68px minmax(0, 1fr) minmax(0, 1fr) 34px 34px;
     grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
@@ -324,7 +342,10 @@
   }
   .rail-brand { grid-column: 1; padding: 0; height: 34px; display: flex; align-items: center; align-self: start; }
   .rail-brand svg { width: 64px; height: auto; }
-  .rail-workspace { grid-column: 2; min-width: 0; }
+  .rail-host { grid-column: 2; min-width: 0; margin-bottom: 0; }
+  .rail-host .rail-scope-label { display: none; }
+  .rail-workspace { grid-column: 3; min-width: 0; }
+  .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
   .rail .tabs {
     grid-column: 1 / -1;
@@ -365,7 +386,7 @@
   .rail-foot { display: none; }
   .topbar { padding: 6px 8px; gap: 0; }
   .topbar-spacer { display: none; }
-  .topbar .host-resource-chips { flex: 1 1 100%; padding: 2px; }
+  .topbar .host-resource-group { flex: 1 1 100%; padding: 2px; }
   /* Tighter chips keep all three readings in view at 375px. */
   .host-resource { gap: 4px; padding: 0 7px; }
   .host-resource[data-resource="cpu"] { min-width: 9.5rem; }
@@ -675,4 +696,73 @@ footer {
   text-align: right;
   border-top: 1px solid var(--border);
   background: var(--bg);
+}
+
+/* ORB-14680: host switcher. The picker's label names what it scopes; the
+   select itself shares the workspace picker's styling and focus ring. */
+.rail-scope-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-mute);
+  padding: 0 8px;
+}
+
+/* One state for the selected host when it cannot be shown. It replaces every
+   panel; the rail, the picker and the way back stay in place. */
+.main-col.host-unavailable > .tab-pane { display: none !important; }
+.host-state {
+  margin: 24px;
+  max-width: 720px;
+  padding: 18px 20px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-wash);
+  color: var(--danger-fg);
+}
+.host-state h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--fg); }
+.host-state p { margin: 0 0 6px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.host-state .host-state-code { font-family: var(--font-mono); font-size: 12px; }
+.host-state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.host-state-actions button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.host-state-actions button:hover { border-color: var(--accent); }
+.host-state-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Persistent, non-blocking notes about the selected host: version skew and
+   refused writes. They sit under the top bar and never cover a panel. */
+.host-banner {
+  flex: 0 0 auto;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--state-pending) 10%, var(--bg));
+  color: var(--state-pending);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.host-banner[hidden] { display: none; }
+.host-read-only-note { flex-basis: 100%; font-size: 12px; color: var(--state-pending); }
+a.exec-origin.remote-run-link { color: var(--accent); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

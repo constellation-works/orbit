@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -110,6 +110,15 @@ function runActionLabel(verb, run) {
   return `${verb} run ${run && run.run_id}${workspace ? ` in ${workspace}` : ""}`;
 }
 
+// A selected host that refuses forwarded writes disables every run action
+// and says why, rather than letting the click fail.
+function refuseOnReadOnlyHost(btn) {
+  const refusal = hostWriteRefusal();
+  if (!refusal) return;
+  btn.disabled = true;
+  btn.title = refusal;
+}
+
 function buildCancelRunButton(run, host) {
   const btn = el("button", {
     class: "action reject run-cancel",
@@ -118,6 +127,7 @@ function buildCancelRunButton(run, host) {
   });
   btn.disabled = !runIsCancellable(run) || cancelRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Cancel", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     cancelRun(run, btn, host);
@@ -133,6 +143,7 @@ function buildReplayRunButton(run, host) {
   });
   btn.disabled = replayRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Replay", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     replayRun(run, btn, host);
@@ -148,6 +159,7 @@ function buildResumeRunButton(run, host) {
   });
   btn.disabled = resumeRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Resume", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     resumeRun(run, btn, host);

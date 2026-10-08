@@ -329,9 +329,19 @@ fn forwarded_writes_need_the_operator_session() {
             assert!(stub.calls().is_empty(), "a denied write starts no ssh");
             assert_eq!(comments(&b_server, &task), 0, "B records nothing");
             json_ok(agent.get(&format!("/api/on/hostb/tasks{WS}")));
+            let refused = json_ok(agent.get("/api/hosts/hostb/connection"));
+            assert_eq!(refused["forward_writes"]["authorized"], false, "{refused}");
+            assert!(
+                refused["forward_writes"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.is_empty()),
+                "a refused session is told why: {refused}"
+            );
             drop(agent);
 
             let operator = a.server_with_path(true, stub.bin());
+            let allowed = json_ok(operator.get("/api/hosts/hostb/connection"));
+            assert_eq!(allowed["forward_writes"]["authorized"], true, "{allowed}");
             json_ok(operator.send("POST", &comment, body));
             assert_eq!(comments(&b_server, &task), 1, "the comment lands on B");
         },

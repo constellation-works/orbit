@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router's `#auto-drain` redirect.
 
-import { el, fetchJson, formatClock, formatDateTime } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -529,6 +529,12 @@ function applyLogSnapshot(payload) {
 
 function loadLogSnapshot() {
   if (document.hidden || logSnapshotReady) return;
+  // A selected host that cannot be shown is not asked again until a refresh
+  // finds it reachable; the retry keeps its place in the backoff meanwhile.
+  if (isHostUnavailable()) {
+    scheduleLogSnapshotRetry();
+    return;
+  }
   const attempt = ++logSnapshotAttempt;
   fetchJson("/api/log?limit=50").then((payload) => {
     if (attempt !== logSnapshotAttempt || logSnapshotReady) return;
@@ -544,7 +550,31 @@ function loadLogSnapshot() {
   });
 }
 
+// ORB-14680: the tail follows the selected host. Another host's log has its
+// own offsets, so a switch drops the rows and cursor and starts from that
+// host's snapshot, exactly as a first load does.
+let logHost = null;
+
+function restartLogTailForHost() {
+  if (getHost() === logHost) return;
+  logHost = getHost();
+  logSnapshotAttempt += 1;
+  clearLogSnapshotRetry();
+  closeLogStream();
+  logStreamWanted = false;
+  logSnapshotReady = false;
+  logStreamOffset = 0;
+  logAgentStreamOffset = 0;
+  logBuffered = [];
+  logBufferedDropped = 0;
+  logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+  logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+  loadLogSnapshot();
+}
+
 export function initLogTail() {
+  logHost = getHost();
+  onWorkspaceChange(restartLogTailForHost);
   wireLogVisibility();
   wireLogPanelResize();
   wireDockSplitter();
@@ -776,7 +806,7 @@ function connectLogStream() {
   closeLogStream();
   // A hidden tab opens nothing; becoming visible reconnects from the offset.
   if (document.hidden) return;
-  logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`);
+  logStream = new EventSource(withHost(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`));
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);
