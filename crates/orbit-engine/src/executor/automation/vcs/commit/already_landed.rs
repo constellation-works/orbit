@@ -22,6 +22,7 @@ use crate::context::RuntimeHost;
 use super::super::delivery_marker::delivery_markers;
 use super::super::git::{git_output, git_output_paths, git_success};
 use super::checkpoint::pinned_object_id;
+use super::no_diff;
 
 pub(super) const ARTIFACT: &str = "already-landed.json";
 
@@ -52,6 +53,14 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
         return Err(refused(
             "worktree is no longer clean; deliver or reconcile the pending changes",
         ));
+    }
+    let artifacts = host.get_task_artifacts(&task.id)?;
+    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
+    if !has(ARTIFACT) && !has(no_diff::ARTIFACT) {
+        return Err(refused(format!(
+            "missing task artifact {ARTIFACT} or {no_diff}; for a task that correctly changed nothing, attach {no_diff} naming this task, its run or retry lineage, the pinned HEAD as tested_head, a reason, and zero-exit validation logs carrying run_id, tested_head, command, exit_code and output; for work a covering commit delivered, attach {ARTIFACT} with structured landing proof and required validation logs",
+            no_diff = no_diff::ARTIFACT,
+        )));
     }
     verify_at_revision(host, task, workspace, run_id, tested_head)
 }

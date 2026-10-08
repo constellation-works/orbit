@@ -612,6 +612,31 @@ fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
     }
 }
 
+/// A clean tree at the pinned HEAD with neither route artifact must name both
+/// routes, so a task that correctly changed nothing is pointed at no-diff.json
+/// [F2026-10-169]. The reason keeps its already_landed_unverified prefix.
+#[test]
+fn commit_verifier_clean_tree_without_evidence_names_both_routes() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+
+    let message = action(&host, &commit_input(temp.path(), &head))
+        .expect_err("a clean tree without evidence must be refused")
+        .to_string();
+    for expected in [
+        "already_landed_unverified:",
+        "no-diff.json",
+        "already-landed.json",
+    ] {
+        assert!(
+            message.contains(expected),
+            "refusal must name {expected} so a no-change task finds its route [F2026-10-169], got: {message}"
+        );
+    }
+}
+
 /// A `no-diff-expected` task skips a clean stage and commits an unexpected
 /// diff. The commit is the normal shipment commit; `sync_base` remains the
 /// conflict boundary for that diff [ORB-14247].
