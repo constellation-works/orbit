@@ -25,8 +25,8 @@ use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
     OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, named_entity_not_found, next_evaluation_json, record_operation_audit,
-    selection_conflict,
+    explicit_workspace, host_cron_zone, named_entity_not_found, next_evaluation_json,
+    record_operation_audit, selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -447,6 +447,7 @@ fn list_json(
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
+        "cron_zone": host_cron_zone(),
         "definitions": definitions,
         "inactive_plugin_count": inactive_plugin_count,
         "cursor_state_error": cursor_state_error,

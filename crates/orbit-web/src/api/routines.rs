@@ -7,7 +7,7 @@ use std::time::Instant;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
@@ -478,6 +478,7 @@ pub(super) fn report_json(
             "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
         },
         "clock": clock,
+        "cron_zone": host_cron_zone(),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
         "retired": report.listed_retired(include_inactive_plugins).map(|routine| json!({
             "name": routine.name,
@@ -528,6 +529,53 @@ fn status_json(status: &RoutineStatus) -> Value {
         ),
         "last_fire": status.last_fire.as_ref().map(fire_json),
     })
+}
+
+/// The zone cron triggers are evaluated in: the host's local zone, as the
+/// routine and auto-task schedulers use. `name` is the IANA name when the
+/// host exposes one (`TZ`, the `/etc/localtime` link, `/etc/timezone`), else
+/// null; `offset_seconds` is the current offset from UTC, so a client can
+/// still label the zone when the name is unknown.
+pub(super) fn host_cron_zone() -> Value {
+    json!({
+        "name": host_zone_name(),
+        "offset_seconds": Local::now().offset().local_minus_utc(),
+    })
+}
+
+fn host_zone_name() -> Option<String> {
+    let tz = std::env::var("TZ").ok();
+    let link = std::fs::read_link("/etc/localtime").ok();
+    let file = std::fs::read_to_string("/etc/timezone").ok();
+    zone_name_from_sources(
+        tz.as_deref(),
+        link.as_deref().and_then(std::path::Path::to_str),
+        file.as_deref(),
+    )
+}
+
+fn zone_name_from_sources(
+    tz_env: Option<&str>,
+    localtime_link: Option<&str>,
+    timezone_file: Option<&str>,
+) -> Option<String> {
+    let plausible = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
+    };
+    let from_env = tz_env.map(|tz| tz.trim().trim_start_matches(':'));
+    let from_link = localtime_link
+        .and_then(|target| target.split_once("zoneinfo/"))
+        .map(|(_, name)| name);
+    let from_file = timezone_file.map(str::trim);
+    [from_env, from_link, from_file]
+        .into_iter()
+        .flatten()
+        .find(|name| plausible(name))
+        .map(str::to_string)
 }
 
 pub(super) fn next_evaluation_json(state: ScheduleDisplayState, at: Option<String>) -> Value {

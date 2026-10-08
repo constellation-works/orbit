@@ -9,9 +9,12 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
+const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs', import.meta.url));
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' } : dashboardFile(name);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
+    : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
+    : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
@@ -826,6 +829,14 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
+  // A browser in UTC, a host cron zone elsewhere: triggers read in the host
+  // zone and agree with the UTC next fire beside them.
+  const utcPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  utcPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await utcPage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+  await utcPage.addScriptTag({ type: 'module', url: '/cron-zone.mjs' });
+  await utcPage.waitForFunction(() => globalThis.cronZoneTestsPassed, undefined, { timeout: 15000 });
+  await utcPage.screenshot({ path: path.join(evidence, 'cron-zone-utc-browser.png') });
   if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
   console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
