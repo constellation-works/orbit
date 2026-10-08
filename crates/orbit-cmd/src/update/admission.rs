@@ -104,7 +104,7 @@ pub(super) fn handover_of(admissions: &[CandidateAdmission]) -> Vec<ParticipantR
 }
 
 /// Observe admission for an installer that renames the executable at
-/// `candidate` over this one, as [`acquire_candidate_admissions`] takes it,
+/// `candidate` over this one, as `acquire_candidate_admissions` takes it,
 /// and name each process that would hand over. The admissions are released
 /// on return, so this reserves nothing.
 pub fn candidate_preflight(

@@ -15,7 +15,7 @@ Before implementation handoff or before-PR review, run these repository gates:
 ```bash
 make ci-fast           # formatting and script guardrails; runs no Rust tests
 make ci-test-affected  # complete test targets of changed crates and workspace dependents
-make ci-lint           # clippy for production and all targets
+make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI logs and sandbox profile goldens
 ```
 

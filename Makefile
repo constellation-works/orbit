@@ -163,13 +163,16 @@ ci-fast:
 ci-test-affected:
 	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" python3 ./scripts/ci-test-affected.py
 
-# Compile-time pre-handoff gate for agents. Keep both passes aligned with
+# Compile-time pre-handoff gate for agents. Keep these passes aligned with
 # scripts/ci-guardrails.sh: production enforces bounded channels, then all
-# targets retain the other workspace lints without flagging test-only channels.
+# targets retain the other workspace lints without flagging test-only channels,
+# then rustdoc denies warnings (private intra-doc links turned agent-main red
+# twice on 2026-10-07 because no agent gate built docs).
 ci-lint:
 	./scripts/check-dependency-direction.sh
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
+	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
 # MCP tools/list snapshot, CI/GitHub log fixtures, and sandbox profile goldens. Compiles orbit-cli
