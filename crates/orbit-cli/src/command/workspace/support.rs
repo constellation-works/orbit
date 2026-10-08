@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 
 /// Repo-local discovery directories a legacy workspace init linked skills into.
@@ -252,7 +253,7 @@ fn write_orbit_gitignore_entry(gitignore_path: &Path) -> Result<(), OrbitError> 
         next.push('\n');
     }
     next.push_str(&orbit_gitignore_block());
-    std::fs::write(gitignore_path, next).map_err(|error| OrbitError::Io(error.to_string()))
+    atomic_write_text(gitignore_path, &next).map_err(|error| OrbitError::Io(error.to_string()))
 }
 
 fn gitignore_has_managed_block(content: &str) -> bool {

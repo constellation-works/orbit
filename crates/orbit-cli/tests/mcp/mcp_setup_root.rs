@@ -337,11 +337,45 @@ fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
 #[test]
 fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
     let fixture = ExternalRootFixture::init();
+    let original_mcp = serde_json::json!({
+        "mcpServers": { "other": { "command": "other-client" } },
+        "userSetting": true,
+    });
+    let original_settings = serde_json::json!({
+        "permissions": {
+            "allow": ["Read(./notes/**)"],
+            "deny": ["Read(./private/**)"],
+        },
+        "userSetting": true,
+    });
+    let settings_dir = fixture.checkout.join(".claude");
+    fs::create_dir_all(&settings_dir).expect("create user settings directory");
+    fs::write(fixture.claude_config(), original_mcp.to_string()).expect("seed user MCP config");
+    fs::write(fixture.claude_settings(), original_settings.to_string())
+        .expect("seed user settings");
+    let entries = |directory: &Path| {
+        fs::read_dir(directory)
+            .expect("read config directory")
+            .map(|entry| entry.expect("read config entry").file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let checkout_entries = entries(&fixture.checkout);
+    let settings_entries = entries(&settings_dir);
+    let read_json = |path: &Path| -> Value {
+        serde_json::from_slice(&fs::read(path).expect("read client config"))
+            .expect("parse client JSON")
+    };
+    // An in-place rewrite would change these open files too. Atomic replacement
+    // must leave the old descriptors' contents intact on Unix.
+    #[cfg(unix)]
+    let old_mcp = fs::File::open(fixture.claude_config()).expect("open original MCP config");
+    #[cfg(unix)]
+    let old_settings = fs::File::open(fixture.claude_settings()).expect("open original settings");
 
     fixture
         .orbit(
             &fixture.checkout,
-            &fixture.rooted(&["mcp", "init", "--claude"]),
+            &fixture.rooted(&["mcp", "init", "--claude", "--scope", "workspace"]),
         )
         .success();
 
@@ -350,8 +384,67 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
         vec!["mcp", "serve", "--workspace", "ws_wsname"],
         "the generated server must carry the registered workspace binding"
     );
-    assert!(fixture.claude_settings().is_file());
+    let mut expected_mcp = original_mcp.clone();
+    expected_mcp["mcpServers"]["orbit"] = serde_json::json!({
+        "command": "orbit",
+        "args": ["mcp", "serve", "--workspace", "ws_wsname"],
+    });
+    assert_eq!(read_json(&fixture.claude_config()), expected_mcp);
+    let settings = read_json(&fixture.claude_settings());
+    let allow = settings["permissions"]["allow"]
+        .as_array()
+        .expect("allow array");
+    assert!(allow.contains(&serde_json::json!("Read(./notes/**)")));
+    assert!(
+        allow.iter().any(|value| value
+            .as_str()
+            .is_some_and(|permission| permission.starts_with("mcp__orbit__"))),
+        "project settings must include Orbit MCP permissions"
+    );
+    let mut user_settings = settings.clone();
+    user_settings["permissions"]["allow"] = original_settings["permissions"]["allow"].clone();
+    assert_eq!(
+        user_settings, original_settings,
+        "preserve unrelated settings"
+    );
+    assert_eq!(
+        entries(&fixture.checkout),
+        checkout_entries,
+        "no MCP staging files left behind"
+    );
+    assert_eq!(
+        entries(&settings_dir),
+        settings_entries,
+        "no settings staging files left behind"
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(old_mcp).expect("read old MCP descriptor"),
+            original_mcp
+        );
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(old_settings)
+                .expect("read old settings descriptor"),
+            original_settings
+        );
+    }
     fixture.assert_no_client_config_outside_the_checkout();
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--claude"]),
+        )
+        .success();
+    assert_eq!(read_json(&fixture.claude_config()), expected_mcp);
+    assert_eq!(
+        read_json(&fixture.claude_settings()),
+        settings,
+        "init is idempotent"
+    );
+    assert_eq!(entries(&fixture.checkout), checkout_entries);
+    assert_eq!(entries(&settings_dir), settings_entries);
 
     fixture
         .orbit(
@@ -360,8 +453,10 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
         )
         .success();
 
-    assert!(!fixture.claude_config().exists());
-    assert!(!fixture.checkout.join(".claude").exists());
+    assert_eq!(read_json(&fixture.claude_config()), original_mcp);
+    assert_eq!(read_json(&fixture.claude_settings()), original_settings);
+    assert_eq!(entries(&fixture.checkout), checkout_entries);
+    assert_eq!(entries(&settings_dir), settings_entries);
 }
 
 #[test]

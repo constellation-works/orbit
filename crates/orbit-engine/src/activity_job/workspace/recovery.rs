@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use orbit_common::fs::io::atomic_write_bytes;
 use serde::Serialize;
 
 use super::declared_pair::canonical_git_common_dir;
@@ -142,7 +143,7 @@ impl WorktreeBoundaryGuard {
         diff_args.extend(["HEAD", "--"]);
         let patch = git_stdout_bytes(&self.assigned_root, &diff_args)?;
         let patch_path = pending.join("tracked.patch");
-        fs::write(&patch_path, patch)
+        atomic_write_bytes(&patch_path, &patch)
             .map_err(|error| recovery_io_error("write tracked patch", &patch_path, error))?;
 
         for relative in assigned_after.untracked_content.keys() {
@@ -177,7 +178,7 @@ impl WorktreeBoundaryGuard {
             ))
         })?;
         let manifest_path = pending.join("manifest.json");
-        fs::write(&manifest_path, manifest_bytes).map_err(|error| {
+        atomic_write_bytes(&manifest_path, &manifest_bytes).map_err(|error| {
             recovery_io_error("write worktree recovery manifest", &manifest_path, error)
         })?;
         Ok(())
@@ -288,7 +289,7 @@ fn copy_untracked_entry(source: &Path, destination: &Path) -> std::io::Result<()
         #[cfg(not(unix))]
         {
             // Record the link target as text rather than follow it.
-            return fs::write(destination, target.to_string_lossy().as_bytes());
+            return atomic_write_bytes(destination, target.to_string_lossy().as_bytes());
         }
     }
     if file_type.is_dir() {

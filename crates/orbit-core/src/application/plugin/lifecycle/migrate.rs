@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{load_sidecar_manifest, migrate_sidecars};
 use orbit_types::plugin::{MANIFEST_FILE_NAME, plugin_root_in};
 
@@ -101,7 +102,7 @@ pub fn migrate_plugin_sidecars(
             backend_target.display()
         ))
     })?;
-    std::fs::write(&path, &yaml)
+    atomic_write_text(&path, &yaml)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
     Ok((yaml, Some(path)))
 }

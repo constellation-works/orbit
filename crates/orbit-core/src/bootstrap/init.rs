@@ -23,7 +23,9 @@ use crate::bootstrap::global_defaults::{
 };
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
-use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
+use orbit_common::fs::io::{
+    atomic_write_text, create_dir_symlink, create_private_dir_all, remove_path_if_exists,
+};
 
 use crate::runtime::resolve_global_root;
 use orbit_config::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
@@ -417,12 +419,12 @@ fn seed_scoreboard_templates(orbit_root: &Path) -> Result<(), OrbitError> {
 
     let pr_path = scoreboard_dir.join("pr.json");
     if !pr_path.exists() {
-        fs::write(&pr_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
+        atomic_write_text(&pr_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
     }
 
     let task_review_path = scoreboard_dir.join("task_review.json");
     if !task_review_path.exists() {
-        fs::write(&task_review_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
+        atomic_write_text(&task_review_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
     }
 
     Ok(())

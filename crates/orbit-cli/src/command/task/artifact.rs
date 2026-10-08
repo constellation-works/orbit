@@ -119,6 +119,10 @@ impl Execute for TaskArtifactGetArgs {
         let presentation = artifact_presentation(&artifact.media_type, &artifact.content);
 
         if let Some(out) = &out {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "artifact export targets are user-selected files, symlinks or devices; retain direct output semantics"
+            )]
             std::fs::write(out, &artifact.content).map_err(|error| {
                 OrbitError::Io(format!("write artifact to '{}': {error}", out.display()))
             })?;

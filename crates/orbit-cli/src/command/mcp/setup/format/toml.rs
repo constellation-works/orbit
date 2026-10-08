@@ -23,6 +23,10 @@ pub(in crate::command::mcp::setup) fn load_toml_document(
 
 /// Write `doc` in place. Deliberately not an atomic rename: a config symlinked
 /// from a dotfiles repository must stay a symlink.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "user TOML configs may be symlinks into dotfiles repositories; in-place writes preserve those links"
+)]
 pub(in crate::command::mcp::setup) fn write_toml_document(
     path: &Path,
     doc: &DocumentMut,
