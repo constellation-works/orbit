@@ -406,6 +406,69 @@ fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
     }
 }
 
+/// A proposed or backlog task's readiness gaps reach whoever files or edits
+/// it — the `orbit.task.add` / `orbit.task.update` responses — and
+/// `orbit task show` prints them as a `Readiness:` line.
+#[test]
+fn task_show_and_write_tools_report_readiness_gaps() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
+    let codes = |readiness: &Value| -> Vec<(String, String)> {
+        readiness["gaps"]
+            .as_array()
+            .expect("readiness gaps")
+            .iter()
+            .map(|gap| {
+                (
+                    gap["code"].as_str().expect("code").to_string(),
+                    gap["severity"].as_str().expect("severity").to_string(),
+                )
+            })
+            .collect()
+    };
+
+    let add = json!({
+        "title": "Readiness over the tool surface",
+        "description": "Filed without context selectors.",
+        "complexity": "low",
+        "workspace": "trimmed-surface-test",
+        "model": "codex",
+    })
+    .to_string();
+    let added = workspace.task_json(&["tool", "run", "orbit.task.add", "--input", &add]);
+    let id = added["id"].as_str().expect("task id").to_string();
+    assert_eq!(added["readiness"]["ready"], json!(false));
+    assert_eq!(
+        codes(&added["readiness"]),
+        [("missing_context_files".to_string(), "blocking".to_string())]
+    );
+
+    let shown = workspace.run(&["task", "show", &id], "show unready task");
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        text.contains("Readiness: not ready") && text.contains("missing_context_files [blocking]"),
+        "show names the gap:\n{text}"
+    );
+    assert_eq!(
+        workspace.task_json(&["task", "show", &id, "--json"])["readiness"],
+        added["readiness"]
+    );
+
+    let update =
+        json!({"id": id, "model": "codex", "context_files": ["file:existing.rs"]}).to_string();
+    let updated = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &update]);
+    assert_eq!(updated["readiness"], json!({"ready": true, "gaps": []}));
+    let shown = workspace.run(&["task", "show", &id], "show ready task");
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("Readiness: ready"));
+
+    // Readiness describes only work waiting to be approved or admitted.
+    workspace.drive_to_done(&id);
+    let done = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert!(done.get("readiness").is_none(), "{done}");
+    let shown = workspace.run(&["task", "show", &id], "show done task");
+    assert!(!String::from_utf8_lossy(&shown.stdout).contains("Readiness:"));
+}
+
 /// The existence guard is an operator-surface default, not a wall: work that
 /// creates a file records its selector with the explicit escape, and that
 /// declaration is durable creation intent for exactly the selectors it named.

@@ -485,6 +485,15 @@ pub(crate) fn active_task_pilot_preparations(
     Ok(prepared_by_task)
 }
 
+impl OrbitRuntime {
+    /// IDs of the tasks an active task-pilot run is preparing; admission holds
+    /// them until the run settles, and read surfaces show them as preparing
+    /// rather than by their readiness gaps.
+    pub fn tasks_in_pilot_preparation(&self) -> Result<BTreeSet<String>, OrbitError> {
+        Ok(active_task_pilot_preparations(self)?.into_keys().collect())
+    }
+}
+
 fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {
     let object = output.as_object()?;
     let prepared_workspace = object.get("workspace_path")?.as_str()?;

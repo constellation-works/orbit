@@ -561,6 +561,31 @@
   border-style: dashed;
 }
 
+/* Task readiness, in the os-badge slot: amber while a gap blocks automation,
+   muted when every gap is advisory, neutral while a task pilot prepares it. */
+.readiness-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  border: 1px solid;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.readiness-blocking {
+  color: var(--state-pending);
+  border-color: var(--state-pending);
+}
+.readiness-advisory {
+  color: var(--fg-mute);
+  border-color: var(--border);
+}
+.readiness-preparing {
+  color: var(--fg-dim);
+  border-color: var(--fg-dim);
+  border-style: dashed;
+}
+
 
 main {
   display: grid;

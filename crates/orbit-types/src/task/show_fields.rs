@@ -11,14 +11,14 @@
 
 use serde_json::{Value, json};
 
-use crate::task::{Task, TaskOsRequirement, TaskStatus};
+use crate::task::{Task, TaskOsRequirement, TaskStatus, task_readiness_json};
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
 /// clap help and other const contexts.
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -55,6 +55,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "crew_model",
     "crew_unresolved",
     "os_requirement",
+    "readiness",
     "orchestrator",
     "created_at",
     "updated_at",
@@ -190,6 +191,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "job_run_machine" => Some(json!(task.job_run_machine)),
         "crew" => Some(json!(task.crew)),
         "os_requirement" => Some(task_os_requirement_json(task).unwrap_or(Value::Null)),
+        "readiness" => Some(task_readiness_json(task).unwrap_or(Value::Null)),
         "orchestrator" => Some(json!(task.orchestrator)),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),
