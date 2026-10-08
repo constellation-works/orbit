@@ -1,7 +1,5 @@
 //! Public GitHub CLI parsing and recovery contracts over sanitized fixtures.
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::time::{Duration, Instant};
 
 use orbit_tools::github_cli as gh;
 #[cfg(unix)]
@@ -207,15 +205,6 @@ fn request_fixture_goldens() {
 }
 
 #[cfg(unix)]
-struct ChildGuard(std::process::Child);
-#[cfg(unix)]
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-#[cfg(unix)]
 fn isolated() -> bool {
     const MARKER: &str = "ORBIT_TEST_GITHUB_LOG_GOLDEN_CHILD";
     if std::env::var_os(MARKER).is_some() {
@@ -255,8 +244,6 @@ exit 1
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let stdout = home.path().join("stdout");
-    let stderr = home.path().join("stderr");
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -276,27 +263,17 @@ exit 1
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .env("PATH", path)
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout).unwrap())
-        .stderr(std::fs::File::create(&stderr).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "GitHub log fixture child exceeded 120s"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
+        .current_dir(home.path());
+    let output = orbit_common::test_env::run_child_test(
+        &mut command,
+        "public_tool_surface::github_log_goldens::fallback_fixture_goldens",
+        home.path(),
+    );
     orbit_common::test_env::assert_child_test_passed(
         "public_tool_surface::github_log_goldens::fallback_fixture_goldens",
-        status,
-        std::fs::read(stdout).unwrap(),
-        std::fs::read(stderr).unwrap(),
+        output.status,
+        output.stdout,
+        output.stderr,
     );
     false
 }

@@ -7,10 +7,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use orbit_common::process::{
-    identity::{ProcessLiveness, probe_process_liveness},
-    run_bounded_capped,
-};
+use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{
@@ -261,7 +258,8 @@ fn isolated(name: &str) -> bool {
         .env("HOME", root.path())
         .env("USERPROFILE", root.path())
         .current_dir(root.path());
-    let output = run_bounded_capped(&mut command, Duration::from_secs(120), 256 * 1024).unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut command, &qualified, logs.path());
     test_env::assert_child_test_passed(&qualified, output.status, &output.stdout, &output.stderr);
     false
 }

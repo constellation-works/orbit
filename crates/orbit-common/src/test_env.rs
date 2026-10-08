@@ -198,6 +198,99 @@ pub fn assert_child_test_passed(
     );
 }
 
+/// How long [`run_child_test`] lets a re-executed child test run before it
+/// kills the child and fails.
+///
+/// A hang guard, not a speed budget. A fixture slows by an order of magnitude
+/// on a CPU-saturated host: a default-concurrency nextest run beside a busy
+/// drain, or an instrumented `cargo llvm-cov` run. Fixed one- and two-minute
+/// deadlines failed passing children there (ORB-14659). The guard stays below
+/// nextest's ten-minute termination in `.config/nextest.toml`, so the parent
+/// still reports the child's output instead of being killed silently.
+pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Run a re-executed child test with its output in files under `output_dir`.
+///
+/// Stdin is null and, on Unix, the child leads its own process group, which
+/// is killed once the child has exited or overrun. Pass the result to
+/// [`assert_child_test_passed`]. A child still running at
+/// [`CHILD_TEST_DEADLINE`] fails the caller with the host's load and
+/// everything the child printed so far, so an overrun on a saturated host is
+/// told apart from a hang at the point where it stopped.
+pub fn run_child_test(
+    command: &mut std::process::Command,
+    test_name: &str,
+    output_dir: &std::path::Path,
+) -> crate::process::CapturedOutput {
+    let stdout_path = output_dir.join("child-test-stdout.log");
+    let stderr_path = output_dir.join("child-test-stderr.log");
+    let create = |path: &std::path::Path| {
+        std::fs::File::create(path)
+            .unwrap_or_else(|error| panic!("create {} for `{test_name}`: {error}", path.display()))
+    };
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(create(&stdout_path))
+        .stderr(create(&stderr_path));
+    crate::process::bounded::isolate_process_group(command);
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}"));
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < CHILD_TEST_DEADLINE => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => break None,
+            Err(error) => panic!("wait for child test `{test_name}`: {error}"),
+        }
+    };
+    crate::process::bounded::kill_owned_group(child.id());
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let read = |path: &std::path::Path| std::fs::read(path).unwrap_or_default();
+    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
+    let Some(status) = status else {
+        panic!(
+            "child test `{test_name}` was still running after {:?} ({}); killed. \
+             Output so far:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            started.elapsed(),
+            host_load(),
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    };
+    crate::process::CapturedOutput {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+/// The host's load averages against its CPU count, for a fixture deadline's
+/// failure message: an overrun on a saturated host then names the pressure
+/// instead of reading as a defect in the code under test.
+pub fn host_load() -> String {
+    let cpus = std::thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get);
+    #[cfg(unix)]
+    {
+        let mut load = [0.0f64; 3];
+        // Safety: `getloadavg` writes at most the three samples requested into
+        // the array it is handed.
+        if unsafe { libc::getloadavg(load.as_mut_ptr(), 3) } == 3 {
+            return format!(
+                "host load average {:.1} / {:.1} / {:.1} over 1/5/15 min on {cpus} CPUs",
+                load[0], load[1], load[2]
+            );
+        }
+    }
+    format!("host load average unavailable; {cpus} CPUs")
+}
+
 /// Verify the exact entry point before starting a child that will be killed or
 /// stays alive until a readiness handshake, so it cannot emit a final summary.
 ///

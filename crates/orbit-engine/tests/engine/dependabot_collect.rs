@@ -20,7 +20,7 @@ use serde_json::json;
 
 const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
 const LOG_ENV: &str = "ORBIT_FAKE_GH_LOG";
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu

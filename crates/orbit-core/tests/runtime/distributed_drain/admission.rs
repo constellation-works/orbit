@@ -627,14 +627,16 @@ fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
         },
     )
     .unwrap();
-    pair.follower = OrbitRuntime::from_roots(
-        &pair.follower.global_root(),
-        &pair.follower_repo.join(".orbit"),
-    )
-    .unwrap()
-    .with_automation_machine_identity(Some(FOLLOWER.into()))
-    .with_coordination_write_owner(Some(OWNER.into()))
-    .with_drain_owner_transport(pair.wire.clone());
+    pair.follower = calm_host(
+        OrbitRuntime::from_roots(
+            &pair.follower.global_root(),
+            &pair.follower_repo.join(".orbit"),
+        )
+        .unwrap()
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone()),
+    );
     let job = pair
         .follower
         .show_job_catalog_entry("workspace_pull_pipeline")

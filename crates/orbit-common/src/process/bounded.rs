@@ -363,13 +363,13 @@ fn terminate(child: &mut Child, leader: u32) -> Result<(), OrbitError> {
 }
 
 #[cfg(unix)]
-fn isolate_process_group(command: &mut Command) {
+pub(crate) fn isolate_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
     command.process_group(0);
 }
 
 #[cfg(not(unix))]
-fn isolate_process_group(_command: &mut Command) {}
+pub(crate) fn isolate_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn prepare_pipes(
@@ -457,3 +457,9 @@ fn signal_owned_group(leader: u32, signal: i32) {
 
 #[cfg(not(unix))]
 fn signal_owned_group(_leader: u32, _signal: i32) {}
+
+/// SIGKILL what remains of the process group `leader` was spawned to lead by
+/// [`isolate_process_group`]; the caller still reaps `leader` itself.
+pub(crate) fn kill_owned_group(leader: u32) {
+    signal_owned_group(leader, kill_signal());
+}

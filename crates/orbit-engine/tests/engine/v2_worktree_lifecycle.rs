@@ -48,7 +48,7 @@ use tempfile::TempDir;
 /// Set in the isolated child that runs a test body.
 const CHILD_ENV: &str = "ORBIT_WORKTREE_LIFECYCLE_CHILD";
 /// Upper bound on one isolated test body, Git calls included.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const BASE: &str = "agent-main";
 
 // ---------------------------------------------------------------------------

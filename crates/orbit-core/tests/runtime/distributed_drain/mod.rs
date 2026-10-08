@@ -13,16 +13,16 @@
 //! therefore is cancelled and released with a host-suppressing environment
 //! failure. Tests of launched work explicitly advance the fixture's leaf.
 //!
-//! Host resource pressure is injected through the follower's resource probe.
+//! Both runtimes sample a pinned calm host; a test injects resource pressure
+//! through the follower's own probe.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -83,14 +83,11 @@ const FOLLOWER: &str = "hm_follower";
 const LEAF_JOB: &str = "task_claimed_pr_pipeline";
 const LOCAL_LEAF_JOB: &str = "task_claimed_local_pipeline";
 
-/// How long one isolated test may run before it is killed and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(180);
-
 /// Run `test` (declared in `module_path`, the caller's `module_path!()`)
 /// alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. `HOME/bin`
 /// leads the child's `PATH`, so a test can stand in for a provider CLI. The
-/// parent waits in-process up to [`CHILD_DEADLINE`] and reaps the child on
+/// parent waits under the shared child-test hang guard and reaps the child on
 /// any exit.
 fn isolated(module_path: &str, test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISTRIBUTED_DRAIN_CHILD";
@@ -98,8 +95,6 @@ fn isolated(module_path: &str, test: &str) -> bool {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout_path = home.path().join("stdout.log");
-    let stderr_path = home.path().join("stderr.log");
     // libtest names a test by its module path below the crate root; the
     // caller's `module_path!()` carries the concern module the test lives in.
     let qualified = format!(
@@ -120,49 +115,16 @@ fn isolated(module_path: &str, test: &str) -> bool {
         .env("PATH", path)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).unwrap())
-        .stderr(std::fs::File::create(&stderr_path).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .unwrap()
-            .read_to_string(&mut text)
-            .unwrap();
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    assert!(status.success(), "`{test}` failed:\n{stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child must run `{test}` itself:\n{stdout}"
+        .current_dir(home.path());
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     false
-}
-
-/// Kills and reaps the isolated child however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 /// The follower's route to the owner. Every call reaches the owner's tool
@@ -455,7 +417,16 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
         .with_automation_machine_identity(Some(machine.to_string()));
-    (runtime, repo)
+    (calm_host(runtime), repo)
+}
+
+/// `runtime` admitting against a pinned calm resource sample, never the live
+/// host: a loaded test host would otherwise throttle every admission
+/// (ORB-14659). Every fixture runtime, including one reopened over the same
+/// roots, goes through here; a test of throttling installs its own probe and
+/// drives the pressure.
+fn calm_host(runtime: OrbitRuntime) -> OrbitRuntime {
+    runtime.with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
 }
 
 /// An approved owner task scoped to `file`, ready for admission, on `crew`

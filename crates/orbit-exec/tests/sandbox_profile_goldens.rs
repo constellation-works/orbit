@@ -55,7 +55,7 @@ const OUTPUT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_OUTPUT";
 /// Set on the child only: the fixture root, which is also its `HOME` parent.
 const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_compiled_profiles_in_a_pinned_environment";
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 #[test]
 fn compiled_sandbox_profiles_match_their_goldens() {

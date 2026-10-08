@@ -39,6 +39,29 @@ const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
 
+/// A host resource sample well below every throttle mark.
+struct CalmHost;
+
+impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
+    fn sample(
+        &self,
+        disk_paths: &[std::path::PathBuf],
+    ) -> orbit_core::runtime::host_resource::HostResourceSample {
+        orbit_core::runtime::host_resource::HostResourceSample {
+            sampled_at: chrono::Utc::now(),
+            cpu_percent: Some(10.0),
+            memory_percent: Some(10.0),
+            disks: disk_paths
+                .iter()
+                .map(|path| orbit_core::runtime::host_resource::DiskSample {
+                    path: path.clone(),
+                    used_percent: Some(10.0),
+                })
+                .collect(),
+        }
+    }
+}
+
 fn isolated_run_observation(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -55,12 +78,8 @@ fn isolated_run_observation(test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let output = orbit_common::process::run_bounded_capped(
-        &mut command,
-        std::time::Duration::from_secs(60),
-        64 * 1024,
-    )
-    .unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut command, test, logs.path());
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }
@@ -1130,9 +1149,13 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
     use serde_json::json;
 
     let fixture = Fixture::init();
+    // The replacement's waves are classified against a pinned calm sample,
+    // never the live host: a loaded test host would throttle the wave and
+    // offer none of the work this test counts.
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
+            .unwrap()
+            .with_host_resource_probe(std::sync::Arc::new(CalmHost));
     let tasks: Vec<_> = (0..7)
         .map(|index| {
             let file = format!("task-{index}.rs");

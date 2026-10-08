@@ -127,6 +127,7 @@ impl CleanLeaf {
                     Arc::new(ToOwner(pair.wire.owner.clone())),
                 )
                 .unwrap();
+        let bound = calm_host(bound);
         let input = json!({
             "job_run_id": leaf, "run_id": leaf, "scope": "all",
             "workspace_path": follower, "base_sha": base, "base_ref": "origin/main",

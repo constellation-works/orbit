@@ -82,10 +82,11 @@ model = "fixture-b"
         },
     )
     .expect("seed shipped recovery job and activities");
-    let owner =
+    let owner = calm_host(
         OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &owner_repo.join(".orbit"))
             .unwrap()
-            .with_automation_machine_identity(Some(OWNER.into()));
+            .with_automation_machine_identity(Some(OWNER.into())),
+    );
     assert!(owner.read_run_state(&leaf).unwrap().is_none());
     let jobs = orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),

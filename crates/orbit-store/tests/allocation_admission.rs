@@ -76,7 +76,7 @@ mod dependencies;
 mod reservation_grants;
 
 /// How long one isolated test may run before it is killed and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent

@@ -30,6 +30,11 @@ fn append(path: &Path, bytes: &[u8]) {
         .unwrap();
 }
 
+/// How long a follower may take to emit an appended record. The wait ends as
+/// soon as the record arrives; the ceiling only bounds a missing one. A fixed
+/// five seconds was exceeded by the CLI's own startup on a saturated host.
+const RECORD_WAIT: Duration = Duration::from_secs(60);
+
 struct Follower {
     child: Child,
     lines: Receiver<String>,
@@ -88,17 +93,17 @@ impl Follower {
     }
 
     fn expect_record(&self, expected: &str, json: bool) {
-        let line = self
-            .lines
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or_else(|err| {
-                let mut stderr = &self.stderr;
-                let mut errors = String::new();
-                use std::io::{Read, Seek, SeekFrom};
-                stderr.seek(SeekFrom::Start(0)).unwrap();
-                stderr.read_to_string(&mut errors).unwrap();
-                panic!("missing {expected}: {err}; stderr: {errors}");
-            });
+        let line = self.lines.recv_timeout(RECORD_WAIT).unwrap_or_else(|err| {
+            let mut stderr = &self.stderr;
+            let mut errors = String::new();
+            use std::io::{Read, Seek, SeekFrom};
+            stderr.seek(SeekFrom::Start(0)).unwrap();
+            stderr.read_to_string(&mut errors).unwrap();
+            panic!(
+                "missing {expected} after {RECORD_WAIT:?} ({}): {err}; stderr: {errors}",
+                test_env::host_load()
+            );
+        });
         if json {
             let value: Value = serde_json::from_str(&line).expect("JSONL output");
             assert_eq!(value["fields"]["message"], expected);

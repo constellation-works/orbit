@@ -7,7 +7,6 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use orbit_common::{process, test_env};
 use orbit_store::compose::workspace_session_log_store;
@@ -32,8 +31,9 @@ fn isolated(test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let output = process::run_bounded_capped(&mut command, Duration::from_secs(120), 256 * 1024)
-        .expect("run isolated session-log fixture");
+    let output =
+        process::run_bounded_capped(&mut command, test_env::CHILD_TEST_DEADLINE, 256 * 1024)
+            .expect("run isolated session-log fixture");
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }

@@ -4,7 +4,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
 use std::process::Command;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use orbit_common::{process, test_env};
@@ -33,8 +32,9 @@ fn isolated(test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let output = process::run_bounded_capped(&mut command, Duration::from_secs(30), 64 * 1024)
-        .expect("run isolated automation fixture");
+    let output =
+        process::run_bounded_capped(&mut command, test_env::CHILD_TEST_DEADLINE, 64 * 1024)
+            .expect("run isolated automation fixture");
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     true
 }

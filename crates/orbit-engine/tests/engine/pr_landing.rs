@@ -59,7 +59,7 @@ const CHILD_ENV: &str = "ORBIT_PR_LANDING_CHILD";
 /// the forge state of the case being run.
 const SANDBOX_ENV: &str = "ORBIT_PR_LANDING_SANDBOX";
 /// Upper bound on one isolated test body, including the engine's poll sleeps.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 const BASE: &str = "agent-main";
 const BRANCH: &str = "orbit/landing-candidate";
