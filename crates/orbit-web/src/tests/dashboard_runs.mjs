@@ -200,7 +200,17 @@ renderRuns(sampleRuns);
 
 const limitNote = runsBody.querySelector('.runs-limit-note');
 assert.ok(limitNote, 'limit note renders when truncated');
-const loadMoreBtn = limitNote.querySelector('.runs-load-more');
+assert.match(diagCount.textContent, /\blimit 25\b/);
+assert.doesNotMatch(diagCount.textContent, /server limit/, 'a requested page size below the cap is not a server limit');
+for (const total of [100, undefined]) {
+  currentMeta = { limit: 75, total, truncated: true };
+  renderRuns(sampleRuns);
+  assert.match(diagCount.textContent, /\blimit 75\b/, 'the count retains the requested size after two pagination increments');
+  assert.doesNotMatch(diagCount.textContent, /server limit/, 'the requested size is identified even without a server total');
+}
+currentMeta = { limit: 25, total: 100, truncated: true };
+renderRuns(sampleRuns);
+const loadMoreBtn = runsBody.querySelector('.runs-limit-note').querySelector('.runs-load-more');
 assert.ok(loadMoreBtn, 'load more button exists in limit note');
 assert.equal(loadMoreBtn.textContent, 'Load more', 'load more button text is "Load more"');
 assert.equal(loadMoreBtn.disabled, false, 'load more button is not disabled initially');
@@ -273,6 +283,12 @@ currentMeta = { limit: 200, total: 5000, truncated: true };
 renderRuns(sampleRuns);
 const cappedNote = runsBody.querySelector('.runs-limit-note');
 assert.ok(cappedNote, 'limit note still explains the truncation at the server cap');
+assert.match(diagCount.textContent, /server limit 200\b/, 'a confirmed server cap is named in the count');
+currentMeta = { limit: 200, truncated: true };
+renderRuns(sampleRuns);
+assert.match(diagCount.textContent, /server limit 200\b/, 'a confirmed cap is also named when the total is unavailable');
+currentMeta = { limit: 200, total: 5000, truncated: true };
+renderRuns(sampleRuns);
 assert.equal(cappedNote.querySelector('.runs-load-more'), null, 'no Load more button once the server cap is reached');
 limitCapped = false;
 renderRuns(sampleRuns);

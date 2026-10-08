@@ -256,6 +256,8 @@ function setConfigSubtabImpl(ctx, name) {
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
+  const previousTab = document.querySelector(".tab.active");
+  const previousSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
   // Legacy routes: auto-drain was a destination, and before that an
@@ -358,6 +360,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "";
     indicator.style.width = `${activeTabEl.offsetWidth}px`;
     indicator.style.left = `${activeTabEl.offsetLeft}px`;
+    document.querySelector(".tabs").style.setProperty("--active-tab-width", `${activeTabEl.offsetWidth}px`);
   } else {
     indicator.style.display = "none";
   }
@@ -407,6 +410,14 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     hash = `#${top}`;
   }
   syncSkipLinkTarget();
+  // Reveal the current destination on initial deep links and history changes,
+  // as well as clicks. Phone subtabs scroll within the space beside their tab.
+  // A repeated hash normalization must not undo intervening keyboard scrolling.
+  const activeSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
+  if (activeTabEl !== previousTab || activeSubtab !== previousSubtab) {
+    activeSubtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    activeTabEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
   // A bookmarked legacy hash is rewritten in place so the address bar and any

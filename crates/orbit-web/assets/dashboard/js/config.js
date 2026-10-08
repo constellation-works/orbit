@@ -1103,16 +1103,16 @@ function crewRow(crew, payload) {
   ];
   const usedBy = el("span", { class: "config-crew-usage" }, uses.length
     ? uses.map((use) => el("span", { class: use.className, text: use.text }))
-    : [el("span", { class: "config-crew-use", text: NO_VALUE })]);
+    : [el("span", { class: "config-crew-use", text: EMPTY_ARRAY })]);
   const cells = el("div", { class: "config-crew-cells" }, [
     identity,
     providerCell(crew.provider),
-    el("span", { class: "config-value mono", text: displayValue(crew.model) }),
-    el("span", { class: "config-value mono", text: displayValue(crew.effort) }),
-    el("span", { class: "config-value mono", text: displayValue(crew.tags) }),
-    el("span", { class: `config-source ${crew.source}`, text: crew.source }),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.model) }),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.effort) }),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.tags) }),
+    el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
     usedBy,
-    editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : null,
+    editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : el("span", { text: EMPTY_ARRAY }),
   ]);
   node.appendChild(cells);
   const error = pendingError(node, `crews.${crew.name}`);
@@ -1137,6 +1137,10 @@ function crewPoolMembership(payload, name) {
     .map(([, label]) => label);
 }
 
+function displayCrewValue(value) {
+  return value == null || value === "" ? EMPTY_ARRAY : displayValue(value);
+}
+
 function providerCell(provider) {
   const cell = el("span", { class: "config-provider mono" });
   const dot = el("span", { class: "config-provider-dot" });
@@ -1144,7 +1148,7 @@ function providerCell(provider) {
   // keeps the neutral accent rather than inventing a colour.
   dot.style.background = `var(--ag-${String(provider || "").toLowerCase()}, var(--accent))`;
   cell.appendChild(dot);
-  cell.appendChild(el("span", { text: displayValue(provider) }));
+  cell.appendChild(el("span", { text: displayCrewValue(provider) }));
   return cell;
 }
 

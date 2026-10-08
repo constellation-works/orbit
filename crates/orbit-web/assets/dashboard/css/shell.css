@@ -382,7 +382,10 @@
     flex: 0 0 auto;
     flex-direction: row;
     flex-wrap: nowrap;
-    overflow: visible;
+    /* Keep the destination and any selected view visible together, including
+       views near the end of a long section such as Settings. */
+    max-width: calc(100vw - 28px - var(--active-tab-width, 140px));
+    overflow-x: auto;
     margin: 0;
     padding: 0 4px;
     gap: 2px;
