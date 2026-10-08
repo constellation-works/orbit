@@ -228,8 +228,13 @@ spec:
     # settlement commits its changes as the candidate's reviewer commit
     # (`review: <summary>`) over the untouched implementation commit and posts
     # the findings on the task. `reject` or `incomplete` refuses
-    # `review_gate_settle` (no retry): the failure handoff preserves the
-    # candidate and blocks the task without opening a PR.
+    # `review_gate_settle` (no retry): substantive failures preserve the
+    # candidate and block the task; evidence-only gaps hold it in progress.
+    # A reviewer timeout preserves partial work and allows one automatic
+    # backlog requeue per task/candidate tree; another timeout on that tree
+    # blocks with review_timeout_requeue_exhausted. Fresh runs have new review
+    # lineages and budgets, but rewriting the commit does not reset this bound.
+    # None of these outcomes opens a PR.
     - id: review_gate_admit
       retry:
         max_attempts: 3

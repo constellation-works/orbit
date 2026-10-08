@@ -15,13 +15,17 @@ use super::conflict::pipeline_checkpoint_string;
 use super::preserve::recorded_spec_digest;
 use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 
+/// A fresh run resets its review ledger; bound automatic continuations across
+/// those lineages by the preserved tree instead of the rewritten commit.
+const REVIEW_TIMEOUT_MAX_REQUEUES: usize = 1;
+
 /// Preserve a candidate the before-PR review gate refused to publish.
 ///
 /// Uncommitted reviewer changes are committed under the reviewer identity the
 /// gate admitted, never as implementer work; the implementation and reviewer
 /// commits stay as they are; the branch is pushed so partial fixes and
-/// evidence are recoverable; the task is blocked with the gate's escalation.
-/// No PR is opened.
+/// evidence are recoverable. The task records the bounded timeout requeue,
+/// evidence hold or substantive escalation. No PR is opened.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -71,6 +75,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         ));
     }
     let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let candidate_tree = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{tree}"])?;
     let pushed = push_batch_changes_inner(
         host,
         &review_gate_preservation_push_input(input, &head, workspace_path, &head_sha)?,
@@ -102,11 +107,33 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     let timed_out = task.status == TaskStatus::InProgress
         && failed_step_id == "review"
         && error_message.contains("review_timeout_incomplete:");
+    let timeout_requeues = if timed_out {
+        let tree_marker = format!("candidate_tree={candidate_tree}");
+        host.get_task_history(&task.id)?
+            .iter()
+            .filter(|entry| {
+                entry.event == "review_timeout_incomplete"
+                    && entry
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.split(", ").any(|field| field == tree_marker))
+            })
+            .count()
+    } else {
+        0
+    };
+    let timeout_exhausted = timed_out && timeout_requeues >= REVIEW_TIMEOUT_MAX_REQUEUES;
     let (status, event, decision) = if evidence_hold {
         (
             TaskStatus::InProgress,
             "review_awaiting_evidence",
             "awaiting_review_evidence",
+        )
+    } else if timeout_exhausted {
+        (
+            TaskStatus::Blocked,
+            "review_timeout_requeue_exhausted",
+            "blocked_review_gate",
         )
     } else if timed_out {
         (
@@ -121,9 +148,23 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             "blocked_review_gate",
         )
     };
+    let continuation = if evidence_hold {
+        "Awaiting named external evidence. Attach each matching passing result and its log to the task; once all checks arrive, delivery is requeued for review.".to_string()
+    } else if timeout_exhausted {
+        format!(
+            "Reviewer timed out again on the same candidate tree; automatic timeout requeue limit exhausted ({timeout_requeues}/{REVIEW_TIMEOUT_MAX_REQUEUES}). Delivery is blocked. Repair the candidate or record an operator decision before continuing; the partial report is retained."
+        )
+    } else if timed_out {
+        format!(
+            "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued ({}/{REVIEW_TIMEOUT_MAX_REQUEUES} automatic timeout requeues for this candidate tree). A fresh run starts a new review lineage with its captured budget; resuming the same lineage uses its remaining budget.",
+            timeout_requeues + 1,
+        )
+    } else {
+        "A substantive review escalation requires a recorded repair or scope decision.".to_string()
+    };
     let note = format!(
         "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
-         candidate={head_sha}, branch={head}; no PR was opened"
+         candidate={head_sha}, candidate_tree={candidate_tree}, branch={head}; no PR was opened; {continuation}"
     );
     let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
         "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
@@ -155,13 +196,6 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             leftover.join(", ")
         },
     );
-    let continuation = if evidence_hold {
-        "Awaiting named external evidence. Attach each matching passing result and its log to the task; once all checks arrive, delivery is requeued for review."
-    } else if timed_out {
-        "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued to continue the review within the remaining minute budget."
-    } else {
-        "A substantive review escalation requires a recorded repair or scope decision."
-    };
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
@@ -172,7 +206,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("{note}\n\n{continuation}\n\n{body}"),
+                message: format!("{note}\n\n{body}"),
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -186,6 +220,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "failed_step_id": failed_step_id,
         "branch": head,
         "head_sha": head_sha,
+        "candidate_tree": candidate_tree,
         "partial_repair_commit": partial_repair.map(|commit| commit.commit),
         "uncommitted_paths": leftover,
         "push": pushed,

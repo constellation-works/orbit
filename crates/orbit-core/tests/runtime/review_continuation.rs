@@ -4,6 +4,7 @@ use chrono::Utc;
 use orbit_core::TaskStatus;
 use orbit_engine::{
     ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost, TaskAutomationUpdate,
+    execute_deterministic_action,
 };
 use orbit_types::workflow::{
     JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
@@ -277,6 +278,180 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     completed["escalation"] = Value::Null;
     fixture.put_report(&completed);
     assert_eq!(fixture.settle().unwrap()["gate"], "passed");
+}
+
+#[test]
+fn fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let repo = fixture.repo.clone();
+    let git = |args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command.args(args).current_dir(&repo).output().unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let remote = fixture._root.path().join("remote.git");
+    git(&["init", "--bare", remote.to_str().unwrap()]);
+    git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+    let initial_commit = git(&["rev-parse", "HEAD"]);
+    let initial_tree = git(&["rev-parse", "HEAD^{tree}"]);
+    let mut previous_lineage = Value::Null;
+    let mut previous_commit = initial_commit.clone();
+
+    // Re-committing the same tree, then changing and restoring it, must not
+    // erase the earlier timeout's durable bound (F2026-10-131).
+    for (index, expected_status) in [
+        TaskStatus::Backlog,
+        TaskStatus::Blocked,
+        TaskStatus::Backlog,
+        TaskStatus::Blocked,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            match index {
+                1 => {
+                    git(&["commit", "--allow-empty", "-m", "rewritten candidate"]);
+                }
+                2 => {
+                    std::fs::write(fixture.repo.join("candidate.txt"), "repaired\n").unwrap();
+                    git(&["add", "candidate.txt"]);
+                    git(&["commit", "-m", "changed candidate tree"]);
+                }
+                _ => {
+                    git(&["restore", "--source", &initial_commit, "candidate.txt"]);
+                    git(&["add", "candidate.txt"]);
+                    git(&["commit", "-m", "restore original candidate tree"]);
+                }
+            }
+            let previous = fixture
+                .runtime
+                .show_job_run(fixture.input["job_run_id"].as_str().unwrap())
+                .unwrap();
+            let next = fixture
+                .runtime
+                .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
+                .unwrap();
+            assert!(next.retry_source_run_id.is_none());
+            assert_ne!(next.run_id, previous.run_id);
+            fixture
+                .runtime
+                .update_task_with_identity(
+                    &fixture.task_id,
+                    orbit_core::application::task::TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        job_run_id: Some(Some(next.run_id.clone())),
+                        ..Default::default()
+                    },
+                    Some("codex".into()),
+                    None,
+                )
+                .unwrap();
+            fixture.input["job_run_id"] = json!(next.run_id);
+        }
+        fixture.admit();
+        assert_ne!(fixture.input["admission"]["lineage_key"], previous_lineage);
+        previous_lineage = fixture.input["admission"]["lineage_key"].clone();
+        RuntimeHost::mark_job_run_running(
+            &fixture.runtime,
+            fixture.input["job_run_id"].as_str().unwrap(),
+            Utc::now(),
+            std::process::id(),
+        )
+        .unwrap();
+        fixture.put_report(&interrupted_report(&fixture));
+        let request = |event| ReviewerInvocationRequest {
+            run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
+            lineage_key: previous_lineage.as_str().unwrap().into(),
+            attempt_id: fixture.input["admission"]["attempt_id"]
+                .as_str()
+                .unwrap()
+                .into(),
+            event,
+        };
+        let bound = RuntimeHost::record_reviewer_invocation(
+            &fixture.runtime,
+            &request(ReviewerInvocationEvent::Started {
+                timeout_seconds: 1800,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        RuntimeHost::record_reviewer_invocation(
+            &fixture.runtime,
+            &request(ReviewerInvocationEvent::TimedOut {
+                runtime_seconds: bound,
+            }),
+        )
+        .unwrap();
+        let handoff = execute_deterministic_action(&fixture.runtime, "pr_failure_handoff", &json!({}), &json!({
+            "failed_step_id": "review", "error_code": "deterministic_action_refused",
+            "error_message": "review_timeout_incomplete: reviewer exceeded its wall clock",
+            "run_id": fixture.input["job_run_id"],
+            "job_input": {"task_ids": [fixture.task_id], "base_branch": "main", "base_sync": "local"},
+            "pipeline": {
+                "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
+                "sync_base": {"base": "main", "base_ref": "main"},
+                "review_gate_admit": fixture.input["admission"],
+            },
+        }), false, &Default::default(), None).unwrap();
+        assert_eq!(handoff["pr_created"], false);
+        if index != 2 {
+            assert_eq!(handoff["candidate_tree"], initial_tree);
+        } else {
+            assert_ne!(handoff["candidate_tree"], initial_tree);
+        }
+        if index > 0 {
+            assert_ne!(handoff["head_sha"], previous_commit);
+        }
+        previous_commit = handoff["head_sha"].as_str().unwrap().into();
+        let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+        let decision = history
+            .iter()
+            .rev()
+            .find(|entry| entry.to_status.is_some())
+            .unwrap();
+        assert_eq!(decision.to_status, Some(expected_status));
+        assert_eq!(
+            decision.event,
+            if expected_status == TaskStatus::Blocked {
+                "review_timeout_requeue_exhausted"
+            } else {
+                "review_timeout_incomplete"
+            },
+            "F2026-10-131: the second timeout on a tree must stop automatic requeues"
+        );
+        if expected_status == TaskStatus::Blocked {
+            assert!(
+                decision
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| !note.trim().is_empty()),
+                "a blocked timeout must retain a reason"
+            );
+        }
+        RuntimeHost::finalize_job_run(
+            &fixture.runtime,
+            fixture.input["job_run_id"].as_str().unwrap(),
+            JobRunState::Failed,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+            expected_status
+        );
+    }
 }
 
 #[test]
