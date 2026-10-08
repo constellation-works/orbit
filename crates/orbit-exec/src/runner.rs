@@ -68,6 +68,9 @@ pub struct ExecRequest {
 /// In particular, children inherit macOS Seatbelt restrictions and Linux
 /// descendants inherit the Bubblewrap mount namespace of an outer provider
 /// sandbox.
+///
+/// On Unix, termination signals are intercepted before spawning and forwarded
+/// to the previous disposition after the child's process group is cleaned up.
 pub fn run_process(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -75,7 +78,7 @@ pub fn run_process(
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let child = sandbox.spawn(req)?;
+    let child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,
@@ -127,6 +130,8 @@ pub struct SupervisedOutcome {
 ///
 /// If pipe or signal-handler setup, or the supervised wait, fails, supervision
 /// kills the child's process group and reaps the child before returning the error.
+/// The caller owns the interval before this function receives the child;
+/// [`run_process`] also protects its own spawn operation from termination signals.
 pub fn supervise_child(
     child: Child,
     timeout_ms: Option<u64>,
@@ -175,6 +180,7 @@ pub fn supervise_child_cancellable(
 ///
 /// If stdout relay setup or supervision fails after spawning, the runner
 /// kills the child's process group and reaps the child before returning the error.
+/// As with [`run_process`], termination signals are intercepted before spawning.
 pub fn run_process_streaming_stdout<T, F>(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -189,7 +195,7 @@ where
     let started = Instant::now();
     // Own cleanup before allocating the relay, and transfer the same guard
     // into supervision so no fallible setup operation can strand the child.
-    let mut child = crate::supervision::SupervisedChild::new(sandbox.spawn(req)?);
+    let mut child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
     let (stdout, relay) = stdout_relay(child.process_mut())?;
     let stdout_thread = thread::spawn(move || consume(stdout));
     let stdin_payload = match &req.stdin_mode {

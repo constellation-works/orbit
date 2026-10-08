@@ -9,19 +9,33 @@
 //! This lives in its own test binary so `raise(SIGINT)` cannot interrupt
 //! other `orbit-exec` unit tests sharing a process.
 
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_common::OrbitError;
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, NoSandbox, Sandbox, StdinMode, run_process,
+    run_process_streaming_stdout,
+};
+use wait_timeout::ChildExt;
 
 static FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
+static FORWARD_PROBE_PID: AtomicI32 = AtomicI32::new(0);
+static FORWARDED_CHILD_PROBE: AtomicI32 = AtomicI32::new(0);
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" fn record_previous_handler(signal: libc::c_int) {
+    let pid = FORWARD_PROBE_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        // SAFETY: kill with signal zero is an async-signal-safe existence
+        // probe for the fixture child, including an unreaped zombie.
+        FORWARDED_CHILD_PROBE.store(unsafe { libc::kill(pid, 0) }, Ordering::SeqCst);
+    }
     FORWARDED_SIGNAL.store(signal, Ordering::SeqCst);
 }
 
@@ -37,6 +51,190 @@ fn install_previous_handler(signal: libc::c_int) {
         libc::sigemptyset(&mut new_action.sa_mask);
         let rc = libc::sigaction(signal, &new_action, std::ptr::null_mut());
         assert_eq!(rc, 0, "install previous handler");
+    }
+}
+
+/// The sandbox spawn seam holds the actual post-spawn, pre-registration
+/// window open, without adding a production test hook. ORB-14720: a signal
+/// here must not take the previous disposition and orphan the child group.
+#[test]
+fn signals_in_the_spawn_window_are_pending_until_cleanup_and_reraised() {
+    let _lock = TEST_LOCK.lock().expect("signal test lock");
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        for streaming in [false, true] {
+            for before_spawn in [false, true] {
+                FORWARDED_SIGNAL.store(0, Ordering::SeqCst);
+                FORWARD_PROBE_PID.store(0, Ordering::SeqCst);
+                FORWARDED_CHILD_PROBE.store(0, Ordering::SeqCst);
+                install_previous_handler(signal);
+                let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+                let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+                let sandbox = PausedSpawn {
+                    before_spawn,
+                    ready: ready_tx,
+                    resume: Mutex::new(resume_rx),
+                    group: Mutex::new(SpawnGroup::default()),
+                };
+                let req = ExecRequest {
+                    program: "/bin/sleep".to_string(),
+                    args: vec!["60".to_string()],
+                    current_dir: None,
+                    timeout_ms: Some(15_000),
+                    stdin_mode: StdinMode::Null,
+                    environment_mode: EnvironmentMode::Inherit,
+                    debug: false,
+                };
+
+                let (result, forwarded_while_paused, peer_status) = thread::scope(|scope| {
+                    let runner = scope.spawn(|| {
+                        if streaming {
+                            run_process_streaming_stdout(&req, &sandbox, |mut stdout| {
+                                std::io::copy(&mut stdout, &mut std::io::sink())?;
+                                Ok(())
+                            })
+                            .map(|(result, ())| result)
+                        } else {
+                            run_process(&req, &sandbox)
+                        }
+                    });
+                    ready_rx
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("runner reached held spawn window");
+                    // SAFETY: signal only this dedicated test process, whose
+                    // previous handler records the eventual re-raise.
+                    assert_eq!(unsafe { libc::raise(signal) }, 0, "signal runner");
+                    let forwarded = FORWARDED_SIGNAL.load(Ordering::SeqCst);
+                    resume_tx.send(()).expect("release held spawn window");
+                    // Reap our separately waitable peer promptly, so a zombie
+                    // cannot keep the group present during supervisor cleanup.
+                    let mut peer = sandbox.group.lock().expect("fixture group").peer.take();
+                    let peer_status = peer.as_mut().and_then(|peer| {
+                        peer.wait_timeout(Duration::from_secs(10))
+                            .expect("wait for group peer")
+                    });
+                    sandbox.group.lock().expect("fixture group").peer = peer;
+                    (
+                        runner.join().expect("runner thread"),
+                        forwarded,
+                        peer_status,
+                    )
+                });
+
+                assert_eq!(
+                    forwarded_while_paused, 0,
+                    "ORB-14720: a pre-spawn or post-spawn signal must remain pending"
+                );
+                assert_eq!(
+                    FORWARDED_SIGNAL.load(Ordering::SeqCst),
+                    signal,
+                    "restore and re-raise after spawn failure or child cleanup"
+                );
+                if before_spawn {
+                    assert!(
+                        matches!(result, Err(OrbitError::Execution(message)) if message == "injected spawn failure")
+                    );
+                } else {
+                    assert_interrupted(&result.expect("interrupted runner result"), signal);
+                    assert_eq!(
+                        FORWARDED_CHILD_PROBE.load(Ordering::SeqCst),
+                        -1,
+                        "ORB-14720: the previous handler must observe an already reaped child"
+                    );
+                    let mut group = sandbox.group.lock().expect("fixture group");
+                    let pid = group.pid.expect("group leader pid");
+                    // SAFETY: WNOHANG probes the fixture's direct child only.
+                    let waited = unsafe {
+                        libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG)
+                    };
+                    assert_eq!(
+                        (waited, std::io::Error::last_os_error().raw_os_error()),
+                        (-1, Some(libc::ECHILD)),
+                        "ORB-14720: the runner must reap the child before forwarding"
+                    );
+                    assert_eq!(peer_status.and_then(|status| status.signal()), Some(signal));
+                    // SAFETY: signal zero probes this fixture's process group.
+                    let probe = unsafe { libc::killpg(pid as libc::pid_t, 0) };
+                    assert_eq!(
+                        (probe, std::io::Error::last_os_error().raw_os_error()),
+                        (-1, Some(libc::ESRCH)),
+                        "ORB-14720: no process group may survive the spawn-window interrupt"
+                    );
+                    group.pid = None;
+                }
+                FORWARD_PROBE_PID.store(0, Ordering::SeqCst);
+                let fresh = supervise_script("exit 0");
+                assert!(
+                    fresh.success,
+                    "the forwarded signal must not leak into a fresh spawn"
+                );
+            }
+        }
+    }
+}
+
+struct PausedSpawn {
+    before_spawn: bool,
+    ready: mpsc::SyncSender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+    group: Mutex<SpawnGroup>,
+}
+
+impl Sandbox for PausedSpawn {
+    fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        if !self.before_spawn {
+            let mut group = self.group.lock().expect("fixture group");
+            group.child = Some(NoSandbox.spawn(req)?);
+            let pid = group.child.as_ref().expect("group leader").id();
+            group.pid = Some(pid);
+            FORWARD_PROBE_PID.store(pid as i32, Ordering::SeqCst);
+            group.peer = Some(
+                Command::new("/bin/sleep")
+                    .arg("60")
+                    .process_group(pid as i32)
+                    .spawn()
+                    .expect("peer in child process group"),
+            );
+        }
+        self.ready.send(()).expect("announce held spawn window");
+        self.resume
+            .lock()
+            .expect("resume receiver")
+            .recv_timeout(Duration::from_secs(30))
+            .expect("release spawn window");
+        if self.before_spawn {
+            return Err(OrbitError::Execution("injected spawn failure".to_string()));
+        }
+        Ok(self
+            .group
+            .lock()
+            .expect("fixture group")
+            .child
+            .take()
+            .expect("group leader"))
+    }
+}
+
+#[derive(Default)]
+struct SpawnGroup {
+    pid: Option<u32>,
+    child: Option<Child>,
+    peer: Option<Child>,
+}
+
+impl Drop for SpawnGroup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            // SAFETY: only the unreleased fixture group is signalled.
+            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+        }
+        for child in self.child.iter_mut().chain(self.peer.iter_mut()) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

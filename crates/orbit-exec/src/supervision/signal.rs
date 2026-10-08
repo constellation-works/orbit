@@ -28,7 +28,7 @@ struct PreviousHandlers {
 }
 
 /// Process-wide SIGINT/SIGTERM intercept for the duration of one supervised
-/// wait. Install is refcounted: the first live guard swaps in the handlers,
+/// spawn and wait. Install is refcounted: the first live guard swaps in the handlers,
 /// and the last drop restores the previous dispositions and re-raises the
 /// captured signal so a long-running server's original handler (tokio
 /// `ctrl_c` / SIGTERM, or SIG_DFL) still runs. The install mutex is held
@@ -49,16 +49,21 @@ pub(super) struct SignalHandlerGuard {
 }
 
 impl SignalHandlerGuard {
-    /// `child_pid` is the supervised child's pid; it is registered for
-    /// handler-side fan-out only when it currently leads its own process group.
-    pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
+    /// Install before spawning: a signal in the spawn/registration window
+    /// stays pending until the child is registered and the waiter cleans up.
+    pub(super) fn install() -> Result<Self, OrbitError> {
         acquire_handlers()?;
-        let slot = if is_child_process_group_leader(child_pid) {
+        Ok(Self { slot: None })
+    }
+
+    /// Register only a live group leader. The waiter's pending-signal check
+    /// also covers signals whose handler ran before this slot was populated.
+    pub(super) fn register_process_group(&mut self, child_pid: u32) {
+        self.slot = if is_child_process_group_leader(child_pid) {
             register_pgid(child_pid)
         } else {
             None
         };
-        Ok(Self { slot })
     }
 
     /// Stop fanning signals out to the child's group. Call as soon as the
