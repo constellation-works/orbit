@@ -111,6 +111,25 @@ pub(super) mod filesystem {
         result: &mut TmpGcResult,
         check_runs: impl FnOnce() -> Result<(), OrbitError>,
     ) -> Result<(), OrbitError> {
+        collect_inner(checkout, result, check_runs, || {})
+    }
+
+    #[cfg(test)]
+    pub(in crate::application::gc) fn collect_with_after_listing(
+        checkout: &Path,
+        result: &mut TmpGcResult,
+        check_runs: impl FnOnce() -> Result<(), OrbitError>,
+        after_listing: impl FnMut(),
+    ) -> Result<(), OrbitError> {
+        collect_inner(checkout, result, check_runs, after_listing)
+    }
+
+    fn collect_inner(
+        checkout: &Path,
+        result: &mut TmpGcResult,
+        check_runs: impl FnOnce() -> Result<(), OrbitError>,
+        mut after_listing: impl FnMut(),
+    ) -> Result<(), OrbitError> {
         // Pin each directory separately. Neither `.orbit`, `tmp`, nor any
         // descendant can redirect a traversal through a symlink after a check.
         let root_name = CString::new(checkout.as_os_str().as_bytes())
@@ -134,9 +153,18 @@ pub(super) mod filesystem {
         };
         let mut names = names(&tmp)?;
         names.sort();
+        after_listing();
         // Finish the entire no-follow measurement before removing anything.
         for name in &names {
-            let bytes = walk(&tmp, name, false)?.bytes;
+            let tally = if result.dry_run {
+                let Some(tally) = measure(&tmp, name, &mut after_listing)? else {
+                    continue;
+                };
+                tally
+            } else {
+                walk(&tmp, name, false)?
+            };
+            let bytes = tally.bytes;
             result.bytes_reclaimable = result.bytes_reclaimable.saturating_add(bytes);
             result.reports.push(TmpGcReport {
                 path: result
@@ -239,6 +267,32 @@ pub(super) mod filesystem {
         name: &CStr,
         delete: bool,
     ) -> io::Result<Tally> {
+        let Some(tally) = walk_inner(parent, name, delete, false, &mut || {})? else {
+            return Err(io::Error::other(
+                "strict scratch walk unexpectedly skipped a missing entry",
+            ));
+        };
+        Ok(tally)
+    }
+
+    /// Measure one preview entry, ignoring it if it disappears at any point
+    /// in its no-follow traversal. Strict walks used by deletion and age-based
+    /// collection keep reporting the I/O error.
+    fn measure(
+        parent: &OwnedFd,
+        name: &CStr,
+        after_listing: &mut impl FnMut(),
+    ) -> io::Result<Option<Tally>> {
+        walk_inner(parent, name, false, true, after_listing)
+    }
+
+    fn walk_inner(
+        parent: &OwnedFd,
+        name: &CStr,
+        delete: bool,
+        skip_vanished: bool,
+        after_listing: &mut impl FnMut(),
+    ) -> io::Result<Option<Tally>> {
         let mut metadata = MaybeUninit::<libc::stat>::uninit();
         // SAFETY: parent is live, name is NUL-terminated, and fstatat writes
         // the stat only on success. AT_SYMLINK_NOFOLLOW measures the link itself.
@@ -251,7 +305,11 @@ pub(super) mod filesystem {
             )
         } < 0
         {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if skip_vanished && error.kind() == io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(error);
         }
         // SAFETY: fstatat succeeded and initialized metadata.
         let metadata = unsafe { metadata.assume_init() };
@@ -265,9 +323,32 @@ pub(super) mod filesystem {
         );
         let mut tally = Tally { bytes: 0, newest };
         if is_directory {
-            let directory = open_directory(parent.as_raw_fd(), name)?;
-            for child in names(&directory)? {
-                let child = walk(&directory, &child, delete)?;
+            let directory = match open_directory(parent.as_raw_fd(), name) {
+                Ok(directory) => directory,
+                Err(error) if skip_vanished && error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
+            let children = match names(&directory) {
+                Ok(children) => children,
+                Err(error) if skip_vanished && error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
+            after_listing();
+            for child_name in children {
+                let Some(child) = walk_inner(
+                    &directory,
+                    &child_name,
+                    delete,
+                    skip_vanished,
+                    after_listing,
+                )?
+                else {
+                    continue;
+                };
                 tally.bytes = tally.bytes.saturating_add(child.bytes);
                 tally.newest = tally.newest.max(child.newest);
             }
@@ -286,6 +367,6 @@ pub(super) mod filesystem {
                 return Err(io::Error::last_os_error());
             }
         }
-        Ok(tally)
+        Ok(Some(tally))
     }
 }
