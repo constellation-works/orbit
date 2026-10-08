@@ -376,14 +376,21 @@
   overflow-x: auto;
 }
 
-/* Below tablet width a table that still overflows keeps its first column
-   pinned and fades the scrolling edges, so the sideways scroll is visible.
-   The fade is the classic scroll-shadow: `local` covers hide each shadow once
-   the scroller is at that edge. Cells need an opaque background so the
-   scrolled columns do not show through the pinned one. */
-@media (max-width: 768px) {
-  .scoreboard-table-wrap,
+/* Scrollable tables fade their edges to show the sideways scroll. Pinned
+   cells need an opaque background so scrolled columns do not show through. */
+@media (max-width: 1183px) {
   #runs-body {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
+}
+
+@media (max-width: 768px) {
+  .scoreboard-table-wrap {
     background:
       linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
       linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,

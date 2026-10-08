@@ -826,6 +826,10 @@ async function assertNarrowTableLayouts(page) {
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/runs'));
   await refresh();
   await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
+  // Earlier keyboard coverage intentionally leaves the Failed filter active;
+  // restore All so this fixture's live run and its Cancel control are present.
+  await page.locator('#runs-body .runs-filter-button').first().click();
+  await page.waitForFunction(() => document.querySelectorAll('#runs-body .runs-row[data-key^="run-"]').length === 3);
   if (await scrolls('runs-body') || await pageOverflow()) throw new Error('Runs must not scroll sideways at 375px');
   await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
   await page.screenshot({ path: path.join(evidence, 'runs-375.png'), fullPage: true });
@@ -851,6 +855,47 @@ async function assertNarrowTableLayouts(page) {
     if (!pinned.scrolls) throw new Error(`Runs must still scroll sideways at ${width}px for this check to mean anything`);
     if (!(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
       throw new Error(`Runs first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
+    }
+    await page.screenshot({ path: path.join(evidence, `runs-${width}.png`), fullPage: true });
+  }
+  for (const width of [769, 900, 1024, 1100]) {
+    await page.setViewportSize({ width, height: 900 });
+    const reachable = await page.evaluate(() => {
+      const wrap = document.getElementById('runs-body');
+      const rows = [...wrap.querySelectorAll('.runs-row[data-key^="run-"]')];
+      const cancel = wrap.querySelector('.run-cancel');
+      const row = cancel?.closest('.runs-row') ?? rows[0];
+      const cell = row.querySelector('.state');
+      const overflows = wrap.scrollWidth > wrap.clientWidth + 1;
+      const initialPosition = getComputedStyle(cell).position;
+      const edge = getComputedStyle(wrap).backgroundImage.includes('gradient');
+      wrap.scrollLeft = wrap.scrollWidth;
+      if (cancel) cancel.focus();
+      const wrapRect = wrap.getBoundingClientRect();
+      const cancelRect = cancel?.getBoundingClientRect();
+      const stateRect = cell.getBoundingClientRect();
+      const topmost = document.elementFromPoint(stateRect.left + 4, (stateRect.top + stateRect.bottom) / 2);
+      return {
+        overflows,
+        initialPosition,
+        edge,
+        cancelExists: Boolean(cancel),
+        cancelEnabled: cancel && !cancel.disabled,
+        cancelFocused: cancel && document.activeElement === cancel,
+        cancelVisible: cancelRect && cancelRect.width > 0
+          && cancelRect.left >= wrapRect.left - 0.5 && cancelRect.right <= wrapRect.right + 0.5,
+        statePinned: Math.abs(stateRect.left - wrapRect.left) < 1.5,
+        statePainted: cell.contains(topmost),
+        runStates: rows.map(item => item.querySelector('.state')?.textContent.trim()),
+        cancelCount: wrap.querySelectorAll('.run-cancel').length,
+      };
+    });
+    if (!reachable.overflows) throw new Error(`Runs must still overflow at ${width}px for the pinned-column check to mean anything`);
+    if (reachable.initialPosition !== 'sticky' || !reachable.edge || !reachable.statePinned || !reachable.statePainted) {
+      throw new Error(`Runs State column or scroll edge missing at ${width}px: ${JSON.stringify(reachable)}`);
+    }
+    if (!(reachable.cancelExists && reachable.cancelEnabled && reachable.cancelFocused && reachable.cancelVisible)) {
+      throw new Error(`Live-run Cancel control is not reachable through the marked scroller at ${width}px: ${JSON.stringify(reachable)}`);
     }
     await page.screenshot({ path: path.join(evidence, `runs-${width}.png`), fullPage: true });
   }
