@@ -299,6 +299,18 @@ strict: a broader check such as "runtime tests and formatting" cannot replace
 "runtime tests", even with an identical command. Coverage or command-superset
 claims do not establish a replacement relationship.
 
+A pass can still leave a path unexecuted [ORB-14334]. Inside an agent lane a
+test of Orbit's own sandbox cannot apply a nested sandbox, so it prints a
+`DEFERRED: …` notice past libtest's output capture and returns. The run still
+reports success. The reviewer lists each such line in the record's `deferred`.
+A record that passed with a nonblank `deferred` reads as `not_run` wherever a
+pass counts: it is no required pass (`validation_incomplete`, naming the
+notice), it replaces no superseded attempt, it establishes no host-required
+command, and delivery coverage does not count it. The reviewer names the
+deferred test as `host_sandbox_test` evidence instead. A result from a host
+that executed the path, such as owner fulfilment below, stands in for the
+record and clears its notices.
+
 A negative control is bound to more than its label [ORB-14192]: an
 `expected_failure` record names its `control` kind — `pre_fix` (the
 reproduction on the pre-fix tree), `superseded_assertion` or
@@ -593,7 +605,7 @@ the requirement's kind:
 | `hosted_ci` | `operator` |
 | `native_os` | `operator` |
 | `codeql` | `operator`, or `system` (owner fulfilment, below) |
-| `host_sandbox_test` | `operator`, or the claimed host's own settlement (below) |
+| `host_sandbox_test` | `operator`, `system` (Linux owner fulfilment, below), or the claimed host's own settlement (below) |
 
 An `operator` write is a human actor on the bare CLI or the dashboard with no
 agent identity, whose process declares no agent envelope or managed run. A
@@ -634,20 +646,39 @@ A claimed leaf's hold reaches the owner. Settlement pushes the held candidate
 to `orbit-evidence/<branch>` on `origin`, apart from the delivery branch. The
 leaf's settlement then releases the claim with the hold, so the owner keeps
 the task in progress under `review_awaiting_evidence`; it does not block it.
-A hold whose every requirement is `codeql` is fulfilled by a Linux owner
-(`review_evidence_fulfilment_pipeline`, one run at a time). The run re-checks
-that the hold is current and gates on free disk. It admits only
-`scripts/codeql-rust-local.sh` with its own options, so a reviewer-authored
-command can never run anything else. It then runs that script without a shell
-in a standalone shallow checkout of the fetched held commit, which holds its
-own Git metadata. A complete run with an
-empty SARIF attaches the results above; anything else attaches only the log,
-and the hold stays with a typed reason. Every attempt is audited as
-`review.evidence_fulfilment`.
+A hold whose every requirement is `codeql` or a `linux` `host_sandbox_test`
+is fulfilled by a Linux owner whose host can create Bubblewrap namespaces
+(`review_evidence_fulfilment_pipeline`, one run at a time). The tick stands
+down on another platform, a follower or worker, or a host without namespaces.
+The run first admits every command against its kind's allowlist:
+
+- `codeql`: only `scripts/codeql-rust-local.sh` with its own options and one
+  query selector;
+- `host_sandbox_test` [ORB-14334]: the same grammar as a claimed leaf's
+  settlement below, an exact owner-required command or
+  `cargo test -p <crate> --test <target> [<filter>]` using only
+  `[A-Za-z0-9._/:@+=-]` and spaces.
+
+One command outside its allowlist refuses the whole hold with a typed reason
+(`command_not_allowed`, `shell_metacharacter`, `argument_not_allowed`) before
+any host gate, so nothing runs and only the refusal's log is attached. The run
+then re-checks that the hold is current, gates on free disk, and runs each
+command without a shell at the fetched held commit. CodeQL runs in a
+standalone shallow checkout holding its own Git metadata, confined by
+Bubblewrap. A sandbox test runs in a detached worktree with the validation
+environment and a run-local build target, both removed afterwards, outside any
+sandbox: the namespaces it tests cannot nest inside another Bubblewrap
+sandbox. It is judged as a claimed leaf's run is (below). A complete CodeQL
+run with an empty SARIF, or a sandbox test that executed and passed, attaches
+the results above as `system`, with `os` for a test; anything else attaches
+only the log, and the hold stays with a typed reason (`self_skipped`,
+`no_tests_ran`, `test_failed`, `sandbox_unavailable`, …). Every attempt is
+audited as `review.evidence_fulfilment` and commented on the task.
 The owner already runs its required validation on foreign heads under the
-same host trust, so the fulfilment is no new trust in the candidate's own
-script. Details are in the
-[CodeQL runbook](../../runbooks/codeql-local.md#owner-fulfilment).
+same host trust and with no sandbox, so the fulfilment is no new trust in the
+candidate's own script or tests. Details are in the
+[CodeQL runbook](../../runbooks/codeql-local.md#owner-fulfilment) and the
+[review gate runbook](../../runbooks/review-gate.md).
 
 A claimed leaf fulfils its own `host_sandbox_test` requirements before it
 holds. Every agent lane runs inside Orbit's sandbox, where a nested one cannot
@@ -685,8 +716,9 @@ accepts the handoff only if all of the following hold: each passing record is
 pinned and no other ref is; the log is nonempty; the result is a passed
 `host_sandbox_test` for the record's command and OS on the head tree; and the
 certificate holds a passed required record for that command. A held
-`host_sandbox_test` that the leaf's host could not fulfil waits for an
-operator's result.
+`linux` `host_sandbox_test` that the leaf's host could not fulfil, or that a
+local review deferred, is fulfilled by a Linux owner as above; a `macos` one
+waits for an operator's result.
 
 A reviewer may forget to name owed evidence, or report a check as passed
 when its host could not have run it. To close that gap, the workspace
@@ -929,7 +961,7 @@ certificates, ledgers, and landings stay readable. An older binary cannot settle
 in-flight gate; drain gated runs with a supporting binary before downgrading.
 External evidence attached before writer classes has none, so an in-flight
 hold waits for an accepted writer to attach it again; owner fulfilment does
-so for a `codeql` hold on its next tick.
+so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ## 10. Concerns & Honest Limitations
 
@@ -955,6 +987,10 @@ so for a `codeql` hold on its next tick.
   environment excludes it, but the environment is not authentication. A
   process that removed both and could still write the task store directly
   would be classed as an operator.
+- An owner-fulfilled `host_sandbox_test` runs the candidate's tests with no
+  sandbox around them, because Orbit's sandbox tests cannot run inside one.
+  The allowlist bounds the command, not what the candidate's test code does;
+  the trust is the same as required validation's.
 - Final recovery may `resume` a rejected run from a step of the failed
   phase. That is an operator-grade decision by the recovery crew, not a
   second review round the pipeline schedules.
@@ -973,6 +1009,7 @@ so for a `codeql` hold on its next tick.
 - [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
+- [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

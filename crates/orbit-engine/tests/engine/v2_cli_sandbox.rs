@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+#[cfg(not(target_os = "linux"))]
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -187,6 +188,9 @@ fn platform_sandbox() -> Option<ExecutorSandboxKind> {
         .ok_or_else(|| "sandbox-exec is unavailable".to_string());
     available
         .inspect_err(|reason| {
+            #[cfg(target_os = "linux")]
+            orbit_exec::report_bwrap_deferral("v2 CLI plugin broker check", reason);
+            #[cfg(not(target_os = "linux"))]
             let _ = writeln!(
                 std::io::stderr(),
                 "skipped the plugin broker check: the agent sandbox is unavailable: {reason}"

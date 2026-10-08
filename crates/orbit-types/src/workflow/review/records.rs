@@ -67,6 +67,26 @@ impl ReviewValidation {
             .map(str::trim)
             .filter(|id| !id.is_empty())
     }
+
+    /// The record's first non-empty deferral notice, when the run deferred
+    /// a sandbox-confined path [ORB-14334].
+    pub fn deferral(&self) -> Option<&str> {
+        self.deferred
+            .iter()
+            .map(|notice| notice.trim())
+            .find(|notice| !notice.is_empty())
+    }
+
+    /// What the run established about its check. A pass that deferred a
+    /// sandbox-confined path never executed it, so it reads as `not_run`:
+    /// it neither satisfies a required check nor replaces one [ORB-14334].
+    pub fn executed_outcome(&self) -> ValidationOutcome {
+        if self.outcome == ValidationOutcome::Passed && self.deferral().is_some() {
+            ValidationOutcome::NotRun
+        } else {
+            self.outcome
+        }
+    }
 }
 
 /// How `records` and `retired` fail to account for the earlier required

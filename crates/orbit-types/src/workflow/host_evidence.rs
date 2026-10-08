@@ -269,8 +269,14 @@ const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
     "No permissions to create a new namespace",
 ];
 
+/// The line prefix a test prints when it returns without exercising its
+/// sandbox-confined path because this host cannot apply the sandbox
+/// [ORB-14334]. A reviewer records each such line in the validation
+/// record's `deferred`.
+pub const HOST_TEST_DEFERRED_PREFIX: &str = "DEFERRED:";
+
 /// Line prefixes a test prints when it returns without exercising its path.
-const SKIP_PREFIXES: &[&str] = &["SKIP:", "DEFERRED:", "skipping:", "skipping "];
+const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];
 
 /// Judge one host run from its full output. Returns the number of tests the
 /// libtest summaries report passed, or why the run is not passing evidence.

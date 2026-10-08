@@ -311,6 +311,7 @@ fn record(
         control: None,
         sources: Vec::new(),
         mutation_target: Vec::new(),
+        deferred: Vec::new(),
         baseline: None,
     }
 }
@@ -1800,5 +1801,86 @@ fn missing_host_snapshot_is_not_an_empty_requirement_list() {
     assert_eq!(
         validation_evidence(&scoped_passes(), &context),
         Err(ValidationDefect::HostContractMissing)
+    );
+}
+
+/// A Bubblewrap-gated test run inside an agent lane, whose own sandbox
+/// refuses a nested one: the test printed its deferral and returned, so the
+/// run passed without executing the confined path [ORB-14334].
+const CONFINED: &str =
+    "cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment";
+const DEFERRAL: &str = "DEFERRED: bubblewrap unavailable: \
+     bwrap_child_gets_only_the_supplied_environment: No permissions to create a new namespace";
+
+fn deferred(mut record: ReviewValidation, notices: &[&str]) -> ReviewValidation {
+    record.deferred = notices.iter().map(|notice| (*notice).to_string()).collect();
+    record
+}
+
+#[test]
+fn a_pass_that_deferred_its_confined_path_never_counts_as_executing_it() {
+    let lane_run = deferred(required(CONFINED, None, true), &[DEFERRAL]);
+    let records = vec![required("make ci-fast", None, true), lane_run.clone()];
+    assert_eq!(lane_run.executed_outcome(), ValidationOutcome::NotRun);
+    assert_eq!(
+        validation_evidence(&records, &ValidationContext::default()),
+        Err(ValidationDefect::RequiredDeferred {
+            command: CONFINED.to_string(),
+            notice: DEFERRAL.to_string(),
+        })
+    );
+    assert_eq!(
+        certificate_acceptable(&certificate(records)),
+        Err(ReviewInvalidation::ValidationIncomplete),
+        "a certificate cannot spend a deferred-only pass as coverage"
+    );
+
+    // Nor does it replace a superseded attempt of the same check.
+    assert_eq!(
+        validation_evidence(
+            &[
+                required("make ci-fast", None, true),
+                superseded(CONFINED, None),
+                lane_run.clone(),
+            ],
+            &ValidationContext::default(),
+        ),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: CONFINED.to_string(),
+        })
+    );
+}
+
+#[test]
+fn a_run_that_executed_its_confined_path_stays_coverage() {
+    for (name, notices) in [
+        ("no deferral", &[][..]),
+        ("only blank notices", &["", "  "][..]),
+    ] {
+        let records = vec![
+            required("make ci-fast", None, true),
+            deferred(required(CONFINED, None, true), notices),
+        ];
+        assert_eq!(
+            validation_evidence(&records, &ValidationContext::default()),
+            Ok(()),
+            "{name}"
+        );
+        assert_eq!(
+            certificate_acceptable(&certificate(records)),
+            Ok(()),
+            "{name}"
+        );
+    }
+    // A failed run that also deferred is still a failure, not a deferral.
+    assert_eq!(
+        validation_evidence(
+            &[deferred(required(CONFINED, None, false), &[DEFERRAL])],
+            &ValidationContext::default(),
+        ),
+        Err(ValidationDefect::RequiredNotPassed {
+            command: CONFINED.to_string(),
+            outcome: ValidationOutcome::Failed,
+        })
     );
 }

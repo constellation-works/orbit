@@ -47,6 +47,28 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
     probe_bwrap_with(&SETTLED, probe_bwrap_now)
 }
 
+/// The line a test prints when it returns without exercising its
+/// Bubblewrap-confined path because this host cannot create the namespaces,
+/// as inside an agent lane whose own sandbox refuses a nested one
+/// [ORB-14334]. Host evidence judges a run that printed it as skipped, and a
+/// reviewer lists it in the validation record's `deferred`, so a run that
+/// deferred never counts as executing the path.
+pub fn bwrap_deferral_notice(test: &str, detail: &str) -> String {
+    format!(
+        "{} bubblewrap unavailable: {test}: {}",
+        orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX,
+        detail.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
+}
+
+/// Write [`bwrap_deferral_notice`] straight to this process's stderr, past
+/// the test harness's output capture, so a passing test's deferral shows in
+/// any run's output, with or without `--nocapture`.
+pub fn report_bwrap_deferral(test: &str, detail: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{}", bwrap_deferral_notice(test, detail));
+}
+
 /// Recheck the host after onboarding changes without consulting dispatch's
 /// successful-probe memo. This also reports the result for the current user,
 /// not for the privileged package-manager subprocess.

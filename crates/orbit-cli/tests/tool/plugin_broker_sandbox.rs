@@ -13,8 +13,6 @@ use crate::{fixture_crew, git_repo};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
-use std::io::Write;
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
@@ -42,10 +40,9 @@ const CHILD: &str = "ORBIT_SANDBOX_BROKER_FIXTURE";
 fn cli_and_mcp_reach_host_backends_with_authoritative_identity() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
-        let _ = writeln!(
-            std::io::stderr(),
-            "skipped broker sandbox integration: {}",
-            probe.detail
+        orbit_exec::report_bwrap_deferral(
+            "cli_and_mcp_reach_host_backends_with_authoritative_identity",
+            &probe.detail,
         );
         return;
     }

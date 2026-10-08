@@ -174,7 +174,14 @@ fn normalize_report(report: &mut Value) {
                     ("skipped", "not_run"),
                 ],
             );
-            for optional in ["id", "role", "control", "sources", "mutation_target"] {
+            for optional in [
+                "id",
+                "role",
+                "control",
+                "sources",
+                "mutation_target",
+                "deferred",
+            ] {
                 if record.get(optional).is_some_and(Value::is_null) {
                     record.remove(optional);
                 }
@@ -185,7 +192,7 @@ fn normalize_report(report: &mut Value) {
             }
             normalize_label_field(record, "role", &[]);
             normalize_label_field(record, "control", &[]);
-            for list in ["sources", "mutation_target"] {
+            for list in ["sources", "mutation_target", "deferred"] {
                 if let Some(Value::String(path)) = record.get(list) {
                     let paths = Value::Array(vec![Value::String(path.clone())]);
                     record.insert(list.to_string(), paths);

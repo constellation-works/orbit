@@ -64,6 +64,7 @@ fn record(id: &str, command: &str, outcome: ValidationOutcome) -> ReviewValidati
         control: None,
         sources: Vec::new(),
         mutation_target: Vec::new(),
+        deferred: Vec::new(),
         baseline: None,
     }
 }
@@ -471,7 +472,8 @@ fn fulfil_or_attach(
     root: &Path,
 ) {
     let log_artifact = "evidence/codeql-rust-linux.log.json";
-    if orbit_exec::probe_bwrap().available {
+    let probe = orbit_exec::probe_bwrap();
+    if probe.available {
         let resources = owner.paths().global_dir.join("resources");
         std::fs::create_dir_all(resources.join("activities")).unwrap();
         std::fs::create_dir_all(resources.join("jobs")).unwrap();
@@ -507,6 +509,10 @@ fn fulfil_or_attach(
         assert_eq!(log["tested_head"], hold.candidate.commit.as_str());
         return;
     }
+    orbit_exec::report_bwrap_deferral(
+        "owner CodeQL fulfilment (an operator attaches the result instead)",
+        &probe.detail,
+    );
     let result = orbit_types::workflow::ReviewExternalEvidence {
         schema_version: 1,
         attempt_id: hold.attempt_id.clone(),

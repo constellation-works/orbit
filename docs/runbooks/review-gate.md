@@ -82,12 +82,13 @@ the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
 
-A hold whose every requirement is kind `codeql` is fulfilled by a Linux
-owner without an operator. The owner runs the named
-`scripts/codeql-rust-local.sh` command at the held commit and attaches the
-result and its log. A failed or incomplete run attaches only the log, with a
-typed reason. Each attempt is audited as `review.evidence_fulfilment`. See
-[owner fulfilment](codeql-local.md#owner-fulfilment).
+A hold whose every requirement is kind `codeql` or a `linux`
+`host_sandbox_test` is fulfilled by a Linux owner without an operator. The
+owner runs each named command at the held commit and attaches the result and
+its log. A failed or incomplete run attaches only the log, with a typed
+reason. Each attempt is audited as `review.evidence_fulfilment`. See
+[owner fulfilment](codeql-local.md#owner-fulfilment) for CodeQL and
+[host sandbox tests](#host-sandbox-tests) below.
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review, unless the hold names only owed
@@ -166,6 +167,14 @@ command passes, admission lifts the hold. The next delivery resumes the
 preserved candidate (`resumed_validated`) without the implementer and admits
 a fresh review. A claimed leaf's resume runs the implementer again.
 
+### Host sandbox tests
+
+Orbit's own sandbox tests cannot run inside an agent lane, whose sandbox
+refuses a nested one. Inside the lane they print a `DEFERRED: …` notice and
+pass without executing their confined path. The reviewer copies each notice
+into the record's `deferred`, and such a pass never counts as running that
+path: settlement reads it as `not_run` (`validation_incomplete`).
+
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
 the agent sandbox when it settles
@@ -198,12 +207,54 @@ orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review
   | jq '.content | fromjson | {owed_evidence, resumed_hold_attempt}'
 ```
 
+A `linux` requirement that is still held — the review ran locally, or the
+claimed leaf's host could not run it — is fulfilled by a Linux owner whose
+host can create Bubblewrap namespaces. The owner's clock sweep dispatches
+`review_evidence_fulfilment_pipeline` for it, one run at a time, and stands
+down on a follower, a worker, another platform or a host without namespaces.
+The run admits only an exact owner-required validation command or
+`cargo test -p <crate> --test <target> [<filter>]`, written in
+`[A-Za-z0-9._/:@+=-]` and spaces with no other option. A command outside
+that allowlist refuses the whole hold before anything runs. An admitted
+command runs without a shell at the held commit, in a detached worktree with
+the validation environment and a run-local build target, outside any sandbox
+because the namespaces it tests cannot nest. The worktree and target are
+removed afterwards. A test that executed and passed attaches the result as
+`system` and requeues review. Anything else attaches only the log.
+
+Inspect a fulfilment run:
+
+```bash
+# Every attempt, with its run id, candidate, commands, exit codes and reason.
+orbit audit list --tool review.evidence_fulfilment --json
+# The step's output: fulfilled, reason, detail, retryable, requeued.
+orbit run show <run-id>
+# The command line run, its output, tests passed and validation environment.
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+```
+
+The run also comments its outcome on the task.
+
+| Reason | Cause |
+| --- | --- |
+| `shell_metacharacter` | The command has a character outside the allowlist. Never ran. |
+| `command_not_allowed` | The command is neither `cargo test` nor an owner-required command. Never ran. |
+| `argument_not_allowed` | An option or extra argument outside the `cargo test` form. Never ran. |
+| `sandbox_unavailable` | The output reports the sandbox could not apply. |
+| `self_skipped` | The test passed but printed `SKIP:`, `DEFERRED:` or `skipping`. |
+| `no_tests_ran` | No libtest summary reports a passed test. |
+| `test_failed` | The test ran and failed. |
+| `tool_missing` | `cargo` is missing from the validation PATH. |
+| `command_failed` | The worktree or the command could not be started. |
+| `timed_out` | The run exceeded its time limit. |
+
 `sandbox_unavailable` means the host itself cannot apply the sandbox: run the
 test there by hand, outside any sandbox. `self_skipped` and `no_tests_ran`
 mean the command proved nothing: correct the requirement's command or filter.
 A refused command (`shell_metacharacter`, `command_not_allowed`,
 `argument_not_allowed`) never ran. The hold then waits for an operator's
-result, as for any other evidence.
+result, as for any other evidence; a `macos` requirement that no claimed leaf
+fulfilled always does.
 
 ## 3. Decide a blocked review
 

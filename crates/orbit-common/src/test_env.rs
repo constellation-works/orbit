@@ -27,6 +27,7 @@
 //! implementation without changing `orbit-common`'s feature set. Child-test
 //! guards reject successful libtest exits that never executed the exact filter.
 
+use std::io::Write;
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicUsize, Ordering},
@@ -174,6 +175,9 @@ pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
 ///
 /// Pass captured libtest output, including its final summary. Checking the last
 /// summary prevents a nested child's result from hiding an empty outer run.
+/// A passing child's `DEFERRED:` notices are repeated on the parent's stderr,
+/// so a test that deferred its sandbox-confined path inside an isolated child
+/// still says so in the run's output [ORB-14334].
 pub fn assert_child_test_passed(
     test_name: &str,
     status: std::process::ExitStatus,
@@ -196,6 +200,14 @@ pub fn assert_child_test_passed(
         }),
         "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
     );
+    let deferrals = stdout.lines().chain(stderr.lines()).filter(|line| {
+        line.trim_start()
+            .starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+    });
+    for line in deferrals {
+        // Bypass libtest capture, as the child's own notice did.
+        let _ = writeln!(std::io::stderr(), "{}", line.trim());
+    }
 }
 
 /// How long [`run_child_test`] lets a re-executed child test run before it

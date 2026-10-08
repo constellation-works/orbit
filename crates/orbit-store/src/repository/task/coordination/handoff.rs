@@ -300,7 +300,7 @@ impl TaskCommitBoundary {
             let required_passed = certificate.validation.iter().any(|validation| {
                 validation.command == record.command
                     && validation.role == ValidationRole::Required
-                    && validation.outcome == ValidationOutcome::Passed
+                    && validation.executed_outcome() == ValidationOutcome::Passed
             });
             if result.schema_version != 1
                 || result.kind != ReviewEvidenceKind::HostSandboxTest

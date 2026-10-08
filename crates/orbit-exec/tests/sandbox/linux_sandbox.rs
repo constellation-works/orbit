@@ -80,7 +80,10 @@ fn bwrap_child_gets_only_the_supplied_environment() {
     }
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "bwrap_child_gets_only_the_supplied_environment",
+            &probe.detail,
+        );
         return;
     }
 
@@ -138,7 +141,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     }
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "bwrap_child_cannot_read_credential_locations_but_writes_its_worktree",
+            &probe.detail,
+        );
         return;
     }
 
@@ -393,7 +399,10 @@ printf written > result.txt
         }
         let probe = probe_bwrap();
         if !probe.available {
-            println!("skipping real Bubblewrap test: {}", probe.detail);
+            orbit_exec::report_bwrap_deferral(
+                "tmp_linked_worktree_retains_git_without_exposing_host_scratch",
+                &probe.detail,
+            );
             continue;
         }
         let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
@@ -469,7 +478,10 @@ fn git_metadata_pointer_cannot_restore_host_tmp_wholesale() {
 fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable() {
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable",
+            &probe.detail,
+        );
         return;
     }
     let wrapper = std::path::PathBuf::from(&probe.trusted_path);
@@ -1185,7 +1197,10 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
 
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_invocation",
+            &probe.detail,
+        );
         return;
     }
     let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
@@ -1291,9 +1306,12 @@ fn assert_absent_deny_enforced(
         .expect("spawn");
         let _ = child.wait().expect("wait");
     } else {
-        println!(
-            "bwrap unavailable ({}); applying the child script on the host",
-            probe.detail
+        orbit_exec::report_bwrap_deferral(
+            "assert_absent_deny_enforced",
+            &format!(
+                "{}; applying the child script on the host instead",
+                probe.detail
+            ),
         );
         let status = std::process::Command::new("/bin/sh")
             .args(["-c", script])
@@ -1332,7 +1350,10 @@ fn assert_absent_deny_enforced(
 fn kernel_enforces_allowed_outside_and_subtree_writes_when_available() {
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "kernel_enforces_allowed_outside_and_subtree_writes_when_available",
+            &probe.detail,
+        );
         return;
     }
 
@@ -1419,7 +1440,10 @@ deny mv "$DENIED" "$WORKSPACE/orbit-moved"
 fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_available() {
     let probe = probe_bwrap();
     if !probe.available {
-        println!("skipping real Bubblewrap test: {}", probe.detail);
+        orbit_exec::report_bwrap_deferral(
+            "kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_available",
+            &probe.detail,
+        );
         return;
     }
 
@@ -1759,9 +1783,12 @@ fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
             .expect("spawn managed child");
             let _ = child.wait().expect("wait");
         } else {
-            println!(
-                "bwrap unavailable ({}); creating the forbidden path on the host",
-                probe.detail
+            orbit_exec::report_bwrap_deferral(
+                "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
+                &format!(
+                    "{}; creating the forbidden path on the host instead",
+                    probe.detail
+                ),
             );
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).expect("parent");
@@ -1782,4 +1809,46 @@ fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
             path.display()
         );
     }
+}
+
+/// A Bubblewrap-gated test that defers says so in the output of a plain
+/// `cargo test` run, past libtest's output capture, and host evidence never
+/// reads that run as executing the confined path [ORB-14334].
+#[test]
+fn a_deferred_bwrap_test_reports_its_deferral_past_output_capture() {
+    use orbit_types::workflow::{HostEvidenceReason, HostSandboxCommand, judge_host_test_output};
+
+    const CHILD_ENV: &str = "ORBIT_BWRAP_DEFERRAL_FIXTURE_CHILD";
+    const DETAIL: &str = "fixture host\nwithout namespaces";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        orbit_exec::report_bwrap_deferral("deferral_fixture", DETAIL);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "linux_sandbox::a_deferred_bwrap_test_reports_its_deferral_past_output_capture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_ENV, "1")
+        .output()
+        .expect("rerun this test as the deferring child");
+    assert!(output.status.success(), "{output:?}");
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let notice = orbit_exec::bwrap_deferral_notice("deferral_fixture", DETAIL);
+    assert!(
+        text.lines().any(|line| line == notice),
+        "a passing test's deferral must reach captured output on one line: {text}"
+    );
+    let command =
+        HostSandboxCommand::admit("cargo test -p orbit-exec --test sandbox", &[]).expect("admit");
+    assert_eq!(
+        judge_host_test_output(&command, true, false, &text).map_err(|refusal| refusal.reason),
+        Err(HostEvidenceReason::SelfSkipped),
+        "the child passed one test, which executed nothing confined: {text}"
+    );
 }

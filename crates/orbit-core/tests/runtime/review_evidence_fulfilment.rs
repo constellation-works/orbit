@@ -5,6 +5,11 @@
 //! The candidate carries a stub `scripts/codeql-rust-local.sh` that speaks
 //! the real script's output contract and records each run's `HEAD` and
 //! arguments in its captured output.
+//!
+//! A review whose sandbox-gated test only deferred its confined path holds
+//! for a Linux `host_sandbox_test` the same way [ORB-14334]. The owner's
+//! validation PATH leads with a stand-in `cargo` that runs the candidate's
+//! `tests/host/<target>.sh`, so what a run proves is whatever that probe does.
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -13,8 +18,8 @@ use orbit_core::TaskStatus;
 use orbit_core::application::review::{EVIDENCE_FULFILMENT_AUDIT, REVIEW_EVIDENCE_FULFILMENT_JOB};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewEvidenceHold,
-    ReviewEvidenceKind, ReviewExternalEvidence, ValidationOutcome,
+    EvidenceHostOs, JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
+    ReviewEvidenceHold, ReviewEvidenceKind, ReviewExternalEvidence, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -88,17 +93,7 @@ fn git(fixture: &Fixture, args: &[&str]) -> String {
 /// the held commit runs the held stub.
 fn held(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHold) {
     let mut fixture = Fixture::new_with_required_commands(&[command]);
-    // A dispatched run's substitute worker stays alive until the test has run
-    // the step in process, so the supervisor never interrupts it as pending.
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        "sh".to_string(),
-        "-c".to_string(),
-        "i=0; while [ ! -e \"$1/ran-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
-            .to_string(),
-        "worker".to_string(),
-        fixture._root.path().to_string_lossy().into_owned(),
-        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
-    ]);
+    install_substitute_worker(&fixture);
     let script = fixture.repo.join("scripts/codeql-rust-local.sh");
     std::fs::create_dir_all(script.parent().unwrap()).unwrap();
     std::fs::write(&script, stub_script(stub)).unwrap();
@@ -133,6 +128,20 @@ fn held(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHold) {
     git(&fixture, &["commit", "-q", "-am", "moved on"]);
     assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), hold.candidate.commit);
     (fixture, hold)
+}
+
+/// A dispatched run's substitute worker stays alive until the test has run
+/// the step in process, so the supervisor never interrupts it as pending.
+fn install_substitute_worker(fixture: &Fixture) {
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "sh".to_string(),
+        "-c".to_string(),
+        "i=0; while [ ! -e \"$1/ran-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
+            .to_string(),
+        "worker".to_string(),
+        fixture._root.path().to_string_lossy().into_owned(),
+        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
+    ]);
 }
 
 /// The shipped job, with the free space its tick and step require replaced.
@@ -247,6 +256,11 @@ fn latest_decision(fixture: &Fixture) -> String {
 }
 
 fn assert_still_held(fixture: &Fixture, why: &str) {
+    assert_held_without(fixture, EVIDENCE, why);
+}
+
+/// The task still waits on its hold and `evidence` was never accepted.
+fn assert_held_without(fixture: &Fixture, evidence: &str, why: &str) {
     let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
     assert_eq!(task.status, TaskStatus::InProgress, "{why}");
     assert_eq!(
@@ -255,7 +269,7 @@ fn assert_still_held(fixture: &Fixture, why: &str) {
         "{why}"
     );
     assert!(
-        artifact(fixture, EVIDENCE).is_none(),
+        artifact(fixture, evidence).is_none(),
         "{why}: nothing is accepted"
     );
 }
@@ -278,7 +292,12 @@ fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() 
         &serde_json::to_value(&hold).unwrap(),
     );
 
-    if !orbit_exec::probe_bwrap().available {
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review",
+            &probe.detail,
+        );
         let deferred = fixture
             .runtime
             .run_review_evidence_fulfilment_tick(Utc::now())
@@ -383,7 +402,12 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
     ) {
         return;
     }
-    if !orbit_exec::probe_bwrap().available {
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason",
+            &probe.detail,
+        );
         return;
     }
     let unadmitted = "scripts/codeql-rust-local.sh codeql/rust-queries:x;touch owned";
@@ -521,7 +545,12 @@ fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_time
     ) {
         return;
     }
-    if !orbit_exec::probe_bwrap().available {
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times",
+            &probe.detail,
+        );
         return;
     }
     let (fixture, _) = held(Stub::Clean, CODEQL);
@@ -563,4 +592,246 @@ fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_time
                 && detail["min_free_mib"] == UNREACHABLE_MIB),
         "{rows:?}"
     );
+}
+
+const HOST_TEST: &str = "cargo test -p orbit-exec --test probe";
+const HOST_EVIDENCE: &str = "evidence/host-sandbox-probe.json";
+const HOST_EVIDENCE_LOG: &str = "evidence/host-sandbox-probe.log.json";
+/// What a sandbox-gated test prints inside an agent lane.
+const LANE_DEFERRAL: &str =
+    "DEFERRED: bubblewrap unavailable: probe: bwrap: No permissions to create a new namespace";
+/// A probe that executes and reports libtest's summary, naming its `HEAD`.
+const PASSING_PROBE: &str = "set -e\n\
+    echo \"ORBIT_HOST_PROBE_RAN $(git rev-parse HEAD)\"\n\
+    echo 'test probe ... ok'\n\
+    echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n";
+
+/// A task whose reviewer passed `command` only by deferring its confined
+/// path, so its before-PR review settled into a hold naming one Linux
+/// `host_sandbox_test` run of it. The candidate commits `probe` as the
+/// stand-in `cargo`'s target script; the returned directory holds that
+/// stand-in. The workspace branch then moves past the held commit.
+fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfile::TempDir) {
+    let bin = tempfile::TempDir::new().unwrap();
+    let cargo = bin.path().join("cargo");
+    // `cargo test -p <package> --test <target> [filter] -- --nocapture`
+    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut fixture = Fixture::new_with_config(
+        &[],
+        &format!(
+            "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+            bin.path().display()
+        ),
+    );
+    install_substitute_worker(&fixture);
+    let script = fixture.repo.join("tests/host/probe.sh");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, probe).unwrap();
+    git(&fixture, &["add", "tests"]);
+    git(&fixture, &["commit", "-q", "-m", "sandbox probe"]);
+    fixture.admit();
+    fixture.put_report(&json!({
+        "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "incomplete",
+        "summary": "Checked the change; the sandbox probe deferred inside the lane.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": command, "outcome": "passed", "role": "required",
+             "deferred": [LANE_DEFERRAL]},
+        ],
+        "external_evidence": [{
+            "kind": "host_sandbox_test", "name": "Sandbox probe", "command": command,
+            "artifact": HOST_EVIDENCE, "os": "linux",
+        }],
+        "escalation": "The sandbox probe needs a host that can create namespaces",
+    }));
+    run_review_pipeline(&fixture);
+    let hold: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .expect("a deferred-only pass holds for host evidence instead of passing")
+            .content,
+    )
+    .unwrap();
+    assert_eq!(latest_decision(&fixture), "review_awaiting_evidence");
+    std::fs::write(fixture.repo.join("candidate.txt"), "later\n").unwrap();
+    git(&fixture, &["commit", "-q", "-am", "moved on"]);
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), hold.candidate.commit);
+    (fixture, hold, bin)
+}
+
+/// A Linux owner whose host creates namespaces runs the held sandbox test at
+/// the held commit without an operator, attaches its result and log, and
+/// requeues review. Where namespaces are unavailable the tick stands down
+/// and the hold stays for an owner that can run it.
+#[test]
+fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review",
+    ) {
+        return;
+    }
+    let (fixture, hold, _bin) = held_host(PASSING_PROBE, HOST_TEST);
+    configure_job(&fixture, 1, None);
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review",
+            &probe.detail,
+        );
+        let deferred = fixture
+            .runtime
+            .run_review_evidence_fulfilment_tick(Utc::now())
+            .unwrap();
+        assert!(deferred.dispatched.is_empty(), "{deferred:?}");
+        assert!(deferred.skipped.is_some(), "{deferred:?}");
+        assert_held_without(&fixture, HOST_EVIDENCE, "sandbox unavailable");
+        return;
+    }
+
+    let (run_id, output) = fulfil_once(&fixture);
+    assert_eq!(output["fulfilled"], true, "{output}");
+    assert_eq!(output["requeued"], true, "{output}");
+    let evidence: ReviewExternalEvidence =
+        serde_json::from_value(artifact(&fixture, HOST_EVIDENCE).expect("result attached"))
+            .unwrap();
+    assert_eq!(evidence.kind, ReviewEvidenceKind::HostSandboxTest);
+    assert_eq!(evidence.os, Some(EvidenceHostOs::Linux));
+    assert_eq!(evidence.attempt_id, hold.attempt_id);
+    assert_eq!(evidence.candidate, hold.candidate);
+    assert_eq!(evidence.command, HOST_TEST);
+    assert_eq!(evidence.outcome, ValidationOutcome::Passed);
+    assert_eq!(evidence.log_artifact, HOST_EVIDENCE_LOG);
+    let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("log attached");
+    assert_eq!(log["host_command"], format!("{HOST_TEST} -- --nocapture"));
+    assert_eq!(log["tests_passed"], 1);
+    assert!(
+        log["output"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("ORBIT_HOST_PROBE_RAN {}", hold.candidate.commit)),
+        "the held commit's probe ran, not the moved branch's: {log}"
+    );
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Backlog,
+        "receipt queues a fresh review"
+    );
+    assert_eq!(latest_decision(&fixture), "review_evidence_received");
+    let rows = audit_rows(&fixture);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, AuditEventStatus::Success);
+    assert_eq!(rows[0].1["commands"], json!([HOST_TEST]));
+    assert!(
+        !fixture
+            .runtime
+            .paths()
+            .state_dir
+            .join("recovery-checkouts")
+            .join(format!("{run_id}-evidence-target"))
+            .exists(),
+        "the run's build target is removed"
+    );
+}
+
+/// A host run that executed nothing confined, or failed, is no evidence: its
+/// log is attached and the hold stays with a typed reason.
+#[test]
+fn a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason",
+    ) {
+        return;
+    }
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason",
+            &probe.detail,
+        );
+        return;
+    }
+    let skipping = "echo 'DEFERRED: bubblewrap unavailable: probe: no namespaces on this host'\n\
+        echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n";
+    let failing = "echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored'\nexit 101\n";
+    for (probe, reason) in [(skipping, "self_skipped"), (failing, "test_failed")] {
+        let (fixture, _, _bin) = held_host(probe, HOST_TEST);
+        configure_job(&fixture, 1, None);
+        let (_, output) = fulfil_once(&fixture);
+        assert_eq!(output["fulfilled"], false, "{reason}: {output}");
+        assert_eq!(output["reason"], reason, "{output}");
+        assert_eq!(output["retryable"], false, "{output}");
+        let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("the refused run's log is attached");
+        assert_eq!(log["reason"], reason);
+        assert_held_without(&fixture, HOST_EVIDENCE, reason);
+    }
+}
+
+/// A held host test runs only from its allowlist. A shell metacharacter, any
+/// other program and any argument outside `cargo test -p <crate> --test
+/// <target> [<filter>]` are refused with a typed reason before any host
+/// gate, so nothing runs even where namespaces are unavailable.
+#[test]
+fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running",
+    ) {
+        return;
+    }
+    let touching = "touch \"$(git rev-parse --show-toplevel)/../owned\"\n";
+    for (command, reason) in [
+        (
+            "cargo test -p orbit-exec --test probe;touch owned",
+            "shell_metacharacter",
+        ),
+        ("make probe", "command_not_allowed"),
+        (
+            "cargo test -p orbit-exec --test probe --release",
+            "argument_not_allowed",
+        ),
+    ] {
+        let (fixture, hold, _bin) = held_host(touching, command);
+        configure_job(&fixture, 1, None);
+        // Submit the owner workflow directly: unlike a tick, it reaches
+        // admission on a host without namespaces too.
+        let run = fixture
+            .runtime
+            .submit_pipeline_run(
+                REVIEW_EVIDENCE_FULFILMENT_JOB,
+                json!({
+                    "task_id": fixture.task_id,
+                    "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+                }),
+                None,
+                Some("system"),
+            )
+            .unwrap();
+        execute(&fixture, &run.run_id);
+        let output = fixture
+            .runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline["fulfil"]
+            .clone();
+        assert_eq!(output["fulfilled"], false, "{reason}: {output}");
+        assert_eq!(output["reason"], reason, "{output}");
+        assert_eq!(output["retryable"], false, "{output}");
+        assert!(
+            !fixture.repo.join("owned").exists() && !fixture.repo.join("../owned").exists(),
+            "{reason}: nothing ran"
+        );
+        let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("the refusal's log is attached");
+        assert_eq!(log["reason"], reason);
+        assert!(log["host_command"].is_null(), "{reason}: {log}");
+        assert_held_without(&fixture, HOST_EVIDENCE, reason);
+        let rows = audit_rows(&fixture);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, AuditEventStatus::Failure, "{reason}");
+        assert_eq!(rows[0].1["reason"], reason);
+    }
 }
