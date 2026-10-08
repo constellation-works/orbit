@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
-paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
+paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks/"]
 related_features: [distributed-drain, federated-mcp, host-registry]
 related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247]
 ---
@@ -51,7 +51,7 @@ claims remain until settlement or deliberate recovery.
 **Superseded by:** [Requests identify admissions and claims identify attempts](#requests-identify-admissions-and-claims-identify-attempts). The original rationale below is retained as history.
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml`, `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`
+**Code anchors:** `crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml`, `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`
 
 ### Context
 
@@ -184,7 +184,7 @@ claims to be. Fields are additive and nullable; absent means unknown.
 ## Epic is a tag, not a pipeline
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
 
 ### Context
 
@@ -245,7 +245,7 @@ uncertain still parks the task in `blocked`, now with a diagnosis and a named hu
 ## Requests identify admissions and claims identify attempts
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs`, `crates/orbit-engine/src/executor/automation/vcs/handoff.rs::load_handoff_context`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-engine/src/executor/automation/vcs/handoff.rs::load_handoff_context`
 
 ### Context
 
@@ -467,7 +467,7 @@ a PR that is already open.
 ## Declared context survives missing filesystem targets
 
 **Recorded:** 2026-09 · Daniel requested removal of context-file pruning after review of [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/runtime/task/mod.rs::declared_context_files`, `crates/orbit-core/src/runtime/task/locks.rs::TaskLockIndex::declared_lock_surface`, `crates/orbit-core/src/application/task/context_repair.rs` (landed in [ORB-12490], replacing `locks.rs::existing_envelope_context_files_at_root`)
+**Code anchors:** `crates/orbit-core/src/runtime/task/mod.rs::declared_context_files`, `crates/orbit-core/src/runtime/task/locks/index.rs::TaskLockIndex::declared_lock_surface`, `crates/orbit-core/src/application/task/context_repair.rs` (landed in [ORB-12490], replacing `locks.rs::existing_envelope_context_files_at_root`)
 
 ### Context
 
@@ -706,7 +706,7 @@ is off on the Mac by design.
 ## No-diff-expected work does not hold context locks
 
 **Recorded:** 2026-10-06 · [ORB-14247]
-**Paths:** `crates/orbit-core/src/runtime/task/locks.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
 
 ### Context
 

@@ -4,5 +4,3 @@ mod config_path;
 mod git_sandbox;
 mod run_input;
 mod tool_exec;
-
-mod host_resource;
