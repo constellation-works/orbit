@@ -327,7 +327,12 @@ name for `pr` and `local` modes after taking the shared admission decision
 through `orbit.drain.receipt.lookup` before anything local changes: a found receipt is received
 and carried forward (an earlier send committed, and a replay was refused, say after an owner
 upgrade); an expired or absent one closes the local record as `Refused`, which releases its slot,
-and the refusal ends that pass. A lost delivery, an unknown outcome or a store failure leaves the
+and the refusal ends that pass. The exception is `protocol_skew` on a persisted request whose
+fingerprint differs from the running follower's (or predates fingerprints): when lookup confirms
+there is no receipt, closing that obsolete request succeeds. A drain whose current probe matches
+can then admit a fresh request in the same pass. Found receipts are still carried forward, and
+skew on a request stamped by the current build still fails the drain.
+A lost delivery, an unknown outcome or a store failure leaves the
 request pending under the same ID. A refused *settlement* is reconciled the same way: when the
 lookup shows the owner already ended the claim (revoked, failed or landed), or no longer holds it,
 no settlement can ever be accepted, so the record settles locally with the refusal
@@ -361,7 +366,8 @@ long-lived processes.
 count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
-the streak. Protocol skew immediately latches degradation and ends the drain **failed** with `protocol_skew`,
+the streak. Protocol skew on the current probe or a current-build request immediately latches
+degradation and ends the drain **failed** with `protocol_skew`,
 even with an open window. `orbit doctor` reports the latest skewed pull drain, and the dashboard
 keeps its pass health and failure code visible after it ends. Its durable admissions and settlement
 records remain available to leaf workers, the settle-only pass, and the clock sweep. Other

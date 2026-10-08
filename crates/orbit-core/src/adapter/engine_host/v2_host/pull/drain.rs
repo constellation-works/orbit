@@ -470,9 +470,10 @@ impl PullDrain<'_> {
     /// request is closed: a retry can be refused (say, after the owner was
     /// upgraded) even though an earlier send of the same ID committed a claim,
     /// and that claim must be carried forward, not abandoned. Only when the
-    /// owner holds no live receipt is the request closed — and the refusal is
-    /// still returned, so this pass allocates nothing further against an owner
-    /// that is refusing.
+    /// owner holds no live receipt is the request closed. Protocol skew of an
+    /// obsolete persisted fingerprint is then reconciled successfully: it says
+    /// nothing about this build's compatibility with the owner. Other refusals
+    /// are returned, so this pass allocates nothing further against that owner.
     fn request(&self, record: &LocalPullAdmission) -> Result<LocalPullAdmission, OrbitError> {
         let refusal = match self.peer.request(&record.destination, &record.request) {
             Ok(receipt) => {
@@ -489,8 +490,15 @@ impl PullDrain<'_> {
                 self.update(record, LocalPullMutation::Receive(receipt))
             }
             AdmissionLookup::Expired | AdmissionLookup::NotFound => {
-                self.update(record, LocalPullMutation::Refuse(refusal.to_string()))?;
-                Err(refusal)
+                let closed = self.update(record, LocalPullMutation::Refuse(refusal.to_string()))?;
+                if matches!(refusal, OrbitError::ProtocolSkew(_))
+                    && record.request.caller_fingerprint.as_deref()
+                        != Some(orbit_store::contracts::distributed_drain_protocol_fingerprint())
+                {
+                    Ok(closed)
+                } else {
+                    Err(refusal)
+                }
             }
         }
     }

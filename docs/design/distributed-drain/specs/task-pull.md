@@ -136,8 +136,13 @@ long-lived processes.
 count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
-the streak. Protocol skew immediately latches degradation and ends the drain **failed** with `protocol_skew`,
-even with an open window. `orbit doctor` reports the latest skewed pull drain, and the dashboard
+the streak. Protocol skew on the current probe or a current-build request immediately latches
+degradation and ends the drain **failed** with `protocol_skew`,
+even with an open window. A refused retry carrying an obsolete persisted fingerprint (including
+a request from before fingerprints) is reconciled through receipt lookup first. A found receipt
+is carried forward; an absent or expired receipt closes the old record without failing the
+drain, so a matching current probe can admit a fresh request in the same pass. Skew on a
+current-build request remains fatal. `orbit doctor` reports the latest skewed pull drain, and the dashboard
 keeps its pass health and failure code visible after it ends. Its durable admissions and settlement
 records remain available to leaf workers, the settle-only pass, and the clock sweep. Other
 degraded drains keep retrying settlements and outlive their window until nothing
