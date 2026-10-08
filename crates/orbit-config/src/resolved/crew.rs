@@ -6,9 +6,9 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
     ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
-    CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL, CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL,
-    CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL,
-    PI_DEFAULT_MODEL,
+    CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL, CODEX_TERRA_MODEL,
+    COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
+    OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
@@ -156,6 +156,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
     for (name, model, provider) in [
         ("opus", CLAUDE_DEFAULT_STRONG, "claude"),
         ("sonnet", CLAUDE_DEFAULT_WEAK, "claude"),
+        ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
         ("fable", CLAUDE_FABLE_MODEL, "claude"),
         ("sol", CODEX_SOL_MODEL, "codex"),
         ("terra", CODEX_TERRA_MODEL, "codex"),

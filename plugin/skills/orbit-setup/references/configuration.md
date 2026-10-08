@@ -122,19 +122,23 @@ disabled crew. Enable one with:
 orbit config set crews.gemini.enabled true
 ```
 
-`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `fable`;
+`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `terra`, `luna`; one crew each for Antigravity, Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points the two lane
 keys at enabled crews:
 `workflow.default_crew` is the preferred family's default (`opus` on a Claude
 host) and `workflow.system_crew` is the cheapest tier of the preferred family
-(`luna` when Codex is present, else `sonnet`, `grok`, …). Interactive init
+(`luna` when Codex is present, else `haiku`, `grok`, …). Interactive init
 offers those enabled crews by name; `--non-interactive` writes the
 recommendations. Init does not write a `custom` or `system` crew table: the
 `system` name shipped job steps use resolves onto `system_crew` at load, and an
 explicit user-authored `[crews.system]` table wins if one exists. The four
-`workflow.*_complexity_crews` pools are scaffolded as `[]`. A user-authored
+`workflow.*_complexity_crews` pools are seeded from the detected families
+(Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
+`sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
+grok joins `medium`, `antigravity` or else `gemini` joins `low`; other families
+leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
 work, run `orbit config set workflow.system_crew <crew>`. With no supported
 agent CLI, every crew is written disabled and no lane key is set, so nothing
