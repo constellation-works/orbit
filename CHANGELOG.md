@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.28.0 — 2026-10-08
+
+### Breaking Changes
+
+- **Distributed pull protocol**: the revision goes from 5 to 10, and a newer owner refuses older followers → run matching owner and follower versions. ([ORB-14261])
+- **Job-run state migration**: SQLite migration 38 moves run state into `job_run_states` and drops `job_runs.pipeline_state_json`. It is declared Breaking, so older binaries refuse the migrated store. ([ORB-14585])
+- **`terra` is no longer a built-in crew**: a config that names terra without defining `[crews.terra]` must define it. Existing `[crews.terra]` tables keep working. ([ORB-14672])
+
+### Highlights
+
+- **Host registry and routing**: `orbit host add|list|show|remove` keeps a registry of named hosts. Task IDs route to the host that owns their prefix, `--host` selects one explicitly, and Settings › Hosts manages the registry from the dashboard. ([ORB-14448])
+- **Linux sandbox setup**: Linux installs can use Orbit's signed, pinned Bubblewrap when the host wrapper is missing, and package-manager discovery follows host capabilities. `orbit init` finishes with a readiness warning if preparation fails, and execution stays fail-closed until the sandbox is ready. ([ORB-14075])
+- **Faster run, dashboard and scoreboard queries**: run listings no longer scan every run's pipeline state, and scoreboard failure aggregation and cold dashboard paths are optimized, taking pages that took many seconds down to a fraction of that. ([ORB-14585])
+- **Distributed claimed review and recovery**: claimed PR work runs the owner's before-PR review contract and gets one automatic repair when landing stops on a stale or conflicting base. Operators can reconcile a merged PR whose final head differs from the candidate. ([ORB-13908])
+- **Proposed-task intake**: `orbit run auto --approve-proposed` promotes qualifying proposed tasks and holds uncertain ones. The dashboard auto-drain panel offers it when starting a window, and proposed and backlog tasks show a readiness chip. ([ORB-14117])
+- **Built-in Haiku crew**: fresh configs ship a Claude Haiku crew, and `orbit init` seeds complexity pools from the provider families it detects. ([ORB-14671])
+
 ## 0.27.0
 
 ### Breaking Changes
