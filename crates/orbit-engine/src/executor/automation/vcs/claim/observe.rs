@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 use serde_json::Value;
 
@@ -8,7 +9,8 @@ use crate::context::ClaimExecutionContext;
 use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{
-    BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
+    BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_output,
+    normalize_base_branch, resolve_worktree_start_point,
 };
 use super::super::review_gate::revision;
 use super::delivery::repository;
@@ -33,6 +35,10 @@ use super::{delivery, require_clean_checkout};
 /// candidate and that ref — the tip the candidate sits on — not the live
 /// fetched tip. A later advance of `origin/<base>` is therefore not a
 /// refusal of a candidate that was synchronized onto the earlier SHA.
+/// If a remote fetch exhausts its transport retries, a delivered candidate
+/// may use the cached remote ref when its merge-base still resolves. Missing
+/// or unrelated cached refs preserve the transient fetch failure. Refusals
+/// and NoDiff observations always require a successful fetch.
 pub fn observe_candidate(
     workspace_path: &Path,
     source: Option<&str>,
@@ -64,7 +70,24 @@ pub fn observe_candidate(
             )));
         }
     };
-    let base_ref = resolve_worktree_start_point(workspace_path, base_branch, sync_mode)?;
+    let base_ref = match resolve_worktree_start_point(workspace_path, base_branch, sync_mode) {
+        Ok(base_ref) => base_ref,
+        Err(error)
+            if sync_mode == BaseSyncMode::Remote
+                && !matches!(delivery, HandoffDelivery::NoDiff { .. })
+                && matches!(&error, OrbitError::Execution(message) if message.starts_with(TRANSIENT_FAILURE_MARKER)) =>
+        {
+            let cached = format!("origin/{}", normalize_base_branch(base_branch)?);
+            if !git_command_success(workspace_path, &["merge-base", &candidate.commit, &cached])
+                .unwrap_or(false)
+            {
+                return Err(error);
+            }
+            tracing::warn!(base_ref = cached, %error, "observing claimed candidate against cached remote base");
+            cached
+        }
+        Err(error) => return Err(error),
+    };
     let tip = revision(workspace_path, &base_ref)?;
     // Same rule as `synchronized_base`: the candidate is judged against the
     // merge-base it sits on, not against a tip that can move under a fetch.
@@ -145,6 +168,7 @@ pub(super) fn observe_with(
     input: &Value,
     delivery: HandoffDelivery,
 ) -> Result<HandoffCandidate, OrbitError> {
+    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let candidate = observe_candidate(
         workspace_path,
         None,

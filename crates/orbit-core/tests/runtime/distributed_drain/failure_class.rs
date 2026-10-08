@@ -67,6 +67,148 @@ fn settle_only(pair: &Pair, drain: &str) -> Value {
     pair.pass_over(drain, json!({"window_expired": true}))
 }
 
+/// ORB-14717: settle the actual handoff fetch error as the last failed
+/// step of a claimed leaf. A timeout releases finished work; an unknown
+/// remote ref retains the existing candidate failure and blocks the task.
+#[test]
+fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
+    if !isolated(
+        module_path!(),
+        "handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks",
+    ) {
+        return;
+    }
+    for timeout in [true, false] {
+        let leaf = super::claimed_review::ReviewedLeaf::admit();
+        let pair = &leaf.pair;
+        let repo = &pair.follower_repo;
+        let action = |name: &str, input: &Value| {
+            orbit_engine::execute_deterministic_action(
+                &leaf.bound,
+                name,
+                &json!({}),
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+        };
+        let mut input = json!({
+            "workspace_path": repo,
+            "base_sync": "local",
+            "base_sha": leaf.base.commit,
+            "pull_request": "7",
+        });
+        let validated = action("claim_validate", &input).unwrap();
+        input["candidate"] = validated["candidate"].clone();
+        input["validation"] = validated["validation"].clone();
+        input["base_sync"] = json!("remote");
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        if timeout {
+            let origin = format!(
+                "git://{}/owner/repository.git",
+                silent.local_addr().unwrap()
+            );
+            git(repo, &["remote", "set-url", "origin", &origin]);
+            input["git_timeouts"] = json!({"fetch": 1});
+        } else {
+            let remote = pair._root.path().join("empty-origin.git");
+            git(
+                pair._root.path(),
+                &["init", "--bare", remote.to_str().unwrap()],
+            );
+            git(
+                repo,
+                &["remote", "set-url", "origin", remote.to_str().unwrap()],
+            );
+        }
+        let error = action("claim_handoff", &input)
+            .expect_err("the final fetch cannot resolve the remote base")
+            .to_string();
+        assert!(
+            error.contains(if timeout {
+                "timed out after 1ms"
+            } else {
+                "couldn't find remote ref"
+            }),
+            "{error}"
+        );
+        let head = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        leaf_completed(
+            pair,
+            &leaf.leaf,
+            json!({
+                "commit": {"commit_sha": head},
+                "sync_base": {"base_sha": leaf.base.commit, "head_sha": head},
+                "review_gate_settle": {"gate": "passed", "reviewed_head_sha": head},
+                "validate": validated,
+                "pin_validation": validated,
+            }),
+        );
+        let job = orbit_engine::activity_job::load_job_asset(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/jobs/task_claimed_pr_pipeline.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .spec;
+        let step_index = job
+            .steps
+            .iter()
+            .position(|step| step.id == "handoff")
+            .unwrap();
+        let now = Utc::now();
+        pair.follower_jobs
+            .complete_job_run_step(
+                &leaf.leaf,
+                &JobRunStepParams {
+                    step_index,
+                    target_type: JobTargetType::Activity,
+                    target_id: "claim_handoff".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: None,
+                    error_message: Some(error),
+                },
+            )
+            .unwrap();
+        pair.follower_jobs
+            .finalize_job_run(&leaf.leaf, JobRunState::Failed, now, None)
+            .unwrap();
+        let pass = settle_only(pair, &leaf.drain);
+        let settlement = settlement_of(pair, &leaf.leaf);
+        let (kind, class, status) = if timeout {
+            ("Release", "transient", "backlog")
+        } else {
+            ("Fail", "candidate", "blocked")
+        };
+        assert_eq!(settlement[kind]["failure"]["class"], class, "{settlement}");
+        assert!(
+            settlement[kind]["failure"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("fetch"),
+            "the release names the fetch failure: {settlement}"
+        );
+        assert_eq!(pair.owner_status(&leaf.task), status, "{pass}");
+        assert_eq!(
+            pair.follower
+                .pull_leaf_claim(&leaf.leaf)
+                .unwrap()
+                .unwrap()
+                .failure_class
+                .map(|class| class.as_str()),
+            Some(class)
+        );
+    }
+}
+
 /// A claimed `sol` leaf that fails on `error`, settled by one pass: the
 /// owner's task returns to the backlog, and the release names `class`.
 /// Returns that settle-only pass and the drain, for the caller's window

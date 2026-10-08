@@ -194,6 +194,13 @@ no origin or PR credentials.
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable
   settlement any later settle-only pass or refill retries idempotently ([ORB-13663]).
+  Remote-base fetches retry timeouts and transport errors up to three attempts with bounded
+  backoff, under each attempt's fetch timeout. If transport remains unavailable, candidate
+  observation can use an already-fetched `origin/<base>` only when Git resolves its merge-base
+  with the candidate. An absent or unrelated cached base preserves the typed `transient`
+  failure, so settlement releases the owner's task rather than blocking it. Missing refs,
+  authentication and permission refusals retain their existing failure class and never use
+  the cache. NoDiff observations still require a successful fetch of the current base.
 
 **Claimed-leaf crew.** The claimed task lives in the owner's store, so the leaf's run input carries
 the owner's snapshot of it (`claimed_task: {id, crew}`, from the receipt's task summary). Crew

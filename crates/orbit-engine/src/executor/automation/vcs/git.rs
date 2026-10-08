@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
@@ -11,6 +12,7 @@ use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
+use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 use serde_json::Value;
 
 /// Bounded wall-clock budgets for host Git children.
@@ -366,6 +368,9 @@ pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<b
 /// Serializes with other Orbit-owned fetches through the git-common-dir
 /// lock so linked worktrees and task-pilot prepare do not CAS-fail the
 /// same `refs/remotes/origin/*` ref.
+/// Timeouts and transport failures retry within the same bounded attempt
+/// count, with backoff. Exhaustion carries the transient failure marker;
+/// authentication, permission and missing-ref refusals remain ordinary errors.
 pub fn fetch_remote_base(repo_root: &Path, base: &str) -> Result<(), OrbitError> {
     let branch = normalize_base_branch(base)?;
     with_git_fetch_lock(repo_root, || fetch_remote_base_locked(repo_root, &branch))
@@ -376,16 +381,29 @@ fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitE
     let mut last_stderr = String::new();
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
         let outcome = git_run(repo_root, &["fetch", "origin", &spec])?;
-        if outcome.timed_out {
-            return Err(git_timeout_error(
-                repo_root,
-                &["fetch", "origin", &spec],
-                outcome.timeout_ms,
-                &outcome.stderr,
-            ));
-        }
-        if outcome.success {
+        if outcome.success && !outcome.timed_out {
             return Ok(());
+        }
+        if outcome.timed_out || is_git_transport_failure(&outcome.stderr) {
+            let error = if outcome.timed_out {
+                git_timeout_error(
+                    repo_root,
+                    &["fetch", "origin", &spec],
+                    outcome.timeout_ms,
+                    &outcome.stderr,
+                )
+            } else {
+                git_failure_error(repo_root, &["fetch", "origin", &spec], &outcome.stderr)
+            };
+            if attempt + 1 == GIT_FETCH_CAS_ATTEMPTS {
+                return Err(OrbitError::Execution(format!(
+                    "{TRANSIENT_FAILURE_MARKER} remote base fetch failed after {} attempts: {error}",
+                    attempt + 1
+                )));
+            }
+            tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
+            std::thread::sleep(Duration::from_millis(250 * (1 << attempt)));
+            continue;
         }
         last_stderr = outcome.stderr.trim().to_string();
         if should_retry_git_ref_cas(attempt, &last_stderr) {
@@ -404,6 +422,50 @@ fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitE
         "failed to fetch remote base 'origin/{branch}' in '{}': {last_stderr}",
         repo_root.display()
     )))
+}
+
+/// Match transport diagnostics narrowly: an access refusal may also mention
+/// a closed connection, but must never become an inconclusive network result.
+fn is_git_transport_failure(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    if [
+        "authentication failed",
+        "permission denied",
+        "access denied",
+        "could not read username",
+        "terminal prompts disabled",
+        "host key verification failed",
+        "ssl certificate problem",
+        "couldn't find remote ref",
+        "repository not found",
+        "not a git repository",
+        "the requested url returned error: 4",
+    ]
+    .iter()
+    .any(|refusal| text.contains(refusal))
+    {
+        return false;
+    }
+    [
+        "could not resolve host",
+        "could not resolve proxy",
+        "could not resolve hostname",
+        "unable to look up",
+        "failed to connect",
+        "couldn't connect to server",
+        "connection refused",
+        "connection timed out",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "network is unreachable",
+        "no route to host",
+        "operation timed out",
+        "remote end hung up unexpectedly",
+        "early eof",
+    ]
+    .iter()
+    .any(|transport| text.contains(transport))
 }
 
 pub(in crate::executor::automation) fn resolve_worktree_start_point(
