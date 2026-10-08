@@ -23,7 +23,21 @@ make goldens           # CLI/MCP, CI logs and sandbox profile goldens
 do not establish that the Rust test suite passes. Focused test filters help
 investigate a change, but do not replace `make ci-test-affected`: an existing
 test can encode behavior the candidate changes even when its new tests pass.
-Hosted CI continues to run the full `make ci` on every PR.
+Hosted CI runs the full `make ci` for open PRs. Every PR-triggered workflow
+first reads the live PR state through the GitHub API in a checkout-free
+`Live PR state` job with only `pull-requests: read` permission. If the PR was
+merged or closed while queued, all build and analysis jobs are skipped through
+job-level conditions; their check names stay the same and GitHub treats skipped
+jobs as successful required checks. API errors fail the gate visibly rather
+than admitting an unknown PR state. A PR that closes after the gate has read
+`open` can still finish its suite.
+
+Push, scheduled and manually dispatched runs skip the state gate and keep
+their existing suites and concurrency. In particular, agent-main/main push
+CI and CodeQL analysis continue to cover merged changes. The offline
+`scripts/test-pr-state-workflows.py` fixture executes each workflow's shell
+gate against recorded API responses and checks job admission; `make ci-fast`
+runs it alongside workflow YAML parsing.
 
 The affected-test gate reads Cargo workspace metadata without compiling. It
 selects each crate with changed paths, then all transitive reverse workspace
@@ -531,7 +545,7 @@ in the CLI `mcp` binary's `mcp_roundtrip` module exercises runtime, CLI/MCP disp
 sessions in a disposable child process with a 120-second deadline.
 
 CI collects workspace test coverage with
-[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every PR
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every open PR
 (the `Coverage (informational)` job in `.github/workflows/ci.yml`) and
 uploads an lcov report as the `coverage-lcov` workflow artifact. The job is
 **informational only — it never gates a merge**. It runs the tests through
@@ -757,7 +771,7 @@ module, or `#![cfg(unix)]` for a wholly POSIX file. Gate it; never delete it.
 ## Supply-chain (cargo-deny)
 
 Dependencies are gated by [`cargo-deny`](https://embarkstudios.github.io/cargo-deny/)
-on every PR (via `scripts/ci-guardrails.sh`) and locally with `make audit`. The
+on every open PR (via `scripts/ci-guardrails.sh`) and locally with `make audit`. The
 policy lives in [`deny.toml`](../deny.toml): it denies crates with an open RUSTSEC
 advisory or a yanked version, and restricts licenses to a reviewed allow-list.
 
