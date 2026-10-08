@@ -184,6 +184,11 @@ impl Fleet {
         })
     }
 
+    /// A successful command's stdout, piped as a script would read it.
+    pub(crate) fn text(&self, args: &[&str]) -> String {
+        String::from_utf8_lossy(&self.orbit_ok(&self.local.home, args).stdout).into_owned()
+    }
+
     /// Run a command expected to fail and return its JSON error code and
     /// message.
     pub(crate) fn refused(&self, args: &[&str]) -> (String, String) {

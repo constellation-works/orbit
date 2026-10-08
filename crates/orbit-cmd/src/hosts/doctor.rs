@@ -24,9 +24,8 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
             let remediation = if error.host_registry_code()
                 == Some(HostRegistryCode::HostFileConflict)
             {
-                "Confirm `orbit host list` would show every legacy row once the legacy file is \
-                 gone (re-add any that are missing with `orbit host add <ssh-target>`), then \
-                 delete the legacy file."
+                "Delete the legacy file, then register each legacy row the diagnostic lists \
+                 as missing from the host file with the `orbit host add` command it names."
             } else {
                 "Repair the host file named in the diagnostic (or restore it from backup), then \
                  rerun `orbit doctor`."

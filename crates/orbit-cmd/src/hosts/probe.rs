@@ -49,13 +49,9 @@ pub(super) fn local_protocol_fingerprint() -> &'static str {
 /// budget and read the host's discovery envelope. Read-only, with ordinary
 /// agent authority: it never asks for `--operator`.
 ///
-/// `label` names the host in transport errors; before registration that is
-/// the SSH target itself.
-pub(super) fn probe_ssh(
-    ssh: &str,
-    label: &str,
-    caller_machine_id: &str,
-) -> Result<LiveHost, OrbitError> {
+/// Transport errors name the host by its SSH target, which an operator can
+/// check with `ssh` itself, and carry the tail of ssh's stderr.
+pub(super) fn probe_ssh(ssh: &str, caller_machine_id: &str) -> Result<LiveHost, OrbitError> {
     let probe = SshDestinationProbe::new(
         caller_machine_id.to_string(),
         DEFAULT_PROBE_TIMEOUT,
@@ -63,7 +59,7 @@ pub(super) fn probe_ssh(
         None,
         McpSessionAuthority::Agent,
     );
-    let snapshot = probe.probe(&Destination::ssh(ssh, label))?;
+    let snapshot = probe.probe(&Destination::ssh(ssh, ssh))?;
     Ok(LiveHost {
         facts: snapshot.host,
         workspaces: snapshot.workspaces,
@@ -93,6 +89,17 @@ where
             })
             .collect()
     })
+}
+
+/// A probe failure's detail for the row's `error.message`: the error without
+/// the class `error.code` already carries.
+pub(super) fn error_detail(error: &OrbitError) -> String {
+    match error {
+        OrbitError::UnreachableDestination(message)
+        | OrbitError::HostRegistry { message, .. }
+        | OrbitError::RemoteTool { message, .. } => message.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// The stable class of a probe failure, for the row's `error.code`.

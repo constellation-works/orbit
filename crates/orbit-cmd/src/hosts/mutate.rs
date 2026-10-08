@@ -66,7 +66,7 @@ pub fn add_host(
     validate_ssh_target(ssh)?;
     let registry = load_host_registry(global_root)?;
     let local = require_local(&registry)?;
-    let live = probe_ssh(ssh, ssh, &local.id).map_err(|error| match error {
+    let live = probe_ssh(ssh, &local.id).map_err(|error| match error {
         OrbitError::UnreachableDestination(message) => OrbitError::UnreachableDestination(format!(
             "{message}; check that `ssh {ssh}` logs in without a prompt and that `orbit` is on \
              the remote PATH"
@@ -75,7 +75,14 @@ pub fn add_host(
     })?;
     let facts = &live.facts;
     if facts.machine_id == local.id {
-        return Err(is_local(ssh, &format!("machine_id {}", local.id)));
+        return Err(OrbitError::host_registry(
+            HostRegistryCode::HostIsLocal,
+            format!(
+                "'{ssh}' answered with this machine's own machine_id {}; the local host is \
+                 always listed and is never added",
+                local.id
+            ),
+        ));
     }
     let migrated = migrated_entries(&registry, local, None)?;
     if let Some(existing) = registry
@@ -112,7 +119,15 @@ pub fn add_host(
         return Err(too_old(ssh, &live));
     };
     if task_prefix == local.task_prefix {
-        return Err(is_local(ssh, &format!("task prefix {task_prefix}")));
+        return Err(OrbitError::host_registry(
+            HostRegistryCode::TaskPrefixConflict,
+            format!(
+                "'{ssh}' is {}, a different machine, but it mints task ids with this machine's \
+                 own prefix {task_prefix}. A task id must name exactly one host, and a prefix is \
+                 fixed when `orbit init` runs, so that host cannot be registered here",
+                facts.machine_id
+            ),
+        ));
     }
     let name = match name {
         Some(name) => name.trim().to_string(),
@@ -130,7 +145,9 @@ pub fn add_host(
     };
     let mut entries = registered(&registry, &migrated).to_vec();
     entries.push(entry.clone());
-    registry.commit(entries)?;
+    registry
+        .commit(entries)
+        .map_err(|error| name_hint(error, "choose another with --name"))?;
     let host = remote_row_from(&entry, live);
     Ok(HostChange {
         action: "added",
@@ -172,7 +189,9 @@ pub fn rename_host(
     };
     let previous_name = std::mem::replace(&mut entry.name, new_name);
     let renamed = entry.clone();
-    registry.commit(entries)?;
+    registry
+        .commit(entries)
+        .map_err(|error| name_hint(error, "choose another new name"))?;
     Ok(HostChange {
         action: "renamed",
         entry: renamed.into(),
@@ -258,7 +277,7 @@ fn migrated_entries(
             .collect::<Vec<_>>(),
     };
     let legacy_path = legacy_destinations_path(registry.global_root());
-    let answers = in_parallel(&rows, |row| probe_ssh(&row.ssh, &row.machine_id, &local.id));
+    let answers = in_parallel(&rows, |row| probe_ssh(&row.ssh, &local.id));
     let mut entries: Vec<HostEntry> = Vec::with_capacity(rows.len());
     for (row, answer) in rows.into_iter().zip(answers) {
         let live = answer.map_err(|error| legacy_unreachable(row, &legacy_path, &error))?;
@@ -330,14 +349,18 @@ fn remote_row_from(entry: &HostEntry, live: LiveHost) -> HostRow {
     row
 }
 
-fn is_local(ssh: &str, what: &str) -> OrbitError {
-    OrbitError::host_registry(
-        HostRegistryCode::HostIsLocal,
-        format!(
-            "'{ssh}' answered with this machine's own {what}; the local host is always listed \
-             and is never added"
+/// Finish a name conflict with the remedy the refused command actually takes.
+fn name_hint(error: OrbitError, hint: &str) -> OrbitError {
+    match error {
+        OrbitError::HostRegistry {
+            code: HostRegistryCode::HostNameConflict,
+            message,
+        } => OrbitError::host_registry(
+            HostRegistryCode::HostNameConflict,
+            format!("{message}; {hint}"),
         ),
-    )
+        other => other,
+    }
 }
 
 fn too_old(ssh: &str, live: &LiveHost) -> OrbitError {

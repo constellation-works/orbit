@@ -465,14 +465,13 @@ fn parse_hosts(
     let path = hosts_path(global_root);
     let legacy_path = legacy_destinations_path(global_root);
     match (&snapshot.hosts, &snapshot.legacy) {
-        (Some(_), Some(_)) => Err(OrbitError::host_registry(
+        (Some(hosts), Some(legacy)) => Err(OrbitError::host_registry(
             HostRegistryCode::HostFileConflict,
             format!(
-                "both '{}' and the legacy '{}' exist, and Orbit will not choose between them. \
-                 Make sure every legacy row is in the host file (`orbit host list`), then \
-                 delete the legacy file",
+                "both '{}' and the legacy '{}' exist, and Orbit will not choose between them. {}",
                 path.display(),
-                legacy_path.display()
+                legacy_path.display(),
+                conflict_remedy(hosts, legacy, local)
             ),
         )),
         (Some(bytes), None) => {
@@ -498,6 +497,49 @@ fn parse_hosts(
         }
         (None, None) => Ok(RegisteredHosts::None),
     }
+}
+
+/// What to do about both files, worked out here because every `orbit host`
+/// command refuses while they coexist: the legacy routes the host file lacks,
+/// compared by `machine_id`, each with the command that registers it once the
+/// legacy file is gone.
+fn conflict_remedy(hosts: &[u8], legacy: &[u8], local: Option<&MachineIdentity>) -> String {
+    let parsed = |bytes: &[u8]| String::from_utf8(bytes.to_vec()).ok();
+    let hosts = parsed(hosts).and_then(|text| toml::from_str::<HostFileDocument>(&text).ok());
+    let legacy = parsed(legacy).and_then(|text| toml::from_str::<LegacyDocument>(&text).ok());
+    let (Some(hosts), Some(legacy)) = (hosts, legacy) else {
+        return "One of them does not parse, so compare them by hand: every legacy \
+                `machine_id` should appear in a host-file entry. Then delete the legacy file"
+            .to_string();
+    };
+    let missing = legacy
+        .destinations
+        .iter()
+        .filter(|row| local.is_none_or(|local| local.id != row.machine_id))
+        .filter(|row| {
+            !hosts
+                .hosts
+                .iter()
+                .any(|entry| entry.machine_id == row.machine_id)
+        })
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return "Every legacy row is already in the host file, so delete the legacy file"
+            .to_string();
+    }
+    format!(
+        "The host file lacks these legacy rows: {}. Delete the legacy file, then run {}",
+        missing
+            .iter()
+            .map(|row| format!("ssh {} ({})", row.ssh, row.machine_id))
+            .collect::<Vec<_>>()
+            .join(", "),
+        missing
+            .iter()
+            .map(|row| format!("`orbit host add {}`", row.ssh))
+            .collect::<Vec<_>>()
+            .join(" and ")
+    )
 }
 
 fn validate_entries(
@@ -578,7 +620,10 @@ fn validate_legacy(rows: &[LegacyHost], path: &Path) -> Result<(), OrbitError> {
 fn name_conflict(name: &str, holder: &str) -> OrbitError {
     OrbitError::host_registry(
         HostRegistryCode::HostNameConflict,
-        format!("host name '{name}' is already used by {holder}; choose another with --name"),
+        format!(
+            "host name '{name}' is already used by {holder}; host names are unique, compared \
+             case-insensitively"
+        ),
     )
 }
 

@@ -25,7 +25,7 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
     let CommandOutput::Payload(payload) = output else {
         return Ok(());
     };
-    let (doc, view) = payload.into_view();
+    let (doc, records, view) = payload.into_parts();
 
     // A stream renders itself: its records cannot be collected before the
     // first write, which is what a `json` document would require. The closure
@@ -52,7 +52,7 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
             for notice in table_notices(&view) {
                 eprintln!("{notice}");
             }
-            emit_ndjson(&doc)
+            emit_ndjson(&records.map_or(doc, Value::Array))
         }
         OutputMode::Table | OutputMode::Plain => emit_human(doc, view, sink),
     }

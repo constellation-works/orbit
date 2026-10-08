@@ -31,7 +31,10 @@ use serde::Serialize;
 pub use doctor::doctor_hosts_row;
 pub use mutate::{HostChange, HostChangeEntry, add_host, remove_host, rename_host};
 pub use probe::local_host_facts;
-use probe::{LiveHost, error_class, in_parallel, local_binary_version, local_protocol_fingerprint};
+use probe::{
+    LiveHost, error_class, error_detail, in_parallel, local_binary_version,
+    local_protocol_fingerprint,
+};
 pub use route::{
     HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, remote_task_holder,
     resolve_host_workspace, route_task_id, routed_client, selector_remote_host, task_prefix_remote,
@@ -68,6 +71,7 @@ pub struct HostRow {
 #[derive(Debug, Clone, Serialize)]
 pub struct HostProbeError {
     pub code: String,
+    /// What happened, without `code` repeated in front of it.
     pub message: String,
 }
 
@@ -332,7 +336,7 @@ fn remote_row(target: &RemoteTarget<'_>, caller_machine_id: &str, probe: bool) -
     if !probe {
         return row;
     }
-    let live = probe::probe_ssh(target.ssh(), target.machine_id(), caller_machine_id)
+    let live = probe::probe_ssh(target.ssh(), caller_machine_id)
         .and_then(|live| verify_identity(target, live));
     match live {
         Ok(live) => {
@@ -357,7 +361,7 @@ fn remote_row(target: &RemoteTarget<'_>, caller_machine_id: &str, probe: bool) -
                 Some(error.host_registry_code() == Some(HostRegistryCode::HostIdentityMismatch));
             row.error = Some(HostProbeError {
                 code: error_class(&error),
-                message: error.to_string(),
+                message: error_detail(&error),
             });
         }
     }
