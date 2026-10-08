@@ -203,9 +203,9 @@ function taskMutationPath(task, suffix = "") {
 }
 
 function scheduleFeedbackExpiry(map, key, context, delay) {
+  const scheduledEntry = map.get(key);
   setTimeout(() => {
-    const entry = map.get(key);
-    if (entry && entry.kind !== "pending") {
+    if (map.get(key) === scheduledEntry && scheduledEntry && scheduledEntry.kind !== "pending") {
       map.delete(key);
       renderTasks(taskList(context), context);
     }
