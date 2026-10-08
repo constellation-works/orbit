@@ -31,11 +31,14 @@ pub(super) struct TaskWriteOutput {
     pub persisted_id: String,
 }
 
+/// Create a task. One a claimed worker files carries, as its first comment,
+/// the claim and run that filed it [ORB-14792].
 pub(super) fn add(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    filed_by: Option<&orbit_types::tool::WorkerInvocation>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
@@ -77,7 +80,12 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
             required_tools: raw_required_tools,
             plan: String::new(),
-            comment: None,
+            comment: filed_by.map(|binding| {
+                format!(
+                    "Filed by a claimed worker: claim {}, run {} on machine {}.",
+                    binding.claim_id, binding.bound_run_id, binding.execution.machine_id
+                )
+            }),
             context_files: raw_context_files.clone(),
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))

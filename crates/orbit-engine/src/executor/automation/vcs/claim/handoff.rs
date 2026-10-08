@@ -61,7 +61,15 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
     }
-    let execution_summary = handoff_execution_summary(input, &candidate, !validation.is_empty())?;
+    let mut execution_summary =
+        handoff_execution_summary(input, &candidate, !validation.is_empty())?;
+    let unfiled = attach_unfiled_findings(host, &context, input)?;
+    if unfiled > 0 {
+        execution_summary.push_str(&format!(
+            "\n\nThe claimed worker could not file {unfiled} finding(s) on the owner; they are \
+             attached to this task as `{UNFILED_FINDINGS_ARTIFACT}` for the owner to file."
+        ));
+    }
     let review = handoff_review(input, &candidate)?;
 
     let handoff = TaskHandoff {
@@ -98,6 +106,53 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::NoDiff { .. } => "no_diff",
         },
     }))
+}
+
+/// The claimed-task artifact carrying findings the claimed worker could not
+/// file on the owner [ORB-14792].
+const UNFILED_FINDINGS_ARTIFACT: &str = "unfiled-findings.json";
+
+/// Attach the implementer's `unfiled_findings` output, if any, to the claimed
+/// task on the owner, through the claim, and return how many it holds.
+///
+/// A claimed worker files its findings through the run's coordinator. When
+/// the owner still refuses one, the worker returns it in this output field
+/// instead, so it reaches the owner as a structured record on the task that
+/// found it rather than only as prose in a reply nobody reads.
+fn attach_unfiled_findings<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &crate::context::ClaimExecutionContext,
+    input: &Value,
+) -> Result<usize, OrbitError> {
+    let Some(findings) = implementation_output(input)
+        .and_then(|output| output.get("unfiled_findings"))
+        .filter(|findings| !findings.is_null())
+    else {
+        return Ok(0);
+    };
+    let findings = findings
+        .as_array()
+        .filter(|findings| findings.iter().all(Value::is_object))
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "the implementer's `unfiled_findings` must be an array of finding objects"
+                    .to_string(),
+            )
+        })?;
+    if findings.is_empty() {
+        return Ok(0);
+    }
+    let record = json!({
+        "schema_version": 1,
+        "task_id": context.task_id,
+        "claim_id": context.claim_id,
+        "run_id": context.run_id,
+        "findings": findings,
+    });
+    let content = serde_json::to_vec_pretty(&record)
+        .map_err(|error| OrbitError::Execution(format!("unfiled findings: {error}")))?;
+    host.attach_claim_validation_log(UNFILED_FINDINGS_ARTIFACT, content)?;
+    Ok(findings.len())
 }
 
 /// The review disposition the handoff reports. A leaf that ran the before-PR

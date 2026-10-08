@@ -16,7 +16,9 @@
 //! each checked against that scope before anything reaches the owner:
 //!
 //! - `orbit.task.show` and the artifact calls name the claimed task;
-//! - `orbit.task.add` names the claimed task, and only it, as `spawned_from`;
+//! - `orbit.task.add` names the claimed task as `spawned_from`, and any other
+//!   relation only as `regression_from`: the owner, which holds the claimed
+//!   task's tags, allows that only for a review task's findings;
 //! - `orbit.friction.add` is recorded during the claimed task.
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
@@ -450,8 +452,11 @@ pub(super) fn execute_brokered(
                     "a claimed worker's brokered request does not accept `{field}`"
                 )));
             }
+            // The broker has no copy of the claimed task, so it admits a
+            // finding's `regression_from` by shape; the owner decides whether
+            // the claimed task files findings and whether each culprit exists.
             binding
-                .validate_spawned_relations(&input)
+                .validate_spawned_relations(&input, true)
                 .map_err(|reason| denied(&reason))?;
             input.clone()
         }

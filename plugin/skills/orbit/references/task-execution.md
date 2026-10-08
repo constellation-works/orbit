@@ -250,7 +250,12 @@ it — see [friction.md](friction.md). Then:
   `execution_summary` (with `context_files_added` and `comment` for anything
   you would have written to the task); the pipeline's handoff carries it to
   the owner. An owner-routed tool that answers unreachable is not a task
-  failure.
+  failure. A task you file must be `spawned_from` the claimed task; a claimed
+  `delivery-code-review` or `code-review` task may also give each finding a
+  `regression_from` relation to its culprit. `orbit.search` does not reach the
+  owner, so skip the duplicate search and say so; the owner's triage dedupes.
+  Return a finding the owner still refuses in `unfiled_findings`; the handoff
+  attaches it to the claimed task as `unfiled-findings.json`.
 - **Direct execution** (no envelope): persist the summary *and* move to `review`
   via `orbit.task.update`.
 

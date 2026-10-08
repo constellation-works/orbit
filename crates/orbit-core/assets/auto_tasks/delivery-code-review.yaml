@@ -20,12 +20,18 @@ template:
     that made the code wrong, then read its task from the frozen input — each
     `deliveries[]` entry lists its `commits` and the `task_ids` that landed them.
     File each confirmed finding with `orbit.task.add` as a `bug` tagged
-    `delivery-code-review`, carrying `relations: [{"type": "regression_from",
-    "target": "<culprit task ID>"}]`. A defect in an unattributed neighbor
+    `delivery-code-review`, carrying `relations: [{"type": "spawned_from",
+    "target": "<this task ID>"}, {"type": "regression_from", "target":
+    "<culprit task ID>"}]`. A defect in an unattributed neighbor
     commit, or one that predates the batch and was merely exposed by it, is filed
-    without the relation and says so — never blame a bystander delivery. Name the
-    culprit task and commit in the finding's description and in the evidence
-    finding text.
+    without the `regression_from` relation and says so — never blame a bystander
+    delivery. Name the culprit task and commit in the finding's description and
+    in the evidence finding text.
+    Search for duplicates with `orbit.search` (`"kind":"task"`) before filing.
+    A claimed run on another machine cannot reach the owner's search: file
+    without it and record the skipped search in the evidence; the owner's
+    triage dedupes. A finding the owner still refuses goes in the step output's
+    `unfiled_findings`, which the handoff attaches to this task.
     Complete the supplied evidence template, replace action_id with this task ID,
     write it to `.orbit/tmp/automation-coverage.json`, and attach it in this
     task's assigned executor run with

@@ -285,7 +285,8 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
 leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
 given no owner transport of its own: the few claim-scoped owner calls it may make (the claimed
-task's record and artifacts, a follow-up task `spawned_from` it, a friction) cross the run's
+task's record and artifacts, a follow-up task `spawned_from` it, or a review finding that is
+also `regression_from` its culprit, and a friction) cross the run's
 plugin broker outside the sandbox ([ORB-14260]; plugins
 [2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3, "Claimed-owner calls").
 Before this, every such agent finished its change, failed to save its summary through

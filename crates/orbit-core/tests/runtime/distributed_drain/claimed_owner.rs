@@ -2,8 +2,9 @@
 //!
 //! A claimed leaf's binding reaches the owner exactly as its run's broker
 //! forwards a bridged call. The owner creates a task from it only when every
-//! relation the task declares is `spawned_from` the claimed task, and only
-//! while the claim is still active; a friction the worker files is recorded
+//! relation the task declares is `spawned_from` the claimed task (a review
+//! task's finding may also name its culprit, see `no_diff`), and only while
+//! the claim is still active; a friction the worker files is recorded
 //! during the claimed task whatever the call names.
 
 use super::*;
@@ -53,6 +54,11 @@ fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
             "an extra relation",
             json!([{"type": "spawned_from", "target": leaf.task},
                    {"type": "blocks", "target": "TSO-999"}]),
+        ),
+        (
+            "a culprit from a task that is not a review [ORB-14792]",
+            json!([{"type": "spawned_from", "target": leaf.task},
+                   {"type": "regression_from", "target": leaf.task}]),
         ),
     ] {
         let refused = add(relations).unwrap_err();
