@@ -458,7 +458,7 @@ fn unreachable_host_read_is_audited_once_by_cli() {
 
 #[cfg(unix)]
 #[test]
-fn unbrokered_plugin_refusals_are_audited_once_over_mcp() {
+fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
     for scope in ["workspace", "global"] {
         let workspace = McpWorkspace::init();
         let source = write_plugin_with_scope(&workspace.home, "unbrokered", scope);
@@ -506,6 +506,25 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp() {
             "{scope}: refusal names the unavailable broker: {error}"
         );
         assert_caller_failure_rows(&workspace, tool, before, 1);
+        drop(client);
+
+        let cli = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["tool", "run", tool, "--input", "{}", "--format", "json"])
+            .env_remove("ORBIT_PLUGIN_BROKER")
+            .output()
+            .expect("run unbrokered CLI call");
+        assert!(!cli.status.success(), "{scope}: CLI must refuse the call");
+        assert!(
+            cli.stdout.is_empty(),
+            "{scope}: no plugin output on refusal"
+        );
+        let cli_error: Value =
+            serde_json::from_slice(&cli.stderr).expect("structured CLI broker refusal");
+        assert_eq!(
+            cli_error, error,
+            "{scope}: CLI and MCP return the same refusal"
+        );
+        assert_caller_failure_rows(&workspace, tool, before, 2);
     }
 }
 
