@@ -1,24 +1,20 @@
-#![allow(missing_docs)]
-
 use std::path::Path;
 use std::time::Duration;
 
-use tempfile::tempdir;
+use super::super::super::tests::test_support::sh_args;
+use super::super::{SpawnTraceContext, SpawnWithTimeoutRequest, spawn_with_timeout};
+use super::test_support::{process_is_live, read_pid, spawn_test_request, stdin_trace, wait_until};
 
-use super::super::supervisor::{
-    OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    spawn_with_timeout,
-};
-use super::test_support::sh_args;
-
-const STDIN_CHILD: &str = "activity_job::cli_runner::tests::supervisor::stdin_lifecycle_child";
+const STDIN_CHILD: &str =
+    "activity_job::cli_runner::supervisor::tests::spawn::stdin_lifecycle_child";
 const STDIN_DIR_ENV: &str = "ORBIT_TEST_STDIN_LIFECYCLE_DIR";
 #[cfg(target_os = "linux")]
-const STDIN_HOLDER: &str = "activity_job::cli_runner::tests::supervisor::escaped_stdin_holder";
+const STDIN_HOLDER: &str =
+    "activity_job::cli_runner::supervisor::tests::spawn::escaped_stdin_holder";
 #[cfg(target_os = "linux")]
 const HOLDER_DIR_ENV: &str = "ORBIT_TEST_STDIN_HOLDER_DIR";
 #[cfg(target_os = "linux")]
-const STDIN_PROVIDER: &str = "activity_job::cli_runner::tests::supervisor::stdin_provider";
+const STDIN_PROVIDER: &str = "activity_job::cli_runner::supervisor::tests::spawn::stdin_provider";
 #[cfg(target_os = "linux")]
 const PROVIDER_MODE_ENV: &str = "ORBIT_TEST_STDIN_PROVIDER_MODE";
 
@@ -123,15 +119,6 @@ fn stdin_lifecycle_child() {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = root;
-}
-
-fn stdin_trace() -> SpawnTraceContext<'static> {
-    SpawnTraceContext {
-        provider: "fixture",
-        job_run_id: "stdin-lifecycle",
-        task_id: None,
-        cwd: None,
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -355,296 +342,13 @@ impl Drop for StdinHolderGuard {
     }
 }
 
-fn spawn_test_request<'a>(
-    program: &'a str,
-    args: &'a [String],
-    cwd: Option<&'a Path>,
-    timeout: Duration,
-    trace: SpawnTraceContext<'a>,
-) -> SpawnWithTimeoutRequest<'a> {
-    SpawnWithTimeoutRequest {
-        program,
-        args,
-        stdin_bytes: b"",
-        env: &[],
-        cwd,
-        timeout,
-        sandbox: None,
-        trace,
-        output_capture_limit: None,
-        on_spawn: None,
-        on_progress: None,
-        stopped_descendants: None,
-        wait: None,
-        live_readers: None,
-        spawned_child: None,
-        cancel_pair: None,
-    }
-}
-
-/// The supervisor's private capture boundary must be exercised before the
-/// blob store can redact it; public runtime fixtures cannot control pipe cuts.
-#[test]
-fn output_capture_redacts_boundary_tokens_before_blob_storage() {
-    use orbit_common::security::redaction::{argv_redactor, redact_all};
-    use orbit_common::storage::blob_store::BlobStore;
-
-    use super::super::stdout_preview::bounded_redacted_text;
-
-    const LIMIT: usize = 1024 * 1024;
-    const SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
-    const MARKER: &str = "[REDACTED_SECRET]";
-    let args = Vec::new();
-    let dir = tempdir().expect("blob fixture");
-    let blobs = BlobStore::new(dir.path());
-    let protocol = b"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}\n";
-
-    // Oversized captures keep half the limit as a diagnostic prefix. The
-    // second case also plants a token across the total capture threshold.
-    for cut in [LIMIT / 2, LIMIT] {
-        let mut raw = vec![b'.'; cut - 20];
-        *raw.last_mut().expect("padding") = b'\n';
-        raw.extend_from_slice(SECRET.as_bytes());
-        raw.push(b'\n');
-        raw.resize(LIMIT + 8192, b'.');
-        raw.push(b'\n');
-        raw.extend_from_slice(protocol);
-        let (stdout, stderr, code, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
-            stdin_bytes: &raw,
-            output_capture_limit: Some(LIMIT),
-            ..spawn_test_request(
-                "/bin/cat",
-                &args,
-                None,
-                Duration::from_secs(10),
-                stdin_trace(),
-            )
-        })
-        .expect("capture boundary output");
-        assert_eq!(code, Some(0));
-        assert!(!timed_out);
-        assert!(stderr.bytes().is_empty());
-        assert!(stdout.truncated());
-        assert_eq!(stdout.observed_bytes(), raw.len());
-        assert_eq!(stdout.capture_limit_bytes(), LIMIT);
-        assert!(stdout.bytes().len() <= LIMIT + 128);
-        assert!(
-            stdout.protocol_bytes().ends_with(protocol),
-            "preserve raw final protocol frame"
-        );
-
-        let hash = blobs.write(stdout.bytes()).expect("store capture");
-        let stored = blobs.read(&hash).expect("read capture");
-        assert!(String::from_utf8_lossy(&stored).contains(MARKER));
-        let fragment = &SECRET[..MARKER.len() + 1];
-        let diagnostic = String::from_utf8_lossy(stdout.bytes());
-        for (surface, bytes) in [
-            (
-                "diagnostic prefix",
-                stdout.bytes()[..stdout.bytes().len() - stdout.protocol_bytes().len()].to_vec(),
-            ),
-            ("blob", stored.clone()),
-            (
-                "blob prefix",
-                blobs.read_prefix(&hash, cut).expect("blob preview"),
-            ),
-            (
-                "head preview",
-                bounded_redacted_text(&diagnostic, argv_redactor(), false, cut)
-                    .text
-                    .into_bytes(),
-            ),
-            (
-                "tail preview",
-                bounded_redacted_text(&diagnostic, argv_redactor(), true, cut)
-                    .text
-                    .into_bytes(),
-            ),
-        ] {
-            assert!(
-                !bytes
-                    .windows(fragment.len())
-                    .any(|window| window == fragment.as_bytes()),
-                "ORB-14575: {surface} must not retain a token prefix longer than its marker (cut={cut})"
-            );
-        }
-    }
-
-    // At or below the cap even invalid UTF-8 and secret-shaped bytes retain
-    // the original protocol/capture representation. Blob redaction remains
-    // exactly the existing whole-input redaction, including lossy decoding.
-    for len in [0, 64, LIMIT] {
-        let mut raw = vec![b'.'; len];
-        if len > SECRET.len() {
-            raw[..SECRET.len()].copy_from_slice(SECRET.as_bytes());
-            raw[SECRET.len()] = 0xff;
-        }
-        let (stdout, _, code, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
-            stdin_bytes: &raw,
-            output_capture_limit: Some(LIMIT),
-            ..spawn_test_request(
-                "/bin/cat",
-                &args,
-                None,
-                Duration::from_secs(10),
-                stdin_trace(),
-            )
-        })
-        .expect("capture under limit");
-        assert_eq!(code, Some(0));
-        assert!(!timed_out);
-        assert!(!stdout.truncated());
-        assert_eq!(stdout.bytes(), raw);
-        assert_eq!(stdout.protocol_bytes(), raw);
-        let hash = blobs
-            .write(stdout.bytes())
-            .expect("store under-limit output");
-        assert_eq!(
-            blobs.read(&hash).expect("read under-limit output"),
-            redact_all(&String::from_utf8_lossy(&raw)).into_bytes()
-        );
-    }
-}
-
-#[test]
-fn spawn_with_timeout_kills_grandchild_holding_output_pipes() {
-    let pid_dir = tempdir().expect("pid tempdir");
-    let pid_file = pid_dir.path().join("grandchild.pid");
-    let script = format!(
-        "(sleep 30) & child=$!; printf '%s\\n' \"$child\" > {}; printf '%s\\n' 'before timeout'; sleep 30",
-        shell_quote(pid_file.to_string_lossy().as_ref())
-    );
-    let args = sh_args(&script);
-
-    let started = std::time::Instant::now();
-    let (stdout, stderr, exit_code, duration, timed_out) = spawn_with_timeout(spawn_test_request(
-        "/bin/sh",
-        &args,
-        None,
-        Duration::from_millis(150),
-        SpawnTraceContext {
-            provider: "codex",
-            job_run_id: "job-timeout-tree",
-            task_id: Some("TTREE"),
-            cwd: None,
-        },
-    ))
-    .expect("spawn succeeds");
-
-    assert!(timed_out);
-    assert_eq!(exit_code, None);
-    assert_eq!(stdout.bytes(), b"before timeout\n");
-    assert!(stderr.bytes().is_empty());
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "timeout path should return promptly; reported duration={duration:?}"
-    );
-
-    let grandchild_pid = read_pid(&pid_file);
-    assert!(
-        wait_until(Duration::from_secs(2), || !process_is_live(grandchild_pid)),
-        "grandchild process {grandchild_pid} should be gone after timeout"
-    );
-}
-
-/// [ORB-13899] A long-running child is observable before it exits: the
-/// supervisor samples what it has written so far while it still runs.
-#[test]
-fn a_running_childs_output_is_sampled_before_it_exits() {
-    let args = sh_args("printf '%s\\n' 'reading config'; sleep 1");
-    let samples = std::cell::RefCell::new(Vec::<(usize, Vec<u8>)>::new());
-    let record = |progress: &OutputProgress| {
-        samples
-            .borrow_mut()
-            .push((progress.observed_bytes, progress.recent.clone()));
-    };
-    let (stdout, _stderr, exit_code, _duration, timed_out) =
-        spawn_with_timeout(SpawnWithTimeoutRequest {
-            on_progress: Some(ProgressReporter {
-                interval: Duration::from_millis(100),
-                report: &record,
-            }),
-            ..spawn_test_request(
-                "/bin/sh",
-                &args,
-                None,
-                Duration::from_secs(10),
-                SpawnTraceContext {
-                    provider: "codex",
-                    job_run_id: "job-progress",
-                    task_id: None,
-                    cwd: None,
-                },
-            )
-        })
-        .expect("spawn succeeds");
-
-    assert!(!timed_out);
-    assert_eq!(exit_code, Some(0));
-    assert_eq!(stdout.bytes(), b"reading config\n");
-    let samples = samples.into_inner();
-    assert!(
-        samples
-            .iter()
-            .any(|(observed, recent)| *observed == 15 && recent == b"reading config\n"),
-        "the child's first line must be sampled while it sleeps: {samples:?}"
-    );
-}
-
-fn read_pid(path: &Path) -> u32 {
-    std::fs::read_to_string(path)
-        .expect("read pid file")
-        .trim()
-        .parse()
-        .expect("parse pid")
-}
-
-fn wait_until<F>(timeout: Duration, mut condition: F) -> bool
-where
-    F: FnMut() -> bool,
-{
-    let started = std::time::Instant::now();
-    while started.elapsed() < timeout {
-        if condition() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    condition()
-}
-
-fn process_is_live(pid: u32) -> bool {
-    if pid == 0 || pid > i32::MAX as u32 {
-        return false;
-    }
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        return false;
-    }
-    let output = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output();
-    let Ok(output) = output else {
-        return true;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let status = String::from_utf8_lossy(&output.stdout);
-    !status.trim_start().starts_with('Z')
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 /// A provider whose shell tool stops itself: the supervisor ends the stopped
 /// descendant once the threshold passes, reports it, and the provider's wait
 /// returns so the invocation finishes long before its wall clock.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_provider_blocked_on_a_stopped_descendant_finishes_once_the_supervisor_ends_it() {
-    use super::super::supervisor::StoppedDescendantReporter;
+    use super::super::StoppedDescendantReporter;
     use orbit_common::process::stopped_descendants::StoppedDescendant;
 
     let script = "sh -c 'kill -STOP $$; echo resumed' & child=$!; echo \"child=$child\"; \
