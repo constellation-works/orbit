@@ -30,7 +30,7 @@ mod validation_tools;
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
+    required_os, unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
 };
 pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,

@@ -109,6 +109,16 @@ the hold, including after owner reconciliation. The checkpoint is an advisory
 selection hold, so an admission racing its publication still settles the pilot's
 old assessment as `superseded` without an ordinary write to the claimed task.
 
+**Applied pilot holds.** The latest applied assessment's typed holds are read on
+every admission path from its atomic audit (`OrbitRuntime::pilot_admission_hold`).
+An operator-validation hold defers the task from every executor. A
+`native_os_hold` (a criterion needing native evidence from an OS the task's `os:`
+tags do not name) is judged against the requesting executor's
+`AdmissionRequest::os`, so pull defers it only from a follower of another OS,
+naming the criterion and the tag in `deferred_conflicts`; the in-section re-check
+applies the same rule. A task whose `os:` tags exclude the executor is left to
+the OS filter below.
+
 **Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
 [ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
 4), and the owner skips a ready candidate whose `os:` tags (`os:linux`, `os:macos`,

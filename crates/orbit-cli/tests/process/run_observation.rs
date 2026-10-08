@@ -1794,8 +1794,16 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
                 &[],
                 Some("crew antigravity cannot run on this host"),
             ),
+            waiting(
+                "ORB-106",
+                "native_os_required",
+                &[],
+                Some(
+                    "Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`",
+                ),
+            ),
         ],
-        excluded_total: 3,
+        excluded_total: 4,
         waiting_recorded_at: Some(answered),
         waiting_by_reason: [
             ("context_lock_conflict", 4),
@@ -1803,6 +1811,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
             ("dependency_not_done", 1),
             ("host_os_mismatch", 1),
             ("crew_unavailable", 1),
+            ("native_os_required", 1),
         ]
         .into_iter()
         .map(|(reason, count)| (reason.to_string(), count))
@@ -1819,7 +1828,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
     assert_eq!(pass["queued"], 9, "{pass}");
-    assert_eq!(pass["excluded_total"], 3, "{pass}");
+    assert_eq!(pass["excluded_total"], 4, "{pass}");
     assert_eq!(pass["deferred"][0]["blocked_by"][0], "ORB-900", "{pass}");
     assert_eq!(
         pass["excluded"][0]["reason"], "dependency_not_done",
@@ -1838,13 +1847,14 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
     for expected in [
-        "Still waiting: 9 admissible and 3 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
+        "Still waiting: 9 admissible and 4 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
         "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
         "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
         "Task ORB-103: dependency_not_done blocked-by=ORB-901",
         "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
         "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
-        "idle: 18 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
+        "Task ORB-106: native_os_required (Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`)",
+        "idle: 19 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
     ] {
         assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
     }

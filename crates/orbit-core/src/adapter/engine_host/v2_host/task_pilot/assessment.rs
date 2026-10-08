@@ -7,8 +7,10 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_engine::DispatchError;
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{HostOs, TaskComplexity};
 use serde_json::{Value, json};
+
+use crate::application::task::NativeOsRequirement;
 
 use super::VALIDATION_TOOL_WARNINGS;
 use super::input::{action_failed, required_string, required_string_array, string_array_value};
@@ -307,6 +309,59 @@ pub(super) fn validate_recommendations(
         &["action", "evidence"],
     )?;
     Ok(complexity)
+}
+
+/// The pilot's typed native-OS finding: each `required_os` entry names a
+/// 1-based criterion of the task's `criteria` acceptance criteria, the OS
+/// whose native host alone can produce its evidence, and that evidence.
+/// Absent or empty is no finding. Admission holds only this typed field,
+/// never warning prose.
+pub(super) fn required_os(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+    criteria: usize,
+) -> Result<Vec<NativeOsRequirement>, DispatchError> {
+    let Some(entries) = assessment
+        .get("required_os")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let invalid =
+        |detail: &str| action_failed(action, format!("task {task_id} required_os {detail}"));
+    let mut requirements = Vec::new();
+    for entry in entries
+        .as_array()
+        .ok_or_else(|| invalid("must be an array or null"))?
+    {
+        let criterion = entry
+            .get("criterion")
+            .and_then(Value::as_u64)
+            .and_then(|criterion| usize::try_from(criterion).ok())
+            .filter(|criterion| (1..=criteria).contains(criterion))
+            .ok_or_else(|| {
+                invalid(&format!(
+                    "criterion must be a 1-based index of the task's {criteria} acceptance criteria"
+                ))
+            })?;
+        let os = entry
+            .get("os")
+            .and_then(Value::as_str)
+            .and_then(HostOs::parse)
+            .ok_or_else(|| invalid("os must be linux, macos, or windows"))?;
+        entry
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|evidence| !evidence.is_empty())
+            .ok_or_else(|| invalid("evidence must be a non-empty string"))?;
+        let requirement = NativeOsRequirement { criterion, os };
+        if !requirements.contains(&requirement) {
+            requirements.push(requirement);
+        }
+    }
+    Ok(requirements)
 }
 
 fn validate_optional_finding(

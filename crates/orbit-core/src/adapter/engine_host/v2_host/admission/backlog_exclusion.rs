@@ -95,6 +95,13 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     PilotAlreadyLanded,
     /// Current validation needs an operator-reserved governed operation.
     OperatorValidationHandoff,
+    /// The latest applied pilot assessment found a criterion that needs
+    /// native evidence from an OS this host does not run, and the task's
+    /// `os:` tags do not name that OS. `detail` names the criterion and the
+    /// tag to add; the tag, a re-scope, an operator decision or a newer
+    /// assessment without the finding clears it. A host of that OS may
+    /// still start the task.
+    NativeOsRequired,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
@@ -852,11 +859,15 @@ fn pilot_finding_exclusion(
             message: format!("read pilot findings: {error}"),
         }
     })?;
-    Ok(hold.map(|hold| {
+    Ok(hold.and_then(|hold| {
         let (reason, detail) = match hold {
             PilotAdmissionHold::OperatorValidation(hold) => (
                 BacklogTaskExclusionReason::OperatorValidationHandoff,
                 hold.detail(),
+            ),
+            PilotAdmissionHold::NativeOs(hold) => (
+                BacklogTaskExclusionReason::NativeOsRequired,
+                hold.wait_on(task, runtime.host_os())?,
             ),
             PilotAdmissionHold::Duplicate => (
                 BacklogTaskExclusionReason::PilotDuplicate,
@@ -867,13 +878,13 @@ fn pilot_finding_exclusion(
                 pilot_decision_detail("already_landed"),
             ),
         };
-        BacklogTaskExclusion {
+        Some(BacklogTaskExclusion {
             id: task.id.clone(),
             reason,
             conflicts: Vec::new(),
             crew: None,
             detail: Some(detail),
-        }
+        })
     }))
 }
 

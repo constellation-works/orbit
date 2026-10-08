@@ -119,6 +119,12 @@ fn follower_claim_supersedes_a_prepared_assessment_without_unscoped_writes() {
 }
 
 fn apply_validation_assessment(pair: &Pair, criterion: &str) {
+    apply_assessment(pair, criterion, json!({}));
+}
+
+/// Re-scope the task to `criterion` and apply one assessment of it carrying
+/// the agent findings in `findings`.
+fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
     let task_id = &pair.tasks[0];
     pair.wire
         .owner
@@ -132,21 +138,25 @@ fn apply_validation_assessment(pair: &Pair, criterion: &str) {
         )
         .unwrap();
     let prepared = prepare(pair, task_id);
+    let mut assessment = json!({
+        "task_id": task_id, "context_files_before": ["file:src/f0.rs"],
+        "context_files_after": ["file:src/f0.rs"], "disposition": "selectors",
+        "recommended_crew": "fixture", "recommended_complexity": "low",
+        "confidence": "high", "assessment_rationale": "The declared file contains the repair.",
+        "validation_approach": "Exercise the owner admission boundary.",
+        "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+        "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+        "duplicate_of": null, "already_landed": null,
+    });
+    for (field, finding) in findings.as_object().unwrap() {
+        assessment[field] = finding.clone();
+    }
     let output = action(
         pair,
         "apply_task_pilot_results",
         json!({
             "workspace_path": pair.owner_repo, "prepared": prepared,
-            "results": [{"partition_index": 0, "task_ids": [task_id], "tasks": [{
-                "task_id": task_id, "context_files_before": ["file:src/f0.rs"],
-                "context_files_after": ["file:src/f0.rs"], "disposition": "selectors",
-                "recommended_crew": "fixture", "recommended_complexity": "low",
-                "confidence": "high", "assessment_rationale": "The declared file contains the repair.",
-                "validation_approach": "Exercise the owner admission boundary.",
-                "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
-                "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
-                "duplicate_of": null, "already_landed": null,
-            }]}],
+            "results": [{"partition_index": 0, "task_ids": [task_id], "tasks": [assessment]}],
         }),
     );
     assert_eq!(output["status"], "succeeded", "{output}");
@@ -225,6 +235,60 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
         assert!(launch_refused(&second), "{second}");
         assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
     }
+}
+
+#[test]
+fn owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os() {
+    if !isolated(
+        module_path!(),
+        "owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os",
+    ) {
+        return;
+    }
+    let mut pair = Pair::new(1);
+    apply_assessment(
+        &pair,
+        "A real macOS `sandbox-exec` launch of the fixture succeeds.",
+        json!({"required_os": [{
+            "criterion": 1, "os": "macos",
+            "evidence": "The criterion requires a native macOS sandbox-exec launch.",
+        }]}),
+    );
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(orbit_types::task::HostOs::Linux));
+    let drain = pair.start_drain();
+    let first = pair.pass(&drain);
+    assert!(first["error"].is_null(), "{first}");
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let records = pair.follower_jobs.local_pull_admissions().unwrap();
+    let receipt = records
+        .iter()
+        .filter_map(|record| record.receipt.as_ref())
+        .next()
+        .unwrap();
+    assert_eq!(receipt.queue_depth, 0);
+    assert!(
+        receipt.deferred_conflicts.iter().any(|entry| {
+            entry.task_id == pair.tasks[0]
+                && entry
+                    .reason
+                    .contains("criterion 1 needs native macos evidence")
+                && entry.reason.contains("`os:macos`")
+        }),
+        "{receipt:?}"
+    );
+
+    // A follower that can produce the evidence is handed the task.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(orbit_types::task::HostOs::Macos));
+    let mac_drain = pair.start_drain();
+    pair.pass(&mac_drain);
+    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
 }
 
 #[test]

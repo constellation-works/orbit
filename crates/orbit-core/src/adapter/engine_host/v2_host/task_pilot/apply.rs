@@ -23,7 +23,7 @@ use super::persist::{
 use super::source::SourceSnapshot;
 use super::{
     CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root,
+    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root, required_os,
     required_string, required_string_array, string_array, string_array_value,
     unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
 };
@@ -63,6 +63,9 @@ pub(super) struct ValidatedTask {
     pub(super) history_marker: Option<String>,
     pub(super) complexity: TaskComplexity,
     pub(super) operation_id: String,
+    /// The typed native-OS finding, persisted as the audit's
+    /// `native_os_hold`.
+    pub(super) required_os: Vec<crate::application::task::NativeOsRequirement>,
 }
 
 /// One task's promotion decision, by the authority that requested it.
@@ -661,6 +664,18 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            let native_os = match required_os(
+                action,
+                task_id,
+                assessment,
+                current.acceptance_criteria.len(),
+            ) {
+                Ok(requirements) => requirements,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
             // The pilot never sees the deterministic findings — the lane's
             // validation-tool feasibility [ORB-11980] and this boundary's
             // over-attachment budget [ORB-12228] — so apply attaches them
@@ -762,6 +777,7 @@ pub(in super::super) fn apply(
                 history_marker,
                 complexity,
                 operation_id,
+                required_os: native_os,
             };
 
             let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);

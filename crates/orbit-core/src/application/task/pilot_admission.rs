@@ -4,7 +4,9 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    HostOs, Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
+};
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,11 +16,19 @@ use super::positive_validation_tools;
 use super::helpers::is_automation_actor;
 use crate::OrbitRuntime;
 
+/// The trusted history events an operator decision on a hold records.
+const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
+const NATIVE_OS_RESOLVED: &str = "native_os_requirement_resolved";
+
 /// A finding in the latest applied assessment that requires an operator decision.
 pub(crate) enum PilotAdmissionHold {
     Duplicate,
     AlreadyLanded,
     OperatorValidation(OperatorValidationHold),
+    /// Reported only while the task's `os:` tags miss a required OS. It holds
+    /// a host by [`NativeOsHold::wait_on`], so a host of that OS may still
+    /// start the task.
+    NativeOs(NativeOsHold),
 }
 
 /// A typed requirement that the implementing Agent capability cannot satisfy.
@@ -74,6 +84,83 @@ impl OperatorValidationHold {
     }
 }
 
+/// A criterion whose evidence only a host of one native OS can produce.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeOsRequirement {
+    /// 1-based, like an [`OperatorValidationRequirement`].
+    pub(crate) criterion: usize,
+    pub(crate) os: HostOs,
+}
+
+/// The pilot's typed native-OS finding, persisted with its atomic audit.
+/// It stays current while the acceptance criteria it assessed are unchanged,
+/// so re-scoping a criterion releases it; adding the matching `os:` tag
+/// satisfies it without a decision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeOsHold {
+    criteria: String,
+    pub(crate) requirements: Vec<NativeOsRequirement>,
+}
+
+impl NativeOsHold {
+    pub(crate) fn new(task: &Task, requirements: Vec<NativeOsRequirement>) -> Self {
+        Self {
+            criteria: criteria_digest(task),
+            requirements,
+        }
+    }
+
+    /// Requirements whose OS the task's `os:` tags do not name.
+    fn untagged<'a>(
+        &'a self,
+        tags: &'a TaskOsRequirement,
+    ) -> impl Iterator<Item = &'a NativeOsRequirement> {
+        self.requirements
+            .iter()
+            .filter(|requirement| !tags.any_of.contains(&requirement.os))
+    }
+
+    /// Why a host running `host` may not start `task`, or `None` when it may.
+    /// A host the task's own `os:` tags exclude is left to that routing, which
+    /// names its own wait (`host_os_mismatch`).
+    pub(crate) fn wait_on(&self, task: &Task, host: Option<HostOs>) -> Option<String> {
+        let tags = TaskOsRequirement::from_tags(&task.tags);
+        if !tags.satisfied_by(host) {
+            return None;
+        }
+        let unmet = self
+            .untagged(&tags)
+            .filter(|requirement| host != Some(requirement.os))
+            .collect::<Vec<_>>();
+        if unmet.is_empty() {
+            return None;
+        }
+        let needs = unmet
+            .iter()
+            .map(|requirement| {
+                format!(
+                    "criterion {} needs native {} evidence",
+                    requirement.criterion, requirement.os
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut add = unmet
+            .iter()
+            .map(|requirement| format!("`{}`", requirement.os.tag()))
+            .collect::<Vec<_>>();
+        add.sort();
+        add.dedup();
+        let add = add.join(" or ");
+        let host = host.map_or("an undeclared OS", HostOs::as_str);
+        Some(format!(
+            "Native OS requirement: {needs}, and the task's tags lack {add}, so a host running {host} cannot satisfy it. Add {add} with `orbit.task.update` so admission routes it to a capable host, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. A newer assessment supersedes the decision."
+        ))
+    }
+}
+
 /// Typed operator requirements derived directly from positive mentions of registered tools
 /// that are governed operations reserved for non-agent capabilities.
 pub(crate) fn operator_validation_requirements(
@@ -107,6 +194,48 @@ fn validation_material(task: &Task) -> String {
         .to_string()
         .as_bytes(),
     )
+}
+
+/// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
+/// re-scope that releases it.
+fn criteria_digest(task: &Task) -> String {
+    sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
+}
+
+/// Whether `history` holds a trusted operator resolution `event` of the hold
+/// that `operation_id`'s receipt persisted, while `scope` (a field of that
+/// hold and its current value) still matches.
+fn operator_resolved(
+    history: &[TaskHistoryEntry],
+    event: &str,
+    operation_id: &str,
+    (field, current): (&str, &str),
+) -> bool {
+    history.iter().any(|entry| {
+        if entry.event != event || is_automation_actor(&entry.by) {
+            return false;
+        }
+        let Some(record) = entry
+            .note
+            .as_deref()
+            .and_then(|note| serde_json::from_str::<Value>(note).ok())
+        else {
+            return false;
+        };
+        record["operation_id"] == operation_id
+            && record["hold"][field] == current
+            && matches!(
+                record["decision"].as_str(),
+                Some(
+                    "task-pilot-admission: clear"
+                        | "task-pilot-admission: approve-anyway"
+                        | "task-pilot-admission: evaluated"
+                )
+            )
+            && record["evidence"]
+                .as_str()
+                .is_some_and(decision_has_evidence)
+    })
 }
 
 fn decision_header(message: &str) -> bool {
@@ -175,31 +304,12 @@ impl OrbitRuntime {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
             let operation_id = header.strip_prefix("operation_id=").unwrap_or_default();
-            let operator_decision = history()?.iter().any(|entry| {
-                if entry.event != "operator_validation_resolved" || is_automation_actor(&entry.by) {
-                    return false;
-                }
-                let Some(record) = entry
-                    .note
-                    .as_deref()
-                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                else {
-                    return false;
-                };
-                record["operation_id"] == operation_id
-                    && record["hold"]["material"] == material
-                    && matches!(
-                        record["decision"].as_str(),
-                        Some(
-                            "task-pilot-admission: clear"
-                                | "task-pilot-admission: approve-anyway"
-                                | "task-pilot-admission: evaluated"
-                        )
-                    )
-                    && record["evidence"]
-                        .as_str()
-                        .is_some_and(decision_has_evidence)
-            });
+            let operator_decision = operator_resolved(
+                &history()?,
+                OPERATOR_VALIDATION_RESOLVED,
+                operation_id,
+                ("material", &material),
+            );
             if let Some(hold) = audit
                 .get("operator_validation_hold")
                 .filter(|hold| !hold.is_null())
@@ -229,8 +339,30 @@ impl OrbitRuntime {
                     }
                 }
             }
+            // Ranked after the other findings: it holds only some hosts, so a
+            // duplicate or landed finding must not hide behind it.
+            let native_os = match audit.get("native_os_hold").filter(|hold| !hold.is_null()) {
+                Some(hold) => {
+                    let hold: NativeOsHold =
+                        serde_json::from_value(hold.clone()).map_err(|error| {
+                            OrbitError::Execution(format!("decode native OS hold: {error}"))
+                        })?;
+                    let tags = TaskOsRequirement::from_tags(&task.tags);
+                    let current = hold.criteria == criteria_digest(task)
+                        && hold.untagged(&tags).next().is_some();
+                    (current
+                        && !operator_resolved(
+                            &history()?,
+                            NATIVE_OS_RESOLVED,
+                            operation_id,
+                            ("criteria", &hold.criteria),
+                        ))
+                    .then_some(PilotAdmissionHold::NativeOs(hold))
+                }
+                None => None,
+            };
             if legacy_decision {
-                return Ok(None);
+                return Ok(native_os);
             }
             for (field, hold) in [
                 ("already_landed", PilotAdmissionHold::AlreadyLanded),
@@ -242,7 +374,7 @@ impl OrbitRuntime {
             }
             // A clear latest assessment supersedes any older finding. Unrelated
             // comments and metadata edits do not release an existing hold.
-            return Ok(None);
+            return Ok(native_os);
         }
         Ok(None)
     }
@@ -328,16 +460,20 @@ impl OrbitRuntime {
 
     /// Only the trusted human update path calls this. Agent-authored comment
     /// text cannot mint a resolution event or satisfy an operator handoff.
-    pub(super) fn operator_validation_resolution(
+    /// An operator-validation or native-OS hold each records its own event;
+    /// one decision resolves the hold admission currently reports.
+    pub(super) fn pilot_hold_resolution(
         &self,
         task: &Task,
         params: &super::TaskUpdateParams,
         actor: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
-        let Some(PilotAdmissionHold::OperatorValidation(hold)) =
-            self.pilot_admission_hold(&task.id)?
-        else {
-            return Ok(None);
+        let (event, hold) = match self.pilot_admission_hold(&task.id)? {
+            Some(PilotAdmissionHold::OperatorValidation(hold)) => {
+                (OPERATOR_VALIDATION_RESOLVED, json!(hold))
+            }
+            Some(PilotAdmissionHold::NativeOs(hold)) => (NATIVE_OS_RESOLVED, json!(hold)),
+            _ => return Ok(None),
         };
         let rescoped = params
             .acceptance_criteria
@@ -354,7 +490,7 @@ impl OrbitRuntime {
             && !decision_has_evidence(message)
         {
             return Err(OrbitError::InvalidInput(
-                "operator validation decision requires evidence after its first line".into(),
+                "a task-pilot admission decision requires evidence after its first line".into(),
             ));
         }
         if let Some(message) = decision
@@ -375,7 +511,7 @@ impl OrbitRuntime {
                 && !references_artifact(&self.get_task_artifacts(&task.id)?)
             {
                 return Err(OrbitError::InvalidInput(
-                    "evaluated operator validation decisions must reference a non-empty attached evaluation artifact".into(),
+                    "evaluated task-pilot admission decisions must reference a non-empty attached evaluation artifact".into(),
                 ));
             }
         }
@@ -392,12 +528,12 @@ impl OrbitRuntime {
                     .strip_prefix("operation_id=")
             })
             .ok_or_else(|| {
-                OrbitError::Execution("operator validation decision has no pilot receipt".into())
+                OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
             })?;
         Ok(Some(TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: actor.into(),
-            event: "operator_validation_resolved".into(),
+            event: event.into(),
             note: Some(
                 json!({
                     "operation_id": operation_id,

@@ -72,7 +72,9 @@ reports one `validation_tool_warnings` finding per contradiction before the
 task is admitted. Preparation stays advisory. Transport, allowlist, credential,
 and utility findings do not withhold an already-approved backlog task. A current
 operator-reserved validation requirement holds local workflow admission and
-owner pull claims until an operator handles it.
+owner pull claims until an operator handles it, and a criterion that needs
+native evidence from an OS the task's `os:` tags do not name holds a host of
+another OS (see [Native OS evidence](#native-os-evidence)).
 
 - **Transport.** An MCP session reaches only MCP-advertised tools. `proc.spawn`
   is registered CLI-only, so a criterion that requires it over MCP can never
@@ -133,6 +135,26 @@ Older pilot receipts without the typed material snapshot are interpreted only
 while no document edit follows the assessment. Their governed-operation warnings
 are checked against the current registry and positive criterion mentions; all
 other warning kinds stay advisory.
+
+### Native OS evidence
+
+When a criterion needs execution or evidence that only a native host of one OS
+can produce (a real macOS `sandbox-exec` launch, a Linux Bubblewrap result), the
+pilot records a typed `required_os` finding naming the one-based criterion and
+the OS, commits it as `native_os_hold` in its assessment audit, and adds a
+`utility_warnings` entry naming the tag to add when the task lacks it. The pilot
+never edits tags. While the task's `os:` tags do not name that OS, a local
+drain, ship discovery, `orbit run ship` and an owner's pull admission on a host
+of another OS leave the task in `backlog` as `native_os_required`; readiness,
+`orbit run show` and the dashboard Drain card name the criterion and the tag. A
+host of that OS may still take it, and a task whose own `os:` tags exclude the
+host keeps `host_os_mismatch`. Platform mentions, cross-compilation targets,
+mocked checks and negative tests are not findings.
+
+The wait clears when the matching `os:` tag is added (admission then routes the
+task by its tags), when the acceptance criteria are re-scoped, when a newer
+assessment carries no such finding, or through the same evidenced human
+decision as above, which records `native_os_requirement_resolved`.
 
 
 ## Duplicate recovery
