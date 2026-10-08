@@ -11,6 +11,7 @@ let healthFixture = false;
 const healthQueries = [];
 let marker = 'first';
 let taskPaging = false;
+let mutationTask = null;
 let shipFixture = null;
 let shipLive = false;
 let shipRequests = 0;
@@ -36,6 +37,7 @@ function fixture(url) {
   switch (url.pathname) {
     case '/api/workspaces': return ['one', 'two'].map(id => ({ id, name: id, status: 'active', is_default: id === 'one' }));
     case '/api/tasks': {
+      if (mutationTask) return list([mutationTask]);
       if (shipFixture) return list([{ ...shipFixture }]);
       if (!taskPaging) return list([{ id: 'TEST-1', title: marker, status: 'in-progress', priority: 'medium' }]);
       const cursor = url.searchParams.get('cursor');
@@ -154,6 +156,10 @@ globalThis.fetch = async (path, options = {}) => {
     if (shipLive) return response({ error: 'Ship run is already in flight', code: 'ship_run_in_flight' }, 409);
     return new Promise(resolve => pendingShips.push(resolve));
   }
+  if (mutationTask && options.method === 'PATCH' && url.pathname === `/api/tasks/${encodeURIComponent(mutationTask.id)}`) {
+    mutationTask = { ...mutationTask, ...JSON.parse(options.body) };
+    return response(mutationTask);
+  }
   if (url.pathname === '/api/workflows/auto/readiness') readinessReads += 1;
   if (url.pathname === '/api/crews') crewReads += 1;
   if (networkDown) throw new TypeError('Fixture network unavailable');
@@ -179,6 +185,45 @@ check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty')
 for (const request of pendingReads.splice(0)) release(request, list([]));
 await settle();
 check(text('tasks-body').includes('No tasks'), 'successful empty Tasks produces empty state');
+
+// A first same-key expiry must not remove feedback created by a later undo.
+heldPath = null;
+mutationTask = { id: 'FEEDBACK-1', title: 'Feedback expiry fixture', status: 'in-progress', priority: 'medium' };
+refresh();
+await settle();
+const realFeedbackTimeout = globalThis.setTimeout;
+const feedbackExpiries = [];
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms === 8500) {
+    feedbackExpiries.push({ fn, args });
+    return { feedbackExpiry: true };
+  }
+  return realFeedbackTimeout(fn, ms, ...args);
+};
+const changeFeedbackCrew = async value => {
+  const select = node('tasks-body').querySelector('.task-crew-select');
+  check(select, 'feedback fixture exposes the crew control');
+  select.value = value;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  await settle();
+};
+await changeFeedbackCrew('opus');
+check(feedbackExpiries.length === 1, 'first crew feedback schedules its expiry');
+const firstUndo = node('tasks-body').querySelector('.mutation-undo');
+check(firstUndo, 'first crew feedback offers undo');
+click(firstUndo);
+await settle();
+check(feedbackExpiries.length === 2, 'undo feedback schedules its own expiry');
+feedbackExpiries[0].fn(...feedbackExpiries[0].args);
+await settle();
+check(node('tasks-body').querySelector('.mutation-undo'), 'earlier expiry preserves the newer undo window');
+feedbackExpiries[1].fn(...feedbackExpiries[1].args);
+await settle();
+check(!node('tasks-body').querySelector('.mutation-feedback'), 'newer expiry removes its own feedback');
+globalThis.setTimeout = realFeedbackTimeout;
+mutationTask = null;
+refresh();
+await settle();
 
 // The aggregate list carries each task's crew, but there is no single
 // workspace crew registry to validate it against or edit through.
