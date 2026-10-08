@@ -98,7 +98,7 @@ fn task_mutations_redact_prose_before_persistence() {
 
 /// Ordinary writes intentionally outside the exceptional-operation registry.
 /// New methods/paths default to operator-only, so a new unguarded route fails.
-/// Resume is ordinary only when the source input does not request completion.
+/// Resume and auto-drain are ordinary only when the request does not ask for completion.
 const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/tasks"),
     ("PATCH", "/tasks/:id"),
@@ -110,6 +110,7 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("PATCH", "/frictions/:id"),
     ("POST", "/frictions/:id/resolve"),
     ("POST", "/job-runs/:id/resume"),
+    ("POST", "/workflows/auto"),
     ("POST", "/workflows/ship"),
     ("POST", "/runs/:id/cancel"),
     ("POST", "/metrics/invocations"),
@@ -148,7 +149,7 @@ fn body(path: &str) -> Value {
         }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
         "/auto-tasks/mint" => json!({"name":"missing","acknowledge_unconditional":true}),
-        "/workflows/auto" => json!({"for_duration":"1m","complete":true}),
+        "/workflows/auto" => json!({"for_duration":"1m","complete":false}),
         _ => json!({
             "title":"guard fixture", "description":"HTTP guard check", "scope":"host",
             "expected_candidate_commit":"a", "expected_base_commit":"b",
@@ -239,27 +240,40 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                         assert!(payload["error"].is_string(), "{payload}");
                     }
 
-                    let response = agent.send(method, &uri, body(path));
-                    let status = response.status().as_u16();
-                    let payload: Value = response.json().unwrap();
-                    let completion_resume =
-                        path == "/job-runs/:id/resume" && id == "jrun-resume-done";
-                    if ORDINARY_WRITES.contains(&(method, path)) && !completion_resume {
-                        assert_ne!(
-                            payload["code"], "authorization_denied",
-                            "ordinary write must preserve agent admission: {method} {path}: {status} {payload}"
-                        );
+                    let bodies = if path == "/workflows/auto" {
+                        vec![
+                            json!({"for_duration":"1m","complete":false}),
+                            json!({"for_duration":"1m","complete":true}),
+                        ]
                     } else {
-                        assert_eq!(
-                            status, 403,
-                            "operator guard must protect {method} {path}: {payload}"
-                        );
-                        assert_eq!(
-                            payload["code"], "authorization_denied",
-                            "{method} {path}: {payload}"
-                        );
-                        if completion_resume {
-                            assert_eq!(payload["operation"], "auto_drain.complete");
+                        vec![body(path)]
+                    };
+                    for probe_body in bodies {
+                        let response = agent.send(method, &uri, probe_body.clone());
+                        let status = response.status().as_u16();
+                        let payload: Value = response.json().unwrap();
+                        let completion_resume =
+                            path == "/job-runs/:id/resume" && id == "jrun-resume-done";
+                        let completion_auto =
+                            path == "/workflows/auto" && probe_body["complete"] == true;
+                        let operator_only = completion_resume || completion_auto;
+                        if ORDINARY_WRITES.contains(&(method, path)) && !operator_only {
+                            assert_ne!(
+                                payload["code"], "authorization_denied",
+                                "ordinary write must preserve agent admission: {method} {path}: {status} {payload}"
+                            );
+                        } else {
+                            assert_eq!(
+                                status, 403,
+                                "operator guard must protect {method} {path}: {payload}"
+                            );
+                            assert_eq!(
+                                payload["code"], "authorization_denied",
+                                "{method} {path}: {payload}"
+                            );
+                            if completion_resume || completion_auto {
+                                assert_eq!(payload["operation"], "auto_drain.complete");
+                            }
                         }
                     }
                 }
