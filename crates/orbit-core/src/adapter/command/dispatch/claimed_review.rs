@@ -144,6 +144,10 @@ pub(super) fn execute_brokered(
     path: &str,
     session: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
+    // `claimed_owner` already passes the owner's canonical key, but keep this
+    // boundary safe if another caller ever forwards a raw spelling. Artifact
+    // storage trims and collapses these spellings before lookup.
+    let path = canonical_review_path(path)?;
     let scope = ClaimedReviewScope::derive(runtime, run, binding)?;
     if tool == PUT {
         accept_fields(object, &["id", "path", "content_base64", "model"])?;
@@ -156,7 +160,7 @@ pub(super) fn execute_brokered(
             "'{PUT}' carries only `{REVIEW_REPORT_ARTIFACT}` for the claimed reviewer"
         )));
     }
-    if tool == GET && !CONTRACT_READS.contains(&path) && !evidence_path(path) {
+    if tool == GET && !CONTRACT_READS.contains(&path.as_str()) && !evidence_path(&path) {
         return Err(read_refused());
     }
     runtime.authorize_tool_operation(
@@ -165,10 +169,12 @@ pub(super) fn execute_brokered(
         crate::runtime::tool_exec::CapabilityEnforcement::McpSessionOnly,
     )?;
     if tool == GET {
-        if !CONTRACT_READS.contains(&path) && !scope.hold_names(runtime, path, &session)? {
+        if !CONTRACT_READS.contains(&path.as_str())
+            && !scope.hold_names(runtime, &path, &session)?
+        {
             return Err(read_refused());
         }
-        let output = scope.read(runtime, path, object.get("model"), session)?;
+        let output = scope.read(runtime, &path, object.get("model"), session)?;
         if path == REVIEW_MANIFEST_ARTIFACT {
             scope.check_manifest(&output)?;
         }
@@ -191,9 +197,22 @@ pub(super) fn execute_brokered(
 /// Whether `path` could be an evidence artifact a hold names: a valid
 /// relative artifact path that is not one of the review contract's own.
 fn evidence_path(path: &str) -> bool {
-    orbit_types::task::validate_relative_artifact_path(path).is_ok()
-        && !CONTRACT_READS.contains(&path)
-        && path != REVIEW_GATE_ARTIFACT
+    let Some(path) = canonical_review_path_if_valid(path) else {
+        return false;
+    };
+    !CONTRACT_READS.contains(&path.as_str()) && path != REVIEW_GATE_ARTIFACT
+}
+
+/// Canonicalize an artifact name before comparing it with broker contract
+/// names or forwarding it to the owner, which resolves the same canonical key.
+fn canonical_review_path(path: &str) -> Result<String, OrbitError> {
+    orbit_types::task::canonical_artifact_path(path)
+        .map_err(|error| denied(&format!("the artifact path is not the task's own: {error}")))
+}
+
+/// Canonical form for untrusted names read from the owner's evidence hold.
+fn canonical_review_path_if_valid(path: &str) -> Option<String> {
+    canonical_review_path(path).ok()
 }
 
 fn read_refused() -> OrbitError {
@@ -274,24 +293,25 @@ impl ClaimedReviewScope<'_> {
         let Ok(hold) = serde_json::from_slice::<ReviewEvidenceHold>(&bytes) else {
             return Ok(false);
         };
-        if hold
-            .requirements
-            .iter()
-            .any(|required| required.artifact == path)
-        {
+        if hold.requirements.iter().any(|required| {
+            canonical_review_path_if_valid(&required.artifact).as_deref() == Some(path)
+        }) {
             return Ok(true);
         }
         for required in &hold.requirements {
-            if !evidence_path(&required.artifact) {
+            let Some(artifact_path) = canonical_review_path_if_valid(&required.artifact) else {
+                continue;
+            };
+            if !evidence_path(&artifact_path) {
                 continue;
             }
-            let Some(bytes) = self.owner_bytes(runtime, &required.artifact, session)? else {
+            let Some(bytes) = self.owner_bytes(runtime, &artifact_path, session)? else {
                 continue;
             };
             let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&bytes) else {
                 continue;
             };
-            if evidence.log_artifact == path
+            if canonical_review_path_if_valid(&evidence.log_artifact).as_deref() == Some(path)
                 && evidence.matches_requirement(required, &hold.candidate)
             {
                 return Ok(true);
