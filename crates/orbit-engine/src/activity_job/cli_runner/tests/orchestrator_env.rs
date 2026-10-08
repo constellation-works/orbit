@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_agent::loop_engine::audit::NullSink;
 #[cfg(target_os = "linux")]
@@ -76,6 +76,66 @@ fi
         "ambient credentials leaked into the provider child: {:?}",
         outcome.output
     );
+}
+
+/// [ORB-14771] A timeout whose deadline overflows `SystemTime` must not stamp
+/// `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`. A stamped 0 reads as an exhausted budget
+/// and clamps every nested `proc.spawn` to 0 ms. The timeout sits near
+/// `i64::MAX` seconds so the supervisor's `Instant + Duration` still fits.
+#[test]
+fn unrepresentable_deadline_omits_the_provider_deadline_stamp() {
+    let timeout = Duration::from_secs(i64::MAX as u64 - 1_000_000_000);
+
+    assert_eq!(observed_deadline_stamp(timeout), "unset");
+}
+
+/// [ORB-14771] A representable timeout still stamps the provider's deadline as
+/// a future epoch-millisecond instant, so a nested `proc.spawn` keeps its scope.
+#[test]
+fn representable_timeout_stamps_a_future_provider_deadline() {
+    let before_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis();
+
+    let stamp = observed_deadline_stamp(Duration::from_secs(600));
+
+    let deadline_ms: u128 = stamp.parse().expect("deadline stamp is epoch milliseconds");
+    assert!(deadline_ms >= before_ms + 600_000, "{stamp}");
+}
+
+/// Runs a grok provider that records its `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`
+/// value, or `unset` when the variable is absent, and returns that record.
+fn observed_deadline_stamp(timeout: Duration) -> String {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    let observed = temp.path().join("deadline");
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"${{ORBIT_ACTIVITY_DEADLINE_UNIX_MS-unset}}\" > '{}'\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            observed.display()
+        ),
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-deadline-stamp",
+        "grok:grok-build",
+        Arc::new(NullSink),
+    ));
+
+    let outcome = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()),
+        &test_agent_loop_spec_for("grok", timeout),
+        "test_activity",
+        "job-deadline-stamp",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(outcome.success, "{:?}", outcome.output);
+    fs::read_to_string(observed).expect("provider recorded its deadline env")
 }
 
 /// A claimed leaf's implementer may read its claimed task through the scoped

@@ -54,15 +54,15 @@ use crate::context::RuntimeHost;
 const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The provider's wall-clock deadline, as the `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`
-/// envelope entry.
-fn activity_deadline_env(wall_clock_timeout: Duration) -> (String, String) {
-    let deadline_ms = SystemTime::now()
-        .checked_add(wall_clock_timeout)
-        .and_then(|deadline| deadline.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |since_epoch| {
-            u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX)
-        });
-    (ACTIVITY_DEADLINE_ENV.to_string(), deadline_ms.to_string())
+/// envelope entry. A deadline that cannot be represented as a `SystemTime` has
+/// no entry: stamping a past value would read as an exhausted budget downstream.
+fn activity_deadline_env(wall_clock_timeout: Duration) -> Option<(String, String)> {
+    let since_epoch = SystemTime::now()
+        .checked_add(wall_clock_timeout)?
+        .duration_since(UNIX_EPOCH)
+        .ok()?;
+    let deadline_ms = u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX);
+    Some((ACTIVITY_DEADLINE_ENV.to_string(), deadline_ms.to_string()))
 }
 
 pub fn run_cli_backend(
@@ -383,7 +383,7 @@ pub(crate) fn run_cli_backend_for_step(
     // A nested `proc.spawn` may run as long as this invocation has left. The
     // supervisor's clock starts at spawn, a moment after this, so the stamped
     // deadline never outlasts the provider.
-    dispatch_env.push(activity_deadline_env(wall_clock_timeout));
+    dispatch_env.extend(activity_deadline_env(wall_clock_timeout));
     dispatch_env.extend(activity_policy_env(
         spec,
         activity_name,
