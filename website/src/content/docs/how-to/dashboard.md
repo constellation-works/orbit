@@ -9,7 +9,7 @@ The Orbit dashboard is the browser UI for the host it runs on: tasks, runs,
 errors, automation, and settings. It has no login and binds to loopback only.
 To use another machine's dashboard, tunnel to it over SSH.
 
-![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
+![The dashboard's Tasks list with status groups, the load, memory, and disk host chips, and the 24-hour refresh clock.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
@@ -91,8 +91,11 @@ prove that a particular task or run succeeded.
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | The workspace's `config.toml`. |
 
-The top bar counts failed runs, policy denials, long-running runs, and audited
-events in the selected window. Click a count to open the view behind it.
+The top bar shows live load, memory, and disk readings for the serving host,
+the drain state when a delivery window is active, and **Refresh**. Counts in
+the selected window sit on the rail: failed, timed-out, and interrupted runs
+under **Runs**, and audited events under **Audit**. Click a rail count to open
+the view behind it.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings.
@@ -173,7 +176,7 @@ approved backlog tasks in parallel. It sits at the top of the Tasks dock's
 **Drain** mode; `#auto-drain` and `#operations/auto-drain` open it. It needs a
 single active workspace.
 
-![The Drain card: running and free slots, eligible and blocked tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain card with delivery state and capacity, pool readiness counts, window length, parallel tasks, completion mode, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -183,15 +186,16 @@ The card shows:
   here too.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
-- **Eligible now** and **Blocked by running.** Counts from a read-only
-  readiness snapshot. Up to three blocked tasks are listed as
-  `ABC-1 waits on ABC-2`, with the lock they contend for.
+- **Pool.** Counts for **Pool: eligible**, **Pool: waiting on locks**,
+  **Pool: waiting on capacity**, and **Pool: waiting, other** from a read-only
+  readiness snapshot. Up to three tasks waiting on another task or run are
+  listed as `ABC-1 waits on ABC-2`, with the lock they contend for.
 
 | Control | Effect |
 |---|---|
 | **Window length** | `15m` to `8h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
-| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those eligible now. **Mark done** needs an operator session. |
+| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. **Mark done** needs an operator session. |
 | **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
@@ -231,13 +235,14 @@ the confirmation names. The run detail shows the claim (`pull_claim`), and a
 pull drain's detail lists the crews its window can run and those it excluded,
 with the reason.
 
-Three failure counts answer different questions:
+These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| Top-bar **failed runs** | Job runs that failed, timed out, or were interrupted in the selected window. |
+| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the selected window. |
 | Runs **Failed** filter | Runs in the `Failed` state, with no time window. |
-| **Health → Errors** | Step and event failures this month. |
+| **Audit** rail count | Audited events in the selected window. |
+| **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
@@ -477,7 +482,7 @@ returns the same `403` with `operation: auto_drain.approve_proposed`.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| Top-bar **failed runs** disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Runs** rail count disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
