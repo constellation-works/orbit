@@ -225,25 +225,14 @@
 }
 .runs-sort.active { color: var(--fg); }
 
-/* 601–768 px: the rows still scroll sideways, but the filter and notes are
-   pinned at the scroller's own width (`#runs-body` is a size container) so
-   they never scroll away or run past the viewport, and the first column stays
+/* Where the runs grid overflows through tablet widths, keep its State column
    pinned while the rest of the table scrolls under it. */
-@media (max-width: 768px) {
-  #runs-body { container-type: inline-size; }
-  .runs-row { min-width: 860px; }
+@media (max-width: 1183px) {
+  /* The grid's tracks overflow the row's auto-sized box at these widths.
+     Give the row its table width so its sticky State cell stays pinned for
+     the full scroll range. */
+  .runs-row { min-width: 942px; }
   .runs-row.workspace-attributed { min-width: 980px; }
-  .runs-filter,
-  .runs-source-warning,
-  .runs-scope-note,
-  .runs-limit-note {
-    position: sticky;
-    left: 0;
-    box-sizing: border-box;
-  }
-  .runs-source-warning,
-  .runs-scope-note,
-  .runs-limit-note { width: 100cqw; }
   .runs-row > :first-child {
     position: sticky;
     left: 0;
@@ -265,6 +254,26 @@
   .runs-row:not(.runs-header):hover > :first-child {
     background: var(--bg-hover);
   }
+}
+
+/* 601–768 px: the filter and notes are pinned at the scroller's own width
+   (`#runs-body` is a size container) so they never scroll away or run past
+   the viewport. */
+@media (max-width: 768px) {
+  #runs-body { container-type: inline-size; }
+  .runs-row { min-width: 860px; }
+  .runs-row.workspace-attributed { min-width: 980px; }
+  .runs-filter,
+  .runs-source-warning,
+  .runs-scope-note,
+  .runs-limit-note {
+    position: sticky;
+    left: 0;
+    box-sizing: border-box;
+  }
+  .runs-source-warning,
+  .runs-scope-note,
+  .runs-limit-note { width: 100cqw; }
 }
 
 /* Phones: each run is a card; the header becomes a row of sort buttons. */
