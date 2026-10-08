@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
 
 # ------------------------------------------------------------
 # Config
@@ -73,6 +73,7 @@ help:
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
 	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
 	@echo "  make cross-revision-check-test  Test the provenance-safe before/after validation helper"
+	@echo "  make web-memory-soak  Linux dashboard RSS soak on a large fixture (SOAK_FLAGS=... optional)"
 	@echo "  make watch        Continuous check + test"
 
 # ------------------------------------------------------------
@@ -237,6 +238,12 @@ compiler-cache-bench:
 # docs/runbooks/compiler-cache.md. [ORB-11981]
 cross-revision-check-test:
 	./scripts/test-cross-revision-check.sh
+
+# Dashboard resident-memory soak on a large disposable store (Linux only). See
+# docs/runbooks/web-memory-soak.md. [ORB-14723]
+web-memory-soak:
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release
+	python3 scripts/web-memory-soak.py --bin target/release/$(BINARY) $(SOAK_FLAGS)
 
 # ------------------------------------------------------------
 # Dev Loop

@@ -12,6 +12,14 @@ use std::collections::HashMap;
 
 use super::params::*;
 
+/// When a run finished, for rollups that count runs per job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRunCompletion {
+    pub job_id: String,
+    /// `finished_at`, or `created_at` for a row that never recorded one.
+    pub completed_at: DateTime<Utc>,
+}
+
 pub trait JobRunStoreBackend: Send + Sync {
     /// The workspace partition this store reads and writes runs under. Run
     /// ids are only unique within it.
@@ -173,6 +181,12 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// Every recorded `duration_ms` among runs matching `query`, ignoring
     /// its `limit`.
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
+    /// Job and completion time of every run matching `query`, ignoring its
+    /// `limit`. Feeds per-job rollups without decoding whole runs.
+    fn list_job_run_completions_filtered(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<Vec<JobRunCompletion>, OrbitError>;
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn insert_job_run(

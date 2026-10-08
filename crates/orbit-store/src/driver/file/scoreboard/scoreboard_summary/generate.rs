@@ -11,11 +11,11 @@ use super::{
     AgentSummary, RecentSummary, ScoreboardInputs, ScoreboardSummary, TopToolCall,
     WorkflowRunCount, select_notable_completions, snapshot_coverage,
 };
+use crate::contracts::JobRunCompletion;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::{JobRun, JobRunState};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -168,11 +168,14 @@ fn in_window(timestamp: Option<DateTime<Utc>>, since: Option<DateTime<Utc>>) -> 
     }
 }
 
-fn aggregate_workflows_run(runs: &[JobRun], since: Option<DateTime<Utc>>) -> Vec<WorkflowRunCount> {
+fn aggregate_workflows_run(
+    runs: &[JobRunCompletion],
+    since: Option<DateTime<Utc>>,
+) -> Vec<WorkflowRunCount> {
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
     for run in runs {
-        if run.state == JobRunState::Success && in_window(Some(run_completed_at(run)), since) {
-            *counts.entry(run.job_id.to_string()).or_insert(0) += 1;
+        if in_window(Some(run.completed_at), since) {
+            *counts.entry(run.job_id.clone()).or_insert(0) += 1;
         }
     }
     let mut rows: Vec<WorkflowRunCount> = counts
@@ -214,8 +217,7 @@ fn build_recent_summary(
     let workflows_run: u64 = inputs
         .job_runs
         .iter()
-        .filter(|run| run.state == JobRunState::Success)
-        .filter(|run| run_completed_at(run) >= since)
+        .filter(|run| run.completed_at >= since)
         .count() as u64;
 
     RecentSummary {
@@ -232,11 +234,4 @@ fn build_recent_summary(
 /// generation uses the envelope `updated_at` timestamp.
 pub(super) fn task_done_at(task: &Task) -> Option<DateTime<Utc>> {
     Some(task.updated_at)
-}
-
-/// Best-effort completion timestamp for a JobRun. `finished_at` is set when
-/// the run terminates; the fallback to `created_at` keeps the recency
-/// filter conservative for legacy rows that pre-date that field.
-fn run_completed_at(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.unwrap_or(run.created_at)
 }
