@@ -205,6 +205,60 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
+/// Restores a path's permissions when dropped, so an assertion that panics
+/// while the path is read-only cannot leave a directory the tempdir cannot
+/// delete (the leftover would sit inside an agent worktree's `.orbit/tmp`).
+#[cfg(unix)]
+struct RestorePermissions {
+    path: PathBuf,
+    original: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl RestorePermissions {
+    fn set_mode(path: &Path, mode: u32) -> Self {
+        let original = fs::metadata(path).expect("path to restrict").permissions();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("restrict path");
+        Self {
+            path: path.to_path_buf(),
+            original,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, self.original.clone());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_permissions_guard_restores_the_mode_when_the_test_panics() {
+    let temp = tempdir().expect("fixture");
+    let dir = temp.path().join("locked");
+    fs::create_dir_all(&dir).expect("dir");
+    fs::write(dir.join("file"), "x").expect("file");
+    let before = fs::metadata(&dir).expect("metadata").permissions().mode();
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _restore = RestorePermissions::set_mode(&dir, 0o555);
+        assert_eq!(
+            fs::metadata(&dir).expect("metadata").permissions().mode() & 0o777,
+            0o555
+        );
+        panic!("assertion failed between chmod and restore");
+    }));
+
+    assert!(unwound.is_err(), "the fixture must have panicked");
+    assert_eq!(
+        fs::metadata(&dir).expect("metadata").permissions().mode(),
+        before,
+        "the guard must restore the directory permissions on unwind"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
@@ -234,9 +288,7 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
 
     // The first invocation prepared Orbit's enumerated global SQLite state.
     // A second list must work with the surrounding global directory read-only.
-    let original_permissions = fs::metadata(&global).expect("global root").permissions();
-    fs::set_permissions(&global, fs::Permissions::from_mode(0o555))
-        .expect("make global root read-only");
+    let _restore_global = RestorePermissions::set_mode(&global, 0o555);
     let listed_read_only = run_orbit_json(
         &repo,
         &home,
@@ -277,7 +329,6 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
         !lock.exists(),
         "failed validation must not leave a lock file"
     );
-    fs::set_permissions(&global, original_permissions).expect("restore global permissions");
 }
 
 #[test]

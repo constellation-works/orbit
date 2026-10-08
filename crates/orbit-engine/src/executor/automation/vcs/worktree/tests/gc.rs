@@ -144,6 +144,234 @@ fn removal_without_force_fails_closed_on_a_dirty_worktree() {
     );
 }
 
+/// Puts a read-only directory holding a file inside the worktree, the way an
+/// aborted fixture leaves one, and keeps it out of the dirty-tree check.
+#[cfg(unix)]
+fn leave_read_only_fixture(repo: &Path, worktree: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(repo.join(".git/info/exclude"), ".orbit/tmp/\n").unwrap();
+    let locked = worktree.join(".orbit/tmp/x/home/.orbit");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(locked.join("state.db"), vec![7u8; 4096]).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    locked
+}
+
+/// Lets the tempdir delete the fixture if an assertion fails first.
+#[cfg(unix)]
+struct Unlock(PathBuf);
+
+#[cfg(unix)]
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
+fn listed_worktrees(repo: &Path) -> String {
+    git(repo, &["worktree", "list", "--porcelain"])
+}
+
+#[cfg(unix)]
+#[test]
+fn gc_removes_a_worktree_holding_a_read_only_directory() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-readonly", JobRunState::Success, &["ORB-READONLY"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/readonly");
+    let locked = leave_read_only_fixture(&repo, &worktree);
+    let _unlock = Unlock(locked);
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-READONLY", TaskStatus::Done)]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "removed");
+    assert!(result.reports[0].bytes_reclaimed > 0);
+    assert!(!worktree.exists(), "the whole directory must be gone");
+    assert!(!listed_worktrees(&repo).contains("readonly"));
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_pipeline_cleanup_removes_a_worktree_holding_a_read_only_directory() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-forced");
+    add_worktree(&repo, &worktree, "orbit/forced");
+    let locked = leave_read_only_fixture(&repo, &worktree);
+    let _unlock = Unlock(locked);
+
+    remove_worktree(&repo, &worktree, Some("orbit/forced"), true).unwrap();
+
+    assert!(!worktree.exists(), "forced removal must leave nothing");
+    assert!(!listed_worktrees(&repo).contains("forced"));
+}
+
+#[cfg(unix)]
+#[test]
+fn repair_never_follows_a_symlink_out_of_the_worktree() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-symlinked");
+    add_worktree(&repo, &worktree, "orbit/symlinked");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+    let _unlock = Unlock(outside.clone());
+    std::os::unix::fs::symlink(&outside, worktree.join("escape")).unwrap();
+
+    remove_worktree(&repo, &worktree, Some("orbit/symlinked"), true).unwrap();
+
+    assert!(!worktree.exists());
+    assert_eq!(
+        fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o555,
+        "a directory outside the worktree must keep its mode"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-leftover", JobRunState::Success, &["ORB-LEFTOVER"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/leftover");
+    let locked = leave_read_only_fixture(&repo, &worktree);
+    let _unlock = Unlock(locked.clone());
+    // Reproduce the failure directly: Git unregisters the worktree, then
+    // cannot delete the read-only directory.
+    let failed = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree)
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(worktree.exists() && !listed_worktrees(&repo).contains("leftover"));
+    assert_eq!(
+        fs::metadata(&locked).unwrap().permissions().mode() & 0o777,
+        0o555
+    );
+    let unmapped = repo.join(".orbit/state/worktrees/orbit-jrun-unmapped");
+    fs::create_dir_all(&unmapped).unwrap();
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-LEFTOVER", TaskStatus::Done)]);
+    let options = |delete| WorktreeGcOptions {
+        delete,
+        estimate_bytes: true,
+        ..Default::default()
+    };
+
+    let dry = collect_worktrees(&repo, std::slice::from_ref(&run), &host, &options(false)).unwrap();
+    assert!(
+        dry.reports
+            .iter()
+            .any(|report| report.path == worktree && report.action == "would_remove"),
+        "{:?}",
+        dry.reports
+    );
+    assert!(worktree.exists(), "a dry run must not delete");
+
+    let result = collect_worktrees(&repo, &[run], &host, &options(true)).unwrap();
+
+    let reclaimed = result
+        .reports
+        .iter()
+        .find(|report| report.path == worktree)
+        .unwrap();
+    assert_eq!(reclaimed.action, "removed");
+    assert!(reclaimed.bytes_reclaimed > 0);
+    assert!(!worktree.exists());
+    let untouched = result
+        .reports
+        .iter()
+        .find(|report| report.path == unmapped)
+        .unwrap();
+    assert_eq!(untouched.action, "skipped:unrecognized");
+    assert!(unmapped.exists());
+}
+
+/// A directory whose `.git` link still resolves may be a moved worktree that
+/// `git worktree repair` brings back, so GC leaves it for an operator.
+#[test]
+fn gc_keeps_an_unregistered_directory_whose_git_link_still_resolves() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-moved", JobRunState::Success, &["ORB-MOVED"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    fs::create_dir_all(&worktree).unwrap();
+    fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", repo.join(".git").display()),
+    )
+    .unwrap();
+    fs::write(worktree.join("work.txt"), "precious").unwrap();
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-MOVED", TaskStatus::Done)]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "skipped:not_registered_worktree");
+    assert!(worktree.join("work.txt").exists());
+}
+
+/// A leftover is reclaimed only on the same gates as any worktree.
+#[test]
+fn gc_keeps_a_leftover_whose_task_is_not_settled() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-open", JobRunState::Success, &["ORB-OPEN"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    fs::create_dir_all(&worktree).unwrap();
+    fs::write(worktree.join("work.txt"), "unsettled").unwrap();
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-OPEN", TaskStatus::Review)]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "skipped:task_status_ineligible");
+    assert!(worktree.join("work.txt").exists());
+}
+
 /// A run record shaped exactly like a real `task_pr_pipeline` run: `task_ids`
 /// as an array, no `branch_prefix`, and no singular `task_id`. Also no
 /// `run_id` — the engine injects that into the activity input at dispatch, so

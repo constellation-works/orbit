@@ -252,7 +252,10 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
                     "hm_owner/ws: remote tool failed (execution_failed): store busy".into(),
                 ),
             );
-            // A settled task's checkout that Git no longer lists.
+            // A settled task's checkout that Git no longer lists but whose
+            // `.git` link still resolves, so `git worktree repair` could bring
+            // it back. (One whose link is gone is the remains of a failed
+            // removal, and GC reclaims it.)
             let moved = setup("jrun-claim-moved", "T-CLAIM-MOVED");
             host.set_status("T-CLAIM-MOVED", TaskStatus::Done);
             git(
@@ -261,6 +264,11 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
             );
             fs::create_dir_all(&moved.path).unwrap();
             fs::write(moved.path.join("notes.txt"), "left behind").unwrap();
+            fs::write(
+                moved.path.join(".git"),
+                format!("gitdir: {}\n", fixture.repo.join(".git").display()),
+            )
+            .unwrap();
 
             let cases = [
                 (

@@ -83,10 +83,17 @@ The pull drain also
 reclaims each settled leaf's `target/` on its next pass, so follower disk
 does not depend on this schedule.
 
+Removal first restores owner access to read-only directories inside the
+worktree (a test fixture can leave one), so Git can delete the whole tree.
+
 A directory under the worktree root that Git does not list as a worktree is
-never removed (`skipped:not_registered_worktree`). `detail` gives the remedy:
-`git worktree repair <path>` if it was moved, otherwise inspect it and delete
-it by hand once nothing in it is needed.
+never removed (`skipped:not_registered_worktree`), unless it is the leftover
+of a removal that failed partway: its `.git` link is missing or names an
+administrative directory that no longer exists, and it maps to a terminal run
+with no live worker whose tasks are settled. GC then removes it as `removed`,
+with the reason in `detail`. For any other such directory, `detail` gives the
+remedy: `git worktree repair <path>` if it was moved, otherwise inspect it and
+delete it by hand once nothing in it is needed.
 
 `--target-only` reclaims per-worktree Cargo `target/` directories, which hold
 most of a worktree's size. It deletes only `<worktree>/target` and keeps the
