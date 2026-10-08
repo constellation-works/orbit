@@ -111,13 +111,21 @@ function clockServiceText(clock) {
   return clock.enabled ? "enabled" : "paused";
 }
 
-function nextEvaluationText(projection, fallbackAt) {
+// What a waiting definition waits for, by the trigger that holds it. A
+// definition without a trigger of its own (an auto-task) waits for deliveries.
+function waitingText(trigger) {
+  if (trigger?.state?.kind === "execution_failed") return "Waiting for failed tasks";
+  if (trigger?.state) return "Waiting for task creation or edits";
+  return "Waiting for deliveries";
+}
+
+function nextEvaluationText(projection, fallbackAt, trigger) {
   const state = projection?.state;
   const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
   const when = at ? time(at) : null;
   if (state === "disabled") return when ? `Disabled · hypothetical next ${when}` : "Disabled";
   if (state === "paused") return when ? `Paused · hypothetical next ${when}` : "Paused";
-  if (state === "waiting") return "Waiting for deliveries";
+  if (state === "waiting") return waitingText(trigger);
   if (state === "never_observed") return "Never observed";
   if (state === "unavailable") return "Unavailable";
   if (state === "scheduled") return when || "Scheduled";
@@ -162,11 +170,24 @@ function lastFireText(fire) {
   return fire.state ? `${fire.state} · ${when}` : when;
 }
 
+// "on task creation/edit · debounce 2m": what fires a state-triggered routine
+// and how long it settles first.
+function stateTriggerText(state) {
+  const what = state.kind === "execution_failed" ? "on task execution failure" : "on task creation/edit";
+  return state.debounce_minutes ? `${what} · debounce ${state.debounce_minutes}m` : what;
+}
+
 function routineScheduleText(routine) {
   if (routine.trigger?.deliveries_landed) {
     return `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}`;
   }
+  if (routine.trigger?.state) return stateTriggerText(routine.trigger.state);
   return routine.cron || "—";
+}
+
+// Delivery- and state-triggered routines have no cron cadence to describe.
+function routineEventDriven(routine) {
+  return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state);
 }
 
 function operationIdentity(name, state) {
@@ -529,13 +550,60 @@ function jobLink(target) {
   return link;
 }
 
-// The next hour as a strip: where each routine's next slot lands, with paused
+// One cron field as a membership test, or null for a shape this does not
+// read (names, `L`, `?`): the caller then plots only the slot the server named.
+function cronFieldMatcher(field, min, max) {
+  const accepted = new Set();
+  for (const part of String(field).split(",")) {
+    const match = /^(?:\*|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/.exec(part);
+    if (!match) return null;
+    const step = match[3] === undefined ? 1 : Number(match[3]);
+    if (step < 1) return null;
+    const ranged = part.startsWith("*") ? [min, max] : [Number(match[1]), match[2] === undefined ? (match[3] === undefined ? Number(match[1]) : max) : Number(match[2])];
+    if (ranged[0] < min || ranged[1] > max || ranged[0] > ranged[1]) return null;
+    for (let value = ranged[0]; value <= ranged[1]; value += step) accepted.add(value);
+  }
+  return (value) => accepted.has(value);
+}
+
+// Every fire of a cron routine from its next slot to the end of the window.
+// The server names only the next slot; the rest are the minutes after it that
+// the cron expression matches, read in the host's cron zone. A zone-sensitive
+// expression on a host whose zone is unknown keeps just the named slot.
+function routineFireTimes(routine, first, until) {
+  const fields = String(routine.cron || "").trim().split(/\s+/);
+  if (fields.length !== 5 || routineEventDriven(routine)) return [first];
+  const matchers = [
+    cronFieldMatcher(fields[0], 0, 59), cronFieldMatcher(fields[1], 0, 23), cronFieldMatcher(fields[2], 1, 31),
+    cronFieldMatcher(fields[3], 1, 12), cronFieldMatcher(fields[4], 0, 7),
+  ];
+  const offset = Number(hostCronZone?.offset_seconds);
+  if (matchers.includes(null) || (!Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
+  const [minute, hour, dom, month, dow] = matchers;
+  const zoneOffset = Number.isFinite(offset) ? offset * 1000 : 0;
+  const times = [first];
+  for (let at = Math.floor(first / 60_000) * 60_000 + 60_000; at <= until; at += 60_000) {
+    const local = new Date(at + zoneOffset);
+    const weekday = local.getUTCDay();
+    // Day-of-month and day-of-week combine with OR unless one is a wildcard.
+    const days = fields[2] !== "*" && fields[4] !== "*"
+      ? dom(local.getUTCDate()) || dow(weekday) || (weekday === 0 && dow(7))
+      : dom(local.getUTCDate()) && (dow(weekday) || (weekday === 0 && dow(7)));
+    if (minute(local.getUTCMinutes()) && hour(local.getUTCHours()) && month(local.getUTCMonth() + 1) && days) times.push(at);
+  }
+  return times;
+}
+
+// The next hour as a strip: where each routine's slots land, with paused
 // routines drawn hollow so an operator sees skipped slots, not only live ones.
+// A routine due several times in the hour is drawn at each of its slots.
 function routineTimeline(routines, now = Date.now()) {
   const horizon = 60 * 60_000;
   const due = routines
-    .map((routine) => ({ routine, at: new Date(routineNextAt(routine) || NaN).getTime() }))
-    .filter(({ at }) => Number.isFinite(at) && at >= now - 60_000 && at <= now + horizon)
+    .map((routine) => ({ routine, first: new Date(routineNextAt(routine) || NaN).getTime() }))
+    .filter(({ first }) => Number.isFinite(first) && first >= now - 60_000 && first <= now + horizon)
+    .flatMap(({ routine, first }) => routineFireTimes(routine, first, now + horizon)
+      .map((at, index) => ({ routine, at, repeat: index > 0 })))
     .sort((a, b) => a.at - b.at);
   const strip = el("section", { class: "operation-timeline" });
   strip.setAttribute("aria-label", "Next hour");
@@ -557,19 +625,26 @@ function routineTimeline(routines, now = Date.now()) {
   // Labels are stacked into rows so two routines due in the same minute
   // stay legible: each label takes the first row where it does not overlap
   // the previous label in that row (width estimated from the name length).
+  // A routine's later slots reuse its first slot's row and carry no label of
+  // their own, so a frequent routine marks every slot without repeating its name.
   const rowEnds = [];
+  const routineRows = new Map();
   let rows = 0;
-  due.forEach(({ routine, at }) => {
+  due.forEach(({ routine, at, repeat }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    const halfWidth = routine.name.length * 0.42;
-    let row = rowEnds.findIndex((end) => end <= pct - halfWidth);
-    if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
-    rowEnds[row] = pct + halfWidth;
+    let row = routineRows.get(routine.name);
+    if (!repeat || row === undefined) {
+      const halfWidth = routine.name.length * 0.42;
+      row = rowEnds.findIndex((end) => end <= pct - halfWidth);
+      if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
+      rowEnds[row] = pct + halfWidth;
+      routineRows.set(routine.name, row);
+    }
     rows = Math.max(rows, row + 1);
     const fires = routine.enabled && routine.effective !== false;
     const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"} row-${row}` }, [
       el("span", { class: "operation-timeline-mark" }),
-      el("span", { class: "operation-timeline-label mono", text: routine.name }),
+      repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name }),
     ]);
     tick.style.left = `${pct}%`;
     tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
@@ -590,7 +665,7 @@ function routineRow(payload, routine, workspaceId) {
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,
   ]);
-  const cadence = routine.trigger?.deliveries_landed
+  const cadence = routineEventDriven(routine)
     ? [el("span", { class: "operation-cell-main", text: routineScheduleText(routine) })]
     : [
       el("span", { class: "operation-cell-main", text: cronText(routine.cron) }),
@@ -617,7 +692,7 @@ function routineRow(payload, routine, workspaceId) {
       ], "operation-cell-identity"),
       operationCell("Cadence", cadence),
       routine.enabled
-        ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due) })
+        ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
       operationCell("Last run", lastRun),
     ]),
@@ -627,7 +702,7 @@ function routineRow(payload, routine, workspaceId) {
         field("Source workspace", routine.source),
         field("Schedule", routineScheduleText(routine)),
         field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
-        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
+        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger)),
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
@@ -1168,7 +1243,7 @@ function jobRow(job, workspace) {
   });
   const scheduledBy = job.routines.length
     ? job.routines.map((routine) => {
-      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
+      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : routine.trigger?.state ? "on task change" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
       return chip;
     })

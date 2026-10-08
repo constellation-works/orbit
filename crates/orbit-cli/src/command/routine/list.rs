@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use chrono::{DateTime, Local, SecondsFormat};
 use clap::Args;
 use comfy_table::Cell;
 use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
@@ -111,7 +112,7 @@ impl RoutineListArgs {
             let last_fire = status
                 .last_fire
                 .as_ref()
-                .map(|fire| format!("{} @ {}", fire.state.as_str(), fire.slot))
+                .map(|fire| format!("{} @ {}", fire.state.as_str(), host_local(&fire.slot)))
                 .unwrap_or_else(|| "—".to_string());
             table.add_row(vec![
                 Cell::new(&status.routine.definition.name),
@@ -127,7 +128,12 @@ impl RoutineListArgs {
                 } else {
                     "no"
                 }),
-                Cell::new(status.next_due.as_deref().unwrap_or("—")),
+                Cell::new(
+                    status
+                        .next_due
+                        .as_deref()
+                        .map_or_else(|| "—".to_string(), host_local),
+                ),
                 Cell::new(last_fire),
             ]);
         }
@@ -200,4 +206,18 @@ impl RoutineListArgs {
         }
         Ok(Payload::detail_table(doc, table).into())
     }
+}
+
+/// An RFC 3339 instant in the host's zone, to the second, so the NEXT DUE and
+/// LAST FIRE cells of one row read in the same zone whichever zone each source
+/// recorded. Text that is not an RFC 3339 instant is shown as recorded.
+fn host_local(raw: &str) -> String {
+    DateTime::parse_from_rfc3339(raw).map_or_else(
+        |_| raw.to_string(),
+        |instant| {
+            instant
+                .with_timezone(&Local)
+                .to_rfc3339_opts(SecondsFormat::Secs, false)
+        },
+    )
 }

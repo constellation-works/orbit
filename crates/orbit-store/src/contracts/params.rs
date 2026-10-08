@@ -452,6 +452,11 @@ pub struct JobRunQuery {
     /// Applied before ordering, limiting and row/step hydration. Missing or
     /// non-array bindings do not match; other input fields confer no ownership.
     pub task_id: Option<String>,
+    /// Exact name of the routine recorded as the run's trigger
+    /// (`pipeline state.trigger.routine`), whichever trigger kind fired it.
+    /// Applied before ordering and limiting; pair it with `job_id` so the
+    /// scan stays inside one job's history.
+    pub trigger_routine: Option<String>,
     pub state: Option<JobRunState>,
     /// Whether to include only states for which `JobRunState::is_terminal()`
     /// returns true. Applied before ordering and limiting.
@@ -477,6 +482,7 @@ impl Default for JobRunQuery {
         Self {
             job_id: None,
             task_id: None,
+            trigger_routine: None,
             state: None,
             terminal_only: false,
             active_only: false,

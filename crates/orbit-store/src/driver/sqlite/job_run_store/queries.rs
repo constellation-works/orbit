@@ -472,6 +472,16 @@ fn job_run_filter_sql(
         ));
         params.push(Box::new(task_id.clone()));
     }
+    if let Some(routine) = &query.trigger_routine {
+        conditions.push(format!(
+            "EXISTS (SELECT 1 FROM job_run_states AS trigger_state \
+             WHERE trigger_state.workspace_id = job_runs.workspace_id \
+             AND trigger_state.run_id = job_runs.run_id \
+             AND json_extract(trigger_state.pipeline_state_json, '$.trigger.routine') = ?{})",
+            params.len() + 1
+        ));
+        params.push(Box::new(routine.clone()));
+    }
     if let Some(state) = query.state {
         conditions.push(format!("state = ?{}", params.len() + 1));
         params.push(Box::new(state.to_string()));
