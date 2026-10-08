@@ -258,15 +258,28 @@ impl DestinationSession {
             }),
             LostAnswer::OutcomeUnknown { tool: name },
         )?;
+        self.dispatched_content(&response, name)
+    }
+
+    /// The `structuredContent` of a dispatched call's answer.
+    ///
+    /// Orbit's server sets it on every result, so an answer without it is
+    /// malformed. The destination may still have committed the call, so it is
+    /// an unknown outcome rather than a success with no data.
+    fn dispatched_content(&self, response: &Value, tool: &str) -> Result<Value, OrbitError> {
         let result = &response["result"];
         let content = &result["structuredContent"];
-        if result["isError"].as_bool().unwrap_or(false) {
+        if result.is_object() && result["isError"].as_bool().unwrap_or(false) {
             // Named destination codes such as `capability_refused` must survive
             // as `RemoteTool`, not be wrapped into `execution_failed`.
             return Err(remote_tool_error(&self.destination, content));
         }
-        if content.is_null() {
-            return Ok(json!({}));
+        if !result.is_object() || content.is_null() {
+            return Err(LostAnswer::OutcomeUnknown { tool }.classify(
+                &self.destination,
+                self.next_id,
+                "answered with a result lacking structuredContent".to_string(),
+            ));
         }
         Ok(content.clone())
     }
@@ -285,12 +298,7 @@ impl DestinationSession {
             json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
             LostAnswer::OutcomeUnknown { tool: name },
         )?;
-        let result = &response["result"];
-        let content = &result["structuredContent"];
-        if result["isError"].as_bool().unwrap_or(false) {
-            return Err(remote_tool_error(&self.destination, content));
-        }
-        Ok(content.clone())
+        self.dispatched_content(&response, name)
     }
 
     /// A request whose loss tells the caller nothing was delivered.

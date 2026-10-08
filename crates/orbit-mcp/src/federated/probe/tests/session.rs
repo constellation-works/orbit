@@ -215,6 +215,12 @@ for line in sys.stdin:
             malformed.update(result={}, error={'code': -32603, 'message': 'bad'})
         elif scenario == 'wrong-version':
             malformed.update(jsonrpc='1.0', result={})
+        elif scenario == 'result-null':
+            malformed.update(result=None)
+        elif scenario == 'result-empty':
+            malformed.update(result={})
+        elif scenario == 'structured-content-null':
+            malformed.update(result={'structuredContent': None})
         send(malformed)
         continue
     send({'jsonrpc': '2.0', 'id': call_id, 'result': {
@@ -284,5 +290,38 @@ fn only_response_shaped_messages_can_complete_a_dispatched_call() {
             matches!(error, OrbitError::OutcomeUnknown { .. }),
             "{scenario}: malformed post-dispatch replies must retain ambiguity: {error}"
         );
+    }
+}
+
+#[test]
+fn replies_without_usable_structured_content_are_unknown_outcomes() {
+    for scenario in ["result-null", "result-empty", "structured-content-null"] {
+        for internal in [false, true] {
+            let mut session = peer_request_session(scenario);
+            session.handshake().expect("initialize destination");
+            let tool = if internal {
+                "orbit.task.pull"
+            } else {
+                "orbit.task.add"
+            };
+            let outcome = if internal {
+                session.call_internal_drain(tool, json!({}))
+            } else {
+                session.call_tool(tool, json!({}))
+            };
+            let error = outcome.expect_err("a result without structuredContent is not a success");
+            let OrbitError::OutcomeUnknown {
+                mcp_call_id,
+                message,
+            } = error
+            else {
+                panic!("{scenario}/{tool}: the destination may have committed: {error}");
+            };
+            assert_eq!(mcp_call_id, format!("{OWNER_MACHINE}/{tool}#2"));
+            assert!(
+                message.contains("structuredContent"),
+                "{scenario}/{tool}: name the missing field: {message}"
+            );
+        }
     }
 }
