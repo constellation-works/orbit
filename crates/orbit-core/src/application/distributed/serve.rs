@@ -442,9 +442,9 @@ impl crate::OrbitRuntime {
     }
 
     /// Each `backlog` task a red base still holds, mapped to why
-    /// [ORB-14258]. Read before the admission lock: the check consults Git
-    /// (and may refresh the base from `origin`), and a hold that lifts a
-    /// moment late only defers the task to the next request.
+    /// [ORB-14258]. Only the clock tick's recorded verdicts are read, so no
+    /// Git or validation command runs on pull admission [ORB-14739]; a hold
+    /// that lifts a moment late only defers the task to the next request.
     fn baseline_held_tasks(&self, backlog: &[Task]) -> BTreeMap<String, String> {
         let mut held = BTreeMap::new();
         for task in backlog {

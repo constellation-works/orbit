@@ -54,7 +54,7 @@ const NETWORK_RETRY_BACKOFF: [Duration; NETWORK_RETRIES as usize] =
 /// Longest a candidate waits for another candidate's run of the same base
 /// command: one validation timeout, plus slack for worktree setup.
 const BASE_LOCK_TIMEOUT: Duration = Duration::from_secs(50 * 60);
-/// How often an admission pass may refresh a held base from `origin`.
+/// How often one process may refresh a held base from `origin`.
 const HOLD_FETCH_INTERVAL: Duration = Duration::from_secs(120);
 /// Directory under the Git common directory holding base results.
 const CACHE_DIR: &str = "orbit-baseline";
@@ -457,6 +457,10 @@ pub enum BaselineHoldStatus {
 /// inconclusive check keeps the task held. A remote-tracking ref is refreshed
 /// from `origin` at most every [`HOLD_FETCH_INTERVAL`] per repository and
 /// branch, so a held backlog does not wait on some other delivery to fetch.
+///
+/// A cache miss runs the whole command, for up to the validation timeout, so
+/// only a background caller (the owner's clock tick) may ask; read and
+/// admission paths use the verdict it records [ORB-14739].
 pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
     host: &H,
     repo: &Path,
