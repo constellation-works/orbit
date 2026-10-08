@@ -463,3 +463,19 @@ where
         )))),
     }
 }
+
+/// Workspace identity for audit records, resolved on the blocking pool.
+///
+/// `OrbitRuntime::workspace_id` reads the identity from disk, so a handler must
+/// not call it inline. Falls back to the shared root when the identity cannot
+/// be read.
+pub(super) async fn workspace_label(runtime: &std::sync::Arc<orbit_core::OrbitRuntime>) -> String {
+    let runtime = std::sync::Arc::clone(runtime);
+    tokio::task::spawn_blocking(move || {
+        runtime
+            .workspace_id()
+            .unwrap_or_else(|_| runtime.shared_root().display().to_string())
+    })
+    .await
+    .unwrap_or_default()
+}

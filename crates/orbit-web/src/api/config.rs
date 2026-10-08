@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 use super::routines::{
     action_capability, authorization_denied, authorized_caller, record_operation_audit,
 };
-use super::{bad_request, blocking, map_runtime_error, server_error};
+use super::{bad_request, blocking, map_runtime_error, server_error, workspace_label};
 use crate::state::{DashboardState, Ws};
 
 /// Audit operation name for every config write, accepted or refused.
@@ -235,9 +235,7 @@ async fn perform_write<F>(
 where
     F: FnOnce(&OrbitRuntime) -> Result<ConfigWriteOutcome, orbit_core::OrbitError> + Send + 'static,
 {
-    let workspace = runtime
-        .workspace_id()
-        .unwrap_or_else(|_| runtime.shared_root().display().to_string());
+    let workspace = workspace_label(&runtime).await;
     let caller = match authorized_caller(&DASHBOARD_CONFIG_SET, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
