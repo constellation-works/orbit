@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::FinalRecoveryError;
+
 /// Name of the shipped activity that produces a [`FinalRecoveryDecision`].
 pub const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";
 
@@ -70,17 +72,18 @@ impl FinalRecoveryDecision {
     /// Parse an activity result strictly: one known decision, no unknown
     /// fields, every text field non-empty and bounded, and a full or
     /// abbreviated hexadecimal `evidence_commit`.
-    pub fn parse(output: &Value) -> Result<Self, String> {
-        let decision = Self::deserialize(output).map_err(|error| error.to_string())?;
+    pub fn parse(output: &Value) -> Result<Self, FinalRecoveryError> {
+        let decision =
+            Self::deserialize(output).map_err(|error| FinalRecoveryError::Malformed {
+                reason: error.to_string(),
+            })?;
         for (field, value) in decision.text_fields() {
             let value = value.trim();
             if value.is_empty() {
-                return Err(format!("`{field}` must not be empty"));
+                return Err(FinalRecoveryError::EmptyField { field });
             }
             if value.chars().count() > MAX_DECISION_TEXT_CHARS {
-                return Err(format!(
-                    "`{field}` exceeds {MAX_DECISION_TEXT_CHARS} characters"
-                ));
+                return Err(FinalRecoveryError::FieldTooLong { field });
             }
         }
         if let Self::CompleteNoDiff {
@@ -88,10 +91,9 @@ impl FinalRecoveryDecision {
         } = &decision
             && !is_commit_id(evidence_commit.trim())
         {
-            return Err(format!(
-                "`evidence_commit` must be a 7 to 64 character hexadecimal commit id, not \
-                 '{evidence_commit}'"
-            ));
+            return Err(FinalRecoveryError::EvidenceCommit {
+                evidence_commit: evidence_commit.clone(),
+            });
         }
         Ok(decision)
     }
@@ -102,7 +104,7 @@ impl FinalRecoveryDecision {
         let error = match output {
             Some(output) => match Self::parse(output) {
                 Ok(decision) => return decision,
-                Err(error) => error,
+                Err(error) => error.to_string(),
             },
             None => "the activity returned no result".to_string(),
         };

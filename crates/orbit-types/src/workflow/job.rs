@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::identity::OrbitId;
+use crate::workflow::JobRunStateError;
 
 pub const fn default_job_max_active_runs() -> u32 {
     1
@@ -196,13 +197,10 @@ impl JobRunState {
     }
 
     /// Validate and compute the next state for a given event.
-    pub fn try_transition(self, event: RunEvent) -> Result<JobRunState, String> {
+    pub fn try_transition(self, event: RunEvent) -> Result<JobRunState, JobRunStateError> {
         // Terminal states reject all events
         if self.is_terminal() {
-            return Err(format!(
-                "invalid job run state transition: {} + {:?} (state is terminal)",
-                self, event
-            ));
+            return Err(JobRunStateError::Terminal { state: self, event });
         }
 
         match (self, event) {
@@ -219,15 +217,12 @@ impl JobRunState {
             (Self::Running, RunEvent::Abandon) => Ok(Self::Failed),
             (Self::Running, RunEvent::Interrupt) => Ok(Self::Interrupted),
             (Self::Running, RunEvent::Hold) => Ok(Self::Held),
-            _ => Err(format!(
-                "invalid job run state transition: {} + {:?}",
-                self, event
-            )),
+            _ => Err(JobRunStateError::Transition { state: self, event }),
         }
     }
 
     /// Validates that a step result state is one of the allowed write-once values.
-    pub fn validate_step_state(self) -> Result<(), String> {
+    pub fn validate_step_state(self) -> Result<(), JobRunStateError> {
         match self {
             Self::Success
             | Self::Failed
@@ -236,10 +231,7 @@ impl JobRunState {
             | Self::Cancelled
             | Self::Interrupted
             | Self::Held => Ok(()),
-            other => Err(format!(
-                "invalid step result state: {} (must be success, failed, timeout, skipped, cancelled, interrupted, or held)",
-                other
-            )),
+            state => Err(JobRunStateError::StepState { state }),
         }
     }
 }

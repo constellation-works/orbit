@@ -243,7 +243,7 @@ impl FederatedMcpHost {
         // when initialize injected the v1 local default.
         let parsed = MachineQualifiedSelector::from_str(token)?;
         if let Some(binding) = &session_context.worker_invocation {
-            binding.validate().map_err(OrbitError::InvalidInput)?;
+            binding.validate()?;
             if token != binding.owner_destination || parsed.machine_id() != binding.owner_machine_id
             {
                 return Err(OrbitError::PolicyDenied(

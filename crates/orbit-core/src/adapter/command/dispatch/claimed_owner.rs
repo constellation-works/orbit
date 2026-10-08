@@ -457,7 +457,7 @@ pub(super) fn execute_brokered(
             // the claimed task files findings and whether each culprit exists.
             binding
                 .validate_spawned_relations(&input, true)
-                .map_err(|reason| denied(&reason))?;
+                .map_err(|reason| denied(&reason.to_string()))?;
             input.clone()
         }
         FRICTION_ADD => {

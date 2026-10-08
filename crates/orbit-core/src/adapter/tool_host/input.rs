@@ -321,9 +321,7 @@ pub(super) fn parse_assessed_task_complexity(
     field: &str,
     raw: &str,
 ) -> Result<TaskComplexity, OrbitError> {
-    parse_task_complexity(field, raw)?
-        .require_assessed()
-        .map_err(OrbitError::InvalidInput)
+    Ok(parse_task_complexity(field, raw)?.require_assessed()?)
 }
 
 pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitError> {

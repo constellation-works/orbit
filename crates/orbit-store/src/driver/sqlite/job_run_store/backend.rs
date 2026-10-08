@@ -658,10 +658,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         if self.read_run(run_id)?.is_none() {
             return Ok(false);
         }
-        params
-            .state
-            .validate_step_state()
-            .map_err(OrbitError::JobRunStateTransition)?;
+        params.state.validate_step_state()?;
         let step = JobRunStep {
             step_index: params.step_index as u32,
             target_type: params.target_type,
@@ -725,10 +722,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     )));
                 }
             };
-            run.state = run
-                .state
-                .try_transition(event)
-                .map_err(OrbitError::JobRunStateTransition)?;
+            run.state = run.state.try_transition(event)?;
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
             outcome = JobRunFinalization::Finalized;

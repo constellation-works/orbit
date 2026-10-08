@@ -63,7 +63,7 @@ impl OrbitRuntime {
                  execution is unavailable without a trusted worker binding",
             )
         })?;
-        binding.validate().map_err(OrbitError::InvalidInput)?;
+        binding.validate()?;
         let claim = admission
             .receipt
             .as_ref()

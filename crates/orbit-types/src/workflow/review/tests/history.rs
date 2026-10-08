@@ -3,7 +3,8 @@
 use chrono::{TimeZone, Utc};
 
 use crate::workflow::{
-    REVIEW_REPORT_HISTORY_LIMIT, ReviewReportHistory, ReviewReportRevision, ReviewVerdict,
+    REVIEW_REPORT_HISTORY_LIMIT, ReviewHistoryError, ReviewReportHistory, ReviewReportRevision,
+    ReviewVerdict,
 };
 
 fn revision(attempt: &str, sha: &str) -> ReviewReportRevision {
@@ -52,7 +53,12 @@ fn the_bounded_history_never_evicts_the_recording_attempts_own_revisions() {
     let refused = history
         .record(revision("live", "overflow"))
         .expect_err("one attempt filling the history is refused");
-    assert!(refused.contains("admit a fresh review"), "{refused}");
+    assert_eq!(
+        refused,
+        ReviewHistoryError::AttemptFull {
+            attempt_id: "live".to_string()
+        }
+    );
     assert_eq!(
         history.for_attempt("live").count(),
         REVIEW_REPORT_HISTORY_LIMIT

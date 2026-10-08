@@ -419,7 +419,7 @@ fn reviewer_report(input: &Value, reconciliation_id: &str) -> Result<ReviewRepor
         Value::String(text) => text.clone().into_bytes(),
         other => serde_json::to_vec(other).map_err(|error| error.to_string())?,
     };
-    let report = ReviewReport::parse(&bytes)?;
+    let report = ReviewReport::parse(&bytes).map_err(|error| error.to_string())?;
     if report.attempt_id != reconciliation_id {
         return Err(format!(
             "the report names attempt `{}`, not this reconciliation",

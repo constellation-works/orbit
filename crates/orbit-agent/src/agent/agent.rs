@@ -97,12 +97,10 @@ impl AgentConfig {
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Self, OrbitError> {
         if let Some(effort) = reasoning_effort {
-            effort
-                .validate_for_provider_model(
-                    self.provider_options.canonical_provider_name(),
-                    self.model.as_deref(),
-                )
-                .map_err(OrbitError::InvalidInput)?;
+            effort.validate_for_provider_model(
+                self.provider_options.canonical_provider_name(),
+                self.model.as_deref(),
+            )?;
         }
         self.reasoning_effort = reasoning_effort;
         Ok(self)

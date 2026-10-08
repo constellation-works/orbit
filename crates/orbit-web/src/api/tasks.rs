@@ -582,7 +582,7 @@ pub(super) async fn create_task_action(
     }
     let complexity = match body.complexity.require_assessed() {
         Ok(complexity) => complexity,
-        Err(message) => return bad_request(message),
+        Err(error) => return bad_request(error.to_string()),
     };
     let model = body.model.as_deref().and_then(non_empty_string);
     let allow_missing_context = body.allow_missing_context;
@@ -655,7 +655,7 @@ pub(super) async fn update_task_action(
         .transpose()
     {
         Ok(complexity) => complexity,
-        Err(message) => return bad_request(message),
+        Err(error) => return bad_request(error.to_string()),
     };
     if body.force && body.status.is_none() {
         return bad_request(

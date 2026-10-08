@@ -90,7 +90,7 @@ fn parent_review_admission(
         .as_ref()
         .map(ReviewAdmission::from_run_input)
         .transpose()
-        .map_err(OrbitError::InvalidInput)
+        .map_err(OrbitError::from)
         .map(Option::flatten)
 }
 
@@ -150,7 +150,7 @@ pub(crate) fn run_review_admission(
         .as_ref()
         .map(ReviewAdmission::from_run_input)
         .transpose()
-        .map_err(OrbitError::InvalidInput)
+        .map_err(OrbitError::from)
         .map(Option::flatten)
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn upgrade_resume_admission_mismatch(
     let previous = match ReviewAdmission::from_run_input(input) {
         Ok(Some(admission)) => admission,
         Ok(None) => return Some("run has no captured review admission".to_string()),
-        Err(error) => return Some(error),
+        Err(error) => return Some(error.to_string()),
     };
     let current = snapshot(runtime);
     let mut comparable_previous = previous;

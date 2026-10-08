@@ -1,4 +1,5 @@
 use super::super::pin::{PluginPin, PluginPinFile};
+use super::super::{ArchiveDigestError, PluginPinError};
 
 const ARCHIVE_URL: &str = "https://example.com/orbit-graph-0.4.1.tar.gz";
 const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -22,13 +23,13 @@ fn archive_pin(digest: Option<&str>) -> PluginPinFile {
 #[test]
 fn an_archive_source_without_a_digest_is_refused() {
     let error = archive_pin(None).validate().unwrap_err();
-    assert!(
-        error.starts_with("plugins[0].digest:") && error.contains(ARCHIVE_URL),
-        "the refusal must name the pin entry and its source: {error}"
-    );
-    assert!(
-        error.contains("first use"),
-        "the refusal must say why a digest is mandatory: {error}"
+    assert_eq!(
+        error,
+        PluginPinError::ArchiveDigestMissing {
+            index: 0,
+            url: ARCHIVE_URL.to_string()
+        },
+        "the refusal must name the pin entry and its source"
     );
 }
 
@@ -36,14 +37,26 @@ fn an_archive_source_without_a_digest_is_refused() {
 fn a_malformed_or_misplaced_digest_is_refused() {
     let error = archive_pin(Some("sha256:not-hex")).validate().unwrap_err();
     assert!(
-        error.starts_with("plugins[0].digest:"),
+        matches!(
+            error,
+            PluginPinError::InvalidDigest {
+                index: 0,
+                reason: ArchiveDigestError::Malformed { .. }
+            }
+        ),
         "a malformed digest names its entry: {error}"
     );
     let error = archive_pin(Some("0123456789abcdef"))
         .validate()
         .unwrap_err();
     assert!(
-        error.contains("sha256:"),
+        matches!(
+            error,
+            PluginPinError::InvalidDigest {
+                index: 0,
+                reason: ArchiveDigestError::UnsupportedAlgorithm { .. }
+            }
+        ),
         "a digest without its algorithm prefix is refused: {error}"
     );
 
@@ -52,9 +65,10 @@ fn a_malformed_or_misplaced_digest_is_refused() {
     let mut git = archive_pin(Some(DIGEST));
     git.plugins[0].source = Some("git+https://example.com/graph.git#v0.4.1".into());
     let error = git.validate().unwrap_err();
-    assert!(
-        error.starts_with("plugins[0].digest:") && error.contains("https://"),
-        "only a fetched archive is digest-verified: {error}"
+    assert_eq!(
+        error,
+        PluginPinError::DigestWithoutArchive { index: 0 },
+        "only a fetched archive is digest-verified"
     );
 }
 
@@ -92,9 +106,10 @@ fn an_artifact_digest_requires_a_commit_pinned_git_source() {
         "/srv/plugins/graph",
     ] {
         let error = built_pin(source, DIGEST).validate().unwrap_err();
-        assert!(
-            error.starts_with("plugins[0].artifact_digest:") && error.contains("commit"),
-            "{source}: {error}"
+        assert_eq!(
+            error,
+            PluginPinError::ArtifactDigestWithoutCommit { index: 0 },
+            "{source}"
         );
     }
 
@@ -104,5 +119,11 @@ fn an_artifact_digest_requires_a_commit_pinned_git_source() {
     )
     .validate()
     .unwrap_err();
-    assert!(error.starts_with("plugins[0].artifact_digest:"), "{error}");
+    assert!(
+        matches!(
+            error,
+            PluginPinError::InvalidArtifactDigest { index: 0, .. }
+        ),
+        "{error}"
+    );
 }

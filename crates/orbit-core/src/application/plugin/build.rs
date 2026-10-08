@@ -215,7 +215,7 @@ fn pinned_artifact_digest(
         return Ok(None);
     };
     // The pin file was validated on read, so the digest parses.
-    let hex = parse_archive_digest(&pinned).map_err(OrbitError::InvalidInput)?;
+    let hex = parse_archive_digest(&pinned)?;
     Ok(Some(format!("sha256:{hex}")))
 }
 

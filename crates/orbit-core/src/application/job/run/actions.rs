@@ -333,6 +333,7 @@ impl OrbitRuntime {
                 .state
                 .try_transition(orbit_types::workflow::RunEvent::Cancel)
                 .err()
+                .map(|error| error.to_string())
                 .unwrap_or_else(|| {
                     format!(
                         "stored state remained {} after cancellation",

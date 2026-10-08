@@ -569,7 +569,7 @@ fn parse_consent(options: &PluginTestOptions) -> Result<PluginGrantSet, OrbitErr
     if options.grants.is_empty() {
         Ok(PluginGrantSet::default())
     } else {
-        parse_grants(&options.grants).map_err(OrbitError::InvalidInput)
+        Ok(parse_grants(&options.grants)?)
     }
 }
 

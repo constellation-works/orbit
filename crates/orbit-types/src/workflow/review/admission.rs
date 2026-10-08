@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::workflow::ReviewAdmissionError;
+
 /// The reserved run-input key carrying the captured review admission. Like
 /// the operation snapshot, only the trusted submission path writes it; a
 /// child inherits its parent's snapshot and ordinary input naming it is
@@ -128,21 +130,22 @@ impl ReviewAdmission {
     /// Read the snapshot carried by a run input. A present but malformed
     /// snapshot, or one captured under a contract version this build does
     /// not support, is an error, never silently ignored or reinterpreted.
-    pub fn from_run_input(input: &Value) -> Result<Option<Self>, String> {
+    pub fn from_run_input(input: &Value) -> Result<Option<Self>, ReviewAdmissionError> {
         let Some(raw) = input.get(REVIEW_ADMISSION_KEY) else {
             return Ok(None);
         };
         if raw.is_null() {
             return Ok(None);
         }
-        let admission: Self = serde_json::from_value(raw.clone())
-            .map_err(|error| format!("invalid `{REVIEW_ADMISSION_KEY}` run input: {error}"))?;
+        let admission: Self = serde_json::from_value(raw.clone()).map_err(|error| {
+            ReviewAdmissionError::Malformed {
+                reason: error.to_string(),
+            }
+        })?;
         if admission.contract_version != REVIEW_CONTRACT_VERSION {
-            return Err(format!(
-                "unsupported `{REVIEW_ADMISSION_KEY}` run input: contract_version {} is not the \
-                 supported review contract version {REVIEW_CONTRACT_VERSION}",
-                admission.contract_version
-            ));
+            return Err(ReviewAdmissionError::UnsupportedContractVersion {
+                found: admission.contract_version,
+            });
         }
         Ok(Some(admission))
     }

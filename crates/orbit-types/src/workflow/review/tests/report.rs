@@ -1,6 +1,6 @@
 //! [ORB-14192] The evidence fields a reviewer attaches to its report.
 
-use crate::workflow::{NegativeControl, ReviewReport, ValidationRole};
+use crate::workflow::{NegativeControl, ReviewReport, ReviewReportError, ValidationRole};
 
 /// A drifted `control` label and a single `sources` or `mutation_target`
 /// string read as the contract; an unknown control is refused naming its
@@ -35,5 +35,11 @@ fn control_and_sources_tolerate_drift_and_name_an_unknown_kind() {
               "role":"expected_failure","control":"flaky","note":"n"}]}"#,
     )
     .expect_err("an unknown control kind is not guessed");
-    assert!(error.starts_with("validation[0].control:"), "{error}");
+    assert!(
+        matches!(
+            &error,
+            ReviewReportError::Contract { detail } if detail.starts_with("validation[0].control:")
+        ),
+        "{error}"
+    );
 }
