@@ -158,8 +158,9 @@ thread_local! {
 }
 
 /// Run `f` with supervisors on this thread ending stopped descendants after
-/// `threshold` instead of the configured one.
-#[cfg(all(test, unix))]
+/// `threshold` instead of the configured one. Its only callers are the
+/// Linux-only stopped-descendant tests (kernel process states).
+#[cfg(all(test, target_os = "linux"))]
 pub(super) fn with_stopped_descendant_threshold<T>(
     threshold: Duration,
     f: impl FnOnce() -> T,
