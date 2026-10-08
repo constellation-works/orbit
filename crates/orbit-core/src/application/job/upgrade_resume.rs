@@ -15,7 +15,8 @@
 //! - it was interrupted more than [`UPGRADE_RESUME_WINDOW`] ago, which an
 //!   interruption by the upgrade that just settled never is;
 //! - it is a claimed execution, which only the owner's claim recovery may
-//!   re-admit;
+//!   re-admit (a claim that cannot be read is not a decision: the run is left
+//!   for a later tick, as a live worker is);
 //! - it is a drain (or the ship wrapper around one) whose admissions were
 //!   stopped or whose window has elapsed — a resumed drain's first pass
 //!   admits before it re-reads the window;
@@ -115,7 +116,20 @@ impl OrbitRuntime {
                 );
                 continue;
             }
-            if let Some(skip) = self.upgrade_resume_skip(&run, now)? {
+            // An unreadable claim is not a decision: the run waits for a tick that can read it.
+            let claimed = match self.is_claimed_execution(&run.run_id) {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.sweep",
+                        source_run_id = %run.run_id,
+                        error = %error,
+                        "could not read an upgrade-interrupted run's claim; deferred to the next tick",
+                    );
+                    continue;
+                }
+            };
+            if let Some(skip) = self.upgrade_resume_skip(&run, now, claimed)? {
                 tracing::info!(
                     target: "orbit.core.sweep",
                     run_id = %run.run_id,
@@ -196,6 +210,7 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
         now: DateTime<Utc>,
+        claimed: bool,
     ) -> Result<Option<Skip>, OrbitError> {
         match run.finished_at {
             Some(at) if now.signed_duration_since(at) <= UPGRADE_RESUME_WINDOW => {}
@@ -211,7 +226,7 @@ impl OrbitRuntime {
                 ));
             }
         }
-        if self.is_claimed_execution(&run.run_id)? {
+        if claimed {
             return Ok(Skip::new(
                 "claimed_execution",
                 "a claimed execution is re-admitted by the owner's claim recovery",
@@ -296,13 +311,11 @@ impl OrbitRuntime {
         if self.stores().jobs().local_pull_for_run(run_id)?.is_some() {
             return Ok(true);
         }
-        Ok(self.resolve_execution_claims().is_ok_and(|claims| {
-            claims.iter().any(|claim| {
-                claim
-                    .bound_run
-                    .as_ref()
-                    .is_some_and(|bound| bound.run_id == run_id)
-            })
+        Ok(self.resolve_execution_claims()?.iter().any(|claim| {
+            claim
+                .bound_run
+                .as_ref()
+                .is_some_and(|bound| bound.run_id == run_id)
         }))
     }
 
