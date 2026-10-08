@@ -287,6 +287,13 @@
   .kpi.host-resource { width: 7.5rem; }
   .host-resource-chips { padding-left: 8px; margin-left: 0; }
 }
+/* Reserve room for the widest destination plus four five-digit counts,
+   both alert dots, the fixed host chip, Drain and Refresh. Keep this
+   allowance on the single-row desktop layout; phones scroll the strip. */
+@media (min-width: 1024px) and (max-width: 1400px) {
+  .topbar .kpis { gap: 4px; }
+  .topbar .kpi { gap: 4px; padding: 0 6px; font-size: 12px; }
+}
 /* Below 1024px the bar may wrap, but only to two rows: crumb, drain and
    Refresh on the first, the health strip scrolling on the second. */
 @media (max-width: 1023px) {
