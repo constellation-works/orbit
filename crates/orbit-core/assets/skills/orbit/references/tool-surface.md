@@ -7,6 +7,8 @@ without requiring an Orbit source checkout.
 
 ## Select the store before reading or writing
 
+For a single task addressed by ID, use the prefix-routing rules below. For
+workspace-scoped calls, select the store explicitly.
 In a managed activity, use the injected task and inherited workspace binding;
 its allowlist may omit `orbit.workspace.list`. For an unbound MCP session, call
 `orbit_workspace_list({})` on the configured connection first. For CLI-only use,
@@ -19,17 +21,91 @@ capabilities where returned.
   The server can also resolve registered names and paths, but IDs avoid
   ambiguity. An explicit selector overrides its session binding.
 - Federated server: copy the returned `selector` exactly, including its
-  `hm_…/ws_…` qualification. Bare names, bare IDs, and local paths cannot route
-  federated calls. The mux is deliberately not bound to one workspace.
+  `hm_…/ws_…` qualification for workspace-scoped calls. Bare workspace names,
+  bare workspace IDs, and local paths cannot route federated calls. Single-task
+  calls without a selector route by task prefix. The mux is deliberately not
+  bound to one workspace.
 - A direct session can bind through `orbit mcp serve --workspace <selector>`
-  or initialize metadata. An unbound session requires a per-call selector;
-  server cwd never chooses the workspace.
+  or initialize metadata. An unbound session requires a per-call selector for
+  workspace-scoped calls; server cwd never chooses the workspace.
 - A managed child inherits trusted workspace and run identity from its envelope.
   Do not replace those with a root or registry from another checkout.
 
 If a host is unavailable, report that fact. Reading a publication is explicitly
 labelled snapshot access, not a substitute for live task state. Never create
 records in a second store merely to get past a connection error.
+
+## Task IDs and host selection
+
+Register a remote with `orbit host add <ssh-target>` and inspect `orbit host
+list`. On the CLI and federated MCP, a single-task call without an explicit
+workspace goes to the host its task prefix names: the local prefix runs here,
+a registered remote prefix goes there, and an unknown prefix fails closed.
+Show or update another host's task directly, without SSH or `--workspace`:
+
+```bash
+orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress>","model":"<agent-family>"}'
+```
+
+The ID-routed tools are `orbit.task.show`, `update`, `reject`, `delete`,
+`artifact.get`, `artifact.put`, `review_reset` and `reconcile_review` (each
+under `orbit.task.`). Routing applies only where that tool is advertised and
+authorized. `orbit.task.add`, `list`, `eligible`, `lint`, `pull` and `locks*`
+keep workspace selection; search, friction and workflow-run tools do not route
+by task prefix. There is no fan-out search across hosts. Direct local/remote
+MCP servers and `mcp listen` do not relay: an ID-only call for a registered
+remote prefix returns `task_prefix_remote`.
+
+An explicit `workspace` or CLI `--workspace` wins over the prefix: a read can
+address that store's mirror, while a write must still pass its sole-writer
+check. An explicit CLI root also selects a store. Routing never falls back to
+a mirror when a host is down. Claimed workers retain their owner binding and
+cannot use `--host` to replace it.
+
+For workspace-scoped CLI tool calls, name a host and a workspace as that host
+lists it:
+
+```bash
+orbit tool run orbit.task.list --host <name> --workspace <workspace-name-or-ws_id> --input '{"model":"<agent-family>"}'
+```
+
+`--host` accepts an exact registered host name or `machine_id`. Orbit reads
+that host's live workspace list, matches the name or `ws_*` ID, and copies
+its selector; never build a selector by concatenation. The flag is accepted
+on `orbit tool run` and, with `--workspace`, on `orbit task show`, `update`,
+`artifact put|get`, `review-reset` and `reconcile-review` subcommands. Put it
+after the task subcommand. Agents keep writes on registered tools for
+attribution. Remote creation also uses `orbit tool run orbit.task.add` with
+`--host` and `--workspace`; human `task add` and `task list` are host-local.
+Other host-local commands, including `workspace`, `config`, `doctor`,
+`run show/history/logs` and `update`, reject the routing flag. Their diagnostic
+names the command to run on that host over SSH.
+
+On a replica, `orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id>`
+uses the same live selector resolution. Without `--host`, `--pull` requires
+the full host-qualified selector copied from discovery. Pulling from the local
+host is refused; use plain `orbit run auto` for a local backlog. Starting a
+drain still requires operator authorization.
+
+### Routing failures and remedies
+
+| Code | Remedy |
+|---|---|
+| `unknown_task_prefix` | Check `orbit host list`, then register the task's host with `orbit host add <ssh-target>`. Legacy rows have no prefix until migrated. |
+| `task_prefix_remote` | Use federated MCP or the CLI's ID route, or connect directly to the named host and select its workspace. A direct MCP server does not relay. |
+| `unknown_host` | Copy the exact name or machine ID from `orbit host list`; register a missing host or migrate its legacy row with `orbit host add`. |
+| `owner_unreachable` | Restore SSH and the task host's Orbit process. If the error names a local mirror, select it explicitly for a labelled snapshot read. |
+| `unreachable_destination` | Check that the registered SSH target logs in without a prompt and has `orbit` on PATH, then retry discovery. |
+| `stale_route` | Select a workspace the host's live list reports; repair its registration on that host if it should exist. |
+| `unknown_selector` | For an ambiguous name, use the host's exact `ws_*` ID. For bare `--pull`, supply `--host` or the full discovered selector. |
+| `outcome_unknown` | The call was dispatched but its reply was lost. Inspect live state or the operation's receipt before retrying a write; do not mint a replacement request key. |
+| `tool_not_on_this_host` | Discover the destination's tool catalog and use a supported operation or deploy the required matching build. |
+| `capability_refused` | Follow the named authority/owner restriction. A replica or local-host pull is not an owner route; routing grants no extra capability. |
+| `protocol_skew` | Deploy matching Orbit builds and restart long-lived processes on both endpoints before a new pull drain. |
+
+Registration errors, the doctor's `hosts` row and the one-release legacy-file
+migration are in [remote-access.md](../../orbit-setup/references/remote-access.md).
 
 ## Capability map
 

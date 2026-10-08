@@ -24,6 +24,7 @@ orbit run ship --mode local         # implement in a worktree, merge to the base
 orbit run auto --for 2h             # drain the backlog for a window
 orbit run auto --for 2h --concurrency 8   # ... with 8 tasks in flight at a time
 orbit run auto --for 2h --allow-crew opus,sonnet  # ... using only these crews
+orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 2h # on a replica
 orbit run auto --stop                      # stop new admissions; children keep running
 orbit run concurrency <run-id> --set 7     # retune a live drain, without replacing it
 orbit run readiness                        # explain current auto-drain eligibility, read-only
@@ -121,6 +122,20 @@ for an auto drain it is opt-in and scoped to that run's window:
   resume, so the owner hands it only tasks on those crews. The owner's before-PR
   reviewer is not restricted but must still run on that host. A pull drain
   without `--for` makes one admission pass, then only settles.
+
+For a pull drain, register the owner with `orbit host add <ssh-target>` and
+check `orbit host list`. `--host <name-or-machine_id> --pull <workspace-name-or-ws_id>`
+resolves the owner workspace from that host's live list. Without `--host`,
+`--pull` takes only the full host-qualified selector copied from discovery;
+do not compose one by hand. Run the drain from that owner's replica checkout.
+The flag selects a pull owner, not the execution host for `run ship`,
+`run show/history/logs` or other host-local commands. For task reads and
+updates on the CLI or federated MCP, omit the workspace to route by task ID
+prefix; task creation/listing and dispatch retain workspace selection.
+See [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection)
+for the routed tools and error remedies, and
+[distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
+for pull setup, captured review policy and owner landing authority.
 
 Runs are asynchronous: these commands return once the run is durable, printing a
 run ID. They do not claim the eventual outcome.
