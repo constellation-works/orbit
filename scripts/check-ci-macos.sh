@@ -52,6 +52,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -118,8 +119,55 @@ def pull_request_paths() -> list[str]:
 DARWIN_ONLY_MARKER = "# check-ci-macos: darwin-only"
 
 
-def filtered_cargo_tests() -> list[tuple[str, str, bool]]:
-    commands: list[tuple[str, str, bool]] = []
+class FilteredTest(NamedTuple):
+    """One workflow `cargo test` step, reduced to what decides its test set."""
+
+    package: str
+    test_filter: str
+    darwin_only: bool
+    # Cargo target selectors (`--test <name>`, `--lib`, `--bins`, ...) that
+    # narrow which test binaries the step builds and runs.
+    selectors: list[str]
+    # libtest flags after `--` that change which tests match (`--exact`, ...).
+    libtest_flags: list[str]
+
+    def describe(self) -> str:
+        return " ".join([self.package, self.test_filter, *self.selectors, *self.libtest_flags])
+
+
+# Cargo options that take a value; the value is never the test filter.
+CARGO_VALUE_OPTIONS = {
+    "-p", "--package", "--test", "--bin", "--example", "--bench", "--features", "-F",
+    "--target", "--profile", "--jobs", "-j", "--manifest-path", "--exclude", "--color",
+    "--message-format", "--target-dir", "--config", "-Z", "--timings", "--exclude-from",
+}
+# Target selectors that carry a name, and those that stand alone.
+CARGO_NAMED_SELECTORS = {"--test", "--bin", "--example", "--bench"}
+CARGO_SELECTOR_FLAGS = {
+    "--lib", "--bins", "--tests", "--examples", "--benches", "--doc", "--all-targets",
+}
+# libtest flags that change which tests a `--list` run reports.
+LIBTEST_FILTER_FLAGS = {"--exact", "--ignored", "--include-ignored"}
+
+
+def libtest_filter_flags(libtest_args: list[str]) -> list[str]:
+    flags: list[str] = []
+    index = 0
+    while index < len(libtest_args):
+        token = libtest_args[index]
+        if token in LIBTEST_FILTER_FLAGS:
+            flags.append(token)
+        elif token == "--skip" and index + 1 < len(libtest_args):
+            flags += [token, libtest_args[index + 1]]
+            index += 1
+        elif token.startswith("--skip="):
+            flags.append(token)
+        index += 1
+    return flags
+
+
+def filtered_cargo_tests() -> list[FilteredTest]:
+    commands: list[FilteredTest] = []
 
     for line in lines:
         if "cargo test" not in line or line.lstrip().startswith("#"):
@@ -147,20 +195,44 @@ def filtered_cargo_tests() -> list[tuple[str, str, bool]]:
 
         cargo_args = tokens[cargo_index + 2:separator]
         package = None
-        for option in ("-p", "--package"):
-            if option in cargo_args:
-                package_index = cargo_args.index(option)
-                if package_index + 1 < len(cargo_args):
-                    package = cargo_args[package_index + 1]
-                break
+        selectors: list[str] = []
+        positional: list[str] = []
+        index = 0
+        while index < len(cargo_args):
+            token = cargo_args[index]
+            option, equals, inline_value = token.partition("=")
+            if token.startswith("--") and equals and option in CARGO_VALUE_OPTIONS:
+                value = inline_value
+            elif token in CARGO_VALUE_OPTIONS:
+                value = cargo_args[index + 1] if index + 1 < len(cargo_args) else None
+                option = token
+                index += 1
+            elif token in CARGO_SELECTOR_FLAGS:
+                selectors.append(token)
+                index += 1
+                continue
+            elif token.startswith("-"):
+                index += 1
+                continue
+            else:
+                positional.append(token)
+                index += 1
+                continue
+            index += 1
+            if value is None:
+                continue
+            if option in ("-p", "--package"):
+                package = package or value
+            elif option in CARGO_NAMED_SELECTORS:
+                selectors += [option, value]
 
-        if package is None:
+        if package is None or not positional:
             continue
 
-        package_index = cargo_args.index(package)
-        positional = [token for token in cargo_args[package_index + 1:] if not token.startswith("-")]
-        if positional:
-            commands.append((package, positional[0], darwin_only))
+        commands.append(FilteredTest(
+            package, positional[0], darwin_only, selectors,
+            libtest_filter_flags(tokens[separator + 1:]),
+        ))
 
     return commands
 
@@ -186,7 +258,13 @@ def run_listing(command: list[str], label: str) -> str | None:
     return result.stdout
 
 
-def workspace_test_executables() -> dict[str, list[str]]:
+class TestBinary(NamedTuple):
+    executable: str
+    name: str
+    kinds: list[str]
+
+
+def workspace_test_executables() -> dict[str, list[TestBinary]]:
     """Map each workspace package to the test binaries of one workspace build.
 
     These are the exact artifacts `cargo nextest run --workspace --lib --bins
@@ -205,7 +283,7 @@ def workspace_test_executables() -> dict[str, list[str]]:
     if metadata is None or build is None:
         return {}
     names = {pkg["id"]: pkg["name"] for pkg in json.loads(metadata)["packages"]}
-    executables: dict[str, list[str]] = {}
+    executables: dict[str, list[TestBinary]] = {}
     for line in build.splitlines():
         if not line.startswith("{"):
             continue
@@ -216,23 +294,71 @@ def workspace_test_executables() -> dict[str, list[str]]:
             continue
         name = names.get(message.get("package_id"))
         if name is not None:
-            executables.setdefault(name, []).append(message["executable"])
+            target = message.get("target", {})
+            executables.setdefault(name, []).append(
+                TestBinary(message["executable"], target.get("name", ""), target.get("kind", []))
+            )
     return executables
 
 
-def list_filtered_tests(package: str, test_filter: str) -> str | None:
+def binary_matches_selectors(binary: TestBinary, selectors: list[str]) -> bool:
+    """Whether `cargo test <selectors>` would run this test binary.
+
+    No selector means every target. Otherwise a binary is kept when any
+    selector names it, the way cargo ORs target selectors together.
+    """
+    if not selectors:
+        return True
+    kinds = set(binary.kinds)
+    is_lib = not kinds & {"bin", "test", "example", "bench", "custom-build"}
+    index = 0
+    while index < len(selectors):
+        selector = selectors[index]
+        index += 1
+        if selector in CARGO_NAMED_SELECTORS:
+            name = selectors[index]
+            index += 1
+            if selector[2:] in kinds and binary.name == name:
+                return True
+        elif selector == "--lib" and is_lib:
+            return True
+        elif selector == "--bins" and "bin" in kinds:
+            return True
+        elif selector == "--tests" and (is_lib or kinds & {"bin", "test"}):
+            return True
+        elif selector == "--examples" and "example" in kinds:
+            return True
+        elif selector == "--benches" and "bench" in kinds:
+            return True
+        elif selector == "--all-targets":
+            return True
+    return False
+
+
+def list_filtered_tests(step: FilteredTest) -> str | None:
     if not workspace_build:
         return run_listing(
-            ["cargo", "test", "-p", package, "--locked", test_filter, "--", "--list"],
-            f"filtered cargo test failed for {package} {test_filter!r}",
+            ["cargo", "test", "-p", step.package, "--locked", *step.selectors, step.test_filter,
+             "--", "--list", *step.libtest_flags],
+            f"filtered cargo test failed for {step.describe()!r}",
         )
-    binaries = executables.get(package)
+    binaries = executables.get(step.package)
     if not binaries:
-        errors.append(f"workspace build produced no test binaries for package {package}")
+        errors.append(f"workspace build produced no test binaries for package {step.package}")
+        return None
+    selected = [binary for binary in binaries if binary_matches_selectors(binary, step.selectors)]
+    if not selected:
+        errors.append(
+            f"workspace build produced no test binary matching {' '.join(step.selectors)} "
+            f"for package {step.package}"
+        )
         return None
     listing = ""
-    for binary in binaries:
-        stdout = run_listing([binary, "--list", test_filter], f"listing {binary} {test_filter!r} failed")
+    for binary in selected:
+        stdout = run_listing(
+            [binary.executable, "--list", step.test_filter, *step.libtest_flags],
+            f"listing {binary.executable} {step.test_filter!r} failed",
+        )
         if stdout is None:
             return None
         listing += stdout
@@ -241,19 +367,19 @@ def list_filtered_tests(package: str, test_filter: str) -> str | None:
 
 executables = workspace_test_executables() if workspace_build and filtered_tests else {}
 
-for package, test_filter, darwin_only in filtered_tests:
-    if darwin_only and platform.system() != "Darwin":
-        print(f"check-ci-macos: {package} {test_filter} is Darwin-only; listed by the macOS job")
+for step in filtered_tests:
+    if step.darwin_only and platform.system() != "Darwin":
+        print(f"check-ci-macos: {step.describe()} is Darwin-only; listed by the macOS job")
         continue
-    listing = list_filtered_tests(package, test_filter)
+    listing = list_filtered_tests(step)
     if listing is None:
         continue
 
     test_count = sum(1 for line in listing.splitlines() if re.search(r": test\s*$", line))
     if test_count == 0:
-        errors.append(f"filtered cargo test matched zero tests: {package} {test_filter}")
+        errors.append(f"filtered cargo test matched zero tests: {step.describe()}")
     else:
-        print(f"check-ci-macos: {package} {test_filter} matched {test_count} tests")
+        print(f"check-ci-macos: {step.describe()} matched {test_count} tests")
 
 if errors:
     for error in errors:
