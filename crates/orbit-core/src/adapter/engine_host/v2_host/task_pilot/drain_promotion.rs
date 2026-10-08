@@ -15,7 +15,8 @@
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskStatus,
+    NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity,
+    TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
@@ -32,25 +33,20 @@ const PILOT_JOB: &str = "task_pilot_pipeline";
 const HELD_MARKER_PREFIX: &str = " [drain-approval-held:";
 
 /// Why a `proposed` task does not qualify for drain approval, before any
-/// pilot runs: a `no-auto-approve` tag excludes it outright; a
-/// `no-diff-expected` tag qualifies alone; otherwise the task needs context
-/// selectors and an assessed complexity.
+/// pilot runs: a `no-auto-approve` tag excludes it outright; otherwise its
+/// first blocking readiness gap ([`readiness_gaps`]) withholds it.
 pub(in crate::adapter::engine_host::v2_host) fn approval_disqualification(
     tags: &[String],
     context_files: &[String],
     complexity: Option<TaskComplexity>,
 ) -> Option<&'static str> {
     if auto_approval_opted_out(tags) {
-        Some(NO_AUTO_APPROVE_TAG)
-    } else if tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
-        None
-    } else if context_files.is_empty() {
-        Some("missing_context_files")
-    } else if !complexity.is_some_and(TaskComplexity::is_assessed) {
-        Some("unassessed_complexity")
-    } else {
-        None
+        return Some(NO_AUTO_APPROVE_TAG);
     }
+    readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
+        .into_iter()
+        .find(ReadinessGap::is_blocking)
+        .map(|gap| gap.code.as_str())
 }
 
 /// The approve-transition note; task history names the approving drain.

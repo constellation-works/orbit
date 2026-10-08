@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskOsRequirement,
-    TaskReferenceIndex, TaskStatus, has_epic_tag, inherited_only_epic_roots,
+    EpicHierarchyNode, ReadinessGap, ReadinessStage, Task, TaskOsRequirement, TaskReferenceIndex,
+    TaskStatus, has_epic_tag, inherited_only_epic_roots, readiness_gaps,
     task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::ShipMode;
@@ -82,7 +82,7 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     InheritedOnlyEpicRoot,
     /// Automated work must be prepared before an implementation lane can
     /// consume it; urgency does not substitute for a complexity assessment.
-    /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
+    /// Work tagged [`orbit_types::task::NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
     /// A live task-pilot run holds a successful preparation checkpoint for
@@ -827,9 +827,18 @@ fn inherited_only_epic_root_exclusion(
 /// provenance does not grant it, and nothing here rewrites the task's stored
 /// complexity — an exempt task keeps `unassessed` and resolves its crew from
 /// the configured crew or the workspace default.
+/// Whether a backlog task has no blocking readiness gap. Missing context
+/// files are advisory in the backlog, so this is the assessed-complexity gate
+/// with its `no-diff-expected` exemption.
 fn clears_complexity_gate(task: &Task) -> bool {
-    task.complexity.is_some_and(TaskComplexity::is_assessed)
-        || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+    !readiness_gaps(
+        ReadinessStage::Backlog,
+        &task.tags,
+        &task.context_files,
+        task.complexity,
+    )
+    .iter()
+    .any(ReadinessGap::is_blocking)
 }
 
 fn pilot_finding_exclusion(

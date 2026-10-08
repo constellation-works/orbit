@@ -139,6 +139,14 @@ ship and owner pull admission; empty context holds no context lock. Do not
 invent paths to satisfy admission. Task-pilot can prepare unknown targets,
 and a live preparation checkpoint still holds its tasks until that run settles.
 
+A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
+each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`
+and `orbit.task.update` responses carry it, `orbit task show` prints a
+`Readiness:` line and the dashboard shows a chip. `missing_context_files`
+blocks drain approval of a proposed task and is advisory in the backlog;
+`unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
+Read the gaps after filing and fix what blocks, or leave it to task-pilot.
+
 Put read-only designs, conventions and examples in prose links. A design document
 belongs in the footprint only if this task will change it. Cross-workspace edits
 need separate tasks in their owning workspaces, with explicit dependencies when

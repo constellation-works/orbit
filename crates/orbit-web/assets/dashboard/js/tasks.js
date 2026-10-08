@@ -408,11 +408,17 @@ function stopRowInteraction(node) {
   }
 }
 
+// The "not ready" chip narrows the loaded page to proposed and backlog tasks
+// with a blocking readiness gap. Readiness is derived per task rather than
+// stored, so it filters here instead of in the server's page query.
+let notReadyOnly = false;
+
 function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
   const activeStatuses = activeStatusSet(context);
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
+    if (notReadyOnly && !isNotReady(t)) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -500,7 +506,9 @@ function refreshChips(context) {
     const isAll = chip.dataset.role === "all";
     const activeStatuses = activeStatusSet(context);
     const allOn = activeStatuses.size === statusOrder(context).length;
-    const on = isAll ? allOn : activeStatuses.has(status);
+    const on = chip.dataset.role === "not-ready"
+      ? notReadyOnly
+      : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
@@ -524,6 +532,7 @@ export function buildTasksHash(context) {
   } else {
     sp.set("status", selected.length > 0 ? selected.join(",") : "none");
   }
+  if (notReadyOnly) sp.set("ready", "not");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   const qs = sp.toString();
@@ -546,6 +555,7 @@ export function applyTasksHashQuery(query, context) {
     const wanted = new Set(statusParam.split(",").map((s) => s.trim()).filter(Boolean));
     setActiveStatuses(context, new Set(order.filter((s) => wanted.has(s))));
   }
+  notReadyOnly = query.get("ready") === "not";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -625,6 +635,18 @@ export function buildChips(context) {
     });
     container.appendChild(chip);
   }
+  const notReady = el("button", {
+    class: "chip readiness-filter",
+    text: "not ready",
+    title: "Only proposed and backlog tasks with a gap that blocks automation",
+  });
+  notReady.type = "button";
+  notReady.dataset.role = "not-ready";
+  notReady.addEventListener("click", () => {
+    notReadyOnly = !notReadyOnly;
+    navigateTasksHash(context);
+  });
+  container.appendChild(notReady);
   refreshChips(context);
 }
 
@@ -665,6 +687,7 @@ function renderFilterSummary(context) {
   } else if (activeStatuses.size < order.length) {
     parts.push(`status: ${order.filter((s) => activeStatuses.has(s)).join(", ")}`);
   }
+  if (notReadyOnly) parts.push("not ready");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
@@ -697,6 +720,80 @@ function buildOsBadges(task) {
     ...anyOf.map((os) => el("span", { class: "os-badge mono", text: `os:${os}`, title: `Runs on ${requirement.describe || os}` })),
     ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
   ];
+}
+
+// Readiness: what a proposed or backlog task still lacks before automation
+// approves or admits it. The server attaches it to those statuses only, with
+// `preparing` set while a task-pilot run holds the task.
+function readinessOf(task) {
+  const readiness = task && task.readiness;
+  return readiness && typeof readiness === "object" ? readiness : null;
+}
+
+function readinessGaps(readiness) {
+  return Array.isArray(readiness.gaps) ? readiness.gaps.filter((gap) => gap && gap.code) : [];
+}
+
+function isNotReady(task) {
+  const readiness = readinessOf(task);
+  return Boolean(readiness) && readiness.ready === false;
+}
+
+function readinessSignature(task) {
+  const readiness = readinessOf(task);
+  if (!readiness) return "";
+  const gaps = readinessGaps(readiness).map((gap) => `${gap.code}/${gap.severity}`).join(",");
+  return `${readiness.ready}:${readiness.preparing ? "p" : ""}:${gaps}`;
+}
+
+// The row chip, in the os-badge slot: `preparing` while a pilot run holds the
+// task, amber when a gap blocks automation, muted when every gap is advisory,
+// and nothing for a task that lacks nothing. The tooltip lists each gap.
+function buildReadinessBadge(task) {
+  const readiness = readinessOf(task);
+  if (!readiness) return [];
+  if (readiness.preparing) {
+    return [el("span", {
+      class: "readiness-badge readiness-preparing mono",
+      text: "preparing",
+      title: "A task-pilot run is preparing this task; its readiness settles when the run does",
+    })];
+  }
+  const gaps = readinessGaps(readiness);
+  if (gaps.length === 0) return [];
+  const blocking = readiness.ready === false;
+  return [el("span", {
+    class: `readiness-badge ${blocking ? "readiness-blocking" : "readiness-advisory"} mono`,
+    text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
+    title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
+  })];
+}
+
+// The detail's Readiness block: each gap with its severity and its fix.
+function buildReadinessBlock(readiness) {
+  const wrap = el("div", { class: "readiness-list" });
+  if (readiness.preparing) {
+    wrap.appendChild(el("div", {
+      class: "readiness-note",
+      text: "A task-pilot run is preparing this task; these gaps settle when it finishes.",
+    }));
+  }
+  const gaps = readinessGaps(readiness);
+  if (gaps.length === 0) {
+    wrap.appendChild(el("div", { class: "readiness-note", text: "Ready: nothing is missing." }));
+    return wrap;
+  }
+  for (const gap of gaps) {
+    const severity = gap.severity === "blocking" ? "blocking" : "advisory";
+    wrap.appendChild(el("div", { class: `readiness-gap readiness-gap-${severity}` }, [
+      el("div", { class: "readiness-gap-head" }, [
+        el("span", { class: "readiness-severity mono", text: severity }),
+        el("span", { class: "readiness-message", text: gap.message || gap.code }),
+      ]),
+      ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
+    ]));
+  }
+  return wrap;
 }
 
 function buildExternalRefs(refs) {
@@ -1886,6 +1983,12 @@ function buildTaskDetail(task, context) {
   }
   if (metaCount > 0) addField(rightCol, "details", meta);
 
+  const readiness = readinessOf(task);
+  if (readiness) {
+    const count = readinessGaps(readiness).length;
+    addField(rightCol, "readiness", buildReadinessBlock(readiness), false, false, count > 0 ? { count } : {});
+  }
+
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
@@ -2938,20 +3041,20 @@ export function renderTasks(tasks, context) {
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const osBadges = buildOsBadges(t);
+        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
         // The title is the row's disclosure: the row holds the copy-id button,
         // the selects and the quick action, so it cannot be a button itself.
-        const titleCell = (aggregate && t.workspace_name) || osBadges.length > 0
+        const titleCell = (aggregate && t.workspace_name) || titleBadges.length > 0
           ? el("button", { class: "title" }, [
               ...(aggregate && t.workspace_name
                 ? [el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })]
                 : []),
-              ...osBadges,
+              ...titleBadges,
               t.title,
             ])
           : el("button", { class: "title", text: t.title });

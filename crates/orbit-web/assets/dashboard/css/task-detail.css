@@ -105,6 +105,46 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+/* Readiness: one entry per gap, its severity marked like the row chip. */
+.readiness-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.readiness-note {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+.readiness-gap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+.readiness-gap-blocking {
+  border-left-color: var(--state-pending);
+}
+.readiness-gap-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.readiness-severity {
+  flex: none;
+  font-size: 10px;
+  color: var(--fg-mute);
+}
+.readiness-gap-blocking .readiness-severity {
+  color: var(--state-pending);
+}
+.readiness-fix {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
 .property-list {
   display: flex;
   flex-direction: column;

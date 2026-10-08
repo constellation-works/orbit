@@ -9,7 +9,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::blocked_next_step::blocked_next_step;
 use super::output::{
-    format_task_fields, is_human_visible_history_event, task_fields_to_json,
+    format_task_fields, format_task_readiness, is_human_visible_history_event, task_fields_to_json,
     task_to_json_with_sidecars,
 };
 
@@ -87,6 +87,9 @@ impl Execute for TaskShowArgs {
             );
             if let Some(complexity) = task.complexity {
                 let _ = writeln!(out, "{} {}", bold("Complexity:"), complexity);
+            }
+            if let Some(readiness) = format_task_readiness(&task) {
+                let _ = writeln!(out, "{} {readiness}", bold("Readiness:"));
             }
             let _ = writeln!(out, "{} {}", bold("Type:"), task.task_type);
             if !task.description.is_empty() {

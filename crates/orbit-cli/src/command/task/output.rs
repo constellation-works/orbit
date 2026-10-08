@@ -106,6 +106,9 @@ pub(crate) fn task_to_json_with_sidecars(
     if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
         object.insert("os_requirement".to_string(), requirement);
     }
+    if let Some(readiness) = orbit_types::task::task_readiness_json(task) {
+        object.insert("readiness".to_string(), readiness);
+    }
     let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
         "artifacts".to_string(),
@@ -508,6 +511,12 @@ fn write_single_task_field(
             text.push_str(task.orchestrator.as_deref().unwrap_or_default());
             Ok(())
         }
+        "readiness" => {
+            if let Some(readiness) = format_task_readiness(task) {
+                text.push_str(&readiness);
+            }
+            Ok(())
+        }
         "artifacts" => {
             use crate::output::color::bold;
             let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
@@ -543,6 +552,29 @@ fn write_single_task_field(
             ))),
         },
     }
+}
+
+/// The human readiness readout of a `proposed` or `backlog` task: `ready` or
+/// `not ready`, then one indented line per gap with its fix. `None` for any
+/// other status.
+pub(crate) fn format_task_readiness(task: &orbit_core::Task) -> Option<String> {
+    let readiness = orbit_types::task::task_readiness(task)?;
+    let mut text = String::from(if readiness.ready() {
+        "ready"
+    } else {
+        "not ready"
+    });
+    for gap in &readiness.gaps {
+        let _ = write!(
+            text,
+            "\n  - {} [{}]: {} Fix: {}.",
+            gap.code.as_str(),
+            gap.severity.as_str(),
+            gap.message,
+            gap.fix
+        );
+    }
+    Some(text)
 }
 
 pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {

@@ -409,7 +409,7 @@ fn task_list_page_json(
     let items = page
         .items
         .iter()
-        .map(|row| projection.row_to_json(row, &status_by_id))
+        .map(|row| projection.row_to_json(runtime, row, &status_by_id))
         .collect::<Result<Vec<_>, _>>()?;
     let offset = query.offset();
     let next_offset = offset.saturating_add(items.len());

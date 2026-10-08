@@ -361,7 +361,7 @@ fn all_tasks_json(
         let projection = projections
             .entry(entry.id.as_str())
             .or_insert_with(|| TaskListProjection::new(&runtime));
-        let mut value = projection.row_to_json(&row, &statuses)?;
+        let mut value = projection.row_to_json(&runtime, &row, &statuses)?;
         if let Value::Object(map) = &mut value {
             map.insert("workspace_id".to_string(), json!(entry.id));
             map.insert("workspace_name".to_string(), json!(entry.name));

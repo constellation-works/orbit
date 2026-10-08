@@ -3,6 +3,7 @@
 //! duplicated here (verbatim logic) so orbit-web compiles in isolation
 //! without a dependency on orbit-cli (per ARCHITECTURE layering rules).
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::job::JobCatalogEntry;
@@ -186,7 +187,32 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
     if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
         value["os_requirement"] = requirement;
     }
+    // What a proposed or backlog task lacks before automation approves or
+    // admits it; absent for every other status.
+    if let Some(readiness) = orbit_types::task::task_readiness_json(task) {
+        value["readiness"] = readiness;
+    }
     value
+}
+
+/// Tasks an active task-pilot run is preparing. Their readiness gaps are about
+/// to be settled by that run, so the dashboard shows them as preparing. The
+/// flag is decoration on a read: a job store that cannot be read leaves every
+/// task unmarked rather than failing the task read.
+fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
+    runtime
+        .tasks_in_pilot_preparation()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "task readiness: active pilot preparations unreadable");
+            BTreeSet::new()
+        })
+}
+
+/// Add `readiness.preparing` to a projection that carries readiness.
+fn mark_readiness_preparing(value: &mut Value, preparing: bool) {
+    if let Some(readiness) = value.get_mut("readiness").and_then(Value::as_object_mut) {
+        readiness.insert("preparing".to_string(), Value::Bool(preparing));
+    }
 }
 
 pub(crate) fn task_to_json_with_sidecars(
@@ -250,6 +276,10 @@ pub(crate) fn task_row_to_json(
     {
         object.insert("review".to_string(), review);
     }
+    if value.get("readiness").is_some() {
+        let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
+        mark_readiness_preparing(&mut value, preparing);
+    }
     Ok(value)
 }
 
@@ -287,6 +317,8 @@ pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 pub(crate) struct TaskListProjection {
     registry: ConfiguredCrewRegistryProjection,
     local_machine_id: Option<String>,
+    /// Read once, on the page's first proposed or backlog row.
+    preparing: OnceCell<BTreeSet<String>>,
 }
 
 impl TaskListProjection {
@@ -294,11 +326,15 @@ impl TaskListProjection {
         Self {
             registry: runtime.configured_crew_registry_projection(),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
+            preparing: OnceCell::new(),
         }
     }
 
+    /// `runtime` is the one this projection was built from; it is read only
+    /// for the pilot preparations behind `readiness.preparing`.
     pub(crate) fn row_to_json(
         &self,
+        runtime: &OrbitRuntime,
         row: &TaskRow,
         status_by_id: &BTreeMap<String, TaskStatus>,
     ) -> Result<Value, OrbitError> {
@@ -335,6 +371,13 @@ impl TaskListProjection {
                 task,
             )),
         );
+        if value.get("readiness").is_some() {
+            let preparing = self
+                .preparing
+                .get_or_init(|| tasks_in_pilot_preparation(runtime))
+                .contains(&task.id);
+            mark_readiness_preparing(&mut value, preparing);
+        }
         Ok(value)
     }
 }

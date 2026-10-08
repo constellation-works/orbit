@@ -3158,6 +3158,42 @@ fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
     assert_eq!(search("Quartz telescope")["results"][0]["id"], id);
 }
 
+/// `orbit_task_add` and `orbit_task_update` answer with the task's readiness,
+/// so an agent filing work sees what it lacks without a second read.
+#[test]
+fn mcp_task_writes_report_readiness_gaps() {
+    let workspace = McpWorkspace::init();
+    std::fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n")
+        .expect("fixture file");
+    let mut client = workspace.serve();
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Readiness over MCP",
+            "description": "Filed without context selectors.",
+            "complexity": "medium",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(added["readiness"]["ready"], false);
+    assert_eq!(
+        added["readiness"]["gaps"][0]["code"],
+        "missing_context_files"
+    );
+    assert_eq!(added["readiness"]["gaps"][0]["severity"], "blocking");
+    assert!(added["readiness"]["gaps"][0]["fix"].is_string());
+
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": added["id"],
+            "context_files": ["file:existing.rs"],
+            "model": "codex",
+        }),
+    );
+    assert_eq!(updated["readiness"], json!({"ready": true, "gaps": []}));
+}
+
 #[test]
 fn mcp_calls_are_audited_once_including_unknown_raw_names() {
     let workspace = McpWorkspace::init();
