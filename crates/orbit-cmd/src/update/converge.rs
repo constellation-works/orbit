@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
     CompatibilityIdentity, GENERATION_CONTRACT, HandoverCandidate, LEGACY_GENERATION_CONTRACT,
 };
+use orbit_common::process::{BoundedRunError, run_bounded_capped_typed};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -24,6 +25,16 @@ const DETAIL_LIMIT: usize = 2000;
 /// How long to keep retrying a freshly written executable that reports
 /// [`std::io::ErrorKind::ExecutableFileBusy`].
 const EXEC_BUSY_WINDOW: Duration = Duration::from_secs(2);
+
+/// How long one convergence step (`migrate`, a clock repair, a state
+/// inspection) may run. The replacement binary may be migrating a large
+/// workspace, so this is generous; it exists so a wedged step cannot hold the
+/// update, and the generation authorities it holds, forever.
+const STEP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Bytes kept from each stream of a convergence step; reports read one line
+/// of stdout or the first 2000 characters of stderr.
+const STEP_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 /// Environment variable bounding each `--version` and `update --contract`
 /// probe of a candidate or installed executable, in seconds.
@@ -223,17 +234,33 @@ pub fn probe_version(executable: &Path) -> Result<String, OrbitError> {
 /// that forks in the same window can briefly inherit that descriptor — so a
 /// freshly staged or freshly installed executable is retried for a bounded
 /// period rather than reported as broken.
+///
+/// The step is bounded by [`STEP_TIMEOUT`] and killed with its process group
+/// past it; that is reported as [`std::io::ErrorKind::TimedOut`].
 fn run_process(command: &mut Command) -> std::io::Result<Output> {
     let deadline = Instant::now() + EXEC_BUSY_WINDOW;
     loop {
-        match command.output() {
-            Err(error)
+        match run_bounded_capped_typed(command, STEP_TIMEOUT, STEP_OUTPUT_LIMIT) {
+            Err(BoundedRunError::Spawn(error))
                 if error.kind() == std::io::ErrorKind::ExecutableFileBusy
                     && Instant::now() < deadline =>
             {
                 std::thread::sleep(Duration::from_millis(25));
             }
-            other => return other,
+            Ok(captured) => {
+                return Ok(Output {
+                    status: captured.status,
+                    stdout: captured.stdout,
+                    stderr: captured.stderr,
+                });
+            }
+            Err(BoundedRunError::Spawn(error)) => return Err(error),
+            Err(BoundedRunError::Run(error)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    error.to_string(),
+                ));
+            }
         }
     }
 }

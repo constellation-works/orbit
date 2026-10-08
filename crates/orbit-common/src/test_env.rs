@@ -463,12 +463,25 @@ pub enum PsRun {
 /// other failure to start it panics, and a `ps` that ran is returned whatever
 /// its status, so a sandbox can never turn a wrong rendering into a pass.
 pub fn ps_lstart_utc(pid: u32) -> PsRun {
-    let spawned = std::process::Command::new("ps")
+    let mut command = std::process::Command::new("ps");
+    command
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .env("TZ", "UTC")
         .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .output();
+        .env("LANG", "C");
+    let spawned = match crate::process::run_bounded_capped_typed(
+        &mut command,
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+    ) {
+        Ok(captured) => Ok(std::process::Output {
+            status: captured.status,
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+        }),
+        Err(crate::process::BoundedRunError::Spawn(error)) => Err(error),
+        Err(crate::process::BoundedRunError::Run(error)) => panic!("run ps: {error}"),
+    };
     classify_ps(spawned)
 }
 

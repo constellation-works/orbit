@@ -283,7 +283,7 @@
   },
   {
     "name": "orbit_command_exec",
-    "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.",
+    "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status, within a deadline. Requires operator capability and the workspace claim; withheld from managed runs.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -304,6 +304,10 @@
         "working_directory": {
           "type": "string",
           "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Deadline in milliseconds (default 120000, at most 600000; larger values are clamped). When it passes, the command and its whole process group are killed and the result reports `timed_out: true`."
         },
         "claim_token": {
           "type": "string",

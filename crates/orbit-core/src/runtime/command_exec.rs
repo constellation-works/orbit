@@ -6,12 +6,13 @@
 //! wrapper and the runtime method that owns the actual gate. `argv` is spawned
 //! directly via [`std::process::Command`] — no shell — so quoting and
 //! operator-precedence bugs cannot occur by construction, not by review.
-//! `orbit-core` spawns the child itself rather than reusing `orbit-exec`'s
-//! `run_process`: that crate is not a declared dependency of `orbit-core`
-//! ([`ARCHITECTURE.md`](../../../../../ARCHITECTURE.md) draws that edge only
-//! from `orbit-tools` and `orbit-engine`), and the one property it adds beyond
-//! `Command::output` — timeout supervision — is not part of this operation's
-//! contract.
+//! The child runs through [`orbit_common::process::run_bounded_capped_typed`]:
+//! it leads its own process group, each output stream is capped at
+//! [`OUTPUT_LIMIT_BYTES`], and it is killed with its whole group when the
+//! deadline passes. The deadline is [`DEFAULT_TIMEOUT_MS`] unless the caller
+//! passes `timeout_ms`, which is clamped to [`MAX_TIMEOUT_MS`]. A killed
+//! command is reported as `timed_out: true` with no exit code; the output it
+//! had produced is discarded.
 //!
 //! Operator capability is enforced uniformly across every entry point by the
 //! ORB-10453 governed-operation chokepoint before this method is ever reached;
@@ -21,9 +22,10 @@
 //! audit record naming what actually ran.
 
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::process::{BoundedRunError, run_bounded_capped_typed};
 use orbit_common::security::redaction::{argv_redactor, is_sensitive_env_name};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ExecutionResult;
@@ -35,6 +37,13 @@ use crate::OrbitRuntime;
 const COMMAND_TOOL_NAME: &str = "orbit.command.exec";
 const COMMAND_TARGET_TYPE: &str = "command_exec";
 
+/// Deadline when the caller passes no `timeout_ms`.
+pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// Largest deadline a caller may request; larger values are clamped to it.
+pub(crate) const MAX_TIMEOUT_MS: u64 = 600_000;
+/// Bytes kept from each of stdout and stderr; the rest is read and dropped.
+const OUTPUT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
 /// Parameters for [`OrbitRuntime::execute_remote_command`], already parsed and
 /// typed by the tool-dispatch layer.
 pub(crate) struct RemoteCommandParams {
@@ -42,6 +51,8 @@ pub(crate) struct RemoteCommandParams {
     pub(crate) working_directory: String,
     pub(crate) claim_token: Option<String>,
     pub(crate) actor: String,
+    /// Caller-requested deadline; `None` means [`DEFAULT_TIMEOUT_MS`].
+    pub(crate) timeout_ms: Option<u64>,
 }
 
 impl OrbitRuntime {
@@ -69,14 +80,24 @@ impl OrbitRuntime {
 
         let env_pairs = std::env::vars().filter(|(key, _)| !is_sensitive_env_name(key));
 
-        let started = Instant::now();
-        let result = Command::new(&program)
+        let timeout_ms = params
+            .timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .clamp(1, MAX_TIMEOUT_MS);
+        let mut command = Command::new(&program);
+        command
             .args(&args)
             .current_dir(&working_directory)
             .env_clear()
-            .envs(env_pairs)
-            .output()
-            .map(|output| ExecutionResult {
+            .envs(env_pairs);
+
+        let started = Instant::now();
+        let result = match run_bounded_capped_typed(
+            &mut command,
+            Duration::from_millis(timeout_ms),
+            OUTPUT_LIMIT_BYTES,
+        ) {
+            Ok(output) => Ok(ExecutionResult {
                 success: output.status.success(),
                 timed_out: false,
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -84,15 +105,30 @@ impl OrbitRuntime {
                 exit_code: output.status.code(),
                 duration_ms: started.elapsed().as_millis() as u64,
                 output: None,
-            })
-            .map_err(|error| {
-                OrbitError::Execution(format!(
-                    "spawn '{program}' in '{}': {error}",
-                    working_directory.display()
-                ))
-            });
+            }),
+            Err(BoundedRunError::Run(OrbitError::ProcessTimeout { .. })) => Ok(ExecutionResult {
+                success: false,
+                timed_out: true,
+                stdout: String::new(),
+                stderr: format!(
+                    "'{program}' did not finish within {timeout_ms}ms; it and its process \
+                     group were killed"
+                ),
+                exit_code: None,
+                duration_ms: started.elapsed().as_millis() as u64,
+                output: None,
+            }),
+            Err(BoundedRunError::Spawn(error)) => Err(OrbitError::Execution(format!(
+                "spawn '{program}' in '{}': {error}",
+                working_directory.display()
+            ))),
+            Err(BoundedRunError::Run(error)) => Err(OrbitError::Execution(format!(
+                "run '{program}' in '{}': {error}",
+                working_directory.display()
+            ))),
+        };
 
-        let status = if result.is_ok() {
+        let status = if result.as_ref().is_ok_and(|result| !result.timed_out) {
             AuditEventStatus::Success
         } else {
             AuditEventStatus::Failure

@@ -143,6 +143,20 @@ writes do not promise crash-safe replacement. The explicitly non-atomic
 `write_new_private_text` for exclusive creation of new private files. Test
 fixtures may use direct writes under the separate all-targets lint pass.
 
+## Child processes
+
+Production code must not wait on a child without a deadline. Spawn through
+`orbit_common::process::run_bounded` or `run_bounded_capped`, which give the
+child its own process group, kill the group at the deadline and cap captured
+output. `run_bounded_capped_typed` is the same call but returns a failed spawn
+as its `io::Error`, for callers that branch on the error kind (the `ETXTBSY`
+retry in `orbit update`, the sandbox probes). The production Clippy pass
+disallows `std::process::Command::output` and `Command::status`; an exception
+needs `#[allow(clippy::disallowed_methods, reason = "...")]`. Current
+exceptions are the SSH stdio relay in `orbit-mcp` and the interactive or
+operator-watched `sudo` steps of `orbit init` on Linux, none of which has a
+natural deadline. Fixtures may use both methods under the all-targets pass.
+
 ## Browser checks on a prepared host
 
 The website and dashboard browser checks below need Playwright, a Chromium

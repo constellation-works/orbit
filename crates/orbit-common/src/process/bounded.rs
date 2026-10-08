@@ -80,15 +80,48 @@ pub fn run_bounded_capped(
     deadline: Duration,
     output_limit: usize,
 ) -> Result<CapturedOutput, OrbitError> {
+    run_bounded_capped_typed(command, deadline, output_limit).map_err(OrbitError::from)
+}
+
+/// Why a bounded run produced no output.
+#[derive(Debug)]
+pub enum BoundedRunError {
+    /// The OS refused to start the child. The error keeps its
+    /// [`io::ErrorKind`], so a caller can retry `ExecutableFileBusy` or tell
+    /// "program missing" from "permission denied".
+    Spawn(io::Error),
+    /// The child started, then waiting for it failed or the deadline elapsed
+    /// ([`OrbitError::ProcessTimeout`]).
+    Run(OrbitError),
+}
+
+impl From<BoundedRunError> for OrbitError {
+    fn from(error: BoundedRunError) -> Self {
+        match error {
+            BoundedRunError::Spawn(error) => OrbitError::Execution(error.to_string()),
+            BoundedRunError::Run(error) => error,
+        }
+    }
+}
+
+/// [`run_bounded_capped`] that reports a failed spawn as its [`io::Error`].
+///
+/// # Errors
+///
+/// [`BoundedRunError::Spawn`] when the process cannot be started, otherwise
+/// [`BoundedRunError::Run`] with the same errors as [`run_bounded`].
+pub fn run_bounded_capped_typed(
+    command: &mut Command,
+    deadline: Duration,
+    output_limit: usize,
+) -> Result<CapturedOutput, BoundedRunError> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     isolate_process_group(command);
-    let child = command
-        .spawn()
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
-    supervise(child, deadline, output_limit)
+    let child = command.spawn().map_err(BoundedRunError::Spawn)?;
+    supervise(child, deadline, output_limit).map_err(BoundedRunError::Run)
 }
 
 #[cfg(unix)]

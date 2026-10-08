@@ -4,6 +4,8 @@
 disallowed-methods = [
     { path = "std::sync::mpsc::channel", reason = "production channels must have a bounded capacity" },
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "production channels must have a bounded capacity" },
+    { path = "std::process::Command::output", reason = "a child wait needs a deadline, a process group and capped capture; use orbit_common::process::run_bounded or run_bounded_capped" },
+    { path = "std::process::Command::status", reason = "a child wait needs a deadline and a process group; use orbit_common::process::run_bounded or run_bounded_capped, or add a reasoned exception for an interactive or long-lived child" },
     { path = "std::fs::write", reason = "durable replacements must use orbit_common::fs::io atomic helpers; deliberate in-place writes need a reasoned exception" },
 ]
 

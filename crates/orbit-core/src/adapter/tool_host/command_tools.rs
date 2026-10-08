@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_common::protocol::tool_input::{optional_string, optional_u32_alias, required_string};
 use orbit_types::identity::normalize_optional_attribution_label;
 use serde_json::Value;
 
@@ -15,6 +15,12 @@ pub(super) fn exec(
     let argv = required_argv(&input)?;
     let working_directory = required_string(&input, &["working_directory"], "working_directory")?;
     let claim_token = optional_string(&input, "claim_token")?;
+    let timeout_ms = optional_u32_alias(&input, &["timeout_ms"])?.map(u64::from);
+    if timeout_ms == Some(0) {
+        return Err(OrbitError::InvalidInput(
+            "`timeout_ms` must be at least 1".to_string(),
+        ));
+    }
     let actor = normalize_optional_attribution_label(
         model.as_deref().or(agent.as_deref()),
         model.as_deref(),
@@ -26,6 +32,7 @@ pub(super) fn exec(
         working_directory,
         claim_token,
         actor,
+        timeout_ms,
     })?;
 
     serde_json::to_value(result)

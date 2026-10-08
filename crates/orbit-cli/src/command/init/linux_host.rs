@@ -230,6 +230,10 @@ impl Host for RealHost {
         if non_interactive {
             command.arg("-n");
         }
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "interactive sudo authentication: it waits on a human at the terminal, so no deadline applies"
+        )]
         let status = command
             .arg("-v")
             .stdin(Stdio::null())
@@ -265,6 +269,10 @@ impl Host for RealHost {
             sudo.args(["-n", "--", path]);
             sudo
         };
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "privileged package-manager step that streams its progress to the operator's terminal and legitimately runs for minutes; no fixed deadline fits, and the operator can interrupt it"
+        )]
         let status = command
             .args(args)
             .env_clear()
