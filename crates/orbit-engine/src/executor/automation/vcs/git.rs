@@ -1,12 +1,12 @@
 use std::cell::Cell;
 use std::io::Read;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
-    with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, GIT_FETCH_LOCK_HOLD_LIMIT, GIT_REMOTE_TIMEOUT,
+    git_fetch_cas_retry_delay, should_retry_git_ref_cas, with_git_fetch_lock,
 };
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
@@ -371,16 +371,64 @@ pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<b
 /// Timeouts and transport failures retry within the same bounded attempt
 /// count, with backoff. Exhaustion carries the transient failure marker;
 /// authentication, permission and missing-ref refusals remain ordinary errors.
+///
+/// The lock is held for at most [`GIT_FETCH_LOCK_HOLD_LIMIT`] in total across
+/// attempts and backoff, so a stalled remote cannot outlast the waiters (task
+/// pilot, final recovery) and turn into their lock timeouts. Each attempt gets
+/// the smaller of the activity's fetch budget, [`GIT_REMOTE_TIMEOUT`] and
+/// what is left of that limit; a raised `git_timeouts.fetch` cannot lengthen
+/// the hold.
 pub fn fetch_remote_base(repo_root: &Path, base: &str) -> Result<(), OrbitError> {
-    let branch = normalize_base_branch(base)?;
-    with_git_fetch_lock(repo_root, || fetch_remote_base_locked(repo_root, &branch))
+    fetch_remote_base_within(repo_root, base, GIT_FETCH_LOCK_HOLD_LIMIT)
 }
 
-fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
+pub(crate) fn fetch_remote_base_within(
+    repo_root: &Path,
+    base: &str,
+    hold_limit: Duration,
+) -> Result<(), OrbitError> {
+    let branch = normalize_base_branch(base)?;
+    with_git_fetch_lock(repo_root, || {
+        fetch_remote_base_locked(repo_root, &branch, hold_limit)
+    })
+}
+
+fn fetch_remote_base_locked(
+    repo_root: &Path,
+    branch: &str,
+    hold_limit: Duration,
+) -> Result<(), OrbitError> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let held_since = Instant::now();
     let mut last_stderr = String::new();
+    let mut last_transport_error: Option<OrbitError> = None;
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
-        let outcome = git_run(repo_root, &["fetch", "origin", &spec])?;
+        let remaining = hold_limit.saturating_sub(held_since.elapsed());
+        if remaining.is_zero() {
+            return Err(match last_transport_error {
+                Some(error) => OrbitError::Execution(format!(
+                    "{TRANSIENT_FAILURE_MARKER} remote base fetch hit the {}ms fetch-lock hold limit after {attempt} attempts: {error}",
+                    hold_limit.as_millis()
+                )),
+                None => OrbitError::Execution(format!(
+                    "failed to fetch remote base 'origin/{branch}' in '{}': fetch-lock hold limit of {}ms reached: {last_stderr}",
+                    repo_root.display(),
+                    hold_limit.as_millis()
+                )),
+            });
+        }
+        let outcome = {
+            let current = GitTimeoutBudget::current();
+            let attempt_ms = current
+                .fetch_ms
+                .min(GIT_REMOTE_TIMEOUT.as_millis() as u64)
+                .min(remaining.as_millis().max(1) as u64);
+            let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
+                fetch_ms: attempt_ms,
+                ..current
+            });
+            git_run(repo_root, &["fetch", "origin", &spec])?
+        };
         if outcome.success && !outcome.timed_out {
             return Ok(());
         }
@@ -402,10 +450,13 @@ fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitE
                 )));
             }
             tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
-            std::thread::sleep(Duration::from_millis(250 * (1 << attempt)));
+            last_transport_error = Some(error);
+            let backoff = Duration::from_millis(250 * (1 << attempt));
+            std::thread::sleep(backoff.min(hold_limit.saturating_sub(held_since.elapsed())));
             continue;
         }
         last_stderr = outcome.stderr.trim().to_string();
+        last_transport_error = None;
         if should_retry_git_ref_cas(attempt, &last_stderr) {
             tracing::warn!(
                 attempt,

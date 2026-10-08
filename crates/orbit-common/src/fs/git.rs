@@ -41,6 +41,28 @@ pub const GIT_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(120);
 /// so a stalled holder is killed while the next caller is still waiting.
 pub const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Longest any one holder keeps the [`with_git_fetch_lock`] lock. Waiters give
+/// up after [`DEFAULT_FILE_LOCK_TIMEOUT`](super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT),
+/// so a holder that outlasts them turns one stalled fetch into a lock timeout
+/// for every other caller. A holder with several attempts (delivery
+/// `fetch_remote_base`) spends this as one total across its attempts and
+/// backoff; the limit leaves a margin below the waiters' wait for the
+/// supervisor to kill the last child. We bound the holder rather than widen
+/// the waiters' wait: a waiter blocked for minutes behind a stalled network
+/// call is a worse failure than the holder giving up early and retrying later.
+pub const GIT_FETCH_LOCK_HOLD_LIMIT: Duration = Duration::from_secs(25);
+
+// Pin the holder/waiter relationship: a change to either side that breaks it
+// fails the build instead of reappearing as lock timeouts under a stalled fetch.
+const _: () = assert!(
+    GIT_REMOTE_TIMEOUT.as_millis() <= GIT_FETCH_LOCK_HOLD_LIMIT.as_millis(),
+    "a single-fetch holder must fit within the fetch-lock hold limit"
+);
+const _: () = assert!(
+    GIT_FETCH_LOCK_HOLD_LIMIT.as_millis() < super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT.as_millis(),
+    "the fetch-lock hold limit must stay below the wait of every fetch-lock waiter"
+);
+
 /// Bytes [`run_git`] keeps of each output stream. Callers parse ref lists,
 /// commit headers and worktree lists, all far smaller.
 pub const GIT_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
