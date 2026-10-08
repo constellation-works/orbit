@@ -9,7 +9,8 @@ template:
   description: |
     Validate a small batch of documentation against the current repository.
     Correct factual drift and broken links or Markdown. A batch whose claims
-    are already accurate is a successful no-diff run.
+    are already accurate is a successful no-diff run with validated no-diff
+    evidence.
 
     ## Select a batch
 
@@ -50,12 +51,14 @@ template:
     ordering date and source (frontmatter, git, or prior summary), changes and
     verification evidence, and any skipped document or unverified claim. State
     explicitly when the batch was clean. Do not manufacture an edit to mark a
-    clean run complete.
+    clean run complete; when no document required changes, follow the workspace's
+    validated no-diff evidence requirements (attach `no-diff.json` and captured
+    validation logs).
   acceptance_criteria:
   - Up to six least-recently-validated tracked documents were selected by date and stable path order, using git last-touched dates where no validation metadata or prior summary exists.
   - Each selected document was checked against current evidence; verified drift was corrected, while unverifiable claims were left unchanged and reported.
   - No frontmatter or last_validated key was added to a document that lacked it; existing last_validated keys were updated only after verification.
-  - The durable execution summary records selected paths, ordering evidence, checks, changes, and skipped claims, including clean no-diff batches.
+  - The durable execution summary records selected paths, ordering evidence, checks, changes, and skipped claims, including clean no-diff batches with validated no-diff evidence.
   task_type: chore
   tags:
   - doc-duties
