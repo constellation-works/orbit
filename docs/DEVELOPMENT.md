@@ -134,7 +134,7 @@ explicitly and requires its web fonts to load before measuring page height.
 
 ## MCP Apps compatibility prototype
 
-See [the isolated reproduction and native desktop probe](mcp-apps-probe.md)
+See [the isolated reproduction and native desktop probe](qa/mcp-apps-probe.md)
 for the versioned Control Center, operator controls, isolated rendered preview,
 routing boundaries and evidence template.
 Automated protocol/bridge results and native desktop results are recorded separately.
