@@ -134,10 +134,14 @@ class LocalCodeqlTests(unittest.TestCase):
                         RUSTUP_HOME=str(self.global_dirs[0]),
                         CARGO_HOME=str(self.global_dirs[1]))
 
+    # The timeout only guards against a hung script. A stubbed run takes about
+    # 2 s, but a busy executor stretched runs past 20 s on a managed macOS leaf
+    # (four concurrent cargo builds), which failed make ci-fast on an
+    # unchanged base.
     def run_script(self, *args, **env):
         return subprocess.run(["bash", str(self.script), *args], cwd=self.root,
                               env=dict(self.env, **env), text=True, capture_output=True,
-                              timeout=20)
+                              timeout=180)
 
     def use_scratch(self, scratch):
         self.scratch = scratch
