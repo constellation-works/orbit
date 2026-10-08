@@ -2768,6 +2768,194 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
 // Fixtures
 // ---------------------------------------------------------------------------
 
+/// ORB-14717: a silent origin must not turn reviewed work into a candidate
+/// failure. Only a cached ref sharing ancestry can complete the handoff.
+#[test]
+fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base() {
+    isolated(
+        "claimed_handoff_fetch_timeout_uses_only_a_related_cached_base",
+        |sandbox| {
+            for cache in ["related", "missing", "unrelated"] {
+                let fx = Fixture::new(sandbox);
+                // Keeping the listener alive makes the origin accept TCP
+                // connections without ever answering the Git protocol.
+                let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let origin = format!(
+                    "git://{}/owner/repository.git",
+                    silent.local_addr().unwrap()
+                );
+                git(&fx.repo, &["remote", "set-url", "origin", &origin]);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                let mut input = json!({
+                    "workspace_path": fx.repo,
+                    "base_sync": "local",
+                    "base_sha": fx.base_sha,
+                });
+                let validated = action(&host, "claim_validate", &input).unwrap();
+                input["candidate"] = validated["candidate"].clone();
+                input["validation"] = validated["validation"].clone();
+                input["base_sync"] = json!("remote");
+                input["git_timeouts"] = json!({"fetch": 1});
+                let cached = format!("refs/remotes/origin/{BASE}");
+                match cache {
+                    "missing" => {
+                        git(&fx.repo, &["update-ref", "-d", &cached]);
+                    }
+                    "unrelated" => {
+                        let tree = git(&fx.repo, &["rev-parse", "HEAD^{tree}"]);
+                        let orphan = git(&fx.repo, &["commit-tree", &tree, "-m", "unrelated"]);
+                        git(&fx.repo, &["update-ref", &cached, &orphan]);
+                    }
+                    _ => {}
+                }
+                let handoff = action(&host, "claim_handoff", &input);
+                if cache == "related" {
+                    let handed = handoff.expect("cached ancestry preserves the validated handoff");
+                    assert_eq!(handed["handed_off"], true);
+                    assert_eq!(handed["base"], fx.base_sha);
+                    assert_eq!(handed["candidate"], fx.candidate);
+                    assert_eq!(host.handoffs.lock().unwrap().len(), 1);
+                } else {
+                    let error = handoff
+                        .expect_err("an unusable cache preserves the fetch failure")
+                        .to_string();
+                    assert!(error.contains("timed out after 1ms"), "{cache}: {error}");
+                    assert_eq!(
+                        ClaimFailureClass::of_step_failure(None, Some(&error)),
+                        Some(ClaimFailureClass::Transient),
+                        "{cache}: {error}"
+                    );
+                    assert!(host.handoffs.lock().unwrap().is_empty());
+                }
+                assert_eq!(fx.head(), fx.candidate, "the candidate stays intact");
+            }
+        },
+    );
+}
+
+/// ORB-14717: a deleted remote base must refuse even with a usable cached
+/// ref. It says something different from an unavailable network.
+#[test]
+fn claimed_handoff_missing_remote_ref_never_uses_the_cached_base() {
+    isolated(
+        "claimed_handoff_missing_remote_ref_never_uses_the_cached_base",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = json!({"workspace_path": fx.repo, "base_sync": "local"});
+            let validated = action(&host, "claim_validate", &input).unwrap();
+            input["candidate"] = validated["candidate"].clone();
+            input["validation"] = validated["validation"].clone();
+            input["base_sync"] = json!("remote");
+            git(
+                &fx.forge.join("remote.git"),
+                &["update-ref", "-d", &format!("refs/heads/{BASE}")],
+            );
+            let error = action(&host, "claim_handoff", &input)
+                .expect_err("a missing remote base is a refusal")
+                .to_string();
+            assert!(error.contains("couldn't find remote ref"), "{error}");
+            assert_eq!(
+                ClaimFailureClass::of_step_failure(None, Some(&error)),
+                None,
+                "{error}"
+            );
+            assert!(host.handoffs.lock().unwrap().is_empty());
+        },
+    );
+}
+
+/// Drive real Git's SSH transport: temporary connection failures retry and
+/// can recover; access refusals stay untyped and never retry or use the cache.
+#[test]
+fn remote_base_transport_retries_preserve_access_refusals() {
+    isolated(
+        "remote_base_transport_retries_preserve_access_refusals",
+        |sandbox| {
+            for (diagnostic, recovery, attempts, transient) in [
+                ("Connection reset by peer", true, 2, false),
+                ("Could not resolve hostname fixture.invalid", false, 3, true),
+                ("Connection reset by peer", false, 3, true),
+                (
+                    "Permission denied (publickey). Connection closed",
+                    false,
+                    1,
+                    false,
+                ),
+                (
+                    "Authentication failed. Connection reset by peer",
+                    false,
+                    1,
+                    false,
+                ),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let count = fx._root.path().join("fetch-attempts");
+                let ssh = fx._root.path().join("ssh");
+                fs::write(&count, "0").unwrap();
+                fs::write(&ssh, format!(
+                    "#!/bin/sh\nn=$(cat '{}')\nn=$((n + 1))\necho $n > '{}'\nif [ '{}' = true ] && [ $n -gt 1 ]; then exec git-upload-pack '{}'; fi\necho '{}' >&2\nexit 1\n",
+                    count.display(), count.display(), recovery, fx.forge.join("remote.git").display(), diagnostic,
+                )).unwrap();
+                fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+                git(&fx.repo, &["config", "core.sshCommand", path_str(&ssh)]);
+                git(&fx.repo, &["config", "ssh.variant", "ssh"]);
+                git(
+                    &fx.repo,
+                    &[
+                        "remote",
+                        "set-url",
+                        "origin",
+                        "ssh://fixture.invalid/owner/repository.git",
+                    ],
+                );
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                if !transient && !recovery {
+                    let mut input = json!({"workspace_path": fx.repo, "base_sync": "local"});
+                    let validated = action(&host, "claim_validate", &input).unwrap();
+                    input["candidate"] = validated["candidate"].clone();
+                    input["validation"] = validated["validation"].clone();
+                    input["base_sync"] = json!("remote");
+                    let error = action(&host, "claim_handoff", &input)
+                        .expect_err("access refusal")
+                        .to_string();
+                    assert!(error.contains(diagnostic), "{error}");
+                    assert_eq!(
+                        ClaimFailureClass::of_step_failure(None, Some(&error)),
+                        None,
+                        "{error}"
+                    );
+                    assert!(host.handoffs.lock().unwrap().is_empty());
+                } else {
+                    let fetched = orbit_engine::fetch_remote_base(&fx.repo, BASE);
+                    if recovery {
+                        fetched.expect("the second transport attempt recovers");
+                    } else {
+                        let error = fetched
+                            .expect_err("transport stays unavailable")
+                            .to_string();
+                        assert!(error.contains(diagnostic), "{error}");
+                        assert_eq!(
+                            ClaimFailureClass::of_step_failure(None, Some(&error)),
+                            Some(ClaimFailureClass::Transient),
+                            "{error}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    fs::read_to_string(&count)
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap(),
+                    attempts,
+                    "{diagnostic}"
+                );
+            }
+        },
+    );
+}
+
 /// A checkout on [`BRANCH`] one commit ahead of [`BASE`], both pushed to a
 /// bare remote that the substitute forge reads and merges into.
 struct Fixture {
