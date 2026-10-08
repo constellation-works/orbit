@@ -130,10 +130,17 @@ fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
         .find(|event| event["command"] == "doctor" && event["exit_code"] == 1)
         .unwrap_or_else(|| panic!("failed doctor audit row missing: {events:?}"));
     let message = failed["error_message"].as_str().unwrap_or_default();
+    // Provider checks also fail on hosts without the crews' CLIs (CI
+    // runners), so assert that `database` is among the named failures rather
+    // than that it is the only one.
+    let named_failures = message
+        .strip_prefix(DOCTOR_FINDINGS_MESSAGE_PREFIX)
+        .and_then(|findings| findings.split_once('('))
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(names, _)| names)
+        .unwrap_or_default();
     assert!(
-        message.starts_with(&format!(
-            "{DOCTOR_FINDINGS_MESSAGE_PREFIX}1 failure (database)"
-        )),
+        named_failures.split(", ").any(|name| name == "database"),
         "the audit row must name the failing check: {failed}"
     );
 }
