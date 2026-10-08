@@ -440,10 +440,22 @@ fn interactive_rc_toolchains_are_found_and_can_be_disabled() {
 /// validation tooling. The failure and successful fallback are cached together.
 #[test]
 fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
-    for (rc, reason) in [
-        ("exec /bin/sleep 30", "did not finish within 300ms"),
-        ("echo 'rc failure' >&2; exit 7", "exited with status 7"),
-        ("exec /bin/sh -c 'echo replaced-shell'", "marker missing"),
+    for (rc, reason, timeout) in [
+        (
+            "exec /bin/sleep 30",
+            "did not finish within 300ms",
+            Duration::from_millis(300),
+        ),
+        (
+            "echo 'rc failure' >&2; exit 7",
+            "exited with status 7",
+            Duration::from_secs(10),
+        ),
+        (
+            "exec /bin/sh -c 'echo replaced-shell'",
+            "marker missing",
+            Duration::from_secs(10),
+        ),
     ] {
         let host = Host::new();
         host.bash_rc(
@@ -454,7 +466,10 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             ),
             rc,
         );
-        let bash = LoginShell::new("/bin/bash", Duration::from_millis(300));
+        // macOS runner startup can exceed 300ms; keep the production probe
+        // timeout for these immediate-exit cases. The hanging case above
+        // continues to exercise the short bounded-timeout path.
+        let bash = LoginShell::new("/bin/bash", timeout);
         let started = Instant::now();
         let resolved = ValidationEnvironment::resolve(
             host.launcher_env(),
