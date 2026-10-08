@@ -151,6 +151,14 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             ));
         }
     }
+    if let (Some(tasks), Some(total)) = (payload["tasks"].as_array(), payload["total"].as_u64())
+        && (tasks.len() as u64) < total
+    {
+        lines.push(format!(
+            "showing {} of {total} backlog tasks; use --limit N or name task ids",
+            tasks.len()
+        ));
+    }
     lines
 }
 
