@@ -49,9 +49,6 @@ pub const ANTHROPIC_HTTP_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 /// Codex model used by the standard Sol crew.
 pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";
 
-/// Codex model used by the standard Terra crew and provider default.
-pub const CODEX_TERRA_MODEL: &str = "gpt-5.6-terra";
-
 /// Codex model used by the standard Luna crew.
 pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 

@@ -127,6 +127,50 @@ fn write_skill_dir(dir: &Path) {
 }
 
 #[test]
+fn refresh_defaults_preserves_a_user_authored_terra_crew() {
+    let temp = tempdir().expect("tempdir");
+    let global_root = temp.path().join("global/.orbit");
+    let seed = ConfigSeed::from_families(["codex", "claude"]);
+
+    init_workspace_at_root(
+        &global_root,
+        InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            config_seed: Some(seed.clone()),
+            ..Default::default()
+        },
+    )
+    .expect("initialization seeds config");
+
+    let config_path = global_root.join("config.toml");
+    let mut config = fs::read_to_string(&config_path).expect("read seeded config");
+    config.push_str("\n[crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\n");
+    fs::write(&config_path, config).expect("add user crew");
+
+    init_workspace_at_root(
+        &global_root,
+        InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            config_seed: Some(seed),
+            ..Default::default()
+        },
+    )
+    .expect("refresh managed defaults");
+
+    let config: toml::Table = fs::read_to_string(&config_path)
+        .expect("read refreshed config")
+        .parse()
+        .expect("refreshed config remains valid TOML");
+    assert_eq!(
+        config["crews"]["terra"]["model"].as_str(),
+        Some("gpt-5.6-terra")
+    );
+    assert_eq!(config["crews"]["terra"]["provider"].as_str(), Some("codex"));
+}
+
+#[test]
 fn unlink_skills_does_not_follow_a_symlinked_discovery_directory() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("isolated");

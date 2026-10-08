@@ -167,7 +167,7 @@ prices:
     cache_create_1h_per_million_usd: 20.0
     output_per_million_usd: 50.0
 
-  # ── OpenAI / Codex (crews: sol, terra, luna) ─────────────────────────────
+  # ── OpenAI / Codex (crews: astra, sol, luna) ────────────────────────────
   # Standard short-context API-equivalent rates. OpenAI input totals are gross:
   # cached reads and writes are included and are subtracted before the full
   # input rate is applied. OpenAI reports no 1h tier; the nonzero 5m fallback

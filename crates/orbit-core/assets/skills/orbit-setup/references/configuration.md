@@ -123,7 +123,7 @@ orbit config set crews.gemini.enabled true
 ```
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
-Codex: `astra`, `sol`, `terra`, `luna`; one crew each for Antigravity, Gemini,
+Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points the two lane
 keys at enabled crews:

@@ -265,6 +265,28 @@ fn seeded_config_loads_and_a_config_without_crews_resolves_haiku() {
             true
         )
     );
+    let built_in_names = config.crews.keys().map(String::as_str).collect::<Vec<_>>();
+    assert_eq!(
+        built_in_names,
+        [
+            "antigravity",
+            "astra",
+            "copilot",
+            "cursor",
+            "fable",
+            "gemini",
+            "grok",
+            "haiku",
+            "luna",
+            "opencode",
+            "opus",
+            "pi",
+            "sol",
+            "sonnet",
+            "system",
+        ],
+        "ORB-14672 guards removal of terra from the no-[crews] built-in registry"
+    );
 
     // A seeded file, pools included, passes the same load-time validation.
     let seeded = tempfile::tempdir().expect("seeded tempdir");
@@ -274,10 +296,13 @@ fn seeded_config_loads_and_a_config_without_crews_resolves_haiku() {
         Some(&ConfigSeed::from_families(["codex", "claude", "grok"])),
     )
     .expect("seed");
-    super::write_config(
-        workspace.path(),
-        &std::fs::read_to_string(&path).expect("read"),
+    let seeded_body = std::fs::read_to_string(&path).expect("read");
+    let seeded_config: Table = seeded_body.parse().expect("seeded config is valid TOML");
+    assert!(
+        seeded_config["crews"].get("terra").is_none(),
+        "ORB-14672 keeps terra out of fresh init crew tables"
     );
+    super::write_config(workspace.path(), &seeded_body);
     crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
         .expect("seeded config loads with its pools");
 }

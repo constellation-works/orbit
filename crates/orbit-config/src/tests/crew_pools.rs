@@ -127,3 +127,26 @@ fn unset_final_recovery_pool_keeps_only_crews_a_custom_registry_defines() {
         "no default member defined leaves final recovery disabled"
     );
 }
+
+#[test]
+fn user_authored_terra_crew_still_loads_and_resolves_in_complexity_pool() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    super::write_config(
+        workspace.path(),
+        "[workflow]\ndefault_crew = \"terra\"\nmedium_complexity_crews = [\"terra\"]\n\n\
+         [crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\n",
+    );
+
+    let config = crate::ResolvedConfig::load(&super::roots(global.path(), workspace.path()))
+        .expect("user-authored Terra crew remains an ordinary configured crew");
+
+    assert_eq!(config.crews["terra"].assignment.model, "gpt-5.6-terra");
+    assert_eq!(config.crews["terra"].assignment.provider, "codex");
+    assert_eq!(
+        config
+            .snapshot
+            .value_for("workflow.medium_complexity_crews"),
+        Some(serde_json::json!(["terra"]))
+    );
+}
