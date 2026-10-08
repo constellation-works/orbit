@@ -12,9 +12,9 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
     FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_ROUTE_UNAVAILABLE_MARKER,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
-    TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
-    is_forge_unavailable,
+    PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
+    ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER,
+    is_baseline_red_failure, is_forge_unavailable, is_provider_limit,
 };
 
 use super::candidate::{
@@ -557,6 +557,7 @@ impl PullDrain<'_> {
                                         .and_then(|receipt| receipt.task.as_ref())
                                         .and_then(|task| task.crew.clone()),
                                     candidate: None,
+                                    provider_limit: false,
                                 });
                                 record = self
                                     .record_settlement(&record, ClaimMutation::Release(evidence))?;
@@ -1222,6 +1223,11 @@ fn leaf_failure(
             })
     };
     let stopped_at = state.and_then(|state| first_incomplete_step(run, state));
+    // [ORB-14695] A provider's usage limit is read off its typed marker
+    // before the reason drops it.
+    let provider_limit = typed.as_ref().is_some_and(|(class, reason)| {
+        *class == ClaimFailureClass::Provider && is_provider_limit(None, Some(reason))
+    });
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
             .and_then(|step| step.error_message.clone())
@@ -1275,14 +1281,16 @@ fn leaf_failure(
         reason: reason[..cut].to_string(),
         crew,
         candidate: state.and_then(|state| preserved_candidate(run, state)),
+        provider_limit,
     }
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
-const FAILURE_MARKERS: [&str; 7] = [
+const FAILURE_MARKERS: [&str; 8] = [
     FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER,
+    PROVIDER_LIMIT_MARKER,
     VALIDATION_ENVIRONMENT_MARKER,
     OWNER_ROUTE_UNAVAILABLE_MARKER,
     BASELINE_RED_MARKER,
@@ -1424,6 +1432,12 @@ fn forge_hold_release(
 fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -> String {
     let crew = failure.crew.as_deref().unwrap_or("its crew");
     let mut why = match failure.class {
+        ClaimFailureClass::Provider if failure.provider_limit => format!(
+            "leaf {} ended on a `provider` failure: the provider of crew `{crew}` reported its \
+             account's usage limit on this host ({}); the work was not attempted and the \
+             release does not count against the task's release budget",
+            run.run_id, failure.reason
+        ),
         ClaimFailureClass::Provider => format!(
             "leaf {} ended on a `provider` failure: it could not use the provider of crew \
              `{crew}` on this host ({}); the work was not attempted",
@@ -1446,6 +1460,8 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
     };
     if failure.class.suppresses_host() {
         why.push_str(", and this drain claims no more work on this host in its window");
+    } else if failure.provider_limit {
+        why.push_str(", and this drain runs no more tasks on that provider's crews in its window");
     } else if failure.class.excludes_crew() {
         why.push_str(&format!(
             ", and this drain runs no more `{crew}` tasks in its window"
@@ -1477,6 +1493,7 @@ pub(crate) fn operator_cancel_release(record: &LocalPullAdmission, why: &str) ->
             .and_then(|receipt| receipt.task.as_ref())
             .and_then(|task| task.crew.clone()),
         candidate: None,
+        provider_limit: false,
     });
     ClaimMutation::Release(evidence)
 }

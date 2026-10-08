@@ -16,13 +16,36 @@ pub const PROVIDER_UNAVAILABLE_MARKER: &str = "[provider_unavailable]";
 
 /// Whether a step failure says its provider could not be used on this host.
 ///
-/// A [provider capacity](PROVIDER_CAPACITY_ERROR_CODE) failure is one kind of
-/// unavailability, so this is true for it too.
+/// A [provider capacity](PROVIDER_CAPACITY_ERROR_CODE) failure and a
+/// [usage limit](PROVIDER_LIMIT_ERROR_CODE) are kinds of unavailability, so
+/// this is true for them too.
 #[must_use]
 pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
         || message.is_some_and(|message| message.contains(PROVIDER_UNAVAILABLE_MARKER))
         || is_provider_capacity_exhausted(error_code, message)
+        || is_provider_limit(error_code, message)
+}
+
+/// Token a provider failure diagnostic carries when the provider itself said
+/// the account hit a usage limit — a session, weekly, spend or credit cap —
+/// as opposed to the agent failing the work [ORB-14695].
+///
+/// It is a kind of [`PROVIDER_UNAVAILABLE_ERROR_CODE`]: step and final
+/// recovery skip it, and a pull drain releases the claim without counting
+/// the release against the task's release budget. The limit belongs to the
+/// provider account, so a hold excludes every crew of that provider until the
+/// reset the provider reported.
+pub const PROVIDER_LIMIT_ERROR_CODE: &str = "provider_limit";
+
+/// The bracketed marker form of [`PROVIDER_LIMIT_ERROR_CODE`].
+pub const PROVIDER_LIMIT_MARKER: &str = "[provider_limit]";
+
+/// Whether a step failure says its provider's account hit a usage limit.
+#[must_use]
+pub fn is_provider_limit(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_LIMIT_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(PROVIDER_LIMIT_MARKER))
 }
 
 /// Token a provider failure diagnostic carries when the provider itself said
@@ -67,7 +90,8 @@ pub fn is_provider_refusal(error_code: Option<&str>, message: Option<&str>) -> b
 }
 
 /// Whether a step failure is the provider's rather than the work's: it was
-/// [unavailable](is_provider_unavailable) (capacity included) or
+/// [unavailable](is_provider_unavailable) (capacity and usage limits
+/// included) or
 /// [refused](is_provider_refusal) the turn.
 #[must_use]
 pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
@@ -183,7 +207,9 @@ impl ClaimFailureClass {
 
     /// Whether a release of this class counts against the task's release
     /// budget. Every typed release counts; the third within the window blocks
-    /// the task until a human decides what should change.
+    /// the task until a human decides what should change. A `provider`
+    /// release for a usage limit is the exception the release itself carries,
+    /// since a limit says nothing about the task [ORB-14695].
     #[must_use]
     pub const fn budgeted(self) -> bool {
         !self.blocks()

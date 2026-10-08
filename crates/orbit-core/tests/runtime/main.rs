@@ -49,6 +49,7 @@ mod local_route_before_pr;
 mod plugin_inspection;
 mod pr_forge_admission;
 mod provider_failure_hold;
+mod provider_limit_hold;
 
 mod task_delivery;
 mod task_pilot;

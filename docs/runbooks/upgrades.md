@@ -895,6 +895,14 @@ so it waits for nothing. Building the indexes reads `job_runs` once while the
 opening process holds the store write lock, which takes well under a second for
 tens of thousands of runs.
 
+## Provider limit observations (schema v40)
+
+Store schema v40 adds the `provider_limit_observations` table, where a run
+records the usage limit its provider reported: one row per provider, model and
+window (see [Provider failure holds](../CONFIG.md#provider-failure-holds)). The
+migration is additive: it creates an empty table and rewrites nothing, so
+older binaries keep reading and writing and it waits for nothing.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when

@@ -1,4 +1,5 @@
 pub(in crate::types) mod envelope;
+mod limit;
 pub(in crate::types) mod protocol_schema;
 mod tool_calls;
 mod trace;
@@ -12,6 +13,7 @@ use serde_json::Value;
 #[cfg(test)]
 pub use envelope::parse_and_validate_response;
 pub use envelope::{DeclaredResponseFailure, ParsedStdout};
+pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::response_envelope_json_schema_arg;
 pub use wrapper::provider_invocation_diagnostic;
 

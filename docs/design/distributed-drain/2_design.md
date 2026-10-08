@@ -568,7 +568,9 @@ owns delivery:
   `operator_cancel` and `transient` exclude the leaf's crew for the rest of
   the drain's window (source `leaf_released`). `provider` uses source
   `provider_unavailable`: authentication excludes every configured crew of
-  that provider, and capacity excludes only the leaf's crew. `environment` and `owner_route`
+  that provider, and capacity excludes only the leaf's crew. A usage limit ([ORB-14695]) is a
+  `provider` release with `failure.provider_limit` set: it excludes every crew of that provider
+  and is not budgeted. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. For any excluding class the owner's admission also holds the released
@@ -1145,5 +1147,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14261] — added one automatic repair of a handoff whose landing stopped on its base.
 - [ORB-14603] — made an owner-local run after a failed claim continue the kept candidate, and stopped resolving a follower's run id in the owner's own run store.
 - [ORB-14439] — kept each claimed leaf's failure or release settlement on the owner's claim state and listed settled claims through `orbit run settlements`.
+- [ORB-14695] — released a claimed leaf whose provider account hit its usage limit as an unbudgeted `provider` failure that excludes every crew of that provider for the window.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

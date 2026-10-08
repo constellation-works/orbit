@@ -7,7 +7,7 @@ use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus, normalize_task_tags, task_matches_tags,
 };
-use orbit_types::telemetry::AuditEvent;
+use orbit_types::telemetry::{AuditEvent, ProviderLimitObservation};
 use orbit_types::tool::StoredTool;
 use orbit_types::workflow::ExecutorDef;
 use serde_json::Value;
@@ -463,6 +463,22 @@ pub trait FrictionStoreBackend: Send + Sync {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<FrictionReportedCount>, OrbitError>;
     fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError>;
+}
+
+/// [ORB-14695] This host's provider usage limits, kept in the host-global
+/// database because a limit belongs to the provider login on this host.
+pub trait ProviderLimitStoreBackend: Send + Sync {
+    /// Record `observation` as the latest for its provider, model scope and
+    /// window, unless a newer one is stored. Concurrent drains write the same
+    /// rows, so an older observation never replaces a newer one. Returns
+    /// whether `observation` was stored.
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<bool, OrbitError>;
+    /// The latest observation per provider, model scope and window, newest
+    /// first.
+    fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;
 }
 
 pub trait InvocationStoreBackend: Send + Sync {

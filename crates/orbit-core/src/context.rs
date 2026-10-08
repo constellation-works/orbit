@@ -9,9 +9,9 @@ use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
     InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
-    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
-    V2AuditStoreBackend,
+    ProviderLimitStoreBackend, ReviewStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
 };
 use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, require_canonical_agent_family};
@@ -226,6 +226,7 @@ pub(crate) struct OrbitHostStore {
     pub(crate) review: Arc<dyn ReviewStoreBackend>,
     pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
     pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
+    pub(crate) provider_limit: Arc<dyn ProviderLimitStoreBackend>,
 }
 
 #[derive(Clone)]

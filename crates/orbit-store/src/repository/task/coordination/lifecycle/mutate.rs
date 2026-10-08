@@ -404,10 +404,11 @@ impl TaskCommitBoundary {
                 };
                 let released_at = Utc::now();
                 // [ORB-14257] A typed failure releases only when its class
-                // does not block and the task's release budget allows it.
+                // does not block and the task's release budget allows it. A
+                // provider usage limit is not counted [ORB-14695].
                 let blocked = match &value.failure {
                     Some(failure) if failure.class.blocks() => Some(None),
-                    Some(failure) if failure.class.budgeted() => {
+                    Some(failure) if failure.budgeted() => {
                         let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
                         (earlier.len() >= RELEASE_BUDGET)
                             .then(|| Some(release_budget_comment(&earlier, failure, &released_at)))
@@ -420,6 +421,7 @@ impl TaskCommitBoundary {
                     released_at: released_at.to_rfc3339(),
                     budget_exhausted: matches!(blocked, Some(Some(_))),
                     forge_unavailable: value.forge_hold.is_some(),
+                    provider_limit: failure.provider_limit,
                 });
                 state.settlement = Some(ClaimSettlementRecord::of(
                     ClaimSettlementKind::Release,

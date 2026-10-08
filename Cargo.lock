@@ -1753,6 +1753,7 @@ name = "orbit-agent"
 version = "0.28.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "orbit-common",
  "orbit-tools",
  "orbit-types",
@@ -1935,6 +1936,7 @@ name = "orbit-engine"
 version = "0.28.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "jsonschema",
  "libc",
  "orbit-agent",

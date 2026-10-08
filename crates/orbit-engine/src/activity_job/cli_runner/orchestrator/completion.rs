@@ -8,10 +8,11 @@ use orbit_agent::{
     ParsedStdout, antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
     normalize_cli_stdout, project_cli_response, provider_authentication_failure,
     provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
+    provider_usage_limit,
 };
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
-use orbit_types::workflow::{ProviderFailureClass, provider_failure_text};
+use orbit_types::workflow::{ProviderFailureClass, ProviderLimitFailure, provider_failure_text};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -34,6 +35,7 @@ use super::super::stdout_preview::{
     bounded_assistant_message, stdout_text_preview,
 };
 use super::super::supervisor::CapturedOutput;
+use super::limit::{record_limit, reported_limit, structured_provider_limit};
 
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
@@ -41,6 +43,7 @@ pub(super) struct ProviderExit<'a> {
     pub(super) host: &'a dyn RuntimeHost,
     pub(super) spec: &'a AgentLoopSpec,
     pub(super) input: &'a Value,
+    pub(super) run_id: &'a str,
     pub(super) provider: String,
     pub(super) model: Option<String>,
     pub(super) task_ids: &'a [String],
@@ -70,6 +73,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         host,
         spec,
         input,
+        run_id,
         provider,
         model,
         task_ids,
@@ -188,6 +192,8 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // [ORB-14266] A provider's terminal refusal frame ends the turn whatever
     // the exit code, so it fails the invocation like an authentication error.
     let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
+    // [ORB-14695] So does Claude's terminal error result for a usage limit.
+    let provider_limit = structured_provider_limit(&provider, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
@@ -195,6 +201,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     let success = exit_success
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
+        && provider_limit.is_none()
         && !completion_protocol_violation
         && !print_timeout_reached
         && !completion_status_failure
@@ -233,6 +240,19 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             success,
         )
     };
+    // [ORB-14695] The usage limit the failure reports, with the provider's
+    // own words, for the host's provider-limit store.
+    let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
+    let mut limit_failure = |text: &str, prefix: &str| {
+        let reported = bounded_diagnostic(text, redaction);
+        let limit = reported_limit(&provider, text, stdout.protocol_bytes(), chrono::Utc::now());
+        let message = limit.text(
+            &provider,
+            &format!("{prefix}{provider} provider reported a usage limit: {reported}"),
+        );
+        observed_limit = Some((limit, reported));
+        message
+    };
     let message = if timed_out {
         Some(format!(
             "cli subprocess exceeded {}s wall-clock timeout",
@@ -253,6 +273,8 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 bounded_diagnostic(&refusal, redaction)
             ),
         ))
+    } else if let Some(limit) = provider_limit.as_deref() {
+        Some(limit_failure(limit, ""))
     } else if !exit_success {
         let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
         let exit_message = || match exit_code {
@@ -348,6 +370,16 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 &provider,
                 &diagnostic,
             ))
+        } else if let Some(limit) = provider_reported(
+            &provider,
+            stdout.protocol_bytes(),
+            stderr_text.as_ref(),
+            terminal_error.as_deref(),
+            provider_usage_limit,
+        ) {
+            // [ORB-14695] Nor can either outlast an account's usage limit:
+            // the limit holds until the reset the provider reported.
+            Some(limit_failure(&limit, &format!("{diagnostic}: ")))
         } else if let Some(capacity) = provider_reported(
             &provider,
             stdout.protocol_bytes(),
@@ -423,6 +455,17 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     } else {
         None
     };
+
+    if let Some((limit, detail)) = &observed_limit {
+        record_limit(
+            host,
+            &provider,
+            limit,
+            detail,
+            run_id,
+            input.get("crew").and_then(Value::as_str),
+        );
+    }
 
     let StdoutTextPreview {
         text: stdout_text,
@@ -566,7 +609,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
 }
 
 /// Stdout's JSON frames, for the provider-owned failure readers below.
-fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
+pub(super) fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
     serde_json::Deserializer::from_slice(stdout)
         .into_iter::<Value>()
         .filter_map(Result::ok)
@@ -575,7 +618,7 @@ fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
 /// The failure a provider wrote in its own control-plane `frame`, never
 /// assistant or tool text, and never an Orbit envelope, which describes the
 /// work rather than the provider.
-fn provider_failure<'a>(provider: &str, frame: &'a Value) -> Option<&'a Value> {
+pub(super) fn provider_failure<'a>(provider: &str, frame: &'a Value) -> Option<&'a Value> {
     if frame.get("schemaVersion").is_some() {
         return None;
     }

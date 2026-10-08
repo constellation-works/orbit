@@ -197,7 +197,7 @@ impl TaskCommitBoundary {
             if state.claim.task_id != task_id {
                 continue;
             }
-            if let Some(record) = state.release.filter(|record| record.class.budgeted()) {
+            if let Some(record) = state.release.filter(ClaimReleaseRecord::budgeted) {
                 releases.push((at(&record)?, record));
             }
         }

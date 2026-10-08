@@ -25,6 +25,8 @@ mod history_note;
 mod pr_landing;
 #[cfg(unix)]
 mod provider_capacity;
+#[cfg(unix)]
+mod provider_limit;
 mod recovery_evidence;
 mod review_fixes;
 #[cfg(unix)]

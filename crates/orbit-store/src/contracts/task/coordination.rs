@@ -692,6 +692,22 @@ pub struct ClaimFailure {
     /// can start from it rather than from the base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<ClaimCandidateRef>,
+    /// [ORB-14695] Set on a `provider` failure whose provider reported its
+    /// account's usage limit. The limit says nothing about the task, so its
+    /// release does not count against the task's release budget. An owner
+    /// that predates the field counts it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_limit: bool,
+}
+
+impl ClaimFailure {
+    /// Whether a release for this failure counts against the task's release
+    /// budget: its class is [budgeted](orbit_types::workflow::ClaimFailureClass::budgeted)
+    /// and it is not a provider usage limit.
+    #[must_use]
+    pub fn budgeted(&self) -> bool {
+        self.class.budgeted() && !self.provider_limit
+    }
 }
 
 /// The committed candidate a claimed leaf ended with: the branch it pushed,
@@ -807,6 +823,19 @@ pub struct ClaimReleaseRecord {
     /// nor its crew: admission does not keep the task from that drain.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forge_unavailable: bool,
+    /// [ORB-14695] The release was for a provider usage limit
+    /// ([`ClaimFailure::provider_limit`]), which does not count against the
+    /// task's release budget.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_limit: bool,
+}
+
+impl ClaimReleaseRecord {
+    /// Whether this release counts against the task's release budget.
+    #[must_use]
+    pub fn budgeted(&self) -> bool {
+        self.class.budgeted() && !self.provider_limit
+    }
 }
 
 /// What a claimed leaf's failure or release settlement told the owner, kept

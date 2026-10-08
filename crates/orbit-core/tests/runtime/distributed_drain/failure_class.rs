@@ -1095,3 +1095,87 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
     assert_eq!(failure["class"], "owner_route", "{failure}");
     assert_eq!(pair.owner_status(&claim.task_id), "backlog");
 }
+
+/// [ORB-14695] A claimed leaf whose provider account hit its usage limit
+/// releases the claim as a `provider` failure without spending the task's
+/// release budget: three in a day leave the task in the backlog, where the
+/// third release of any other kind blocks it. Each drain stops running every
+/// crew of that provider for its window and keeps the other provider's.
+#[test]
+fn a_provider_limit_releases_the_claim_outside_the_release_budget() {
+    if !isolated(
+        module_path!(),
+        "a_provider_limit_releases_the_claim_outside_the_release_budget",
+    ) {
+        return;
+    }
+    let config = "\
+[workflow]
+default_crew = \"sol\"
+
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+
+[crews.luna]
+provider = \"codex\"
+model = \"gpt-luna\"
+
+[crews.opus]
+provider = \"claude\"
+model = \"claude-opus\"
+";
+    let pair = Pair::with_configs(config, config, &[Some("sol")]);
+    let task = pair.tasks[0].clone();
+    let limit = "[provider_limit] provider=codex resets_at=2026-10-09T22:42:00Z cli subprocess \
+         exited with code 1: codex provider reported a usage limit: You've hit your usage limit. \
+         Upgrade to Pro or try again at 3:42 PM.";
+    for n in 1..=3 {
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        assert_eq!(pair.claimed_task(&leaf), task, "release {n}: pulled again");
+        pair.leaf_fails_with(&leaf, limit);
+        let pass = settle_only(&pair, &drain);
+        assert_eq!(pair.owner_status(&task), "backlog", "release {n}: {pass}");
+
+        let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
+        assert_eq!(failure["class"], "provider", "{failure}");
+        assert_eq!(failure["provider_limit"], true, "{failure}");
+        assert!(
+            failure["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("You've hit your usage limit")
+                    && !reason.contains("[provider_limit]")),
+            "the reason quotes the provider without Orbit's marker: {failure}"
+        );
+
+        let excluded = window(&pair, &drain)
+            .excluded
+            .into_iter()
+            .map(|exclusion| exclusion.crew)
+            .collect::<Vec<_>>();
+        for crew in ["sol", "luna"] {
+            assert!(
+                excluded.iter().any(|excluded| excluded == crew),
+                "release {n}: every codex crew sits out the window: {excluded:?}"
+            );
+        }
+        assert!(
+            !excluded.iter().any(|excluded| excluded == "opus"),
+            "release {n}: the claude crew still runs: {excluded:?}"
+        );
+    }
+
+    let owner = pair.owner_task(&task);
+    assert!(
+        !comments_of(&owner).contains("released this claim 2 times"),
+        "no release budget was spent: {owner:#}"
+    );
+    assert!(
+        pair.owner_claims()
+            .iter()
+            .all(|claim| claim["claim"]["phase"] == "revoked"),
+        "every claim was released, none failed: {:#?}",
+        pair.owner_claims()
+    );
+}

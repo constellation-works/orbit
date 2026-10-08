@@ -392,12 +392,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_job_runs_recency_index,
     },
+    // ORB-14695: the host's provider usage limits. A new table only, which an
+    // older binary never reads, so drains on older binaries keep writing.
+    Migration {
+        version: 40,
+        name: "provider_limit_observations",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_limit_observations,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 39;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 40;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 
