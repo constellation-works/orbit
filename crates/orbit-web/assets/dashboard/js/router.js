@@ -108,6 +108,26 @@ function getCtx() {
   return _routerCtx;
 }
 
+function activePaneMain() {
+  const pane = document.querySelector(".tab-pane.active");
+  if (!pane) return null;
+  return Array.from(pane.querySelectorAll("main")).find((main) => !main.hidden && main.style?.display !== "none") || null;
+}
+
+function syncSkipLinkTarget() {
+  const link = $("skip-link");
+  const pane = document.querySelector(".tab-pane.active");
+  const main = activePaneMain();
+  if (!link || !pane || !main) return;
+  if (!main.id) {
+    const mainIndex = Array.from(pane.querySelectorAll("main")).indexOf(main) + 1;
+    main.id = `dashboard-main-${pane.dataset.tab}-${mainIndex}`;
+  }
+  main.tabIndex = -1;
+  main.setAttribute("aria-labelledby", "topbar-crumb");
+  link.href = `#${main.id}`;
+}
+
 function setRunDetailSubtabImpl(ctx, name) {
   if (!RUN_DETAIL_SUBTABS.includes(name)) name = "steps";
   ctx.setRunSubtab(name);
@@ -386,6 +406,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   } else {
     hash = `#${top}`;
   }
+  syncSkipLinkTarget();
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
   // A bookmarked legacy hash is rewritten in place so the address bar and any
@@ -462,6 +483,12 @@ function startDashboardPolling(ctx) {
 }
 
 function initTabsImpl(ctx) {
+  $("skip-link")?.addEventListener("click", (event) => {
+    const main = activePaneMain();
+    if (!main) return;
+    event.preventDefault();
+    main.focus();
+  });
   // Native focus scrolling can leave half a button outside the phone's
   // overflow row when its centre is already visible. Reveal the whole entry
   // on keyboard focus, without changing the route or moving focus elsewhere.

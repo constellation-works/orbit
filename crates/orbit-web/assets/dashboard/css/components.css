@@ -82,7 +82,7 @@
 #task-search:focus-visible,
 #audit-search:focus-visible,
 #friction-search:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -165,7 +165,7 @@
 .audit-row:focus-visible,
 .step-row:focus-visible,
 .field-block.collapsible h4:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 /* ORB-14495: a row that holds controls is disclosed by one of its cells, a
@@ -207,7 +207,7 @@
   cursor: copy;
 }
 .copy-id:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: 2px;
 }

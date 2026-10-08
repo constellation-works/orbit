@@ -445,10 +445,15 @@ function renderAuditSummary(data, ctx) {
     cards.push(card);
   };
 
-  const createCard = (title, renderBody) => {
+  const createCard = (title, renderBody, scrollableBody = false) => {
     const card = el("div", { class: "audit-summary-card" });
     card.appendChild(el("div", { class: "card-title", text: title }));
     const body = el("div", { class: "card-body" });
+    if (scrollableBody) {
+      body.tabIndex = 0;
+      body.setAttribute("role", "region");
+      body.setAttribute("aria-label", title);
+    }
     renderBody(body);
     card.appendChild(body);
     return card;
@@ -525,6 +530,7 @@ function renderAuditSummary(data, ctx) {
         { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
         { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
       ], filterByTool),
+      true,
     ), [namedToolFailures, windowLabel]);
   }
 

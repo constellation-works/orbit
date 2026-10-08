@@ -18,12 +18,10 @@
   padding: 0 28px 0 10px;
   font: inherit;
   font-size: 13px;
-  outline: none;
 }
 
 #friction-status-filter:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 @media (max-width: 520px) {

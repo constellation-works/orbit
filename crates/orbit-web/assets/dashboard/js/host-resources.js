@@ -63,7 +63,8 @@ export function renderHostResources(payload, host = document.getElementById('hos
     el('span', { class: 'v', text: shown.value }, shown.suffix ? [el('span', { class: 'k-more', text: shown.suffix })] : []),
     ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
   ]);
-  node.tabIndex = 0;
+  node.setAttribute('role', 'group');
+  node.setAttribute('aria-label', title);
   host.replaceChildren(node);
 }
 

@@ -269,7 +269,7 @@
 .task-quick.approve:hover:not(:disabled) { border-color: var(--state-success); color: #d8fbe9; }
 .task-quick:disabled { opacity: 0.6; cursor: not-allowed; }
 .task-quick:focus-visible,
-.task-quick-link:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.task-quick-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-quick-link { font-size: 12.5px; color: var(--accent); white-space: nowrap; text-decoration: none; }
 .task-quick-link:hover { color: var(--accent-hi); }
 .row.has-quick-error {
@@ -363,7 +363,7 @@
 .operation-cadence:focus-visible,
 .operation-details summary:focus-visible,
 .operation-action-unavailable:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -395,7 +395,7 @@
   font: 11px var(--font-mono);
 }
 .task-pagination button:disabled { color: var(--fg-dim); opacity: 0.55; }
-.task-pagination button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.task-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #tasks-page-status { margin-right: auto; color: var(--fg-dim); font: 11px var(--font-mono); }
 #tasks-page-status.error { color: var(--state-error); }
 

@@ -47,7 +47,6 @@
 .log-statusbar .sb-m[data-level="err"] { color: var(--status-blocked); }
 .log-statusbar .sb-m[data-level="deny"] { color: var(--status-review); }
 .log-statusbar .sb-m[data-level="warn"] { color: var(--status-proposed); }
-.log-statusbar.empty .sb-label { opacity: 0.6; }
 #side-dock.disconnected .live-dot,
 .log-statusbar.disconnected .live-dot {
   background: var(--fg-mute);
@@ -188,7 +187,7 @@
 .log-foot .seg:focus-visible,
 .log-foot .seg.right:focus-visible,
 .log-foot .count:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
