@@ -733,7 +733,10 @@ fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run
     reproduced["reproduced_on"] = json!({
         "run_id": 10, "url": "https://github.com/acme/orbit/actions/runs/10",
         "event_reported_head_sha": previous, "conclusion": "failure",
-        "shared_failed_steps": [{"job": "build", "step": "Run CI"}],
+        "shared_cause": {
+            "job": "build", "steps": ["Run CI"],
+            "normalized_error_signature": "error[e<n>]: cannot find value `probe_timeout` in this scope",
+        },
         "pending_on": queued,
     });
     let mut held = failure(log, 2, &"7".repeat(40));
@@ -748,6 +751,7 @@ fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run
             vec![
                 "https://github.com/acme/orbit/actions/runs/10",
                 previous.as_str(),
+                "error[e<n>]: cannot find value `probe_timeout` in this scope",
             ],
         ),
         (held, vec!["2026-10-07T15:10:00+00:00"]),

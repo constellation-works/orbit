@@ -14,7 +14,8 @@
 //! are current when their evidence is complete; a pending check is not. A red
 //! run whose workflow is still running a push on its branch at a descendant
 //! commit is held in `pending_supersession`, unless its previous completed run
-//! already failed the same job and step or it has been held past the window.
+//! already failed the same job with the same normalized error signature or it
+//! has been held past the window.
 //!
 //! Losing the agent's ability to ask a follow-up question mid-diagnosis is the
 //! accepted cost of that boundary. The compensation is that the snapshot is
@@ -293,6 +294,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
             successors: &in_flight_successors,
             previous_completed: &previous_completed,
             window_minutes: bounds.pending_supersession_window_minutes,
+            log_max_bytes: bounds.log_max_bytes,
             now,
         },
         &mut notes,

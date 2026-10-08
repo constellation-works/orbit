@@ -7,8 +7,13 @@
 //! flight, so the hold is narrow and bounded:
 //!
 //! - A red run whose previous completed run of the same workflow and branch,
-//!   at an ancestor commit, failed the same job and step has reproduced. It
-//!   stays current with `reproduced_on` naming that run.
+//!   at an ancestor commit, failed the same job with the same normalized error
+//!   signature has reproduced. It stays current with `reproduced_on` naming
+//!   that run. Sharing a job and step is not enough: one CI step can run
+//!   fmt, clippy, doc and tests, so consecutive reds there may have unrelated
+//!   causes. The signature is the one CI failure filing dedupes on
+//!   ([`super::log_signature::error_signature`]); a step-name fallback names
+//!   no cause, so it never proves a reproduction.
 //! - A red run held for longer than the window stays current with
 //!   `held_past_window` naming the run it waited on.
 
@@ -17,8 +22,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use super::investigate::{bound_diagnostic, log_belongs_to_job};
+use super::log_signature::{ErrorSignature, error_signature};
 use super::partition::{run_is_cancelled, run_is_unsuccessful};
-use super::query::CiQueries;
+use super::query::{CiQueries, LogScope};
 
 /// Why a current failure was deferred rather than filed.
 pub(super) const IN_FLIGHT_DESCENDANT_REASON: &str = "newer_descendant_run_in_flight";
@@ -31,6 +38,11 @@ const MAX_ANCESTRY_CHECKS: usize = 25;
 /// previous completed run's. Each comparison reads two.
 const MAX_REPRODUCTION_VIEW_READS: usize = 12;
 
+/// Bound on failed-step log reads taken to compare a held run's error
+/// signature with its previous completed run's. Each shared failed job costs
+/// two, and only runs that already share a failed job and step are read.
+const MAX_REPRODUCTION_LOG_READS: usize = 6;
+
 /// What collection knows about each current failure's neighbours.
 pub(super) struct Supersession<'a> {
     /// Newer in-flight push runs of the same workflow and branch, per run id.
@@ -39,6 +51,8 @@ pub(super) struct Supersession<'a> {
     pub(super) previous_completed: &'a BTreeMap<u64, Value>,
     /// How long a failure may be held before it is filed anyway.
     pub(super) window_minutes: u64,
+    /// Byte bound on each failed-step log read for a signature comparison.
+    pub(super) log_max_bytes: usize,
     pub(super) now: DateTime<Utc>,
 }
 
@@ -156,7 +170,8 @@ pub(super) fn hold_for_in_flight_descendants<Q: CiQueries + ?Sized>(
     if budget.comparisons_skipped > 0 {
         notes.push(format!(
             "{} held failure(s) were not compared with their previous completed run (caps \
-             {MAX_ANCESTRY_CHECKS} ancestry checks, {MAX_REPRODUCTION_VIEW_READS} run views); \
+             {MAX_ANCESTRY_CHECKS} ancestry checks, {MAX_REPRODUCTION_VIEW_READS} run views, \
+             {MAX_REPRODUCTION_LOG_READS} failed-step logs); \
              they stay held until the window expires or a later sweep compares them",
             budget.comparisons_skipped
         ));
@@ -164,8 +179,9 @@ pub(super) fn hold_for_in_flight_descendants<Q: CiQueries + ?Sized>(
     if reproduced > 0 {
         notes.push(format!(
             "{reproduced} current failure(s) have a newer push run in flight at a descendant \
-             commit but already failed the same job and step on the previous completed run, so \
-             they are filed rather than held; each names that run in reproduced_on"
+             commit but already failed the same job with the same normalized error signature on \
+             the previous completed run, so they are filed rather than held; each names that run \
+             in reproduced_on"
         ));
     }
     if expired > 0 {
@@ -193,11 +209,13 @@ pub(super) fn hold_for_in_flight_descendants<Q: CiQueries + ?Sized>(
 struct Budget {
     ancestry_checks: usize,
     view_reads: usize,
+    log_reads: usize,
     comparisons_skipped: usize,
 }
 
 /// The previous completed run this red run reproduced on: red itself, at the
-/// same or an ancestor commit, sharing at least one failed job and step.
+/// same or an ancestor commit, failing a job they share, at a step they share,
+/// with the same concrete normalized error signature.
 fn reproduction<Q: CiQueries + ?Sized>(
     queries: &Q,
     failure: &Value,
@@ -260,21 +278,132 @@ fn reproduction<Q: CiQueries + ?Sized>(
             }
         }
     }
-    let shared = failed_steps(views.get(&run_id)?)
-        .intersection(&failed_steps(views.get(&previous_id)?))
-        .map(|(job, step)| json!({"job": job, "step": step}))
-        .collect::<Vec<_>>();
-    if shared.is_empty() {
-        return None;
+    let held_view = views.get(&run_id)?;
+    let previous_view = views.get(&previous_id)?;
+    let shared_steps = failed_steps(held_view)
+        .intersection(&failed_steps(previous_view))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let shared_jobs = shared_steps
+        .iter()
+        .map(|(job, _)| job.as_str())
+        .collect::<BTreeSet<_>>();
+    for job in shared_jobs {
+        let (Some(held_job), Some(previous_job)) =
+            (failed_job(held_view, job), failed_job(previous_view, job))
+        else {
+            continue;
+        };
+        if budget.log_reads + 2 > MAX_REPRODUCTION_LOG_READS {
+            budget.comparisons_skipped += 1;
+            return None;
+        }
+        let held = job_signature(
+            queries,
+            run_id,
+            held_job,
+            held_view,
+            supersession,
+            budget,
+            notes,
+        )?;
+        let before = job_signature(
+            queries,
+            previous_id,
+            previous_job,
+            previous_view,
+            supersession,
+            budget,
+            notes,
+        )?;
+        let (Some(held), Some(before)) = (held, before) else {
+            continue;
+        };
+        if held.step_fallback || before.step_fallback || held.text != before.text {
+            continue;
+        }
+        let steps = shared_steps
+            .iter()
+            .filter(|(name, _)| name == job)
+            .map(|(_, step)| step.as_str())
+            .collect::<Vec<_>>();
+        return Some(json!({
+            "run_id": previous_id,
+            "url": previous.get("url"),
+            "created_at": previous.get("created_at"),
+            "conclusion": previous.get("conclusion"),
+            "event_reported_head_sha": previous_commit,
+            "shared_cause": {
+                "job": job,
+                "steps": steps,
+                "normalized_error_signature": held.text,
+            },
+        }));
     }
-    Some(json!({
-        "run_id": previous_id,
-        "url": previous.get("url"),
-        "created_at": previous.get("created_at"),
-        "conclusion": previous.get("conclusion"),
-        "event_reported_head_sha": previous_commit,
-        "shared_failed_steps": shared,
-    }))
+    None
+}
+
+/// The first non-cancelled failed job with this name and a numeric id.
+fn failed_job<'a>(view: &'a Value, name: &str) -> Option<&'a Value> {
+    view.get("failed_jobs")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|job| job.get("conclusion").and_then(Value::as_str) != Some("cancelled"))
+        .find(|job| {
+            job.get("name").and_then(Value::as_str) == Some(name)
+                && job.get("job_id").and_then(Value::as_u64).is_some()
+        })
+}
+
+/// One failed job's normalized error signature, read from its failed-step log
+/// the way filing reads it: the bound runner diagnostic when there is one,
+/// else the log excerpt, keyed by the job's first failed step. The outer
+/// `None` means the log could not be read (noted; the run stays held); the
+/// inner `None` that the log is another job's and proves nothing.
+fn job_signature<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    run_id: u64,
+    job: &Value,
+    view: &Value,
+    supersession: &Supersession<'_>,
+    budget: &mut Budget,
+    notes: &mut Vec<String>,
+) -> Option<Option<ErrorSignature>> {
+    let job_id = job.get("job_id").and_then(Value::as_u64)?;
+    budget.log_reads += 1;
+    let log = match queries.run_logs(
+        &run_id.to_string(),
+        job_id,
+        LogScope::Failed,
+        supersession.log_max_bytes,
+        Some(view),
+    ) {
+        Ok(log) => log,
+        Err(error) => {
+            notes.push(format!(
+                "failed-step log of job {job_id} in run {run_id} could not be read to compare \
+                 error signatures ({error}); the run it would release stays held"
+            ));
+            return None;
+        }
+    };
+    if !log_belongs_to_job(&log, job_id) {
+        return Some(None);
+    }
+    let step = job
+        .get("failed_steps")
+        .and_then(Value::as_array)
+        .and_then(|steps| steps.first())
+        .and_then(|step| step.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let diagnostic = bound_diagnostic(&log, &json!({"failed_jobs": [job]}), job_id);
+    let text = diagnostic
+        .as_ref()
+        .and_then(|unit| unit.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or(&log.text);
+    Some(Some(error_signature(text, step)))
 }
 
 /// Each failed job's name paired with each of its failed steps' names. A job

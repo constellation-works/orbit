@@ -25,6 +25,7 @@
 mod collect;
 mod history;
 mod investigate;
+pub mod log_signature;
 mod partition;
 mod pending;
 mod query;

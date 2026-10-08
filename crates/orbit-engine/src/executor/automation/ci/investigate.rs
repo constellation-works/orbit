@@ -404,7 +404,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
 
 /// The primary read is explicitly narrowed with --job. A fallback must name
 /// exactly that job; it may never lend another job's checkout or diagnostic.
-fn log_belongs_to_job(log: &super::query::RunLog, job_id: u64) -> bool {
+pub(super) fn log_belongs_to_job(log: &super::query::RunLog, job_id: u64) -> bool {
     if log.source == orbit_tools::github_cli::SOURCE_RUN_LOG {
         return log.source_jobs.is_empty();
     }
@@ -466,7 +466,11 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
 /// A unique runner failure unit can only name a unique failed step. Primary
 /// gh output also carries job/step columns; reject conflicting labels rather
 /// than borrowing a different step's command. Raw fallback logs have no columns.
-fn bound_diagnostic(log: &super::query::RunLog, failure: &Value, job_id: u64) -> Option<Value> {
+pub(super) fn bound_diagnostic(
+    log: &super::query::RunLog,
+    failure: &Value,
+    job_id: u64,
+) -> Option<Value> {
     if !log.source_complete {
         return None;
     }

@@ -49,10 +49,17 @@ spec:
     filed for it this sweep. A pending successor does not hold back a failure
     that has reproduced: when the previous completed run of the same workflow
     and branch, at the same or an ancestor commit, is red (not cancelled) and
-    shares at least one failed job and failed step with the held run (compared
-    from both run views, at most 12 view reads per sweep), the held run stays
-    current with `reproduced_on` naming that run, its shared failed steps and
-    the pending run. The hold is also bounded: a run held for
+    fails a job the held run fails, at a failed step they share, with the same
+    normalized error signature, the held run stays current with
+    `reproduced_on` naming that run, the pending run, and `shared_cause` (the
+    job, its shared failed steps and the signature). The signature is the one
+    filing dedupes on, computed from each job's failed-step log the way filing
+    reads it; a shared job and step alone is not a reproduction, because one
+    CI step can run several unrelated checks, and a step-name fallback with no
+    diagnostic line proves nothing. Comparisons read at most 12 run views and
+    6 failed-step logs per sweep, each log bounded by `log_max_bytes`; a
+    comparison past a cap or whose log cannot be read leaves the run held,
+    with a note. The hold is also bounded: a run held for
     `pending_supersession_window_minutes` (default 30) since it completed stays
     current with `held_past_window` naming the pending run, and filing writes
     that run into the task description. A rerun

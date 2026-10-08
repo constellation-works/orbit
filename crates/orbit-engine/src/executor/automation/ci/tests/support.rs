@@ -180,6 +180,13 @@ impl FakeQueries {
         self
     }
 
+    /// A failed-step log GitHub delivered in full.
+    pub(super) fn with_log(mut self, job_id: u64, text: &str) -> Self {
+        self.logs
+            .insert(job_id, super::super::query::bounded_run_log(text, 16_384));
+        self
+    }
+
     /// A failed-step log whose source GitHub did not deliver in full.
     pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
         let mut log = super::super::query::bounded_run_log(text, 16_384);

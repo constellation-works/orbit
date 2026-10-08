@@ -697,11 +697,16 @@ fn render_run(run: &Value) -> String {
     // commit only for one of these reasons; name the run either way.
     if let Some(previous) = run.get("reproduced_on").filter(|value| value.is_object()) {
         out.push_str(&format!(
-            "  - reproduced on the previous completed run `{}` ({}) at `{}`, which failed the \
-             same job and step; filed without waiting for {}\n",
+            "  - reproduced on the previous completed run `{}` ({}) at `{}`, which failed job \
+             `{}` with the same normalized error signature `{}`; filed without waiting for {}\n",
             display(&value_string(previous, "run_id")),
             display(&value_string(previous, "url")),
             display(&value_string(previous, "event_reported_head_sha")),
+            display(&value_string(&previous["shared_cause"], "job")),
+            display(&value_string(
+                &previous["shared_cause"],
+                "normalized_error_signature"
+            )),
             pending_run(&previous["pending_on"]),
         ));
     }
