@@ -69,6 +69,7 @@ pub(super) fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bo
 
 pub use gc::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_build_output,
+    run_worktree_paths,
 };
 pub(in crate::executor::automation) use merge::merge_batch_worktree_into_base;
 pub(in crate::executor::automation) use setup::setup_worktree;

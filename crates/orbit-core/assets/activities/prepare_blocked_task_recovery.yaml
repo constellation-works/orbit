@@ -10,9 +10,11 @@ spec:
     the exact status and update time the trigger observed, with no final
     recovery decision for that episode. Otherwise it returns proceed=false and
     the run ends without a decision. When the episode is current it gathers
-    the failed run's step and error, and opens a detached checkout of the
-    workspace base branch for the agent to inspect. It never fetches, and
-    never writes the task.
+    the failed run's step and error, identifies the failed run's retained
+    worktree and its changed paths without writing to it, and opens a
+    detached checkout of the workspace base branch for the agent to inspect.
+    The agent input lists only the decisions the backstop applies. It never
+    fetches, and never writes the task.
   input_schema_json:
     type: object
     required: [task_id, episode_key, block_source, observed_status, observed_updated_at]

@@ -70,6 +70,23 @@ spec:
       # Tail of the run log around the failure.
       log_tail:
         type: string
+      # The decisions this caller can apply, when it cannot apply all of them.
+      # The blocked-task backstop has no live run, so it omits `resume`.
+      decisions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          enum: [resume, complete_no_diff, reject, archive, requeue, escalate]
+      # What this caller's lane cannot do; overrides any guidance below that
+      # depends on a decision outside `decisions`.
+      lane_contract:
+        type: string
+      # The failed run's own worktree, where its unfinished work stays:
+      # `status: present` with `path` and `changed_paths`, or `status: absent`
+      # with a `reason`. Evidence only.
+      retained_candidate:
+        type: object
       # Selects the crew from workflow.final_recovery_crews; the host draws it
       # once per run and reuses the draw on every later dispatch and resume.
       crew_config_key:
@@ -163,6 +180,15 @@ spec:
       for this run, oldest first, with bounded diagnostics and output.
     - base_ref, base_sha: the base branch and the head the run was cut from.
     - log_tail: a bounded tail of this run's worker log; empty if no log exists.
+    - decisions, lane_contract: present when your caller cannot apply every
+      decision. Return only a decision listed in `decisions`; any other is
+      applied as `escalate`. `lane_contract` states what your lane cannot do
+      and overrides any guidance below that relies on a decision outside
+      `decisions`, including finishing the work in the worktree and `resume`.
+    - retained_candidate: the failed run's own worktree, where unfinished work
+      stays after the run ends: its path and changed paths, or why it is
+      absent. Inspect it read-only; never edit, copy from or run Git writes in
+      it. Name it in an escalation when that work should continue.
     Fields other than task_id, run_id, the worktree pair, failed_step_id, and
     error_message may be absent. For missing evidence, use the evidence reads
     below and the worktree, and report any gaps instead of inventing run data.
@@ -234,7 +260,8 @@ spec:
          runs, resume runs, or invoke agents or pipelines. Record root causes
          that deserve tracking with `orbit.friction.add`.
 
-    4. Return exactly one Orbit response envelope whose `result` is one of:
+    4. Return exactly one Orbit response envelope whose `result` is one of
+       the following, limited to `decisions` when your input lists them:
        - {"decision": "resume", "step_id": "<a step id from step_ids>", "rationale": "..."}
        - {"decision": "complete_no_diff", "evidence_commit": "<sha on base_ref>", "rationale": "..."}
        - {"decision": "reject", "reason": "...", "evidence": "..."}

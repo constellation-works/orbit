@@ -10,12 +10,15 @@ use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    BlockedRecoveryInput, BlockedRecoveryPreparation, FinalRecoveryOutcome,
+    BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryInput, BlockedRecoveryPreparation,
+    FinalRecoveryOutcome,
 };
 
 /// `prepare_blocked_task_recovery`: `proceed: false` with a `reason` when the
 /// episode moved on, otherwise the agent's input under `recovery` and the
-/// episode echoed under `episode` for the apply step.
+/// episode echoed under `episode` for the apply step. The input restricts the
+/// agent to the decisions this lane applies and names the failed run's
+/// retained candidate.
 pub(super) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
@@ -49,6 +52,9 @@ pub(super) fn prepare(
                     "error_message": prepared.error_message,
                     "base_ref": prepared.base_ref,
                     "base_sha": prepared.base_sha,
+                    "decisions": BACKSTOP_DECISIONS,
+                    "lane_contract": BACKSTOP_LANE_CONTRACT,
+                    "retained_candidate": prepared.retained_candidate.to_json(),
                 },
             })
         }

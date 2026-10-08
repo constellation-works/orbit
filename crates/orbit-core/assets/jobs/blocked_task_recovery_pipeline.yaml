@@ -18,11 +18,16 @@
 # Decision
 # - `recover` runs the shipped `final_recovery` activity with a crew drawn
 #   from `workflow.final_recovery_crews`, in a detached checkout of the
-#   workspace base branch that `apply` removes again.
+#   workspace base branch that `apply` removes again. Its input lists only
+#   the decisions this lane applies (`decisions`, no `resume`), states that
+#   the checkout is never delivered (`lane_contract`), and names the failed
+#   run's retained candidate: its worktree and changed paths, or why there is
+#   none. Preparation only reads that worktree.
 # - `apply` hands the decision to the same deterministic applier the delivery
 #   pipelines use. A blocked task has no live run, so `resume` becomes an
 #   escalation; `requeue` restarts work and shares the applier's requeue
-#   bound. Every decision is a task comment carrying this run's id.
+#   bound. Every escalation names the retained candidate, and every decision
+#   is a task comment carrying this run's id.
 #
 # Opt-out: set `workflow.final_recovery_crews = []`. With an empty pool the
 # tick submits nothing.
@@ -67,6 +72,9 @@ spec:
         error_message: "{{ steps.prepare.output.recovery.error_message }}"
         base_ref: "{{ steps.prepare.output.recovery.base_ref }}"
         base_sha: "{{ steps.prepare.output.recovery.base_sha }}"
+        decisions: "{{ steps.prepare.output.recovery.decisions }}"
+        lane_contract: "{{ steps.prepare.output.recovery.lane_contract }}"
+        retained_candidate: "{{ steps.prepare.output.recovery.retained_candidate }}"
         crew_config_key: workflow.final_recovery_crews
 
     - id: apply
