@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use orbit_common::OrbitError;
+use orbit_common::fs::git::git_common_dir;
 use serde_json::{Value, json};
 
 use super::fingerprint::git_output_raw;
@@ -188,14 +190,8 @@ fn required_git_top_level(path: &Path, label: &str) -> Result<PathBuf, String> {
 }
 
 fn required_git_common_dir(path: &Path, label: &str) -> Result<PathBuf, String> {
-    git_common_dir(path)
-        .map_err(|error| format!("cannot resolve Git common dir for {label}: {error}"))?
-        .ok_or_else(|| {
-            format!(
-                "cannot resolve Git common dir for {label} '{}'",
-                path.display()
-            )
-        })
+    canonical_git_common_dir(path)
+        .map_err(|error| format!("cannot resolve Git common dir for {label}: {error}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -267,17 +263,17 @@ pub(super) fn git_top_level(path: &Path) -> Result<Option<PathBuf>, DispatchErro
     Ok(Some(canonicalize_dir(Path::new(&root))))
 }
 
-pub(super) fn git_common_dir(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
-    let output = git_output_raw(
-        path,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    if !output.success {
-        return Ok(None);
+/// The canonical Git common dir of `path`. A timeout stays
+/// [`DispatchError::GitTimeout`]; any other failure is permanent.
+pub(super) fn canonical_git_common_dir(path: &Path) -> Result<PathBuf, DispatchError> {
+    match git_common_dir(path) {
+        Ok(common) => Ok(canonicalize_dir(&common)),
+        Err(OrbitError::ProcessTimeout { timeout_ms, detail }) => Err(DispatchError::GitTimeout {
+            operation: "rev-parse --path-format=absolute --git-common-dir".to_string(),
+            root: path.to_path_buf(),
+            timeout_ms,
+            diagnostic: detail,
+        }),
+        Err(error) => Err(DispatchError::CliInvocationPermanent(error.to_string())),
     }
-    let common = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if common.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(canonicalize_dir(Path::new(&common))))
 }

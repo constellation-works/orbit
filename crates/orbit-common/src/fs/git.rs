@@ -4,6 +4,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::OrbitError;
+use crate::process::run_bounded_capped;
 
 use super::io::with_exclusive_file_lock;
 
@@ -21,6 +22,28 @@ pub const GIT_FETCH_LOCK_NAME: &str = "orbit-git-fetch";
 pub const GIT_FETCH_CAS_ATTEMPTS: u32 = 3;
 
 const GIT_FETCH_CAS_RETRY_DELAY: Duration = Duration::from_millis(20);
+
+/// Deadline [`run_git`] gives a local command. Local plumbing on Orbit's own
+/// repository finishes in milliseconds, so only a wedged process reaches it.
+/// It stays below [`GIT_REMOTE_TIMEOUT`]: a network command always gets the
+/// longer bound.
+pub const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Deadline for a command that materializes or deletes a whole checkout
+/// (`worktree add`, `worktree remove`, `checkout`), as the engine gives
+/// `worktree add`.
+pub const GIT_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Deadline for a command that talks to a remote (`fetch`, `ls-remote`,
+/// `push`, `clone`). A single-branch fetch from the forge takes well under a
+/// second. A fetch usually runs under [`with_git_fetch_lock`], whose waiters
+/// give up after [`DEFAULT_FILE_LOCK_TIMEOUT`](super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT),
+/// so a stalled holder is killed while the next caller is still waiting.
+pub const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Bytes [`run_git`] keeps of each output stream. Callers parse ref lists,
+/// commit headers and worktree lists, all far smaller.
+pub const GIT_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentBranchStatus {
@@ -322,21 +345,46 @@ fn is_admitted_config_override(setting: &str) -> bool {
         })
 }
 
-/// Run `git` with `args` in `workspace_path`. An argv the admission above
-/// refuses fails with [`OrbitError::InvalidInput`] before any process starts.
+/// Run `git` with `args` in `workspace_path` within [`GIT_LOCAL_TIMEOUT`].
+/// An argv the admission above refuses fails with [`OrbitError::InvalidInput`]
+/// before any process starts. A network or whole-checkout command passes its
+/// own deadline through [`run_git_within`].
 pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput, OrbitError> {
+    run_git_within(workspace_path, args, GIT_LOCAL_TIMEOUT)
+}
+
+/// [`run_git`] with an explicit `deadline`.
+///
+/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
+/// kept, and never prompts on a terminal. When `deadline` elapses the group is
+/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
+/// the workspace: a timeout is never an exit status, so a caller cannot read
+/// it as Git's answer.
+pub fn run_git_within(
+    workspace_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<GitCommandOutput, OrbitError> {
     let admitted = admitted_git_args(args)?;
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(&admitted)
         .current_dir(workspace_path)
-        .output()
-        .map_err(|error| {
-            OrbitError::Execution(format!(
-                "failed to run `git {}` in '{}': {error}",
-                args.join(" "),
-                workspace_path.display()
-            ))
-        })?;
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let output =
+        run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
+            |error| match error {
+                OrbitError::ProcessTimeout { timeout_ms, .. } => OrbitError::ProcessTimeout {
+                    timeout_ms,
+                    detail: format!("`git {}` in '{}'", args.join(" "), workspace_path.display()),
+                },
+                other => OrbitError::Execution(format!(
+                    "failed to run `git {}` in '{}': {other}",
+                    args.join(" "),
+                    workspace_path.display()
+                )),
+            },
+        )?;
 
     Ok(GitCommandOutput {
         success: output.status.success(),

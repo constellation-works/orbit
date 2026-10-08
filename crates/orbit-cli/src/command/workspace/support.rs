@@ -104,16 +104,17 @@ pub(super) fn dir_name_or_fallback(path: &Path) -> String {
         .to_string()
 }
 
-pub(super) fn detect_git_remote(cwd: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
+/// The `origin` URL, or `None` when there is none. A Git that timed out is
+/// an error, never read as no remote; one that could not start (no `git` on
+/// `PATH`) is logged and reads as no remote.
+pub(super) fn detect_git_remote(cwd: &Path) -> Result<Option<String>, OrbitError> {
+    match orbit_common::fs::git::run_git(cwd, &["remote", "get-url", "origin"]) {
+        Ok(output) => Ok(output.success.then(|| output.stdout.trim().to_string())),
+        Err(error @ OrbitError::ProcessTimeout { .. }) => Err(error),
+        Err(error) => {
+            tracing::warn!("cannot read the origin remote URL: {error}");
+            Ok(None)
+        }
     }
 }
 

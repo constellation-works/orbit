@@ -176,8 +176,8 @@ impl WorkspaceInitArgs {
 
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
-        let git_remote = detect_git_remote(cwd);
-        let default_base_branch = checked_out_branch(cwd);
+        let git_remote = detect_git_remote(cwd)?;
+        let default_base_branch = checked_out_branch(cwd)?;
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
         let (reconciling_existing, registered_shared_root, checkout_role, owner_machine_id) =
@@ -426,20 +426,23 @@ impl WorkspaceInitArgs {
 /// Returns the current local branch for a newly registered checkout.
 ///
 /// An explicit `--base-branch` always wins. Repositories without a checked-out
-/// branch retain the long-standing `main` fallback.
-fn checked_out_branch(cwd: &Path) -> String {
-    let output = std::process::Command::new("git")
-        .args(["branch", "--show-current"])
-        .current_dir(cwd)
-        .output();
-
-    output
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|branch| branch.trim().to_string())
-        .filter(|branch| !branch.is_empty())
-        .unwrap_or_else(|| "main".to_string())
+/// branch retain the long-standing `main` fallback. A Git that timed out is an
+/// error rather than that fallback.
+fn checked_out_branch(cwd: &Path) -> Result<String, OrbitError> {
+    let branch = match orbit_common::fs::git::run_git(cwd, &["branch", "--show-current"]) {
+        Ok(output) if output.success => output.stdout.trim().to_string(),
+        Ok(_) => String::new(),
+        Err(error @ OrbitError::ProcessTimeout { .. }) => return Err(error),
+        Err(error) => {
+            tracing::warn!("cannot read the checked-out branch: {error}");
+            String::new()
+        }
+    };
+    Ok(if branch.is_empty() {
+        "main".to_string()
+    } else {
+        branch
+    })
 }
 
 fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
