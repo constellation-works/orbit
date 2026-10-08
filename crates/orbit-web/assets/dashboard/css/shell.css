@@ -1,4 +1,4 @@
-/* App chrome: the nav rail, the top bar and its KPI tiles, the workspace
+/* App chrome: the nav rail, the top bar and its host chips, the workspace
    picker and scope chips, the page grid, tab panes, and subtabs. */
 
 /* ORB-10972: the app is a two-column shell — a fixed nav rail and a
@@ -186,12 +186,13 @@
 
 /* ORB-14481: from 1024px up the bar is one fixed-height row on every route,
    so no destination crumb or host verdict can re-wrap it and shift the page.
-   Groups never wrap; the compact label and padding tiers below keep the
-   widest content inside the row instead. */
+   Groups never wrap, and each host chip is sized for its widest usual
+   reading. */
 :root { --topbar-height: 56px; }
 
-/* ORB-10972: one bar replaces the old header + tabs + health strip
-   stack (~194px). The four health metrics ride inline in it. */
+/* ORB-10972: one bar replaces the old header + tabs + health strip stack
+   (~194px). It holds the destination, the live host chips, Drain and
+   Refresh; the windowed counts ride on the rail. */
 .topbar {
   flex: 0 0 auto;
   box-sizing: border-box;
@@ -215,87 +216,53 @@
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
 .topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
 
-.kpis { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; }
-
-.kpi {
+.host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* One chip per resource, sized so a new reading does not resize it.
+   Throttling changes the held chip's colour and outline, never its size. */
+.host-resource {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  position: relative;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: transparent;
   color: #c4c4cc;
-  font: inherit;
   font-size: 13px;
   white-space: nowrap;
-  flex: 0 0 auto;
-  cursor: pointer;
+  cursor: default;
 }
-.kpi:hover { border-color: #3a3a44; color: var(--fg); }
-.kpi.refresh-stale { border-style: dashed; }
-.kpi .k { color: inherit; }
-.kpi .v { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
-.kpi.tile-alert { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
-.kpi.tile-alert .v { color: var(--danger-fg); }
-.kpi.tile-alert::before {
-  content: "";
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--state-failed);
-}
-.host-resource-chips { display: flex; align-items: center; flex: 0 0 auto; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--border); }
-/* One host chip of a fixed width: the worst resource's name and reading fill it,
-   and throttling changes its colour and outline, never its size. */
-.kpi.host-resource { cursor: default; position: relative; box-sizing: border-box; width: 9.5rem; overflow: hidden; }
-.kpi.host-resource::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--state-running); }
-.kpi.host-resource .v { overflow: hidden; text-overflow: ellipsis; }
-.kpi.host-resource.elevated { background: color-mix(in srgb, var(--state-pending) 10%, var(--bg)); border-color: var(--state-pending); color: var(--state-pending); }
-.kpi.host-resource.elevated::before { background: var(--state-pending); }
-.kpi.host-resource.critical { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
-.kpi.host-resource.critical::before { background: var(--state-failed); }
-.kpi.host-resource.unknown::before { background: var(--fg-mute); }
-.kpi.host-resource.elevated .v, .kpi.host-resource.critical .v { color: inherit; }
-.kpi.host-resource.unknown .v { color: var(--fg-dim); }
-.kpi.host-resource.throttled { outline: 1px solid currentColor; outline-offset: 1px; }
-.kpi.host-resource.throttled::before { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px currentColor; }
+/* Room for `load 12.3× cores` and `mem 100%`; a longer reading widens its chip. */
+.host-resource[data-resource="cpu"] { min-width: 10.5rem; }
+.host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 8rem; }
+.host-resource::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--state-running); }
+.host-resource .v { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.host-resource .unit { font-weight: 400; }
+.host-resource.elevated { background: color-mix(in srgb, var(--state-pending) 10%, var(--bg)); border-color: var(--state-pending); color: var(--state-pending); }
+.host-resource.elevated::before { background: var(--state-pending); }
+.host-resource.critical { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
+.host-resource.critical::before { background: var(--state-failed); }
+.host-resource.unknown::before { background: var(--fg-mute); }
+.host-resource.elevated .v, .host-resource.critical .v { color: inherit; }
+.host-resource.unknown .v { color: var(--fg-dim); }
+.host-resource.throttled { outline: 1px solid currentColor; outline-offset: 1px; }
+.host-resource.throttled::before { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px currentColor; }
 /* The verdict's words stay for assistive tech and the title; they take no room. */
-.kpi.host-resource .host-resource-held {
+.host-resource .host-resource-held {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-.kpi-window {
-  font-size: 12px;
-  color: var(--fg-dim);
-  padding: 0 4px;
-}
 
-.kpi-spark { width: 48px; height: 16px; flex: 0 0 auto; }
-.kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
-.kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
-
-/* Width tiers: the sparkline goes first, then the long labels and the window
-   tag, so the single row still holds the drain pill and Refresh at 1024px. */
-@media (max-width: 1400px) {
-  .kpi-spark { display: none; }
-}
+/* Below 1240px the bar tightens its spacing, so the widest destination, the
+   three chips, the aggregate drain label and Refresh still share one row. */
 @media (max-width: 1240px) {
   .topbar { padding: 0 14px; gap: 10px; }
-  .kpi .k-more, .kpi-window { display: none; }
-  .kpi { padding: 0 8px; }
-  .kpi.host-resource { width: 7.5rem; }
-  .host-resource-chips { padding-left: 8px; margin-left: 0; }
-}
-/* Reserve room for the widest destination plus four five-digit counts,
-   both alert dots, the fixed host chip, Drain and Refresh. Keep this
-   allowance on the single-row desktop layout; phones scroll the strip. */
-@media (min-width: 1024px) and (max-width: 1400px) {
-  .topbar .kpis { gap: 4px; }
-  .topbar .kpi { gap: 4px; padding: 0 6px; font-size: 12px; }
 }
 /* Below 1024px the bar may wrap, but only to two rows: crumb, drain and
-   Refresh on the first, the health strip scrolling on the second. */
+   Refresh on the first, the host chips on the second (scrolling if they must). */
 @media (max-width: 1023px) {
   .topbar {
     height: auto;
@@ -303,7 +270,7 @@
     row-gap: 6px;
     padding: 8px 12px;
   }
-  .topbar .kpis { order: 1; flex: 1 1 100%; overflow-x: auto; }
+  .topbar .host-resource-chips { order: 1; flex: 1 1 100%; overflow-x: auto; }
   .topbar-spacer { order: 0; }
 }
 
@@ -336,7 +303,7 @@
 
 /* On phones, the brand, workspace and icon actions share the first row.
    Destinations and the open section's views scroll together on the next;
-   the health strip has its own single scrolling row below that. Actions
+   the host chips have their own single row below that. Actions
    stay in the topbar DOM so their listeners and desktop layout are shared. */
 @media (max-width: 760px) {
   .shell {
@@ -398,7 +365,11 @@
   .rail-foot { display: none; }
   .topbar { padding: 6px 8px; gap: 0; }
   .topbar-spacer { display: none; }
-  .topbar .kpis { flex: 1 1 100%; padding: 2px; }
+  .topbar .host-resource-chips { flex: 1 1 100%; padding: 2px; }
+  /* Tighter chips keep all three readings in view at 375px. */
+  .host-resource { gap: 4px; padding: 0 7px; }
+  .host-resource[data-resource="cpu"] { min-width: 9.5rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 7.25rem; }
   .topbar .global-drain-state,
   .topbar .refresh-btn {
     position: absolute;

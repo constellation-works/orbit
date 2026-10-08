@@ -1128,6 +1128,10 @@ orbit run readiness          # "Admissions throttled: memory 93% (throttled at â
 orbit run show <drain-run>   # Throttled: line from the drain's last pass
 ```
 
+On the dashboard, the top bar's `load`, `mem` and `disk` chips show the
+serving host's readings; the chip of each held resource is outlined, and its
+tooltip gives the verdict, reason and sample age.
+
 - Sampling monitors share recent pressure history in
   `<global-root>/cache/host-resource-pressure.json`, independently of drain
   records and workspace. A fresh `orbit run ship` or `ship-sweep` evaluates

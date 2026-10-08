@@ -215,9 +215,10 @@ both controls after the task returns to backlog without a reload.
 The Operations browser fixture also checks the responsive dashboard shell. At
 375×812, the brand, workspace picker, Drain indicator and Refresh icon share
 the header row; destinations and the active section's views share a scrolling
-navigation row, and all health chips remain in one scrolling row. The fixture
-checks panel position on Tasks, Runs, run detail and Incidents, keyboard and
-pointer access with visible focus, count spacing, and page width across routes.
+navigation row, and the three host chips sit in one row with every reading
+in view. The fixture checks panel position on Tasks, Runs, run detail and
+Incidents, keyboard and pointer access with visible focus, count spacing, and
+page width across routes.
 The Drain fixture distinguishes host throttling, stopped admissions, workspace
 leaf saturation and task conflicts. It checks window, workspace and pool count
 labels and verifies that both blocker task IDs remain visible at 1024px while
@@ -251,8 +252,8 @@ node crates/orbit-web/tests/http_api/dashboard_polish_browser.mjs \
 ```
 
 The refresh browser fixture loads the complete dashboard, aborts `/api/*` with
-Playwright after a successful load, and checks retained KPI chips, rail counts
-and the Drain pill at 1440px and 768px. Failed refreshes dim these surfaces;
+Playwright after a successful load, and checks retained rail counts and the
+Drain pill at 1440px and 768px. Failed refreshes dim these surfaces;
 their titles show the last clean refresh as `as of HH:MM`. The connection dot
 is red for a network failure, amber for a panel failure, and green after a
 clean refresh. The rail names failed panels, and recovery clears stale styling

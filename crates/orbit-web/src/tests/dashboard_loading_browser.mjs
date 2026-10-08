@@ -576,40 +576,46 @@ async function assertScoreboardLayout(page) {
 }
 
 // ORB-14481: from 1024px up the top bar is one fixed-height row on every
-// route, and the host verdict flipping to throttled neither re-wraps it nor
-// moves Refresh. The fixture is the worst case the bar can hold: wide counts,
-// both alert tiles, the drain pill, and a held host chip.
+// route, and a host chip turning throttled neither re-wraps it nor resizes any
+// chip or moves Refresh. The fixture is the worst case the bar holds: the
+// widest destination, three wide host readings with two held, and the
+// aggregate drain label.
 async function assertTopbarSingleRow(page) {
   const routes = ['tasks', 'operations/routines', 'config/effective', 'knowledge/frictions', 'plugins'];
   const snapshot = () => page.evaluate(() => {
     const rect = id => document.getElementById(id).getBoundingClientRect();
     const bar = document.querySelector('.topbar').getBoundingClientRect();
-    const children = [...document.querySelectorAll('.topbar .crumb, .topbar .kpi, .topbar #refresh-btn, .topbar #global-drain-state')]
+    const children = [...document.querySelectorAll('.topbar .crumb, .topbar .host-resource, .topbar #refresh-btn, .topbar #global-drain-state')]
       .filter(node => node.getClientRects().length);
     // Items are centred in the row, so one row means one shared vertical centre.
     const centres = children.map(node => { const r = node.getBoundingClientRect(); return r.top + r.height / 2; });
     const rows = Math.max(...centres) - Math.min(...centres) <= 2 ? 1 : 2;
     const refresh = rect('refresh-btn');
-    const chip = document.querySelector('#host-resource-chips .host-resource').getBoundingClientRect();
-    const strip = document.getElementById('health-strip');
-    const lastTile = [...strip.querySelectorAll('.kpi')].filter(node => node.getClientRects().length).pop().getBoundingClientRect();
+    const strip = document.getElementById('host-resource-chips');
+    const chips = [...strip.querySelectorAll('.host-resource')];
+    const lastChip = chips.at(-1).getBoundingClientRect();
+    const drain = document.getElementById('global-drain-state');
     return {
-      height: bar.height, refreshLeft: refresh.left, chipWidth: chip.width, rows,
+      height: bar.height, refreshLeft: refresh.left, rows, drainShown: !drain.hidden,
+      chips: chips.map(chip => ({
+        resource: chip.dataset.resource, className: chip.className, width: chip.getBoundingClientRect().width,
+        left: chip.getBoundingClientRect().left, clipped: chip.scrollWidth > chip.clientWidth,
+      })),
       refreshRight: refresh.right, barRight: bar.right, stripOverflows: strip.scrollWidth > strip.clientWidth,
-      overlaps: lastTile.right > rect('refresh-btn').left || (!document.getElementById('global-drain-state').hidden && lastTile.right > rect('global-drain-state').left),
+      overlaps: lastChip.right > refresh.left || (!drain.hidden && lastChip.right > rect('global-drain-state').left),
     };
   });
   await page.evaluate(async () => {
     const { renderHostResources } = await import('/js/host-resources.js');
-    for (const id of ['tile-failed-value', 'tile-denials-value', 'tile-active-value', 'tile-events-value']) document.getElementById(id).textContent = '12,345';
-    for (const id of ['tile-failed', 'tile-denials']) document.getElementById(id).classList.add('tile-alert');
     const drain = document.getElementById('global-drain-state');
     drain.hidden = false;
-    drain.dataset.drainState = 'draining';
+    drain.dataset.drainState = 'per-workspace';
+    drain.querySelector('.global-drain-label').textContent = 'Per-workspace drain status';
     globalThis.topbarHost = throttle => renderHostResources({
-      cpu: { percent: 193.7, severity: 'critical' }, memory: { percent: 40, severity: 'ok' },
-      disk: { path: '/workspace', percent: 50, severity: 'ok' }, sample_age_seconds: 1, max_age_seconds: 15,
-      stale: false, throttle, pressures: throttle ? [{ resource: 'cpu' }] : [], reason: 'cpu load high', thresholds: { enabled: true },
+      cpu: { percent: 1234, severity: 'critical' }, memory: { percent: 100, severity: 'critical' },
+      disk: { path: '/workspace', percent: 100, severity: 'critical' }, sample_age_seconds: 1, max_age_seconds: 15,
+      stale: false, throttle, pressures: throttle ? [{ resource: 'cpu' }, { resource: 'disk /workspace' }] : [],
+      reason: 'cpu load and disk high', thresholds: { enabled: true },
     });
   });
   try {
@@ -628,11 +634,19 @@ async function assertTopbarSingleRow(page) {
         }
         for (const state of flips) {
           heights.add(state.height);
+          if (!state.drainShown) throw new Error(`The worst-case fixture lost its drain pill on #${route} at ${width}px`);
           if (state.height > 64 || state.rows !== 1) throw new Error(`Top bar wraps on #${route} at ${width}px: ${JSON.stringify(state)}`);
           if (state.stripOverflows || state.overlaps || state.refreshRight > state.barRight + 0.5) throw new Error(`Top bar content overflows on #${route} at ${width}px: ${JSON.stringify(state)}`);
+          if (state.chips.map(chip => chip.resource).join() !== 'cpu,memory,disk') throw new Error(`Top bar must show load, mem and disk chips: ${JSON.stringify(state.chips)}`);
+          if (state.chips.some(chip => chip.clipped)) throw new Error(`A host reading is cut off on #${route} at ${width}px: ${JSON.stringify(state.chips)}`);
         }
-        if (flips[0].height !== flips[1].height || flips[0].refreshLeft !== flips[1].refreshLeft || flips[0].chipWidth !== flips[1].chipWidth) {
-          throw new Error(`Throttled verdict moved the top bar on #${route} at ${width}px: ${JSON.stringify(flips)}`);
+        const [open, held] = flips;
+        if (held.chips.map(chip => chip.className.includes('throttled')).join() !== 'true,false,true') {
+          throw new Error(`Only the held resources must read as throttled: ${JSON.stringify(held.chips)}`);
+        }
+        const geometry = state => JSON.stringify([state.height, state.refreshLeft, state.chips.map(chip => [chip.left, chip.width])]);
+        if (geometry(open) !== geometry(held)) {
+          throw new Error(`Throttled verdict moved or resized the top bar on #${route} at ${width}px: ${JSON.stringify(flips)}`);
         }
       }
       if (heights.size !== 1) throw new Error(`Top bar height differs across routes at ${width}px: ${[...heights]}`);

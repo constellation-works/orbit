@@ -737,21 +737,21 @@ function renderPolicy(data, ctx) {
     const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
     const window = effectiveAuditWindow() || "24h";
     const scope = window === getWindow()
-      ? "counted by the top bar"
-      : `using the top bar's definition; the top bar uses ${getWindow()}`;
+      ? ""
+      : `; this view has its own window, the rest of the dashboard uses ${getWindow()}`;
     const note = el("div", { class: "policy-count-note" });
     const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
       ? ` (${data.total - decisions.total} additional evidence rows beyond the canonical decisions)`
       : "";
     note.appendChild(el("p", {
-      text: `${decisions.total} canonical policy decisions ${scope} in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions).`,
+      text: `${decisions.total} canonical policy decisions in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions)${scope}.`,
     }));
     note.appendChild(el("p", {
-      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the KPI; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
+      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
     }));
     note.appendChild(el("p", {
       class: "muted",
-      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the KPI counts all decisions in its window.`,
+      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
     }));
     sections.push(note);
   }
