@@ -3,9 +3,10 @@
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::test_env::{
-    assert_child_test_exists, assert_child_test_passed, clear_inherited_authority,
+    FixtureProgress, assert_child_test_exists, assert_child_test_passed, clear_inherited_authority,
 };
 
 const CHILD: &str = "guard_child";
@@ -121,6 +122,25 @@ fn inherited_authority_is_removed_from_a_child_command() {
         );
     }
     assert_eq!(envs.get("ORBIT_SCRATCH_DIR"), Some(&true));
+}
+
+/// ORB-14818: a large fixture that overran its deadline printed only
+/// `running 1 test`, so a slow seed could not be told from a slow measured
+/// section. The overrun must name the fixture, its phase and the items done.
+#[test]
+fn a_fixture_overrun_names_its_phase_and_progress() {
+    let mut progress = FixtureProgress::with_deadline("partition", Duration::from_millis(50));
+    progress.phase("seed tasks", 5_000);
+    for _ in 0..3 {
+        progress.advance();
+    }
+    std::thread::sleep(Duration::from_millis(60));
+    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| progress.advance()))
+        .expect_err("an advance past the deadline fails the fixture");
+    let message = panic_message(error);
+    for expected in ["fixture `partition`", "phase `seed tasks`", "4/5000 done"] {
+        assert!(message.contains(expected), "{expected:?} in {message}");
+    }
 }
 
 fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {

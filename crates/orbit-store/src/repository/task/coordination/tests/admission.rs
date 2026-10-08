@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use chrono::Utc;
+use orbit_common::test_env::{self, FixtureProgress};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType};
 use tempfile::TempDir;
 
@@ -39,7 +40,8 @@ struct Owner {
 
 impl Owner {
     fn open() -> Self {
-        let root = TempDir::new().expect("tempdir");
+        // A partition seed fsyncs every task; keep it off a disk-backed `TMPDIR`.
+        let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("tempdir");
         let registry =
             TaskRegistryStore::open(&task_registry_path(root.path())).expect("open registry");
         let repo = root.path().join("repo");
@@ -208,23 +210,29 @@ const CONFLICTING: usize = 5;
 #[test]
 #[allow(clippy::print_stderr)]
 fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundles() {
+    let mut progress = FixtureProgress::start("admission partition");
     let owner = Owner::open();
+    progress.phase("seed tasks", PARTITION_TASKS);
+    let mut create = |spec: Spec<'_>| {
+        let task = owner.create(spec);
+        progress.advance();
+        task
+    };
     let done = (0..PARTITION_TASKS - BACKLOG - IN_PROGRESS - REVIEW)
         .map(|index| {
-            owner
-                .create(Spec::new(
-                    "done",
-                    TaskStatus::Done,
-                    &format!("src/done_{index}.rs"),
-                ))
-                .id
+            create(Spec::new(
+                "done",
+                TaskStatus::Done,
+                &format!("src/done_{index}.rs"),
+            ))
+            .id
         })
         .collect::<Vec<_>>();
     for (index, status) in std::iter::repeat_n(TaskStatus::InProgress, IN_PROGRESS)
         .chain(std::iter::repeat_n(TaskStatus::Review, REVIEW))
         .enumerate()
     {
-        owner.create(Spec::new(
+        create(Spec::new(
             "in flight",
             status,
             &format!("src/flight_{index}.rs"),
@@ -233,7 +241,7 @@ fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundl
     let backlog = (0..BACKLOG)
         .map(|index| {
             let conflicting = index < CONFLICTING;
-            owner.create(Spec {
+            create(Spec {
                 priority: if conflicting {
                     TaskPriority::Critical
                 } else {
@@ -253,6 +261,7 @@ fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundl
         })
         .collect::<Vec<_>>();
 
+    progress.phase("admission", 1);
     let rechecked = Rc::new(Cell::new(0));
     let counted = Rc::clone(&rechecked);
     let hold = move |_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| {
@@ -260,6 +269,8 @@ fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundl
         Ok(None)
     };
     let (receipt, cost) = owner.admit("pull-1", &hold);
+    progress.advance();
+    progress.finish();
 
     let claimed = receipt.claim.as_ref().expect("a claim").task_id.clone();
     assert_eq!(claimed, backlog[CONFLICTING].id, "{receipt:?}");
