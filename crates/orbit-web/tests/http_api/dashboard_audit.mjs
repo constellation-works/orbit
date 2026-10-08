@@ -113,6 +113,37 @@ assert.match(categoryCard().textContent, /5,000/);
 audit.namespace.renderAuditSummary({ ...categoryPayload, failure_incidents_truncated: false });
 assert.doesNotMatch(categoryCard().textContent, /capped|partial/i, 'complete refresh removes stale coverage warnings');
 
+const incidentDerivedPayload = {
+  window: '7d', failure_incidents_scan_limit: 10000,
+  failure_rate_by_tool: [{ tool: 'orbit.task.add', rate: 0.2, failures: 2, successes: 8, total: 10 }],
+  failures_by_tool: [{ tool: 'orbit.task.add', count: 2, class: 'unexpected' }],
+  failure_categories: { unexpected: { incidents: 2, raw_events: 2, affected_runs: 1 } },
+  lifecycle_diagnostic_events: 1, lifecycle_diagnostic_incidents: 1,
+  lifecycle_diagnostic_affected_run_count: 1, lifecycle_diagnostic_label: 'Lifecycle diagnostics',
+};
+const incidentDerivedCard = key => container.children.find(node => node.dataset.key === key);
+const toolFailuresCard = () => incidentDerivedCard('failures-by-tool');
+const lifecycleCard = () => incidentDerivedCard('lifecycle-diagnostics');
+audit.namespace.renderAuditSummary({ ...incidentDerivedPayload, failure_incidents_truncated: true });
+assert.match(toolFailuresCard().textContent, /capped counts/i, 'per-tool unexpected failure counts are marked capped');
+assert.match(toolFailuresCard().textContent, /10,000/, 'per-tool rates show the incident scan limit');
+assert.match(toolFailuresCard().textContent, /successful-call counts cover the full window.*understated/i,
+  'per-tool rates disclose the scanned numerator and full-window success counts');
+assert.match(lifecycleCard().textContent, /capped counts/i, 'lifecycle counts are marked capped');
+assert.match(lifecycleCard().textContent, /10,000/, 'lifecycle coverage shows the incident scan limit');
+const cappedToolFailuresCard = toolFailuresCard();
+const cappedLifecycleCard = lifecycleCard();
+audit.namespace.renderAuditSummary({ ...incidentDerivedPayload, failure_incidents_truncated: false });
+assert.notEqual(toolFailuresCard(), cappedToolFailuresCard, 'coverage changes invalidate the per-tool card');
+assert.notEqual(lifecycleCard(), cappedLifecycleCard, 'coverage changes invalidate the lifecycle card');
+assert.doesNotMatch(toolFailuresCard().textContent, /capped|partial/i, 'complete per-tool rates clear coverage warnings');
+assert.doesNotMatch(lifecycleCard().textContent, /capped|partial/i, 'complete lifecycle counts clear coverage warnings');
+audit.namespace.renderAuditSummary({
+  ...incidentDerivedPayload, failure_incidents_truncated: true, failure_incidents_scan_limit: 5000,
+});
+assert.match(toolFailuresCard().textContent, /5,000/, 'per-tool card refreshes when the scan limit changes');
+assert.match(lifecycleCard().textContent, /5,000/, 'lifecycle card refreshes when the scan limit changes');
+
 const scoreboard = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/scoreboard.js', import.meta.url), 'utf8'), { context });
 await scoreboard.link(name => ({ './common.js': common, './audit.js': audit })[name]);
 await scoreboard.evaluate();

@@ -362,6 +362,14 @@ function formatFailureRatePct(rate) {
   return `${((Number(rate) || 0) * 100).toFixed(1)}%`;
 }
 
+function incidentScanPartialCoverageNote(scanLimit) {
+  const limit = Number(scanLimit) || 0;
+  const scannedRows = limit > 0
+    ? `the newest ${limit.toLocaleString()} non-success audit rows`
+    : "the capped non-success audit sample";
+  return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
+}
+
 function renderToolCallFailureRateCard(stats, window = "24h") {
   const failed = Number(stats && stats.failed) || 0;
   const total = Number(stats && stats.total) || 0;
@@ -384,7 +392,7 @@ function renderToolCallFailureRateCard(stats, window = "24h") {
   return card;
 }
 
-function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h") {
+function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
   const failByTool = new Map();
   for (const f of failuresRows) {
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
@@ -393,8 +401,14 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
   const container = el("div", { class: "audit-summary-container" });
   container.appendChild(el("h3", {
     class: "summary-title",
-    text: `Unexpected Failures by Callable Tool (${String(window).toUpperCase()})`,
+    text: `Unexpected Failures by Callable Tool (${String(window).toUpperCase()})${capped ? " · capped counts" : ""}`,
   }));
+  if (capped) {
+    container.appendChild(el("div", {
+      class: "metric-trend",
+      text: `${incidentScanPartialCoverageNote(scanLimit)} Unexpected-failure counts are scanned, while successful-call counts cover the full window; rates can be understated.`,
+    }));
+  }
   const grid = el("div", { class: "tool-health-grid" });
 
   for (const row of rateRows) {
@@ -536,13 +550,17 @@ function renderAuditSummary(data, ctx) {
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
   const namedFailures = (data.failures_by_tool || []).filter((row) => isNamedTool(row.tool));
+  const incidentScanCapped = data.failure_incidents_truncated === true;
+  const incidentScanLimit = Number(data.failure_incidents_scan_limit) || 0;
   if (namedRates.length) {
     addCard("failures-by-tool", renderFailuresByToolCard(
       namedRates,
       namedFailures,
       filterByTool,
       windowLabel,
-    ), [namedRates, namedFailures, windowLabel]);
+      incidentScanCapped,
+      incidentScanLimit,
+    ), [namedRates, namedFailures, windowLabel, incidentScanCapped, incidentScanLimit]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic"];
@@ -555,8 +573,8 @@ function renderAuditSummary(data, ctx) {
     affected_runs: Number(categories[key] && categories[key].affected_runs) || 0,
   }));
   if (categoryRows.some((row) => row.incidents || row.raw_events)) {
-    const capped = data.failure_incidents_truncated === true;
-    const scanLimit = Number(data.failure_incidents_scan_limit) || 0;
+    const capped = incidentScanCapped;
+    const scanLimit = incidentScanLimit;
     const card = createCard(
       `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
@@ -569,7 +587,7 @@ function renderAuditSummary(data, ctx) {
     if (capped) {
       card.appendChild(el("div", {
         class: "metric-trend",
-        text: `Partial coverage: counts include only the newest ${scanLimit.toLocaleString()} non-success audit rows in this window. Older failures and affected runs may be omitted.`,
+        text: incidentScanPartialCoverageNote(scanLimit),
       }));
     }
     addCard("failure-categories", card, [categoryRows, data.window || "24h", capped, scanLimit]);
@@ -580,8 +598,9 @@ function renderAuditSummary(data, ctx) {
   if (lifecycleFailures > 0 || lifecycleIncidents > 0) {
     const label = data.lifecycle_diagnostic_label || "lifecycle diagnostics";
     const window = data.window || "24h";
+    const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
     const lifecycleCard = el("div", { class: "audit-summary-card lifecycle-failure-card" });
-    lifecycleCard.appendChild(el("div", { class: "card-title", text: label }));
+    lifecycleCard.appendChild(el("div", { class: "card-title", text: lifecycleTitle }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", {
       class: "lifecycle-failure-counts",
@@ -591,6 +610,12 @@ function renderAuditSummary(data, ctx) {
       class: "metric-trend",
       text: `Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates · window ${window}`,
     }));
+    if (incidentScanCapped) {
+      body.appendChild(el("div", {
+        class: "metric-trend",
+        text: incidentScanPartialCoverageNote(incidentScanLimit),
+      }));
+    }
     lifecycleCard.appendChild(body);
     addCard("lifecycle-diagnostics", lifecycleCard, [
       label,
@@ -598,6 +623,8 @@ function renderAuditSummary(data, ctx) {
       lifecycleIncidents,
       lifecycleFailures,
       Number(data.lifecycle_diagnostic_affected_run_count) || 0,
+      incidentScanCapped,
+      incidentScanLimit,
     ]);
   }
 
