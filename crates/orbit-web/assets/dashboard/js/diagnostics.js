@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime, listItems } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -476,6 +476,17 @@ function renderIncidents(payload, ctx) {
   syncNodes(body, [summary, list]);
 }
 
+// The Errors feed reports where its sources were actually read from. When that
+// is later than the window start (or the window is `all`), the header says so
+// instead of implying the whole window was searched.
+function errorsCoverageLabel(payload) {
+  const coverage = Date.parse(payload && payload.coverage_since);
+  if (Number.isNaN(coverage)) return "";
+  const since = Date.parse(payload.since);
+  if (!Number.isNaN(since) && coverage <= since) return "";
+  return `covers since ${formatDateTime(payload.coverage_since)}`;
+}
+
 function renderDiagnostics(ctx = {}) {
   const sub = ctx.getActiveDiagSubtab ? ctx.getActiveDiagSubtab() : "metrics";
   const last = ctx.getLastDiagnostics ? ctx.getLastDiagnostics() : { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
@@ -495,11 +506,14 @@ function renderDiagnostics(ctx = {}) {
     return;
   }
 
-  const rows = last[sub] || [];
+  const rows = sub === "errors" ? listItems(last.errors) : (last[sub] || []);
   const count = $("diag-count");
   if (sub === "errors") {
-    count.textContent = `${rows.length} error events · window ${getWindow()}`;
-    count.title = "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
+    const coverage = errorsCoverageLabel(last.errors);
+    count.textContent = `${rows.length} error events · window ${getWindow()}${coverage ? ` · ${coverage}` : ""}`;
+    count.title = coverage
+      ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
+      : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
   } else {
     count.textContent = `${rows.length} metric entries · window ${getWindow()}`;
     count.title = "Most recent invocation metrics in the selected window; capped by the diag URL parameter (default 50).";

@@ -186,7 +186,7 @@ fn snapshots_and_diagnostics_skip_non_utf8_log_records() {
 
             let response = server.get("/api/diagnostics/errors?limit=2");
             assert_eq!(response.status().as_u16(), 200);
-            let errors = json_ok(response);
+            let errors = json_ok(response)["items"].clone();
             assert_eq!(errors.as_array().unwrap().len(), 2);
             assert_eq!(errors[0]["step"], "newer-error");
             assert_eq!(errors[1]["step"], "older-error");
@@ -515,7 +515,8 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
             let read = |window: &str, limit| {
                 json_ok(server.get(&format!(
                     "/api/diagnostics/errors?since={window}&limit={limit}&workspace=ws_http_fixture"
-                )))
+                )))["items"]
+                    .clone()
             };
             let day = read("24h", 50);
             let rows = day.as_array().unwrap();
@@ -673,10 +674,10 @@ fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
             let rows_for = |workspace: &str| {
                 json_ok(server.get(&format!(
                     "/api/diagnostics/errors?since=24h&limit=50&workspace={workspace}"
-                )))
-                .as_array()
-                .unwrap()
-                .clone()
+                )))["items"]
+                    .as_array()
+                    .unwrap()
+                    .clone()
             };
             let describe = |rows: &[Value]| {
                 let mut seen: Vec<_> = rows
@@ -707,6 +708,160 @@ fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
                     pair("process-foreign", "foreign step failed"),
                 ],
                 "the owning workspace shows the same run with its step error"
+            );
+        },
+    );
+}
+
+#[test]
+fn diagnostics_errors_read_rotated_segments_within_the_window_and_report_retention() {
+    isolated(
+        "log::diagnostics_errors_read_rotated_segments_within_the_window_and_report_retention",
+        || {
+            use chrono::{DateTime, Duration, Utc};
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let record = |ts: DateTime<Utc>, level: &str, id: &str| {
+                format!(
+                    "{}\n",
+                    json!({"timestamp":ts.to_rfc3339(), "level":level, "target":"backend",
+                        "fields":{"error_message":format!("{id} failed"), "event_id":id}})
+                )
+            };
+            let segment = |name: &str, records: &[String]| {
+                fs::write(fixture.path(name), records.concat()).unwrap();
+            };
+            let archive = |rotated_at: DateTime<Utc>| {
+                format!("process.log.{}", rotated_at.format("%Y%m%dT%H%M%S%3fZ"))
+            };
+            let oldest_start = now - Duration::hours(30);
+            segment(
+                "process.log",
+                &[
+                    record(now - Duration::hours(1), "INFO", "active-start"),
+                    record(now - Duration::minutes(5), "ERROR", "active"),
+                ],
+            );
+            segment(
+                &archive(now - Duration::hours(1)),
+                &[
+                    record(now - Duration::hours(6), "INFO", "rotated-start"),
+                    record(now - Duration::hours(5), "ERROR", "rotated-in-day"),
+                ],
+            );
+            segment(
+                &archive(now - Duration::hours(6)),
+                &[
+                    record(oldest_start, "INFO", "oldest-start"),
+                    record(now - Duration::hours(29), "ERROR", "rotated-in-week"),
+                ],
+            );
+            let server = fixture.server(false);
+            let read = |window: &str| {
+                json_ok(server.get(&format!(
+                    "/api/diagnostics/errors?since={window}&limit=50&workspace=ws_http_fixture"
+                )))
+            };
+            let ids = |body: &Value| {
+                body["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["event_id"].as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            };
+            let instant = |value: &Value| {
+                value
+                    .as_str()
+                    .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                    .map(|ts| ts.with_timezone(&Utc))
+            };
+
+            let day = read("24h");
+            assert_eq!(
+                ids(&day),
+                ["active", "rotated-in-day"],
+                "the 24h window includes the rotated segment it reaches into: {day}"
+            );
+            assert!(day["since"].is_string(), "{day}");
+            assert_eq!(
+                day["coverage_since"], day["since"],
+                "a retained segment starts before the window, so coverage is complete: {day}"
+            );
+
+            let week = read("7d");
+            assert_eq!(
+                ids(&week),
+                ["active", "rotated-in-day", "rotated-in-week"],
+                "{week}"
+            );
+            assert_eq!(
+                instant(&week["coverage_since"]),
+                Some(oldest_start),
+                "retention starts after the 7d window start, so coverage begins at the oldest retained record: {week}"
+            );
+            assert!(instant(&week["since"]).unwrap() < oldest_start, "{week}");
+        },
+    );
+}
+
+#[test]
+fn diagnostics_errors_report_the_stderr_blob_cap_as_the_coverage_start() {
+    isolated(
+        "log::diagnostics_errors_report_the_stderr_blob_cap_as_the_coverage_start",
+        || {
+            use chrono::{DateTime, Duration, Utc};
+            use orbit_common::storage::blob_store::BlobStore;
+            use orbit_core::V2AuditEventInsertParams;
+            // One past the per-request stderr blob cap in the web crate.
+            const INVOCATIONS: i64 = 257;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let invoked_at = |index: i64| now - Duration::minutes(index + 1);
+            for index in 0..INVOCATIONS {
+                let ts = invoked_at(index);
+                let id = format!("invocation-{index}");
+                let blob = blobs
+                    .write(format!("plain stderr from invocation {index}\n").as_bytes())
+                    .unwrap();
+                let body = json!({"body_kind":"cli_invocation_finished", "event_id":id,
+                    "ts":ts.to_rfc3339(), "run_id":"run-a", "stderr_blob_ref":blob});
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: fixture.runtime.workspace_id().unwrap(),
+                        event_id: id,
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "cli_invocation_finished".into(),
+                        ts,
+                        run_id: "run-a".into(),
+                        agent_identity: "http-fixture".into(),
+                        parent_event_id: None,
+                        workspace_path: None,
+                        payload_json: body.to_string(),
+                    })
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let body = json_ok(
+                server.get("/api/diagnostics/errors?since=24h&limit=50&workspace=ws_http_fixture"),
+            );
+            let instant = |value: &Value| {
+                value
+                    .as_str()
+                    .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                    .map(|ts| ts.with_timezone(&Utc))
+            };
+            assert_eq!(
+                instant(&body["coverage_since"]),
+                Some(invoked_at(INVOCATIONS - 2)),
+                "the oldest invocation whose stderr was read starts the coverage: {body}"
+            );
+            assert!(
+                instant(&body["since"]).unwrap() < invoked_at(INVOCATIONS - 1),
+                "{body}"
             );
         },
     );

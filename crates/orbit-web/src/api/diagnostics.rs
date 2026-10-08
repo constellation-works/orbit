@@ -21,7 +21,8 @@ use super::{
     map_runtime_error, month_bounds_utc, validate_year_month,
 };
 use crate::log_format::{
-    Filters as LogFilters, format_message_html, read_recent_matching_events, resolve_log_path,
+    Filters as LogFilters, format_message_html, read_recent_matching_events_across_segments,
+    resolve_log_path,
 };
 
 pub(super) async fn list_diagnostics_metrics(
@@ -382,7 +383,7 @@ pub(super) async fn list_diagnostics_errors(
     match state
         .diagnostics_errors_memo()
         .get_or_compute(&runtime, key, DIAGNOSTICS_ERRORS_TTL, move || {
-            diagnostics_errors(&compute_runtime, &range, limit).map(Value::Array)
+            diagnostics_errors(&compute_runtime, &range, limit)
         })
         .await
     {
@@ -391,16 +392,43 @@ pub(super) async fn list_diagnostics_errors(
     }
 }
 
+/// The Errors feed: `items` newest first, the window start `since` (null for
+/// `all`), and `coverage_since`, the instant from which both sources were read
+/// completely. It equals `since` unless log retention, the process-log scan
+/// cap or the stderr blob cap stopped a source later than the window start.
 fn diagnostics_errors(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
+) -> Result<Value, orbit_core::OrbitError> {
+    let mut coverage_since = range.since;
+    let rows = if limit == 0 {
+        Vec::new()
+    } else {
+        let (rows, process_coverage, stderr_coverage) =
+            diagnostics_error_rows(runtime, range, limit)?;
+        coverage_since = [coverage_since, process_coverage, stderr_coverage]
+            .into_iter()
+            .flatten()
+            .max();
+        rows
+    };
+    Ok(json!({
+        "items": rows,
+        "since": range.since.map(|since| since.to_rfc3339()),
+        "coverage_since": coverage_since.map(|since| since.to_rfc3339()),
+    }))
+}
+
+type ErrorRowsWithCoverage = (Vec<Value>, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+fn diagnostics_error_rows(
+    runtime: &OrbitRuntime,
+    range: &DiagnosticsRange,
+    limit: usize,
+) -> Result<ErrorRowsWithCoverage, orbit_core::OrbitError> {
     // Read beyond the display cap so duplicate events cannot crowd out distinct failures.
-    let mut rows = global_error_rows_in_range(range, 50_000)?;
+    let (mut rows, process_coverage) = global_error_rows_in_range(range, 50_000)?;
     rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
     let mut seen_process = HashSet::new();
     rows.retain(|row| {
@@ -460,7 +488,8 @@ fn diagnostics_errors(
         scoped.push(row);
     }
     let mut rows = scoped;
-    rows.extend(agent_stderr_error_rows(runtime, range, limit)?);
+    let (stderr_rows, stderr_coverage) = agent_stderr_error_rows(runtime, range, limit)?;
+    rows.extend(stderr_rows);
     rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
     let mut seen = HashSet::new();
     rows.retain(|row| {
@@ -469,23 +498,28 @@ fn diagnostics_errors(
             .is_none_or(|id| seen.insert(id.to_string()))
     });
     rows.truncate(limit);
-    Ok(rows)
+    Ok((rows, process_coverage, stderr_coverage))
 }
 
+/// Process ERROR rows from the active log and every rotated segment that
+/// reaches into the window, with the instant the retained segments (or the
+/// `limit` scan cap) actually start from when that is later than the window.
 fn global_error_rows_in_range(
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
+) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     let path = resolve_log_path(None)?;
     let filters = LogFilters::new(
         None,
         Some(crate::log_format::LevelFilter::Error),
         range.since,
     );
-    let events = read_recent_matching_events(&path, &filters, limit).map_err(|error| {
-        orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
-    })?;
-    Ok(events
+    let scanned =
+        read_recent_matching_events_across_segments(&path, &filters, limit).map_err(|error| {
+            orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
+        })?;
+    let rows = scanned
+        .events
         .into_iter()
         .filter(|event| {
             event["timestamp"]
@@ -494,7 +528,8 @@ fn global_error_rows_in_range(
                 .is_some_and(|ts| range.contains(ts.with_timezone(&Utc)))
         })
         .map(|event| process_error_row(&event))
-        .collect())
+        .collect();
+    Ok((rows, scanned.coverage_since))
 }
 
 fn row_timestamp(row: &Value) -> Option<DateTime<Utc>> {
@@ -544,14 +579,17 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
 /// disk. Each `cli_invocation_finished` event costs one blob read, so a long
 /// history of invocations with no structured error lines would otherwise read
 /// thousands of files per poll. Newest invocations are read first, so the cap
-/// only ever drops the oldest.
+/// only ever drops the oldest, and the feed reports the oldest invocation read
+/// as the start of its stderr coverage.
 pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
 
+/// Agent-stderr rows newest first, with the timestamp of the oldest invocation
+/// read when the blob cap stopped the scan before the window start.
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
+) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     // Ancestors can precede the selected window. Keep them for step attribution,
     // but only read stderr blobs belonging to invocations in the requested range.
     let events = v2_audit_values(runtime, None, Some(range.until), 50_000)?;
@@ -560,6 +598,8 @@ fn agent_stderr_error_rows(
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
     let mut blobs_read = 0usize;
+    let mut oldest_read = None;
+    let mut coverage_since = None;
     let mut seen = HashSet::new();
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
@@ -568,13 +608,13 @@ fn agent_stderr_error_rows(
         if event.get("body_kind").and_then(Value::as_str) != Some("cli_invocation_finished") {
             continue;
         }
-        if !event["ts"]
+        let Some(invoked_at) = event["ts"]
             .as_str()
             .and_then(|ts| ts.parse::<DateTime<Utc>>().ok())
-            .is_some_and(|ts| range.contains(ts))
-        {
+            .filter(|ts| range.contains(*ts))
+        else {
             continue;
-        }
+        };
         if let Some(id) = event["event_id"].as_str()
             && !seen.insert(id.to_string())
         {
@@ -584,9 +624,11 @@ fn agent_stderr_error_rows(
             continue;
         };
         if blobs_read >= MAX_STDERR_BLOBS_PER_REQUEST {
+            coverage_since = oldest_read;
             break;
         }
         blobs_read += 1;
+        oldest_read = Some(invoked_at);
         let stderr = read_blob_text_best_effort(&blob_store, blob_ref);
         let fallback_ts = event
             .get("ts")
@@ -642,7 +684,7 @@ fn agent_stderr_error_rows(
             break;
         }
     }
-    Ok(rows)
+    Ok((rows, coverage_since))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -683,7 +683,7 @@ async function assertNarrowTableLayouts(page) {
       const url = new URL(path, window.location.href);
       if (url.pathname === '/api/job-runs') return response({ items: runs, total: runs.length, limit: 50, truncated: false });
       if (url.pathname === '/api/audit') return response(events);
-      if (url.pathname === '/api/diagnostics/errors') return response(errors);
+      if (url.pathname === '/api/diagnostics/errors') return response({ items: errors, since: iso(24 * 60), coverage_since: iso(24 * 60) });
       if (url.pathname === '/api/diagnostics/metrics') return response(metrics);
       return fixtureFetch(path, options);
     };
