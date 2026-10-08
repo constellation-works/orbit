@@ -163,6 +163,9 @@
   background: var(--bg); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
 }
 .config-crew-head [role="columnheader"] { min-width: 0; }
+.config-crew-cell { min-width: 0; }
+.config-crew-cell > .config-value { overflow-wrap: anywhere; }
+.config-crew-label { display: none; }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
 .config-crew-row.disabled .config-crew-cells { color: var(--fg-disabled); }
 .config-crew-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -187,6 +190,9 @@
 @media (max-width: 900px) {
   .config-row-main, .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .config-crew-head { display: none; }
+  .config-crew-cell { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+  .config-crew-label { display: block; color: var(--fg-dim); font-size: 11px; }
+  .config-crew-cell > .config-source { justify-self: start; }
   .config-paths { grid-template-columns: minmax(0, 1fr); }
 }
 

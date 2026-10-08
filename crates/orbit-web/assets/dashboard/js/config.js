@@ -1027,6 +1027,8 @@ function systemValueCell(row, payload) {
 
 // ------------------------------------------------------------------- crews
 
+const CREW_COLUMNS = ["Name", "Provider", "Model", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+
 function crewsPanel(payload, { standalone }) {
   const crews = payload.crews || [];
   const panel = el("section", { class: "panel config-section config-crews" });
@@ -1044,10 +1046,9 @@ function crewsPanel(payload, { standalone }) {
     ]),
   );
   const body = el("div", { class: "config-section-body" });
-  const headings = ["Name", "Provider", "Model", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
   const head = el("div", { class: "config-crew-cells config-crew-head" });
   head.setAttribute("role", "row");
-  for (const label of headings) {
+  for (const label of CREW_COLUMNS) {
     const cell = el("span", { text: label });
     cell.setAttribute("role", "columnheader");
     head.appendChild(cell);
@@ -1104,15 +1105,8 @@ function crewRow(crew, payload) {
     ]),
     crew.description ? el("span", { class: "config-crew-description", text: crew.description }) : null,
   ]);
-  const uses = [
-    ...referenced.map((key) => ({ className: "config-crew-use", text: key })),
-    ...crewPoolMembership(payload, crew.name).map((pool) => ({
-      className: "config-crew-use",
-      text: `${pool} complexity pool`,
-    })),
-  ];
-  const usedBy = el("span", { class: "config-crew-usage" }, uses.length
-    ? uses.map((use) => el("span", { class: use.className, text: use.text }))
+  const usedBy = el("span", { class: "config-crew-usage" }, referenced.length
+    ? referenced.map((reference) => el("span", { class: "config-crew-use", text: reference }))
     : [el("span", { class: "config-crew-use", text: EMPTY_ARRAY })]);
   const cells = el("div", { class: "config-crew-cells" }, [
     identity,
@@ -1123,28 +1117,14 @@ function crewRow(crew, payload) {
     el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
     usedBy,
     editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : el("span", { text: EMPTY_ARRAY }),
-  ]);
+  ].map((value, index) => el("div", { class: "config-crew-cell" }, [
+    el("span", { class: "config-crew-label", text: CREW_COLUMNS[index] }),
+    value,
+  ])));
   node.appendChild(cells);
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
-}
-
-const CREW_POOL_KEYS = [
-  ["workflow.low_complexity_crews", "Low"],
-  ["workflow.medium_complexity_crews", "Medium"],
-  ["workflow.hard_complexity_crews", "Hard"],
-  ["workflow.xhard_complexity_crews", "X-hard"],
-];
-
-function crewPoolMembership(payload, name) {
-  const keys = (payload.sections || []).flatMap((section) => section.keys || []);
-  return CREW_POOL_KEYS
-    .filter(([key]) => {
-      const pool = keys.find((row) => row.key === key)?.value;
-      return Array.isArray(pool) && pool.some((entry) => String(entry).split(":", 1)[0] === name);
-    })
-    .map(([, label]) => label);
 }
 
 function displayCrewValue(value) {

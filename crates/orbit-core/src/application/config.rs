@@ -46,6 +46,15 @@ const CREW_FIELDS: &[&str] = &[
 /// the key that still names it.
 const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew", "workflow.system_crew"];
 
+/// Weighted or bare crew lists whose membership the settings view reports.
+const CREW_POOL_KEYS: &[&str] = &[
+    "workflow.final_recovery_crews",
+    "workflow.low_complexity_crews",
+    "workflow.medium_complexity_crews",
+    "workflow.hard_complexity_crews",
+    "workflow.xhard_complexity_crews",
+];
+
 /// How a write initializes a workspace `config.toml` that does not exist yet.
 ///
 /// The default is fail-closed for the same reason `orbit config set` is: the
@@ -133,7 +142,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         },
         "workspace_binding": workspace_binding_json(runtime, values),
         "sections": sections,
-        "crews": crew_rows(values),
+        "crews": crew_rows(runtime, values)?,
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),
@@ -535,7 +544,7 @@ fn effective_value(runtime: &OrbitRuntime, key: &str) -> Result<JsonValue, Orbit
 /// The layered value of one crew, as the object its row renders.
 fn crew_value(runtime: &OrbitRuntime, name: &str) -> Result<JsonValue, OrbitError> {
     let effective = load_effective_config(&config_roots(runtime))?;
-    Ok(crew_rows(effective.values())
+    Ok(crew_rows(runtime, effective.values())?
         .into_iter()
         .find(|crew| crew["name"] == json!(name))
         .unwrap_or(JsonValue::Null))
@@ -559,7 +568,7 @@ fn write_outcome(
         Some(key) if keys.len() == 1 => effective.value_for(key).unwrap_or(JsonValue::Null),
         Some(key) => {
             let name = key.split('.').nth(1).unwrap_or_default();
-            crew_rows(values)
+            crew_rows(runtime, values)?
                 .into_iter()
                 .find(|crew| crew["name"] == json!(name))
                 .unwrap_or(JsonValue::Null)
@@ -797,17 +806,45 @@ fn base_row(
 }
 
 /// One row per crew, folded from the per-field `crews.<name>.<field>` values.
-fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
-    let referenced = |key: &str| {
-        values
-            .iter()
-            .find(|entry| entry.key == key)
-            .and_then(|entry| entry.value.as_str().map(str::to_string))
-    };
-    let references = CREW_REFERENCE_KEYS
-        .iter()
-        .filter_map(|key| referenced(key).map(|crew| (*key, crew)))
-        .collect::<Vec<_>>();
+fn crew_rows(
+    runtime: &OrbitRuntime,
+    values: &[EffectiveConfigValue],
+) -> Result<Vec<JsonValue>, OrbitError> {
+    let mut references: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for entry in values {
+        if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) || entry.key == "operation.review_crew"
+        {
+            if let Some(name) = entry.value.as_str() {
+                references
+                    .entry(name.trim().to_string())
+                    .or_default()
+                    .insert(entry.key.clone());
+            }
+        } else if CREW_POOL_KEYS.contains(&entry.key.as_str())
+            && let Some(pool) = entry.value.as_array()
+        {
+            for member in pool.iter().filter_map(JsonValue::as_str) {
+                // Effective config has already admitted the name[:weight] grammar.
+                let name = member.split_once(':').map_or(member, |(name, _)| name);
+                references
+                    .entry(name.trim().to_string())
+                    .or_default()
+                    .insert(entry.key.clone());
+            }
+        }
+    }
+    // Use the scheduler's listing to omit definitions parked by an inactive plugin.
+    for listed in runtime.auto_task_listing(false)? {
+        let definition = listed.definition;
+        if definition.enabled
+            && let Some(name) = definition.template.crew
+        {
+            references
+                .entry(name.trim().to_string())
+                .or_default()
+                .insert(format!("auto-task {}", definition.name));
+        }
+    }
 
     let mut crews: BTreeMap<String, BTreeMap<String, (JsonValue, ConfigValueSourceKind)>> =
         BTreeMap::new();
@@ -824,7 +861,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
         );
     }
 
-    crews
+    Ok(crews
         .into_iter()
         .map(|(name, fields)| {
             let cell = |field: &str| {
@@ -845,11 +882,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
             if layers.is_empty() {
                 layers.push(ConfigValueSourceKind::BuiltIn.label());
             }
-            let referenced_by = references
-                .iter()
-                .filter(|(_, crew)| crew == &name)
-                .map(|(key, _)| json!(key))
-                .collect::<Vec<_>>();
+            let referenced_by = references.remove(&name).unwrap_or_default();
             json!({
                 "name": name,
                 "enabled": cell("enabled"),
@@ -862,7 +895,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
                 "referenced_by": referenced_by,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn shadow_note(layer: ConfigValueSourceKind, value: &JsonValue, reason: ShadowReason) -> String {

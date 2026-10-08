@@ -158,7 +158,7 @@ const effective = () => ({
     ] },
     { token: 'crews', title: 'Crews', blurb: 'named crews', key_prefix: 'crews', kind: 'crews', counts: { set: 0, unset: 0, total: 0 }, keys: [] },
   ],
-  crews: [{ name: 'astra', provider: 'codex', model: 'gpt-6-astra', effort: 'high', tags: [], description: 'review and implementation crew', source: 'global', enabled: true, referenced_by: ['workflow.default_crew'] }],
+  crews: [{ name: 'astra', provider: 'codex', model: 'gpt-6-astra', effort: 'high', tags: [], description: 'review and implementation crew', source: 'global', enabled: true, referenced_by: ['workflow.default_crew', 'workflow.low_complexity_crews'] }],
   review: {
     healthy: false,
     before_pr: { enabled: false, line: 'off (built-in)', problems: [] },
@@ -409,9 +409,10 @@ assert.deepEqual(crewHead.children.map(cell => cell.textContent).slice(0, 7), [
 const crewCells = named(body, 'config-crew-cells').find(node => !classesOf(node).includes('config-crew-head'));
 assert.ok(crewCells, 'the crew row is present');
 assert.doesNotMatch(crewCells.textContent, /\[\]/, 'empty crew arrays use the em dash placeholder');
-assert.equal(crewCells.children[4].textContent, '—', 'an empty crew array uses an em dash');
+assert.equal(crewCells.children[4].children[1].textContent, '—', 'an empty crew array uses an em dash');
+assert.deepEqual(crewCells.children.map(cell => cell.children[0].textContent), crewHead.children.map(cell => cell.textContent), 'every stacked value has its matching column label before it');
 assert.match(crewCells.textContent, /workflow\.default_crew/);
-assert.match(crewCells.textContent, /Low complexity pool/);
+assert.deepEqual(textOf(crewCells, 'config-crew-use'), effective().crews[0].referenced_by, 'usage renders each server reference once');
 assert.equal(named(body, 'config-referenced').length, 0, 'informational crew usage is not warning-colored');
 
 setConfigSubtab('keys');
