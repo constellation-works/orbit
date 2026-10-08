@@ -120,8 +120,8 @@ local host is allowed.
 
 It is accepted:
 
-- with `--workspace` on commands whose operation is a tool call: `orbit task …` and
-  `orbit tool run`;
+- with `--workspace` on the routable task commands: `orbit task show`, `update`,
+  `artifact put|get`, `review-reset`, and `reconcile-review …`, and on `orbit tool run`;
 - with `--pull` on `orbit run auto`.
 
 To resolve, Orbit reads the host's live workspace list and matches the workspace value by
@@ -139,10 +139,16 @@ by concatenation, which keeps federated selector rule 2.
 the value is a full selector: Orbit never picks a host by itself.
 
 Commands that open a host-local runtime directly reject `--host` at parse time. These include
-`run history`, `run logs`, `run show`, `doctor`, `workspace …`, `config …`, `update` and the
-deploy targets. The error gives the command to run on that host:
-`ssh <entry ssh target> orbit …`. Those commands read host-local files and process state the
+`task list`, `task add`, other task commands outside the routable set above, `run history`,
+`run logs`, `run show`, `doctor`, `workspace …`, `config …`, `update` and the deploy targets.
+Pass `--host` after the routable task subcommand, rather than on the `task` group.
+The error gives the command to run on that host:
+`ssh <entry ssh target> orbit …`. Other host-local commands read files and process state the
 tool surface does not expose, and relaying them would make the CLI a remote shell.
+Local-only task commands also refuse a remote-qualified `--workspace` before opening a
+runtime. For remote task listing or creation, use `orbit tool run orbit.task.list` or
+`orbit tool run orbit.task.add` with `--host <host> --workspace <workspace>` and the tool's
+JSON input, or run the task command on that host over SSH.
 
 ## Non-goals
 

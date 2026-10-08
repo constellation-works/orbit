@@ -464,6 +464,81 @@ fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule()
 }
 
 #[test]
+fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() {
+    let routed = Routed::new();
+    let selector = routed.bravo_selector();
+    let tasks_in = |home: &Path, repo: &Path| {
+        let output = routed
+            .fleet
+            .orbit_in(home, repo, &["task", "list", "--json"])
+            .output()
+            .expect("spawn task list");
+        assert!(output.status.success(), "list the fixture's tasks");
+        parse(&output.stdout, &["task", "list"])
+    };
+    let local_before = tasks_in(&routed.fleet.local.home, &routed.fleet.local_repo);
+    let remote_before = tasks_in(&routed.bravo.home, &routed.bravo.repo());
+    routed.take_remote_argv();
+
+    for command in [
+        vec!["task", "list"],
+        vec![
+            "task",
+            "add",
+            "--title",
+            "must not be created",
+            "--complexity",
+            "low",
+        ],
+    ] {
+        for host_flag in [vec!["--host", "bravo"], vec!["--host=bravo"]] {
+            let mut args = command.clone();
+            args.extend(host_flag);
+            args.extend(["--workspace", "bravo-ws", "--json"]);
+            let (code, message) = routed.refused(&args);
+            assert_eq!(code, "usage_error", "{args:?}: {message}");
+            assert!(message.contains("--host"), "the refusal names the flag");
+            assert!(
+                message.contains("ssh bravo orbit task"),
+                "the refusal gives a command on the registered host: {message}"
+            );
+        }
+
+        let mut args = command;
+        args.extend(["--workspace", &selector, "--json"]);
+        let (code, message) = routed.refused(&args);
+        assert_eq!(code, "invalid_input", "{args:?}: {message}");
+        assert!(
+            message.contains("--workspace"),
+            "the refusal names the selector flag"
+        );
+        assert!(
+            message.contains("--host"),
+            "the refusal explains the host restriction"
+        );
+        assert!(
+            message.contains("orbit tool run"),
+            "the refusal names the supported remote surface: {message}"
+        );
+    }
+
+    assert!(
+        routed.take_remote_argv().is_empty(),
+        "refused local commands never contact the remote host"
+    );
+    assert_eq!(
+        tasks_in(&routed.fleet.local.home, &routed.fleet.local_repo),
+        local_before,
+        "refused commands leave the local tasks unchanged"
+    );
+    assert_eq!(
+        tasks_in(&routed.bravo.home, &routed.bravo.repo()),
+        remote_before,
+        "refused commands leave the remote tasks unchanged"
+    );
+}
+
+#[test]
 fn host_flag_resolves_to_the_selector_that_host_lists() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();

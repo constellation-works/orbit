@@ -10,6 +10,8 @@ use super::output::task_to_json_for_runtime;
 
 #[derive(Args)]
 pub struct TaskUpdateArgs {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     /// Task ID
     pub id: String,
     /// New title
@@ -149,6 +151,7 @@ const APPROVE_CONFLICTS: [&str; 22] = [
 impl Execute for TaskUpdateArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let TaskUpdateArgs {
+            routing: _,
             id,
             title,
             description,

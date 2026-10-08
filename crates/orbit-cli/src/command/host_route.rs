@@ -53,6 +53,22 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         }
         return Ok(Preflight::Local);
     }
+    if let Commands::Task(task) = &cli.command
+        && routed_command_id(&task.command).is_none()
+        && let Some(selector) = workspace_value(cli)?
+        && let Ok(qualified) = selector.parse::<MachineQualifiedSelector>()
+        && !matches!(
+            inspect_machine_identity(&global_root)?,
+            MachineIdentityState::Present(identity) if identity.id == qualified.machine_id()
+        )
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "--workspace '{selector}' names another host; this task command runs on this \
+             machine and takes no --host. Run it on that host with `ssh <target> orbit task …`, \
+             or use `orbit tool run <tool> --workspace {selector}` for a supported task tool \
+             (see `orbit host list`)"
+        )));
+    }
     if let Commands::Run(run) = &mut cli.command
         && let RunSubcommand::Auto(auto) = &mut run.command
     {
@@ -112,11 +128,16 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
     deliver(cli, global_root, &holder, Some(selector))
 }
 
-/// Whether this command could route at all, so every other command pays no
-/// host-file read.
+/// Whether this command needs host preflight, so commands without routing
+/// or a qualified task selector pay no host-file read.
 fn may_route(cli: &Cli) -> bool {
     match &cli.command {
-        Commands::Task(task) => routed_command_id(&task.command).is_some(),
+        Commands::Task(task) => {
+            routed_command_id(&task.command).is_some()
+                || cli.workspace.as_deref().is_some_and(|selector| {
+                    selector.trim().parse::<MachineQualifiedSelector>().is_ok()
+                })
+        }
         Commands::Tool(tool) => matches!(tool.command, ToolSubcommand::Run(_)),
         Commands::Run(run) => {
             matches!(&run.command, RunSubcommand::Auto(auto) if auto.pull.is_some())
@@ -127,7 +148,14 @@ fn may_route(cli: &Cli) -> bool {
 
 fn requested_host(command: &Commands) -> Option<String> {
     let host = match command {
-        Commands::Task(task) => task.host.as_deref(),
+        Commands::Task(task) => match &task.command {
+            TaskSubcommand::Show(args) => args.routing.host.as_deref(),
+            TaskSubcommand::Update(args) => args.routing.host.as_deref(),
+            TaskSubcommand::Artifact(command) => command.routing.host.as_deref(),
+            TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
+            TaskSubcommand::ReconcileReview(command) => command.routing.host.as_deref(),
+            _ => None,
+        },
         Commands::Tool(tool) => match &tool.command {
             ToolSubcommand::Run(args) => args.host.as_deref(),
             _ => None,
