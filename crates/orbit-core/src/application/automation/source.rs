@@ -1214,7 +1214,7 @@ impl<'a> Source<'a> {
         Ok(trees)
     }
 
-    /// Parent-relative patch of each commit, in order. An empty diff is an
+    /// First-parent patch of each commit, in order. An empty diff is an
     /// empty string, matching `diff-tree --no-commit-id` on that commit.
     ///
     /// A batch that exceeds the command output cap is split. A deadline fails
@@ -1237,6 +1237,9 @@ impl<'a> Source<'a> {
             &[
                 "diff-tree",
                 "--stdin",
+                // A merge prints nothing without a merge-diff mode. First-parent
+                // is the `<commit>^1 <commit>` patch, under a single header.
+                "--diff-merges=first-parent",
                 "--binary",
                 "--full-index",
                 "--no-renames",
