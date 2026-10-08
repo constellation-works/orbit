@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use orbit_common::fs::path::orbit_scratch_dir;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::workflow::JobRunState;
 use serde::Serialize;
 
 use crate::{OrbitError, OrbitRuntime};
@@ -40,7 +41,8 @@ fn display_path<S: serde::Serializer>(
 
 impl OrbitRuntime {
     /// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
-    /// directory. Pending/running runs refuse deletion even with stale owners.
+    /// directory. Pending, running, and retrying runs refuse deletion even with
+    /// stale owners.
     pub fn gc_tmp(&self, delete: bool) -> Result<TmpGcResult, OrbitError> {
         if delete {
             self.refuse_active_tmp_gc()?;
@@ -66,17 +68,20 @@ impl OrbitRuntime {
     }
 
     fn refuse_active_tmp_gc(&self) -> Result<(), OrbitError> {
-        let mut run_ids: Vec<_> = self
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                active_only: true,
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .map(|run| run.run_id)
-            .collect();
+        let jobs = self.stores().jobs();
+        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
+            active_only: true,
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        // `active_only` is pending/running only. A retrying run sleeps between
+        // attempts and then executes again, so its scratch is still in use.
+        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Retrying),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?);
+        let mut run_ids: Vec<_> = runs.into_iter().map(|run| run.run_id).collect();
         run_ids.sort();
         if run_ids.is_empty() {
             Ok(())

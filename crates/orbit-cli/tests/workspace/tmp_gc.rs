@@ -228,8 +228,10 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
     fs::write(other.join(".orbit/tmp/other.log"), b"other").unwrap();
     fixture.populate();
     let db = Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    // `retrying` is live: the engine sleeps between attempts, then runs again.
     for (run_id, state) in [
         ("jrun-tmp-pending", "pending"),
+        ("jrun-tmp-retrying", "retrying"),
         ("jrun-tmp-running", "running"),
     ] {
         db.execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,created_at,pid) VALUES (?1,?2,'fixture',1,?3,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z',999999)", params![run_id, fixture.workspace_id(), state]).unwrap();
@@ -247,7 +249,7 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
     assert_eq!(error["code"], "tmp_gc_active_runs");
     assert_eq!(
         error["run_ids"],
-        serde_json::json!(["jrun-tmp-pending", "jrun-tmp-running"])
+        serde_json::json!(["jrun-tmp-pending", "jrun-tmp-retrying", "jrun-tmp-running"])
     );
     fixture
         .orbit()
@@ -256,6 +258,7 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
         .assert()
         .failure()
         .stderr(predicates::str::contains("jrun-tmp-pending"))
+        .stderr(predicates::str::contains("jrun-tmp-retrying"))
         .stderr(predicates::str::contains("jrun-tmp-running"));
     let mut statement = db
         .prepare("SELECT state FROM job_runs ORDER BY run_id")
@@ -267,8 +270,29 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
         .unwrap();
     assert_eq!(
         states,
-        ["pending", "running"],
+        ["pending", "retrying", "running"],
         "GC must never reconcile active rows to make deletion eligible"
+    );
+    // The retrying run alone must refuse: its next attempt still needs scratch.
+    db.execute(
+        "UPDATE job_runs SET state = 'success' WHERE run_id IN ('jrun-tmp-pending', 'jrun-tmp-running')",
+        [],
+    )
+    .unwrap();
+    let retrying_only = fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["gc", "tmp", "--confirm", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let error: Value = serde_json::from_slice(&retrying_only).unwrap();
+    assert_eq!(error["run_ids"], serde_json::json!(["jrun-tmp-retrying"]));
+    assert_eq!(
+        fs::read(fixture.tmp().join("operator.log")).unwrap(),
+        b"abcd"
     );
     assert_eq!(
         fixture.json(&["gc", "tmp", "--dry-run", "--json"])["bytes_reclaimable"],

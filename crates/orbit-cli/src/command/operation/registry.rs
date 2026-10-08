@@ -233,7 +233,7 @@ impl Commands {
                 use super::super::gc::GcTarget;
                 let (target, reaps, runtime_need) = match &command.target {
                     GcTarget::Worktrees(args) => ("worktrees", args.confirm, RuntimeNeed::Required),
-                    // Tmp GC must observe pending/running rows without bootstrap
+                    // Tmp GC must observe pending/running/retrying rows without bootstrap
                     // reconciliation turning stale owners into terminal runs.
                     GcTarget::Tmp(args) => ("tmp", args.confirm, RuntimeNeed::ReadOnly),
                 };
