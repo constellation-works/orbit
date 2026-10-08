@@ -701,10 +701,6 @@ pub trait AuditEventStoreBackend: Send + Sync {
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
     ) -> Result<Vec<i64>, OrbitError>;
-    fn get_audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<i64>, OrbitError>;
     fn get_audit_event_hourly_buckets(
         &self,
         since: &DateTime<Utc>,

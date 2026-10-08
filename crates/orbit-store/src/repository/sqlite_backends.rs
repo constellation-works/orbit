@@ -134,13 +134,6 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.get_audit_event_durations(since, tool)
     }
 
-    fn get_audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<i64>, OrbitError> {
-        self.store.get_audit_event_durations_null_tool(since)
-    }
-
     fn get_audit_event_hourly_buckets(
         &self,
         since: &DateTime<Utc>,
