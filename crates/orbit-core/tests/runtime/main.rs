@@ -57,6 +57,7 @@ mod provider_limit_hold;
 
 mod run_history;
 mod task_delivery;
+mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;
 mod task_update;
