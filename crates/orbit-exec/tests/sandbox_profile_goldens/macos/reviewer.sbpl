@@ -50,6 +50,7 @@
 (allow file-write* (subpath "<HOME>/.orbit/tasks"))
 (deny file-write* (subpath "<ROOT>/repo/.orbit/auto_tasks"))
 (deny file-write* (literal "<ROOT>"))
+(deny file-write* (literal "<ROOT>/inspection"))
 (deny file-write* (literal "<ROOT>/repo"))
 (deny file-write* (literal "<ROOT>/repo/.orbit"))
 (deny file-read* (subpath "<HOME>/.ssh"))

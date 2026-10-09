@@ -47,8 +47,9 @@ use crate::credential_paths::{
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
 ///   last-match-wins evaluation;
 /// - then denies writes to each existing writable ancestor entry of a negated
-///   `modify` entry, so a denied path cannot be renamed aside with its parent
-///   — see `emit_denied_ancestor_pins`.
+///   `modify` or `read` entry, and of each path a negated glob matches today,
+///   so a denied path cannot be renamed aside with its parent — see
+///   `emit_denied_ancestor_pins`.
 ///
 /// Callers must resolve workspace-relative globs to absolute paths before
 /// invoking this function — a relative `subpath` is meaningless to the kernel.
@@ -282,7 +283,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             super::sbpl_filter::sbpl_filter_for_allow_rule(rule)
         ));
     }
-    emit_denied_ancestor_pins(rules, &mut out);
+    emit_denied_ancestor_pins(rules, &mut out)?;
 
     // Clause order below is the security contract, not a formatting choice.
     // SBPL is last-match-wins, so the default credential denies come first, the
@@ -467,10 +468,21 @@ const HOST_SCRATCH_WRITE_ROOTS: [&str; 3] = ["/tmp", "/private/tmp", "/private/v
 /// ancestors as mount points.
 ///
 /// Writable means beneath a positive `modify` rule or strictly beneath a host
-/// scratch root. A glob deny pins only the directory above its first wildcard
-/// and that directory's ancestors, so a subdirectory holding a match can still
-/// be moved out of the glob's reach.
-fn emit_denied_ancestor_pins(rules: &ResolvedFsProfile, out: &mut String) {
+/// scratch root.
+///
+/// A glob deny is anchored at the directory above its first wildcard, but its
+/// regex reaches entries at any depth below it, so pinning the anchor's
+/// ancestors alone would leave a subdirectory holding a match free to move.
+/// Each existing match is therefore expanded at compile time and its writable
+/// ancestors up to the anchor are pinned too, so a subdirectory holding a
+/// `.env` cannot be moved out of `**/.env`'s reach and back. A name created
+/// after compile gets no pins. Negated `read` rules pin the same ancestors, so a read-denied
+/// match cannot be carried out of its read deny either; the match itself is
+/// not pinned, as that would also deny writing it.
+fn emit_denied_ancestor_pins(
+    rules: &ResolvedFsProfile,
+    out: &mut String,
+) -> Result<(), OrbitError> {
     let writable: Vec<(PathBuf, bool)> = rules
         .modify
         .iter()
@@ -485,16 +497,78 @@ fn emit_denied_ancestor_pins(rules: &ResolvedFsProfile, out: &mut String) {
                 .iter()
                 .any(|scratch| entry.starts_with(scratch) && entry != Path::new(scratch))
     };
-    let mut pins = std::collections::BTreeSet::new();
-    for denied in rules
+    let denies = rules
         .modify
         .iter()
         .filter_map(|rule| rule.strip_prefix('!'))
-    {
+        .map(|rule| (rule, true))
+        .chain(
+            rules
+                .read
+                .iter()
+                .filter_map(|rule| rule.strip_prefix('!'))
+                .map(|rule| (rule, false)),
+        );
+    let mut pins = std::collections::BTreeSet::new();
+    let mut globs = Vec::new();
+    // Each search root is walked once, however many globs share it: the
+    // default policy carries eight `.env` globs rooted at the workspace.
+    let mut globs_by_search_root: std::collections::BTreeMap<PathBuf, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (denied, denies_write) in denies {
         let (root, matched) = super::sbpl_filter::rule_anchor(denied);
         for entry in root.ancestors().skip(usize::from(matched)) {
             if is_writable(entry) && std::fs::symlink_metadata(entry).is_ok() {
                 pins.insert(entry.to_path_buf());
+            }
+        }
+        let Some(regex) = super::sbpl_filter::glob_deny_matcher(denied)? else {
+            continue;
+        };
+        // Only matches under a writable directory can be moved, so search the
+        // glob's root when it is writable and otherwise only the positive
+        // `modify` roots beneath it. Host scratch beneath it is not searched.
+        let search_roots: Vec<PathBuf> = if is_writable(&root) {
+            vec![root.clone()]
+        } else {
+            writable
+                .iter()
+                .map(|(writable_root, _)| writable_root)
+                .filter(|writable_root| writable_root.starts_with(&root))
+                .cloned()
+                .collect()
+        };
+        for search_root in search_roots {
+            globs_by_search_root
+                .entry(search_root)
+                .or_default()
+                .push(globs.len());
+        }
+        globs.push((root, regex, denies_write));
+    }
+    for (search_root, indices) in globs_by_search_root {
+        let mut entries = Vec::new();
+        collect_entries(&search_root, &mut entries)?;
+        for path in entries {
+            let rendered = path.to_string_lossy();
+            for &index in &indices {
+                let (root, regex, denies_write) = &globs[index];
+                if !regex.is_match(&rendered) {
+                    continue;
+                }
+                for entry in path.ancestors().skip(1) {
+                    if entry == root {
+                        break;
+                    }
+                    // A write deny already covers an ancestor its own regex
+                    // matches; a read deny does not stop that ancestor's rename.
+                    if *denies_write && regex.is_match(&entry.to_string_lossy()) {
+                        continue;
+                    }
+                    if is_writable(entry) {
+                        pins.insert(entry.to_path_buf());
+                    }
+                }
             }
         }
     }
@@ -504,6 +578,38 @@ fn emit_denied_ancestor_pins(rules: &ResolvedFsProfile, out: &mut String) {
             super::sbpl_filter::sbpl_escape(&entry.display().to_string())
         ));
     }
+    Ok(())
+}
+
+/// Append every existing entry strictly beneath `dir`. Symlinks are not
+/// followed: Seatbelt checks the physical path a write lands on, which is the
+/// walked one only for a non-link entry.
+fn collect_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OrbitError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => return Ok(()),
+        Err(error) => {
+            return Err(OrbitError::Execution(format!(
+                "list `{}` for macOS sandbox glob denies: {error}",
+                dir.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            OrbitError::Execution(format!(
+                "list `{}` for macOS sandbox glob denies: {error}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        out.push(path.clone());
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_entries(&path, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
