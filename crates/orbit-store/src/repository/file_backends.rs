@@ -134,6 +134,12 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
         self.in_boundary(|| self.get_task_row(id, list_read))
     }
+    fn task_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError> {
+        self.in_boundary(|| self.task_envelopes_for_ids(ids))
+    }
 
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task(params)

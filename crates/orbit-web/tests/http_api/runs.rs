@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use chrono::Utc;
 use orbit_core::JobRunState;
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{ChildDispatch, PipelineState};
 use serde_json::{Value, json};
 
@@ -54,7 +57,7 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
                 "task_pr_pipeline",
                 JobRunState::Success,
             );
-            missing.input = Some(json!({"task_ids":["HF-999999"]}));
+            missing.input = Some(json!({"task_ids":["HF-999999", "not a task id"]}));
             fixture.save_run(&missing);
             let plain = fixture.seed_run("jrun-plain", "maintenance", JobRunState::Success);
             let mut coordinator = fixture.seed_run(
@@ -89,15 +92,23 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
                 )));
                 let trace = server.task_query_trace();
                 let reads = &trace[before..];
+                let referenced: BTreeSet<&str> = page["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|row| row["task_ids"].as_array().into_iter().flatten())
+                    .filter_map(Value::as_str)
+                    .filter(|id| is_valid_orb_task_id(id))
+                    .collect();
                 assert_eq!(
                     operations(reads, "task_index_freshness"),
-                    1,
-                    "one batched task query per request: {reads:?}"
+                    0,
+                    "labels never validate the workspace task index: {reads:?}"
                 );
                 assert_eq!(
-                    operations(reads, "task_envelope_selection"),
-                    2,
-                    "metadata reads depend on workspace tasks, not run count"
+                    operations(reads, "task_metadata_read"),
+                    referenced.len(),
+                    "one keyed read per task the page references, not per workspace task: {reads:?}"
                 );
                 assert_eq!(
                     operations(reads, "task_bundle_materialization"),
@@ -114,7 +125,10 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
                     let expected_tasks = match id {
                         "jrun-plain" | "jrun-coordinator" => Value::Null,
                         "jrun-singular" => json!([{"id":tasks[0].id,"title":tasks[0].title}]),
-                        "jrun-missing-title" => json!([{"id":"HF-999999","title":null}]),
+                        "jrun-missing-title" => json!([
+                            {"id":"HF-999999","title":null},
+                            {"id":"not a task id","title":null},
+                        ]),
                         _ => expected.clone(),
                     };
                     assert_eq!(row["tasks"], expected_tasks, "list task labels for {id}");

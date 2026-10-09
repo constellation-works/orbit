@@ -325,6 +325,30 @@ impl TaskV2Store {
             .transpose()
     }
 
+    /// The settled envelopes of `ids`: one keyed envelope read per id, so the
+    /// cost follows the ids asked for rather than the workspace. The envelope
+    /// file is read directly, not through the envelope cache, which is only
+    /// proven current inside a freshness scan.
+    pub(crate) fn task_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<TaskEnvelopeV2>, OrbitError> {
+        self.ensure_recovered()?;
+        let mut envelopes = Vec::with_capacity(ids.len());
+        for id in ids {
+            let _span = orbit_common::tracing::trace_span!(
+                target: "orbit.store.task_query",
+                "task_metadata_read",
+                task_id = %id,
+            )
+            .entered();
+            if let Some(envelope) = self.bundle_store.read_envelope_if_settled(id)? {
+                envelopes.push(envelope);
+            }
+        }
+        Ok(envelopes)
+    }
+
     fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
         let comments = std::mem::take(&mut bundle.comments)
             .into_iter()

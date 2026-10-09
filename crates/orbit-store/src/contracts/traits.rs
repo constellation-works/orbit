@@ -4,8 +4,8 @@ use orbit_types::identity::OrbitId;
 use orbit_types::plugin::InstalledPlugin;
 use orbit_types::policy::PolicyDef;
 use orbit_types::task::{
-    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
-    TaskPriority, TaskStatus, normalize_task_tags, task_matches_tags,
+    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskEnvelopeV2,
+    TaskHistoryEntry, TaskPriority, TaskStatus, normalize_task_tags, task_matches_tags,
 };
 use orbit_types::telemetry::{AuditEvent, ProviderLimitObservation};
 use orbit_types::tool::StoredTool;
@@ -132,6 +132,12 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
     fn get_task_row(&self, id: &str, list_read: bool)
     -> Result<Option<super::TaskRow>, OrbitError>;
+    /// Envelopes of the listed `ids`, one keyed read per id: no index
+    /// validation and no body documents. An id with no settled bundle is absent.
+    fn task_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<TaskEnvelopeV2>, OrbitError>;
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError>;
     /// Durable key admission for automation, sharing ordinary bundle creation.
     /// Returns `(task, replayed)`: true only when a readable bundle already
