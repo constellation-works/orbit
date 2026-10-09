@@ -1,0 +1,19 @@
+CHECK     STATUS  DETAILS
+index     WARN    The index is outdated and mus…
+database  OK      Database is healthy
+review    ERROR   The after-landing review…
+
+Findings:
+
+review  ERROR
+The after-landing review consumer is stuck in
+definition_changed and cannot accept new
+delivery candidates.
+Fix: orbit auto-task recover delivery-code-review
+
+index  WARN
+The index is outdated and must be refreshed
+before querying the latest workspace records.
+Fix: orbit index refresh
+
+Table details shortened. Use --format plain or --json for full output.

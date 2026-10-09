@@ -67,6 +67,7 @@ impl std::fmt::Debug for Block {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
             Self::Table(_) => f.write_str("Table"),
+            Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
         }
     }
 }
@@ -123,6 +124,8 @@ pub enum Block {
     /// A grid the renderer lays out: width, color, header suppression, and the
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
+    /// Full doctor findings, shown only after the terminal table.
+    DoctorFindings(Vec<orbit_cmd::WorkspaceDoctorResult>),
 }
 
 impl Block {

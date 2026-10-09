@@ -64,7 +64,7 @@ Both backends are now told, never asked: `Table::render_at` calls `enforce_styli
 
 The shared path keeps the JSON document and human view together. `orbit tool list` still derives a human `REQUIRED INPUT` summary from the parameter data, but it is rendered from the same collected records as the JSON document. The global `--format json|ndjson` modes are available alongside the shorthand; NDJSON emits one complete record per line. The remaining compatibility exceptions are documented in §§7 and 9.
 
-A global `--format auto|table|json|ndjson` is accepted on every command that does not already own a `--format`. `audit export` keeps its file-serialization option, independently of the sink's output mode. `main` extracts the deepest global value and rejects `--json` combined with a conflicting non-JSON output format, with exit 2 and a JSON usage error on stderr. It resolves the mode once with the sink, and `output::render::emit` consumes it for successful payloads. Both JSON spellings also select machine-readable errors on stderr.
+A global `--format auto|table|plain|json|ndjson` is accepted on every command that does not already own a `--format`. `plain` selects the untruncated piped form on any sink. `audit export` keeps its file-serialization option, independently of the sink's output mode. `main` extracts the deepest global value and rejects `--json` combined with a conflicting non-JSON output format, with exit 2 and a JSON usage error on stderr. It resolves the mode once with the sink, and `output::render::emit` consumes it for successful payloads. Both JSON spellings also select machine-readable errors on stderr.
 
 ## 7. Empty States and Errors
 

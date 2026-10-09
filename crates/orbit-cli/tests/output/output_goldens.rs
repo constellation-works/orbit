@@ -7,7 +7,8 @@
 //! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571),
 //! plus the layer provenance `config show --json` reports.
 //!
-//! The "table" form (a real terminal, pinned width, truncation) cannot be
+//! Doctor also covers a terminal sink resolved at a pinned width in a child.
+//! The CLI "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
 //! process, and both `crate::output::table::sink_width` and comfy-table's own
@@ -1165,4 +1166,18 @@ fn global_format_controls_tool_run_output() {
     );
     assert_eq!(config["key"], "workflow.base_branch");
     assert!(config.get("value").is_some(), "{config}");
+}
+
+#[test]
+fn doctor_terminal_findings_golden() {
+    let actual = super::doctor::render_fixture("mixed");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/output_goldens/doctor_terminal_findings.txt");
+    if std::env::var_os(UPDATE_ENV).is_some() {
+        std::fs::write(&path, &actual).expect("write doctor golden");
+    }
+    assert_eq!(
+        actual,
+        std::fs::read_to_string(path).expect("doctor golden")
+    );
 }

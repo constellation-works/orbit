@@ -69,7 +69,7 @@ fn table_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Table(table) => Some(table.trailing_notices()),
-            Block::Text(_) => None,
+            Block::Text(_) | Block::DoctorFindings(_) => None,
         })
         .flatten()
         .map(String::as_str)
@@ -114,15 +114,28 @@ fn ndjson_records(doc: &Value) -> &[Value] {
     }
 }
 
-/// The `table` and plain forms. Plain is a rendering of `table`, not a mode a
-/// command can request (spec §2), so both land here.
+/// The `table` and plain forms share the human view.
 fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitError> {
     match view {
         View::Blocks(blocks) => {
+            let mut truncated = false;
             for block in blocks {
                 match block {
                     Block::Text(text) => println!("{text}"),
-                    Block::Table(table) => table.emit(sink),
+                    Block::Table(table) => truncated |= table.emit(sink),
+                    Block::DoctorFindings(rows) => {
+                        if sink.mode() == OutputMode::Table {
+                            let findings = doctor_findings(&rows, sink.width());
+                            if !findings.is_empty() {
+                                println!("\n{findings}");
+                                if truncated {
+                                    println!(
+                                        "\nTable details shortened. Use --format plain or --json for full output."
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Ok(())
@@ -143,4 +156,58 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
 /// already turns into a silent exit.
 fn write_error(error: std::io::Error) -> OrbitError {
     OrbitError::Execution(error.to_string())
+}
+
+/// Full non-ok diagnostics in severity order. Repair text stays verbatim on
+/// its own line, even when a command exceeds the terminal width.
+fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> String {
+    use orbit_cmd::WorkspaceDoctorStatus as Status;
+    let mut findings = Vec::new();
+    for status in [Status::Error, Status::Warning, Status::Skipped] {
+        for row in rows.iter().filter(|row| row.status == status) {
+            let label = match status {
+                Status::Error => "ERROR",
+                Status::Warning => "WARN",
+                Status::Skipped => "SKIP",
+                Status::Ok => continue,
+            };
+            let mut finding = format!(
+                "{}  {label}\n{}",
+                row.check_name,
+                wrap_message(&row.message, width)
+            );
+            if let Some(fix) = &row.remediation {
+                finding.push_str(&format!("\nFix: {fix}"));
+            }
+            findings.push(finding);
+        }
+    }
+    if findings.is_empty() {
+        String::new()
+    } else {
+        format!("Findings:\n\n{}", findings.join("\n\n"))
+    }
+}
+
+/// Use the table library's display-width-aware wrapping without the list's
+/// one-line cap. No message text is truncated.
+fn wrap_message(message: &str, width: u16) -> String {
+    use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table, Width, presets};
+    if width == 0 {
+        return message.to_string();
+    }
+    let mut prose = Table::new();
+    prose.load_preset(presets::NOTHING);
+    prose.force_no_tty();
+    prose.set_content_arrangement(ContentArrangement::Disabled);
+    prose.add_row(vec![Cell::new(message)]);
+    if let Some(column) = prose.column_mut(0) {
+        column.set_padding((0, 0));
+        column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(width)));
+    }
+    prose
+        .lines()
+        .map(|line| line.trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
