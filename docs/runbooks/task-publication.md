@@ -5,7 +5,7 @@ tags: [operations, backup, recovery, git, task-publication]
 paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
 related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
-last_validated: 2026-09-25
+last_validated: 2026-10-09
 ---
 
 # Publish Orbit Tasks to a Dedicated Repository
@@ -171,7 +171,8 @@ orbit --workspace "$ORBIT_WORKSPACE" task publication publish \
   --json
 ```
 
-V1 has no sensitivity-scanner integration. `include` still refuses attached bytes unless the
+The store exposes an attachment sensitivity-scanner hook, but the current Orbit CLI
+does not configure a scanner. `include` therefore refuses attached bytes unless the
 operator deliberately adds `--allow-unscanned-attachments`; repository privacy is not a
 substitute for reviewing those bytes. If a secret ever reaches Git history, rotate the
 credential and perform provider-side history remediation. Deleting it from the latest commit

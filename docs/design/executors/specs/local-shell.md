@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: the local-shell executor and the local_shell deterministic action"
 tags: ["executors", "activity-job"]
-last_validated: 2026-09-25
+last_validated: 2026-10-09
 ---
 
 # Spec: `local-shell`
