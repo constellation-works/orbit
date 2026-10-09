@@ -22,14 +22,14 @@
 //! Nothing in the read-only surface creates an admission receipt, a claim, a
 //! reservation, or a task transition, and nothing here grants execution
 //! authority. The mutating entry points a follower's drain needs — pull, run
-//! binding and settlement — live in [`serve`] [ORB-13625]. They still name
+//! binding and settlement — live in `serve` [ORB-13625]. They still name
 //! [`ensure_distributed_mutation_available`], so turning the whole feature off
 //! again is one source change. Completion approval, revocation and recovery
 //! are not among them: those stay owner-operator actions on the dashboard.
 //!
 //! # The retained entry points
 //!
-//! This module also owns [`OrbitRuntime::drain_entry_admission`] [ORB-12500]:
+//! This module also owns [`OrbitRuntime::drain_entry_admission`](crate::OrbitRuntime::drain_entry_admission) [ORB-12500]:
 //! the one decision an explicit ship, an explicit owner drain and the
 //! independent registry-driven ship sweep all take before they dispatch
 //! anything. It is here rather than beside any one of them because its whole

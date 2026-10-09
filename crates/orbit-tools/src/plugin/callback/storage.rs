@@ -6,7 +6,7 @@ use super::*;
 ///
 /// Partially-written entries do not prevent inspecting other records, and are
 /// not classified as stale because their ownership cannot be established
-/// safely — see [`SessionScan`].
+/// safely — see `SessionScan`.
 pub fn stale_plugin_callback_session_count(global_root: &Path) -> Result<usize, OrbitError> {
     Ok(stale_session_paths(&callback_dir(global_root))?.len())
 }

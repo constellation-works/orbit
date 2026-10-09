@@ -590,7 +590,7 @@ pub enum ObservationCurrency {
 ///
 /// The database's own state decides which reads are possible, and
 /// `requirement` decides whether the degraded one is acceptable; see
-/// [`observation_currency`].
+/// `observation_currency`.
 pub fn open_observational(
     path: &Path,
     requirement: ObservationRequirement,

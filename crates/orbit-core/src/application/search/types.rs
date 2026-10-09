@@ -77,9 +77,9 @@ pub struct GlobalSearchParams {
 }
 
 impl GlobalSearchParams {
-    /// The requested limit, capped at [`MAX_LIMIT`]. Zero means unset: a
+    /// The requested limit, capped at `MAX_LIMIT`. Zero means unset: a
     /// friction listing then returns up to the cap, any other search
-    /// [`DEFAULT_LIMIT`].
+    /// `DEFAULT_LIMIT`.
     pub fn normalized_limit(&self) -> usize {
         match self.limit {
             0 if self.is_friction_listing() => MAX_LIMIT,

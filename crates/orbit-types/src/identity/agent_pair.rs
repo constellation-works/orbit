@@ -76,7 +76,7 @@ impl ReasoningEffort {
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
     /// reinterpret. OpenCode is narrower still: see
-    /// [`Self::validate_opencode_effort`]. [ORB-11295]
+    /// `Self::validate_opencode_effort`. [ORB-11295]
     pub fn validate_for_provider_model(
         self,
         provider: &str,

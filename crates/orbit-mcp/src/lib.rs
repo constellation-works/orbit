@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Orbit's Model Context Protocol framing, tool surface, and transports.
 //!
 //! This crate owns protocol framing, advertised-name translation, structured
@@ -117,7 +112,7 @@ pub trait McpHost: Send + Sync + 'static {
 ///
 /// Resumes a session handed over by a previous image of this process, and
 /// returns [`StdioExit::HandOver`] when this one should hand over in turn;
-/// see [`stdio_session`].
+/// see `stdio_session`.
 pub async fn serve_stdio_with_context(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,

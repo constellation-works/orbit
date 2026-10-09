@@ -41,7 +41,7 @@ use crate::credential_paths::{
 ///   (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, and the two
 ///   `.package-cache*` locks) so a build can populate the host registry, for a
 ///   profile that already grants some write — see
-///   [`emit_cargo_download_cache_write_allows`];
+///   `emit_cargo_download_cache_write_allows`;
 /// - emits resolved `read` / `modify` rules in order, including explicit
 ///   `(deny ...)` clauses for negated entries and narrow host-policy or
 ///   runtime re-allows after their enclosing deny, preserving SBPL's

@@ -25,7 +25,7 @@ pub struct ClaimReleaseRecord {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forge_unavailable: bool,
     /// [ORB-14695] The release was for a provider usage limit
-    /// ([`ClaimFailure::provider_limit`]), which does not count against the
+    /// (`ClaimFailure::provider_limit`), which does not count against the
     /// task's release budget.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_limit: bool,

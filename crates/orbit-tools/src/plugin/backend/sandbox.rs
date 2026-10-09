@@ -11,7 +11,7 @@ pub struct PluginSandboxProfile {
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
     /// the live callback sessions, the grant witnesses and every plugin's
-    /// state ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]). Neither platform lets a
+    /// state (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
     /// manifest buy them back: the carve-out is applied after the granted
     /// paths rather than beside them, and a manifest read root inside one of
     /// them never reaches [`Self::read`].

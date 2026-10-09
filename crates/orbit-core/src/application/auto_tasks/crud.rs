@@ -296,7 +296,7 @@ impl OrbitRuntime {
     /// the file before a task exists, and a mint that wins admission is an
     /// open task by the time a non-force delete checks. Admission does not load
     /// or save the cursor, so its bytes stay identical. Because it reuses the
-    /// scheduler's [`mint_task`], the result is field-for-field identical to a fired
+    /// scheduler's `mint_task`, the result is field-for-field identical to a fired
     /// instance, provenance tag and `system_created` marker included; that also
     /// means an open manually minted instance is visible to `skip_if_open` dedupe on
     /// the next pass, exactly as a fired one would be.

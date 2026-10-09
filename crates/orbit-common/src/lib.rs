@@ -1,11 +1,6 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Shared mechanism crate for the Orbit workspace.
 //!
 //! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and

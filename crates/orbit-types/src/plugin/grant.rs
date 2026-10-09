@@ -119,7 +119,7 @@ impl PluginGrantEntry {
     /// separator. Written verbatim, `fs=data,cache` loads `cache` as an
     /// unknown grant, and `fs=./a,network` loads the `network` grant the
     /// operator never gave. Each bare root after the first is therefore
-    /// written `./<root>`, which [`looks_like_root`] accepts as a path.
+    /// written `./<root>`, which `looks_like_root` accepts as a path.
     /// [`PluginGrantSet::from_entries`] reads that prefix back off, so the
     /// set keeps the bare spelling.
     pub fn to_recorded(&self) -> String {

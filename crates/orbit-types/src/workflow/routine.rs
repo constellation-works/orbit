@@ -86,7 +86,7 @@ pub enum MissedRunPolicy {
 
 /// What a routine fires: a reference into the existing catalog, resolved at
 /// load time. v1 dispatches `job:<name>` only — see
-/// [`ROUTINE_ACTIVITY_TARGET_PREFIX`] for why `activity:` is reserved.
+/// `ROUTINE_ACTIVITY_TARGET_PREFIX` for why `activity:` is reserved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutineTarget {
     /// A v2 job resolved by name through the job catalog.

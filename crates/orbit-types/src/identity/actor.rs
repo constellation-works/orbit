@@ -171,7 +171,7 @@ pub fn normalize_optional_attribution_label(
 /// - `System` → `"system"`
 /// - `Agent { model }` → `"model"`, or `{"agent": {"model": "..."}}` when the
 ///   bare label would be re-read as another variant (see
-///   [`agent_label_round_trips`])
+///   `agent_label_round_trips`)
 /// - `Human { label }` → `{"human": "label"}`, because a bare string only ever
 ///   reads back as `Human` for the literal `"human"`
 ///

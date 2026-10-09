@@ -484,7 +484,7 @@ pub fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, Or
     paths::resolve_path_value(raw, base_dir, "root path")
 }
 
-/// Like [`resolve_initialize_roots`] but never falls through to the
+/// Like `resolve_initialize_roots` but never falls through to the
 /// `<cwd>/.orbit` bootstrap fallback. Returns `Ok(None)` when no initialized
 /// workspace is discovered anywhere in the chain.
 ///

@@ -32,7 +32,7 @@
 //!   never rewritten). The layout is not write-gated, so its additive
 //!   migrations must keep older writers safe, and a read-compatible or
 //!   breaking migration — or a missing, stale, or unreadable record — still
-//!   refuses with [`OrbitError::Migration`], naming the first such migration
+//!   refuses with [`OrbitError::Migration`](orbit_common::OrbitError::Migration), naming the first such migration
 //!   this binary lacks. The SQLite ledger guards its database the same way.
 //! - **Crash tolerance.** Every migration MUST be idempotent (or stage via
 //!   write-new-then-swap): the marker is advanced (atomic temp-file +

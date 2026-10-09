@@ -5,7 +5,7 @@ use crate::identity::ActorIdentity;
 
 /// A single metrics record captured at step completion.
 ///
-/// Follows the same JSONL day-partitioned pattern as [`super::FrictionEntry`].
+/// Follows the same JSONL day-partitioned pattern as [`FrictionEntry`](crate::record::FrictionEntry).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MetricsEntry {
     pub ts: DateTime<Utc>,

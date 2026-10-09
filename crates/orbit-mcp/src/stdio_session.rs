@@ -214,7 +214,7 @@ pub(crate) async fn serve(
     serve_plain(server, resumed).await
 }
 
-/// Whether a stdio session in this process could hand over: [`serve`] does
+/// Whether a stdio session in this process could hand over: `serve` does
 /// only when stdin can be polled. A process registers this before it serves,
 /// so an updater knows which sessions follow a renamed candidate.
 pub fn stdin_supports_handover() -> bool {

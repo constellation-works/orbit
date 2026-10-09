@@ -34,7 +34,7 @@ pub(super) type FamilyScoreboard = BTreeMap<String, BTreeMap<String, u64>>;
 
 /// Time window for a scoreboard summary. `All` is the legacy lifetime view —
 /// every non-`All` variant carries a finite `duration()` used as the cutoff
-/// for windowed source filtering inside [`generate_summary_with_inputs`].
+/// for windowed source filtering inside `generate_summary_with_inputs`.
 ///
 /// String forms (used in the dashboard query param and the serialized
 /// `ScoreboardSummary.window` field): `1h`, `24h`, `7d`, `30d`, `all`.
@@ -314,7 +314,7 @@ pub struct ScoreboardInputs<'a> {
     /// Per-(role, surface) tool-call counts. All-time.
     pub audit_tool_calls_by_surface: &'a [AuditToolCallCountsBySurfaceAndRole],
     /// Per-(role, surface) tool-call counts windowed to the most recent
-    /// [`RECENT_WINDOW_DAYS`]. Drives the `recent_7d.tool_calls_by_surface`
+    /// `RECENT_WINDOW_DAYS`. Drives the `recent_7d.tool_calls_by_surface`
     /// totals.
     pub audit_tool_calls_by_surface_recent: &'a [AuditToolCallCountsBySurfaceAndRole],
     /// Every successful run's job and completion time. Populates the

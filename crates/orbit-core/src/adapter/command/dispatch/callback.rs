@@ -123,7 +123,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
 
 /// Refuse a plain CLI command invoked by a plugin backend [ORB-12876].
 ///
-/// [`enforce_plugin_callback_allowlist`] gates the two entry points a backend
+/// `enforce_plugin_callback_allowlist` gates the two entry points a backend
 /// is allowed — `orbit tool run` and MCP `tools/call` — against
 /// `permissions.orbit_tools`. Every *other* CLI command reads governed data
 /// without ever consulting that allowlist, so a plugin granted nothing but

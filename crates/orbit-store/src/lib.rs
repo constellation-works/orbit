@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! One directional persistence crate for Orbit data.
 //!
 //! Consumer-visible traits and data live in [`contracts`]. Private file and
@@ -67,7 +62,7 @@ pub mod skill_store {
     pub use crate::driver::file::skill_store::*;
 }
 
-/// Friction records. Live reads and writes go through [`FrictionStore`]
+/// Friction records. Live reads and writes go through `FrictionStore`
 /// (SQLite, ORB-10680); the tag taxonomy file did not move.
 pub mod friction_store {
     pub use crate::driver::file::friction_store::ensure_default_tag_taxonomy;

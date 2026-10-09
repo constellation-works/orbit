@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{ReviewValidation, ReviewVerdict};
 use crate::workflow::ReviewHistoryError;
 
-/// Task artifact the artifact store keeps beside [`REVIEW_REPORT_ARTIFACT`]:
+/// Task artifact the artifact store keeps beside [`REVIEW_REPORT_ARTIFACT`](crate::workflow::REVIEW_REPORT_ARTIFACT):
 /// every accepted report revision's verdict and validation records. Only the
 /// store writes it, in the same manifest write that replaces the report.
 pub const REVIEW_REPORT_HISTORY_ARTIFACT: &str = "review-report-history.json";

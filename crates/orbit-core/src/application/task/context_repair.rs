@@ -59,7 +59,7 @@ impl OrbitRuntime {
     }
 
     /// Re-declare the selectors this task's pruning history recorded as
-    /// dropped, appending a [`context_files_restored_history_entry`] that
+    /// dropped, appending a `context_files_restored_history_entry` that
     /// names each one.
     ///
     /// The read of task and history happens under the same write lock as the

@@ -25,7 +25,7 @@ const RECORDED_THROTTLE_MAX_AGE_SECONDS: i64 = 300;
 /// Every one of these existed before the distributed drain and keeps its own
 /// surface, schedule and enablement. What they no longer keep is a private
 /// idea of what the host is already doing: they all ask
-/// [`OrbitRuntime::drain_entry_admission`], which reads one occupancy, one
+/// [`OrbitRuntime::drain_entry_admission`](crate::OrbitRuntime::drain_entry_admission), which reads one occupancy, one
 /// claim ledger and one destination-authority rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainEntryPoint {

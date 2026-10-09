@@ -25,7 +25,7 @@
 //!   delete`) is an opt-out, reported neither missing nor stale.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
-//! [`crate::application::managed_assets::reconcile_managed_assets`]. Residual
+//! `crate::application::managed_assets::reconcile_managed_assets`. Residual
 //! skill directories are the one condition discovered directly from the catalog layout because a deleted
 //! entry point cannot be represented by a successfully loaded skill. That
 //! matters for correctness as well as safety: precedence differs across kinds —

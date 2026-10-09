@@ -396,7 +396,7 @@ impl PluginBackendSpec {
     /// (an activity-scoped run) bounds it: every program the manifest declares
     /// must be on the caller's list, checked through the same gate
     /// `proc.spawn` uses. A deterministic step has no agent to bound, so the
-    /// operator's grant does instead ([`Self::enforce_granted_programs`]).
+    /// operator's grant does instead (`Self::enforce_granted_programs`).
     pub fn enforce_programs(&self, ctx: &ToolContext, tool_name: &str) -> Result<(), OrbitError> {
         match &ctx.caller {
             ToolCaller::Agent => {

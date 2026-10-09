@@ -341,7 +341,7 @@ pub struct PluginBackendSpec {
     /// `orbit tool run`, which reads this root and the workspace's `.orbit/`
     /// and appends to some of the stores beneath them, so the sandbox opens
     /// them for that grant and for no other — the roots read-only, the stores
-    /// by name (see [`ORBIT_TOOLS_GLOBAL_WRITE_DIRS`]).
+    /// by name (see `ORBIT_TOOLS_GLOBAL_WRITE_DIRS`).
     pub global_root: PathBuf,
     /// The resolved backend program and its fixed arguments.
     pub command: PathBuf,

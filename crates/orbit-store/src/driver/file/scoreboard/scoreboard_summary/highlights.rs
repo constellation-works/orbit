@@ -145,7 +145,7 @@ pub fn snapshot_coverage(windowed: bool) -> ScoreboardCoverage {
 ///
 /// For summaries generated from metadata-only tasks (empty execution
 /// summaries): selection needs no body, so only the at most
-/// [`NOTABLE_COMPLETIONS_LIMIT`] selected tasks pay for a bundle read. The
+/// `NOTABLE_COMPLETIONS_LIMIT` selected tasks pay for a bundle read. The
 /// result equals what generating from full tasks would have selected and
 /// excerpted.
 pub fn fill_notable_summary_excerpts(

@@ -158,7 +158,7 @@ fn load_global() -> Option<LogRotationConfig> {
 /// Opportunistically roll the active log if oversized, then prune archives by
 /// age and total-size budget. Best-effort: logs a warning on failure but never
 /// panics or fails the caller. Intended for long-lived processes and for the
-/// oversized-file path that [`rotate_if_active_exceeds_budget`] takes after a
+/// oversized-file path that `rotate_if_active_exceeds_budget` takes after a
 /// single `metadata()` check.
 pub fn rotate_and_prune(active_path: &Path, config: &LogRotationConfig) {
     if let Err(error) = maybe_roll(active_path, config) {

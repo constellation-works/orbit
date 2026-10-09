@@ -14,8 +14,8 @@
 //! no step of its own — is persisted under the **recovery activity name**.
 //! [`JobActivityRoles::step`] therefore holds both identifiers a step
 //! invocation can be recorded under: the step's `id`, and the catalog name
-//! from its `target` (an inlined [`TargetStep`]'s `activity_name`, or an
-//! unresolved [`TargetRef`] of the form `activity:<name>`). Collecting only
+//! from its `target` (an inlined [`TargetStep`](super::job_v2::TargetStep)'s `activity_name`, or an
+//! unresolved [`TargetRef`](super::job_v2::TargetRef) of the form `activity:<name>`). Collecting only
 //! one of the two would leave real step work unattributed and silently deflate
 //! any denominator built from this set.
 //!

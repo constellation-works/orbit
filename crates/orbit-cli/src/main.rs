@@ -4,15 +4,10 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 
 //! CLI entry point for Orbit: command parsing, dispatch, and output formatting.
 //!
-//! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`],
+//! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`](orbit_core::OrbitRuntime),
 //! dispatches to the appropriate command handler, and formats results as JSON
 //! or human-readable table output. Wraps every command in an audit middleware
 //! that records success, failure, or policy-denial events.

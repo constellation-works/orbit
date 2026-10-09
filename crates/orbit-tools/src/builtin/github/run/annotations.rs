@@ -4,7 +4,7 @@
 //! cancelled a job there rather than in `gh run view` or the jobs listing. A
 //! workflow concurrency group that cancels an older run in favour of a newer
 //! one leaves the annotation "Canceling since a higher priority waiting request
-//! for '<group>' exists". Deliberately unregistered: only engine-private host
+//! for '`<group>`' exists". Deliberately unregistered: only engine-private host
 //! automation uses it.
 
 use orbit_common::OrbitError;

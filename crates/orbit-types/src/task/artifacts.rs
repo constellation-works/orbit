@@ -181,7 +181,7 @@ pub struct TaskRelationEdge {
 /// [`validate_task_relations_for_source`] — rather than passing the whole
 /// graph — must filter on this list. Anything it omits is metadata the cycle
 /// check never walks, so dropping it cannot change the verdict. This list
-/// must agree with [`cyclic_relation_family`] to avoid admitting a cycle.
+/// must agree with `cyclic_relation_family` to avoid admitting a cycle.
 pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
     &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
 

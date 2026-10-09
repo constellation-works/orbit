@@ -11,12 +11,12 @@ use super::*;
 /// sandboxed process to interpret an EROFS.
 ///
 /// A write-capable profile also binds Cargo's shared download caches writable
-/// before any policy mount — see [`append_cargo_download_cache_mounts`] for why
+/// before any policy mount — see `append_cargo_download_cache_mounts` for why
 /// the read-only bind of `/` cannot stand for them.
 ///
 /// Every plan also hides the host account's well-known credential locations
 /// (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish tokens) behind an empty
-/// stand-in, after every other mount — see [`super::credentials`].
+/// stand-in, after every other mount — see `super::credentials`.
 ///
 /// The profile's globs are compiled once and every non-subtree rule is
 /// expanded up front from one walk per search root; the mount loops and the

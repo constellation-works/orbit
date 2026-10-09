@@ -43,7 +43,7 @@
 //!
 //! Which activity performs recovery is a property of a workspace's job
 //! definitions, never of Orbit, so the recovery activity set is discovered by
-//! walking the job catalog ([`JobV2::activity_roles`]) at query time. An
+//! walking the job catalog ([`JobV2::activity_roles`](orbit_types::workflow::JobV2::activity_roles)) at query time. An
 //! activity that a catalog uses in both roles is reported as ambiguous and
 //! excluded from the numerator, since its invocations cannot be attributed
 //! structurally.

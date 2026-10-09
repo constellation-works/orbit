@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 /// observability. Created by converting [`OrbitEvent`](crate::record::OrbitEvent) values as
 /// they flow through the system (e.g., ToolExecuted).
 ///
-/// Contrast with [`AuditEvent`](crate::record::AuditEvent), which is the persistent, detailed
+/// Contrast with [`AuditEvent`](crate::telemetry::AuditEvent), which is the persistent, detailed
 /// CLI audit trail stored in SQLite and exposed via `orbit audit`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Audit {
