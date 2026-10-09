@@ -14,7 +14,7 @@ This page maps the command surface. For a command's exact options, run
 |---|---|
 | `--root <ROOT>` | Override the Orbit root directory. Highest precedence. |
 | `--workspace <SELECTOR>` | Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Only an active workspace can be selected. Unlike `--root`, it does not change the root directory. |
-| `--format <MODE>` | `auto` (default: a table on a terminal, plain text when piped), `table`, `json`, or `ndjson`. |
+| `--format <MODE>` | `auto` (default: a table on a terminal, plain text when piped), `table`, `plain` (full tab-separated values on any sink), `json`, or `ndjson`. |
 | `--json` | Shorthand for JSON output, always pretty-printed. Accepted throughout the command tree, including plugin groups. Plugin-derived `--json` tool-input flags keep their own meaning; select output JSON at the root/group or with `--format json`. A conflicting `--format` produces a JSON usage error on stderr and exit 2. |
 
 Every subcommand accepts these options too, so `orbit --workspace ws_x task list`
@@ -153,7 +153,7 @@ reported as `skipped:owner_unreachable` (transport failure),
 |---|---|
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
-| `orbit doctor` | Check workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). The `--fix-*` flags are opt-in repairs, and `--remove-graph` removes retired graph state from this worktree and the shared workspace. `--confirm` authorizes the destructive repairs, such as `--fix-orphan-task-stores`. |
+| `orbit doctor` | Check workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). Terminal tables are followed by full non-ok findings and verbatim `Fix:` remediations, ordered errors before warnings. Truncated tables with findings point to `--format plain` or `--json`; all-ok output has no findings or hint. The `--fix-*` flags are opt-in repairs, and `--remove-graph` removes retired graph state from this worktree and the shared workspace. `--confirm` authorizes the destructive repairs, such as `--fix-orphan-task-stores`. |
 | `orbit doctor providers` | Show each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. |
 | `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
 

@@ -49,6 +49,7 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 

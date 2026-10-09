@@ -234,6 +234,7 @@ impl Execute for DoctorCommand {
                 ]);
             }
             blocks.push(Block::table(table));
+            blocks.push(Block::DoctorFindings(results.clone()));
 
             if failures == 0 && warnings == 0 {
                 blocks.push(Block::text(format!(

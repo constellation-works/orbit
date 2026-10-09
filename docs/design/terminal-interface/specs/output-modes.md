@@ -6,7 +6,7 @@ last_validated: 2026-10-08
 
 # Spec: Output Modes and Sink Resolution
 
-Every `orbit` command produces a structured payload and hands it to a renderer. The renderer resolves one output mode — `auto`, `table`, `json`, or `ndjson` — from global flags, environment, and the properties of the sink, once per invocation. A command body never decides how it is displayed, never asks whether stdout is a terminal, and never writes to stdout directly.
+Every `orbit` command produces a structured payload and hands it to a renderer. The renderer resolves one output mode — `auto`, `table`, `plain`, `json`, or `ndjson` — from global flags, environment, and the properties of the sink, once per invocation. A command body never decides how it is displayed, never asks whether stdout is a terminal, and never writes to stdout directly.
 
 ## Why This Exists
 
@@ -35,7 +35,7 @@ Precedence, first match wins:
 3. `ORBIT_FORMAT` environment variable.
 4. `auto`.
 
-`auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. Plain is a rendering of `table`, not a fourth mode a command can request.
+`auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. `--format plain` explicitly selects this form on any sink, with the same bytes as the default piped rendering.
 
 `--format` and `--json` are each declared once and installed across the assembled command tree, including plugin-derived groups. Both are accepted at the root and after subcommands, and appear in help. `--json` selects JSON through the existing compatibility rung, preserving its always-pretty output. Combining it with an explicit non-JSON output `--format` is a usage error (exit 2), reported as JSON on stderr. `--json --format json` is accepted. Command-local `--format` arguments keep their own meaning: `audit export --format json|csv` selects the exported file's serialization; `--json` independently selects the sink's output mode; the existing file export and human confirmation remain unchanged. There are no built-in command exclusions. A plugin schema may derive a `--json` tool-input flag with a different meaning; that flag is preserved. Select output JSON at the root/group (for example `orbit --json plugin-ns verb --json`), or use `--format json` on that leaf.
 

@@ -22,16 +22,16 @@ use clap::ValueEnum;
 
 /// The value of the global `--format` argument, and of `ORBIT_FORMAT`.
 ///
-/// `auto` is a request to decide from the sink; the other three name a
-/// rendering directly. There is deliberately no `plain` variant — plain is a
-/// rendering of `table` for a non-terminal sink, not a mode a caller can ask
-/// for (spec §2).
+/// `auto` is a request to decide from the sink; the other values name a
+/// rendering directly. `plain` selects the untruncated piped form on any sink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
     /// Decide from the sink: a table on a terminal, plain text otherwise.
     Auto,
     /// Aligned columns with a header.
     Table,
+    /// Untruncated text with tab-separated fields and no header.
+    Plain,
     /// A single JSON document.
     Json,
     /// One complete JSON document per line.
@@ -136,11 +136,12 @@ impl OutputSink {
         requested: Option<FormatArg>,
         legacy_json: bool,
     ) -> Self {
+        let mode = resolve_mode(is_tty, env, requested, legacy_json);
         Self {
             is_tty,
             width: resolve_width(is_tty, env, terminal_width),
-            color_allowed: resolve_color(is_tty, env),
-            mode: resolve_mode(is_tty, env, requested, legacy_json),
+            color_allowed: mode != OutputMode::Plain && resolve_color(is_tty, env),
+            mode,
             explicit_table: requested == Some(FormatArg::Table),
             legacy_json,
         }
@@ -321,6 +322,7 @@ fn render_as(format: FormatArg, is_tty: bool) -> OutputMode {
         FormatArg::Auto if is_tty => OutputMode::Table,
         FormatArg::Auto => OutputMode::Plain,
         FormatArg::Table => OutputMode::Table,
+        FormatArg::Plain => OutputMode::Plain,
         FormatArg::Json => OutputMode::Json,
         FormatArg::Ndjson => OutputMode::Ndjson,
     }

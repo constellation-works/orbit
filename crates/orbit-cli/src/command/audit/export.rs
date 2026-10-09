@@ -17,7 +17,7 @@ pub enum ExportFormat {
 
 #[derive(Args)]
 #[command(
-    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
+    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|plain|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
 )]
 pub struct AuditExportArgs {
     /// Export file format. Local to this command — it shadows the global

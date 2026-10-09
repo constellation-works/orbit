@@ -30,7 +30,7 @@ None of these is severe alone. Together they mean output correctness is a proper
 
 - **Payload** — the structured record a command produces. The contract; both renderings derive from it [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload).
 - **Renderer** — the layer that projects a payload into bytes. The only code that knows about terminals, width, or ANSI.
-- **Output mode** — `auto` | `table` | `json` | `ndjson`. Resolved centrally from flags and TTY state, never per command.
+- **Output mode** — `auto` | `table` | `plain` | `json` | `ndjson`. Resolved centrally from flags and TTY state, never per command.
 - **Role** — a semantic color token (`ok`, `warn`, `error`, `active`, `muted`, `neutral`). Commands tag values with roles; only the renderer maps roles to color [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 - **Sink** — the resolved stdout target plus its capabilities (is it a TTY, how wide, may it carry ANSI). Every environment question is answered here once.
 

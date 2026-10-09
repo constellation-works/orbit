@@ -11,6 +11,9 @@
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 
+#[path = "../support/output.rs"]
+mod output;
+
 mod doctor;
 mod error_output;
 mod global_json;

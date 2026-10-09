@@ -182,12 +182,13 @@ impl Table {
     /// table's own trailing notices (a truncation count, say) are printed to
     /// stderr after the body in both table and plain modes (ORB-12206).
     ///
+    /// Returns whether any cell was shortened or a column hidden.
     /// Called only by `output::render`; a command hands its table back inside a
     /// payload rather than emitting one itself.
-    pub(crate) fn emit(&self, sink: &OutputSink) {
+    pub(crate) fn emit(&self, sink: &OutputSink) -> bool {
         if self.rows.is_empty() {
             eprintln!("{}", self.empty_message);
-            return;
+            return false;
         }
         if sink.mode() == OutputMode::Plain {
             println!("{}", self.render_plain(sink));
@@ -195,7 +196,7 @@ impl Table {
             for notice in &self.trailing_notices {
                 eprintln!("{notice}");
             }
-            return;
+            return false;
         }
         let rendered = self.render_at(
             sink.truncate_width(),
@@ -210,6 +211,7 @@ impl Table {
         for notice in &self.trailing_notices {
             eprintln!("{notice}");
         }
+        rendered.truncated
     }
 
     /// The plain form: the same visible columns and the same cell values as
@@ -316,7 +318,22 @@ impl Table {
                 dropped.join(", ")
             )]
         };
-        Rendered { body, notices }
+        let truncated = !dropped.is_empty()
+            || layout.iter().any(|(index, width)| {
+                visible
+                    .iter()
+                    .position(|visible| visible == index)
+                    .is_some_and(|position| natural[position] > *width)
+                    || self
+                        .rows
+                        .iter()
+                        .any(|row| cell_at(row, *index).content().contains('\n'))
+            });
+        Rendered {
+            body,
+            notices,
+            truncated,
+        }
     }
 
     /// Columns that survive uniform-value suppression, in order.
@@ -444,6 +461,8 @@ impl Table {
 pub(crate) struct Rendered {
     pub(crate) body: String,
     pub(crate) notices: Vec<String>,
+    /// A cell was shortened or a column was hidden to fit the sink.
+    pub(crate) truncated: bool,
 }
 
 fn cell_at(row: &[Cell], index: usize) -> Cell {

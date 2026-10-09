@@ -42,7 +42,7 @@ The one place output mode is already resolved centrally is `main.rs::print_error
 A command produces a structured payload; rendering is a separate layer that consumes it. Command bodies stop constructing tables and format strings.
 
 - The payload is the contract. The human rendering is a projection of it and may only drop or reformat fields, never introduce a value the payload does not carry.
-- Output mode is resolved centrally, not per command: an explicit global `--format` (`auto|table|json|ndjson`) wins; otherwise `auto` renders the table form when stdout is a TTY and the plain machine form when it is not.
+- Output mode is resolved centrally, not per command: an explicit global `--format` (`auto|table|plain|json|ndjson`) wins; otherwise `auto` renders the table form when stdout is a TTY and the plain machine form when it is not.
 - `--json` is declared once as the global shorthand for `--format json`, accepted throughout the assembled command tree. It preserves historical pretty output and rejects a conflicting explicit output format. Plugin-derived tool-input flags with the same spelling retain their domain meaning; the output shorthand remains available at the root/group.
 - Piped output is plain: no borders, no ANSI, no width adaptation to a terminal that isn't there.
 
