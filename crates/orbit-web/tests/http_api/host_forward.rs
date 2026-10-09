@@ -294,6 +294,48 @@ fn reads_through_the_forward_match_the_remote_dashboard() {
 }
 
 #[test]
+fn fetch_metadata_blocks_cross_site_gets_before_host_side_effects() {
+    isolated(
+        "host_forward::fetch_metadata_blocks_cross_site_gets_before_host_side_effects",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            let b_server = b.server(false);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
+            let server = a.server_with_path(false, stub.bin());
+
+            for path in [format!("/api/on/hostb/tasks{WS}"), "/api/hosts".to_string()] {
+                let response = server
+                    .request("GET", &path)
+                    .header("sec-fetch-site", "cross-site")
+                    .send()
+                    .unwrap();
+                assert_eq!(response.status(), 403, "cross-site GET {path}");
+                assert!(stub.calls().is_empty(), "{path} starts no SSH probe");
+            }
+
+            let dashboard = server
+                .request("GET", &format!("/api/on/hostb/tasks{WS}"))
+                .header("origin", &server.origin)
+                .header("sec-fetch-site", "same-origin")
+                .send()
+                .unwrap();
+            assert_eq!(dashboard.status(), 200);
+            let _: Value = dashboard.json().unwrap();
+            assert_eq!(stub.calls().len(), 1, "same-origin dashboard GET works");
+
+            let cli = json_ok(server.get("/api/hosts?probe=false"));
+            assert!(
+                cli["hosts"].is_array(),
+                "CLI GET without Fetch Metadata works"
+            );
+        },
+    );
+}
+
+#[test]
 fn forwarded_writes_need_the_operator_session() {
     isolated(
         "host_forward::forwarded_writes_need_the_operator_session",

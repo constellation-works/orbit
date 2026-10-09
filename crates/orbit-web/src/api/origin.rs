@@ -21,10 +21,28 @@ use url::Url;
 ///    every `/api` GET (ORB-12506) and `/healthz?detailed=true` (ORB-12531).
 /// 2. When Origin is present, or the method is unsafe, Origin must also
 ///    match that Host as a loopback `http` origin (ORB-11613 CSRF).
+/// 3. When the browser supplies `Sec-Fetch-Site`, it must say `same-origin`
+///    or `none`. In particular, read-only GETs can open SSH tunnels or probe
+///    hosts, so `same-site`, `cross-site` and unknown values are refused too.
+///    The header is absent for direct CLI/curl requests and some older
+///    browsers; those requests retain the Host and Origin checks above.
 pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
     let Some(host) = parse_loopback_authority(request.headers().get(header::HOST)) else {
         return forbidden_cross_origin();
     };
+
+    if request
+        .headers()
+        .get_all("sec-fetch-site")
+        .iter()
+        .any(|site| {
+            !site
+                .to_str()
+                .is_ok_and(|site| matches!(site, "same-origin" | "none"))
+        })
+    {
+        return forbidden_cross_origin();
+    }
 
     let unsafe_method = matches!(
         *request.method(),

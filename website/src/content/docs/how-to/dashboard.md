@@ -487,11 +487,19 @@ For host setup and typed errors, see [Run Orbit across hosts](../multi-host/).
 
 ## Authorization
 
-The dashboard has **no login** and binds loopback only. Origin checks reduce
-browser CSRF but do not control access. Anyone who can reach the port,
-including a forwarded port, can call the same write endpoints the browser uses,
-with the server process's authority. Keep that port inside your operator
+The dashboard has **no login** and binds loopback only. Origin and Fetch
+Metadata checks reduce browser CSRF but do not control access. When a request
+includes `Sec-Fetch-Site`, the server accepts only `same-origin` and `none`;
+it refuses `same-site`, `cross-site` and unknown values. The header is absent
+for direct CLI/curl requests and some older browsers. Anyone who can reach the
+port, including a forwarded port, can call the same write endpoints the browser
+uses, with the server process's authority. Keep that port inside your operator
 boundary.
+
+Older browsers that omit Fetch Metadata do not get this additional request
+check; their requests rely on the loopback Host and Origin checks. In
+particular, an old browser's GET without an Origin is not distinguished from a
+direct command-line request.
 
 Two gates apply:
 
