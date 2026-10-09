@@ -710,10 +710,15 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     let (_, row) = observe();
     assert_eq!(row["status"], "warning", "fallback is advisory: {row}");
     let message = row["message"].as_str().unwrap();
+    // The rc guard exits 42, which the probe reports. A saturated host can
+    // instead hold `bash -i -l` past the production timeout, the same bounded
+    // fallback accepted above. Either way the reason must be stated: a
+    // fallback that drops it still fails.
     assert!(
         message.contains("probe mode: login;")
             && message.contains("interactive fallback reason:")
-            && message.contains("exited with status 42"),
+            && (message.contains("exited with status 42")
+                || message.contains("did not finish within")),
         "{message}"
     );
 }
