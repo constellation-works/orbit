@@ -383,7 +383,8 @@ The ORB-11205 measurements came from an ignored `task_list_io_benchmark`
 store test and the dashboard's ignored `task_response_benchmark` harness. The
 store harness was retired with the store unit tests. To reproduce the
 measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, the last
-commit with `crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
+commit with the historical source
+`630bc95d241c1441de9c31f980bc016948b84f5d:crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
 and follow that file's module docs. It generated three temporary workspaces of
 `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000), with
 `ORBIT_TASK_BENCH_MODE=baseline` running the frozen settled-index read

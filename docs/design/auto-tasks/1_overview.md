@@ -77,8 +77,8 @@ becomes just the first definition.
 | Concern | File | Task |
 |---|---|---|
 | Definition schema | `crates/orbit-types/src/workflow/auto_task/definition.rs` | ORB-10149 |
-| Discovery (fail-closed) | `crates/orbit-core/src/application/auto_tasks/loader.rs` | ORB-10149 |
-| Due-math + catch-up | `crates/orbit-core/src/application/auto_tasks/schedule.rs` | ORB-10149 |
+| Discovery (fail-closed) | `crates/orbit-automation/src/auto_tasks/loader.rs` | ORB-10149 |
+| Due-math + catch-up | `crates/orbit-automation/src/auto_tasks/schedule.rs` | ORB-10149 |
 | Host-local cursor | `crates/orbit-core/src/application/auto_tasks/state.rs` | ORB-10149 |
 | Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
 | CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |

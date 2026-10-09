@@ -55,6 +55,7 @@ if [[ "$fast" == false ]]; then
 fi
 
 "$repo_root/scripts/generate-doc-indexes.sh" --check
+"$repo_root/scripts/check-doc-links.py"
 "$repo_root/scripts/check-installer-pubkey.sh"
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"

@@ -173,6 +173,12 @@ jobs:
         result = self.run_guard("ci-guardrails.sh", "--fast")
         self.assertEqual(result.returncode, 17)
 
+    def test_fast_propagates_doc_link_failure(self):
+        self.prepare_ci()
+        self.write_executable(self.scripts / "check-doc-links.py", "#!/bin/bash\nexit 18\n")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 18)
+
     def test_fast_invokes_web_blocking_handler_check(self):
         self.prepare_ci()
         self.write_executable(
@@ -429,6 +435,96 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+
+class DocLinkGuardrailTests(unittest.TestCase):
+    """Exercise the checker through its executable boundary in real Git repos."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="doc-link-fixture-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.env = dict(os.environ)
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.env.pop(name, None)
+        subprocess.run(["git", "init", "-q", str(self.root)], env=self.env, check=True)
+        self.write("scripts/check-doc-links.py", (SCRIPTS / "check-doc-links.py").read_text())
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def run_checker(self):
+        subprocess.run(["git", "add", "."], cwd=self.root, env=self.env, check=True)
+        return subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                              env=self.env, text=True, capture_output=True)
+
+    def test_valid_links_slugs_and_examples(self):
+        self.write("crates/demo/src/lib.rs", "// fixture source\n")
+        self.write("docs/target.md", "# `snake_case` & *Details*\n# Repeat\n# Repeat\n"
+                   "# Repeat-2\n# Repeat\nSetext title\n============\n"
+                   "<a name=\"custom\"></a>\n# Ελληνικά\n")
+        self.write("docs/asset (one).svg", "<svg/>\n")
+        self.write("docs/guide.md", "# Guide\n[local](#guide)\n"
+                   "[`code label`](target.md#snake_case--details)\n"
+                   "[duplicate](target.md#repeat-3)\n[setext](target.md#setext-title)\n"
+                   "[Unicode](target.md#%CE%B5%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AC)\n"
+                   "[custom](target.md#custom)\n![image](<asset (one).svg> \"title\")\n"
+                   "[reference][target]\n[target]: target.md#repeat-1\n"
+                   "`crates/demo/src/lib.rs` and `crates/demo/src/lib.rs::item`\n"
+                   "`[example](missing.md)`\n~~~md\n[example](missing.md)\n"
+                   "`crates/missing.rs`\n~~~\n\n    [example](missing.md)\n"
+                   "<!-- [comment](missing.md) -->\n"
+                   "\\[escaped](missing.md)\n"
+                   "[external](https://example.com/missing.md#missing)\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checked", result.stdout)
+
+    def test_broken_link_anchor_and_source_path_name_each_line(self):
+        self.write("docs/target.md", "# Existing heading\n")
+        self.write("docs/guide.md", "[good](target.md#existing-heading)\n"
+                   "[broken](missing.md)\n[anchor](target.md#missing)\n"
+                   "`crates/demo/src/missing.rs`\n\n- List item\n"
+                   "    [nested](missing-nested.md)\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        for line, reason, target in (
+                (2, "missing link target", "missing.md"),
+                (3, "missing heading anchor", "target.md#missing"),
+                (4, "missing tracked source path", "crates/demo/src/missing.rs"),
+                (7, "missing link target", "missing-nested.md")):
+            self.assertIn(f"docs/guide.md:{line}: {reason}: {target}", result.stderr)
+
+    def test_untracked_source_is_rejected_and_excluded_docs_are_ignored(self):
+        for name in ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
+                     "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
+                     "crates/demo/tests/fixtures/example.md"):
+            self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")
+        self.write("docs/guide.md", "`crates/demo/src/untracked.rs`\n")
+        subprocess.run(["git", "add", "."], cwd=self.root, env=self.env, check=True)
+        self.write("crates/demo/src/untracked.rs", "// untracked\n")
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        errors = [line for line in result.stderr.splitlines() if ":1:" in line]
+        self.assertEqual(errors, ["docs/guide.md:1: missing tracked source path: "
+                                  "crates/demo/src/untracked.rs"])
+
+    def test_website_routes_resolve_to_source_and_validate_anchors(self):
+        self.write("website/src/content/docs/how-to/guide.md",
+                   "[page](../../reference/config/#snake_case)\n[index](../)\n")
+        self.write("website/src/content/docs/how-to/index.md", "# How to\n")
+        self.write("website/src/content/docs/reference/config.md", "# snake_case\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write("website/src/content/docs/reference/config.md", "# Renamed\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("guide.md:1: missing heading anchor", result.stderr)
 
 
 class WorkflowActionPinGuardrailTests(unittest.TestCase):

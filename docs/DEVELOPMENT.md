@@ -24,6 +24,16 @@ and runs script fixtures and static guardrails; it runs no Rust tests. It does
 not establish that the Rust test suite passes. Focused test filters help
 investigate a change, but do not replace `make ci-test-affected`: an existing
 test can encode behavior the candidate changes even when its new tests pass.
+
+The script guardrails include [check-doc-links.py](../scripts/check-doc-links.py),
+which scans tracked Markdown for missing relative link targets, heading anchors and backticked
+repository file paths. It skips historical decisions, RCAs, templates, the
+changelog and test fixture prose; the exclusions and known extensions live
+in the script. Fenced and indented code examples are ignored. Website links
+use Starlight page routes, mapped back to their source Markdown files.
+Run `python3 scripts/check-doc-links.py` for a quick check and
+`python3 scripts/test-ci-fast-guards.py` for its isolated repository fixtures.
+
 Hosted CI runs the full `make ci` for open PRs. Every PR-triggered workflow
 first reads the live PR state through the GitHub API in a checkout-free
 `Live PR state` job with only `pull-requests: read` permission. If the PR was
