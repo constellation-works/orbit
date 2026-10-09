@@ -152,3 +152,22 @@ pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(),
     )
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
+
+/// v41 `provider_limit_readings` [ORB-14696]: a provider's own reading of a
+/// usage window, recorded after every Codex or Claude run: the percent used,
+/// the window's length, and whether the window gates the account (an overage
+/// window does not).
+///
+/// Additive: an older binary still inserts and updates the v40 columns. Its
+/// update of an existing row leaves these columns from the earlier reading,
+/// so a reader trusts them only on a row whose `source` is `event`.
+pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), OrbitError> {
+    for (column, definition) in [
+        ("used_percent", "REAL"),
+        ("window_minutes", "INTEGER"),
+        ("gating", "INTEGER NOT NULL DEFAULT 1"),
+    ] {
+        add_column_if_missing(conn, "provider_limit_observations", column, definition)?;
+    }
+    Ok(())
+}

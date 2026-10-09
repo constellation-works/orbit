@@ -401,12 +401,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_provider_limit_observations,
     },
+    // ORB-14696: a provider's own usage-window reading on the same rows. New
+    // nullable or defaulted columns only, so older binaries keep writing.
+    Migration {
+        version: 41,
+        name: "provider_limit_readings",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_limit_readings,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 40;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 41;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

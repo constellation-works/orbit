@@ -26,8 +26,9 @@ impl ProviderLimitStoreBackend for Store {
                     r#"
                     INSERT INTO provider_limit_observations (
                         provider, model_scope, window_label, exhausted, source,
-                        resets_at, observed_at, run_id, crew, detail
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                        resets_at, observed_at, run_id, crew, detail,
+                        used_percent, window_minutes, gating
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                     ON CONFLICT (provider, model_scope, window_label) DO UPDATE SET
                         exhausted = excluded.exhausted,
                         source = excluded.source,
@@ -35,7 +36,10 @@ impl ProviderLimitStoreBackend for Store {
                         observed_at = excluded.observed_at,
                         run_id = excluded.run_id,
                         crew = excluded.crew,
-                        detail = excluded.detail
+                        detail = excluded.detail,
+                        used_percent = excluded.used_percent,
+                        window_minutes = excluded.window_minutes,
+                        gating = excluded.gating
                     WHERE excluded.observed_at >= provider_limit_observations.observed_at
                     "#,
                     params![
@@ -49,6 +53,9 @@ impl ProviderLimitStoreBackend for Store {
                         observation.run_id,
                         observation.crew,
                         observation.detail,
+                        observation.used_percent,
+                        observation.window_minutes,
+                        observation.gating,
                     ],
                 )
                 .map(|changed| changed > 0)
@@ -62,7 +69,8 @@ impl ProviderLimitStoreBackend for Store {
             .prepare(
                 r#"
                 SELECT provider, model_scope, window_label, exhausted, source,
-                       resets_at, observed_at, run_id, crew, detail
+                       resets_at, observed_at, run_id, crew, detail,
+                       used_percent, window_minutes, gating
                 FROM provider_limit_observations
                 ORDER BY observed_at DESC, provider, model_scope, window_label
                 "#,
@@ -92,6 +100,9 @@ impl ProviderLimitStoreBackend for Store {
                     run_id: row.get(7)?,
                     crew: row.get(8)?,
                     detail: row.get(9)?,
+                    used_percent: row.get(10)?,
+                    window_minutes: row.get(11)?,
+                    gating: row.get(12)?,
                 })
             })
             .map_err(|error| OrbitError::Store(error.to_string()))?;
