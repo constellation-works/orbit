@@ -26,6 +26,7 @@ Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and 
 
 ## Code
 
+- Skill documentation is canonical under `crates/orbit-core/assets/skills/`; edit it there, then run `scripts/sync-plugin-skills.sh` to regenerate the `plugin/skills/` mirror.
 - Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
 - Lints are configured via `[workspace.lints]`: `unwrap`/`expect` are warned on in production code throughout each crate (tests are exempted at crate roots); propagate errors, using `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`.
 - `missing_docs` is a workspace warning that crate roots may allow while documentation is incomplete. It is currently enforced in `orbit-config` and `orbit-web`; the other crate roots opt out.

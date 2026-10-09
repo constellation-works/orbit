@@ -60,6 +60,7 @@ if [[ "${1:-}" == "--check" ]]; then
     fi
   done
   if [[ "$drifted" -ne 0 ]]; then
+    echo "sync-plugin-skills: remedy: edit crates/orbit-core/assets/skills/, then run scripts/sync-plugin-skills.sh to regenerate plugin/skills/" >&2
     exit 1
   fi
   echo "sync-plugin-skills: committed plugin skill mirror matches canonical assets"

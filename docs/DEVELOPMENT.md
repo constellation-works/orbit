@@ -19,6 +19,10 @@ make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI logs and sandbox profile goldens
 ```
 
+Skill documentation is canonical under `crates/orbit-core/assets/skills/`.
+Edit skill docs there, then run `scripts/sync-plugin-skills.sh` to regenerate
+the `plugin/skills/` mirror. `make ci-fast` checks that the mirror matches.
+
 `make ci-fast` compiles the workspace on the declared MSRV, checks formatting,
 and runs script fixtures and static guardrails; it runs no Rust tests. It does
 not establish that the Rust test suite passes. Focused test filters help
