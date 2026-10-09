@@ -432,11 +432,7 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn resolve_crew_for_run_input(&self, input: &Value) -> Result<Crew, OrbitError> {
-        let cli_override = input
-            .get("crew")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let cli_override = run_input_crew_override(input);
         let claimed = claimed_task_from_input(input)?;
         let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
         self.resolve_crew_for_task(cli_override, task_crew.as_deref())
@@ -547,10 +543,12 @@ impl OrbitRuntime {
     /// Resolve a run's crew at start, persisting it only when the job at
     /// `yaml_path` can dispatch an agent [ORB-13016].
     ///
-    /// Every job still resolves, so a crew misconfiguration fails the run at
-    /// start as it always has. A job made only of deterministic activities
-    /// records no crew: no model does its work, and a crew drawn for it would
-    /// read as an LLM that never ran.
+    /// Every job still resolves, so a crew misconfiguration (an unknown name,
+    /// no crew selected) fails the run at start as it always has. A job made
+    /// only of deterministic activities records no crew: no model does its
+    /// work, and a crew drawn for it would read as an LLM that never ran. For
+    /// the same reason a disabled crew does not refuse it: on a host with no
+    /// enabled default crew, retention and reap jobs must still run.
     pub(crate) fn record_run_crew_for_job(
         &self,
         run_id: &str,
@@ -560,7 +558,9 @@ impl OrbitRuntime {
         if self.job_definition_dispatches_agent(yaml_path) {
             self.record_run_crew_from_input(run_id, input)?;
         } else {
-            self.resolve_crew_for_run_input(input)?;
+            let claimed = claimed_task_from_input(input)?;
+            let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
+            self.lookup_crew_for_task(run_input_crew_override(input), task_crew.as_deref())?;
         }
         Ok(())
     }
@@ -850,4 +850,13 @@ fn hook_dispatches_agent(name: Option<&str>, resolved: Option<&ActivityV2>) -> b
         Some(activity) => matches!(activity.spec, ActivityV2Spec::AgentLoop(_)),
         None => name.is_some(),
     }
+}
+
+/// The run input's explicit `crew`, when it names one.
+fn run_input_crew_override(input: &Value) -> Option<&str> {
+    input
+        .get("crew")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
