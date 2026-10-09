@@ -681,14 +681,15 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
         .failure();
 
     // 6. Verify neither the audit log nor any file on disk contains the leaked tokens
+    let leaked_tokens = [
+        add_token.as_str(),
+        update_token.as_str(),
+        tool_add_token.as_str(),
+        tool_update_token.as_str(),
+        whole_token.as_str(),
+    ];
     let audit = fixture.json(&["audit", "list", "--json"]);
-    for token in [
-        &add_token,
-        &update_token,
-        &tool_add_token,
-        &tool_update_token,
-        &whole_token,
-    ] {
+    for token in leaked_tokens {
         assert!(
             !audit.to_string().contains(token),
             "token leaked into audit log"
@@ -716,14 +717,9 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
         }
     }
 
-    assert_no_token_in_dir(
-        &fixture.repo,
-        &[
-            &add_token,
-            &update_token,
-            &tool_add_token,
-            &tool_update_token,
-            &whole_token,
-        ],
-    );
+    // Persisted Orbit state lives under the fixture's --root (store, friction
+    // YAML, audit) and HOME (tracing logs); the checkout holds neither.
+    for dir in [&fixture.repo, &fixture.root, &fixture.home] {
+        assert_no_token_in_dir(dir, &leaked_tokens);
+    }
 }
