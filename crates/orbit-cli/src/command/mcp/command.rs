@@ -107,8 +107,9 @@ pub struct ServeArgs {
     /// configured alias.
     #[arg(value_name = "SSH_HOST", requires = "mode")]
     pub ssh_host: Option<String>,
-    /// Audit identity supplied only by Orbit's direct SSH proxy command.
-    /// Presence also marks the server session's transport as SSH MCP.
+    /// Caller-chosen machine label forwarded by Orbit's SSH routes.
+    /// Marks the session as SSH MCP and supplies audit/receipt/claim fences;
+    /// it grants no capability and does not prove SSH origination.
     #[arg(long, value_name = "MACHINE_ID", hide = true, conflicts_with = "mode")]
     pub remote_caller_machine_id: Option<String>,
     /// Deterministic owner/follower RPC; selected by Orbit's runtime SSH argv.

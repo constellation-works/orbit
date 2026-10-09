@@ -251,9 +251,11 @@ pub(super) fn on_off(enabled: bool) -> &'static str {
     if enabled { "on" } else { "off" }
 }
 
-/// The machine a session may speak for. A remote session's forwarded label
-/// names its receipt namespace and nothing else; a local session uses the
-/// accepting machine's own identity.
+/// The machine a session speaks for in receipt and claim ownership checks.
+/// A remote session uses its caller-chosen label, including for bind/settle
+/// fences; a local session uses the accepting machine's own identity. The
+/// remote label is not authenticated: local account access and SSH login
+/// already establish owner access in Orbit's single-user trust model.
 pub(super) fn session_machine_id(session: &ToolSessionContext) -> Option<String> {
     if is_remote(session) {
         return session

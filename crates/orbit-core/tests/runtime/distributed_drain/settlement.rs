@@ -2,6 +2,87 @@
 
 use super::*;
 
+/// The session machine fences bind/settle even when the caller knows the
+/// claim and bound run. A refused attempt must leave the owner unchanged.
+#[test]
+fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
+    if !isolated(
+        module_path!(),
+        "another_session_machine_cannot_bind_or_settle_a_followers_claim",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let claims_before = pair.owner_claims();
+    let task_before = pair.owner_task(&claim.task_id);
+    let wrong_session = ToolSessionContext {
+        caller_machine_id: Some("hm_other_follower".into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let evidence = ClaimEvidence {
+        summary: Some("executor returned this attempt".into()),
+        ..Default::default()
+    };
+    for mutation in [
+        ClaimMutation::Release(evidence.clone()),
+        ClaimMutation::Fail(evidence.clone()),
+    ] {
+        let error = pair
+            .wire
+            .owner
+            .serve_claim_settle(&wrong_session, &claim.claim_id, Some(&leaf), mutation)
+            .expect_err("another session machine must not settle this claim");
+        assert_eq!(
+            error.claim_refusal(),
+            Some(orbit_common::ClaimRefusalKind::StaleClaim),
+            "the claim ownership fence must refuse the wrong session machine: {error}"
+        );
+    }
+    let error = pair
+        .wire
+        .owner
+        .serve_claim_bind(
+            &wrong_session,
+            &claim.claim_id,
+            &leaf,
+            record.request.ship.clone(),
+        )
+        .expect_err("another session machine must not replay the bound claim");
+    assert!(
+        matches!(&error, OrbitError::InvalidInput(message) if message == "mutation_mismatch"),
+        "bind replay must refuse a change to its recorded session machine: {error}"
+    );
+    assert_eq!(pair.owner_claims(), claims_before);
+    assert_eq!(pair.owner_task(&claim.task_id), task_before);
+
+    let matching_session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        ..wrong_session
+    };
+    let settled = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &matching_session,
+            &claim.claim_id,
+            Some(&leaf),
+            ClaimMutation::Release(evidence),
+        )
+        .expect("the owning session machine can still settle its attempt");
+    assert_eq!(
+        settled.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Revoked
+    );
+    assert_eq!(pair.owner_status(&claim.task_id), "backlog");
+}
+
 /// A host that cannot spawn a claimed leaf returns its task and stops pulling
 /// immediately, rather than blocking several tasks to trip the breaker.
 #[test]

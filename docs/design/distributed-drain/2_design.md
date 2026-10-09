@@ -881,9 +881,14 @@ ordered ladder (`orbit_store::admission_refusal`).
 ## 5. Transport and authority routing
 
 SSH login to the owner is the admission; session agent/operator capabilities and caller-side
-managed-run restrictions still apply; execution-machine labels are attribution; trusted invocation
-context fences a claim and its run ([SSH login is the admission; machine labels are
-attribution](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution)).
+managed-run restrictions still apply. Runtime/session invocation context fences a claim and its
+run. For remote bind/settle, the session's caller-chosen machine label supplies that context
+and selects the receipt namespace; the journal compares it with the admitted execution machine,
+bound run and phase. An SSH initialize worker binding must name the same execution machine.
+The label grants no capability and authenticates no machine: local account access and SSH login
+are already owner access in this single-user model. The fence prevents mixed attempts among
+cooperating executors, not impersonation by a caller able to start a server with another label,
+including locally from a managed agent context.
 Followers initiate federated MCP over SSH stdio, locating the owner through their destinations
 file. SSH connection reuse is an optimization, not a delivery guarantee; every coordination
 mutation has an idempotency or reconciliation contract before step recovery retries it.

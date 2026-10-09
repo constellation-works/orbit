@@ -116,9 +116,19 @@ destination's argv, whatever the process that launched it held. To deny a
 caller, remove its key from the destination's `~/.ssh/authorized_keys` — that
 is the only boundary the destination ever had.
 
-`--remote-caller-machine-id` remains an audit label. It marks the session's
-transport as SSH and names the calling machine in the destination's
-`authorization` audit rows; it authorizes nothing.
+`--remote-caller-machine-id` is a caller-chosen machine label. Its presence
+marks the session's transport as SSH MCP without proving SSH origination. It
+names the calling machine in audit rows and selects the remote drain receipt
+namespace. Claim bind/settle uses it as the machine fence: the journal compares
+it with the claim's execution machine, bound run and phase. An initialize
+`_meta.orbit.worker_invocation` must name that same execution machine.
+
+The label grants no capability and authenticates no machine. This fence is
+acceptable within Orbit's single-user trust model because local account access
+and SSH login already establish owner access. It prevents accidental mixing of
+attempts among cooperating executors; a caller able to start a server can choose
+another machine's label, including locally from a managed agent context. It
+does not isolate mutually untrusted callers sharing that account.
 
 A destination upgraded from the older model may still carry
 `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/`. Both are ignored:

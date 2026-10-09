@@ -10,11 +10,13 @@
 //! - **Access** is SSH login plus the `agent` or `operator` capability the
 //!   governed-operation rows require [ORB-12564]. There is no callers file.
 //! - **Attempt ownership** is the claim journal's own fence. Every mutation
-//!   here reaches it as a [`ClaimInvocation`] whose machine is the session's
-//!   trusted caller machine, never a machine named in tool input. A follower
-//!   can only name *which* claim it is settling; the journal refuses it unless
-//!   that claim was admitted to this same machine and is still in a phase
-//!   that permits the write.
+//!   here reaches it as a [`ClaimInvocation`] whose machine comes from the
+//!   session, never tool input. For SSH MCP that machine is the caller-chosen
+//!   remote label; for local sessions it is the accepting machine's identity.
+//!   The journal compares it with the admitted execution machine, bound run
+//!   and phase. This prevents mixed attempts among cooperating executors, not
+//!   impersonation by someone able to start a server with another label:
+//!   local account access and SSH login are already trusted owner access.
 //! - **Observations** are the owner's own. A handoff payload names the
 //!   candidate to look at; the owner reads the published pull request from the
 //!   provider and resolves both commits in its own checkout before the journal

@@ -23,8 +23,9 @@ pub struct ToolSessionContext {
     /// Stable logical workspace identity after trusted local resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
-    /// Stable machine label claimed by the caller for audit correlation. It
-    /// is self-declared metadata, not an authenticated principal.
+    /// Stable machine label claimed by the caller for audit correlation and
+    /// remote drain receipt/claim ownership checks. It is self-declared
+    /// metadata, not an authenticated principal; see [`Self::remote_caller_machine_id`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_machine_id: Option<String>,
     /// [ORB-12725] `caller_host_id` is read for one release so a session
@@ -133,13 +134,19 @@ impl ToolSessionContext {
         }
     }
 
-    /// The caller label an SSH-originated session forwarded, for attribution.
+    /// The caller label a session marked as SSH MCP forwarded.
     ///
     /// Absent on a local session, whose [`Self::caller_machine_id`] is the
     /// accepting machine's own identity and therefore says nothing about a
-    /// caller elsewhere. Even when present it is a label the caller chose: it
-    /// names a machine in the audit trail and never contributes to an
-    /// authorization decision.
+    /// caller elsewhere. The caller chooses this label: it names the machine
+    /// in the audit trail, selects the remote drain's receipt namespace, and
+    /// fences claim bind/settle against the journal's execution machine. An
+    /// SSH worker binding must name the same execution machine.
+    ///
+    /// It grants no capability and authenticates no machine. Orbit trusts
+    /// local account access and SSH login as owner access; a caller able to
+    /// start the server can choose another label. This fence prevents mixed
+    /// attempts within that trust boundary, not impersonation by that caller.
     pub fn remote_caller_machine_id(&self) -> Option<&str> {
         if self.transport != Some(McpTransport::SshMcp) {
             return None;
