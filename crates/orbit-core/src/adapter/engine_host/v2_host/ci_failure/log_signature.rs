@@ -257,6 +257,16 @@ pub(super) fn legacy_signature(lines: &[(LineKind, &str)], step: &str) -> String
 /// and line/column numbers: display normalization deliberately erases numbers
 /// and truncates text, so it is not strong enough for a compiler cause key.
 pub(super) fn compiler_cause(log: &str) -> Option<String> {
+    compiler_identity(log, true)
+}
+
+/// Complete diagnostic set for open-owner coverage. Keep codes, operands and
+/// file paths, but ignore source coordinates that move during unrelated edits.
+pub(super) fn compiler_diagnostic_set(log: &str) -> Option<String> {
+    compiler_identity(log, false)
+}
+
+fn compiler_identity(log: &str, include_coordinates: bool) -> Option<String> {
     let lines = classify_log_lines(log);
     let mut causes = BTreeSet::new();
     for (index, (kind, line)) in lines.iter().enumerate() {
@@ -283,7 +293,8 @@ pub(super) fn compiler_cause(log: &str) -> Option<String> {
         {
             return None;
         }
-        causes.insert(format!("{diagnostic} @ {location}"));
+        let source = if include_coordinates { location } else { path };
+        causes.insert(format!("{diagnostic} @ {source}"));
     }
     (!causes.is_empty()).then(|| causes.into_iter().collect::<Vec<_>>().join("; "))
 }

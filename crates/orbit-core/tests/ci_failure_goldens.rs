@@ -70,6 +70,330 @@ fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
     }}), ToolContext::default()).expect("file CI failure")
 }
 
+fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
+    format!("error[{code}]: {message}\n   --> {path}:{line}:{column}\n")
+}
+
+#[test]
+fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
+    if !isolated("ci_open_compiler_owner_survives_checkout_and_coordinate_changes") {
+        return;
+    }
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_types::task::TaskStatus;
+
+    let path = r"crates\orbit-core\src\application\distributed\entry.rs";
+    let message = "cannot find `git_sandbox` in `runtime`";
+    let first_log = compiler_log("E0433", message, path, 277, 25);
+    let second_log = compiler_log("E0433", message, path, 280, 28);
+    for (status, legacy) in [
+        (TaskStatus::Proposed, false),
+        (TaskStatus::Backlog, false),
+        (TaskStatus::InProgress, false),
+        (TaskStatus::Review, false),
+        (TaskStatus::Blocked, false),
+        (TaskStatus::Proposed, true),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        runtime
+            .update_task_as_human(
+                owner,
+                TaskUpdateParams {
+                    plan: Some("Reproduce the compiler error and repair its source.".into()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        runtime
+            .apply_task_automation_update(
+                owner,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if legacy {
+            let description = runtime.get_task(owner).unwrap().description;
+            runtime
+                .update_task_as_human(
+                    owner,
+                    TaskUpdateParams {
+                        description: Some(
+                            description
+                                .lines()
+                                .filter(|line| {
+                                    !line.starts_with("- Open compiler diagnostic set identity:")
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        }
+        let before = runtime.get_task(owner).unwrap();
+        let comments_before = runtime.get_task_comments(owner).unwrap().len();
+        let second_run = failure(&second_log, 1, &commits[1]);
+        let second = file(&runtime, vec![second_run.clone()]);
+        assert_eq!(
+            second["filed_count"], 0,
+            "{status:?}, legacy={legacy}: {second}"
+        );
+        let matched = &second["skipped_existing"][0];
+        assert_eq!(matched["task_id"], owner);
+        assert_eq!(matched["match_kind"], "open_compiler_diagnostics");
+        assert_ne!(matched["failure_key"], first["filed"][0]["failure_key"]);
+        let comments = runtime.get_task_comments(owner).unwrap();
+        assert_eq!(comments.len(), comments_before + 1);
+        let observation = &comments.last().unwrap().message;
+        assert!(observation.contains(&commits[1]), "{observation}");
+        assert!(
+            observation.contains(second_run["url"].as_str().unwrap()),
+            "{observation}"
+        );
+        assert!(
+            observation.contains(matched["failure_key"].as_str().unwrap()),
+            "{observation}"
+        );
+        let after = runtime.get_task(owner).unwrap();
+        assert_eq!(
+            after.tags, before.tags,
+            "the exact key is evidence, not rewritten"
+        );
+        assert_eq!(after.status, status);
+        assert_eq!(after.description, before.description);
+        let retry = file(&runtime, vec![second_run]);
+        assert_eq!(retry["filed_count"], 0, "{retry}");
+        assert_eq!(
+            runtime.get_task_comments(owner).unwrap().len(),
+            comments.len()
+        );
+        assert_eq!(runtime.list_tasks().unwrap().len(), 1);
+    }
+
+    // The first newly filed owner also covers a later cluster in this snapshot.
+    let (_root, runtime, commits) = operator_fixture("");
+    let snapshot = file(
+        &runtime,
+        vec![
+            failure(&first_log, 0, &commits[0]),
+            failure(&second_log, 1, &commits[1]),
+        ],
+    );
+    assert_eq!(snapshot["filed_count"], 1, "{snapshot}");
+    assert_eq!(
+        snapshot["skipped_existing"][0]["task_id"],
+        snapshot["filed"][0]["task_id"]
+    );
+    let owner = snapshot["filed"][0]["task_id"].as_str().unwrap();
+    assert!(
+        runtime.get_task_comments(owner).unwrap()[0]
+            .message
+            .contains(&commits[1])
+    );
+}
+
+#[test]
+fn ci_closed_compiler_owners_do_not_cover_new_checkouts() {
+    if !isolated("ci_closed_compiler_owners_do_not_cover_new_checkouts") {
+        return;
+    }
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_types::task::TaskStatus;
+    let first_log = compiler_log(
+        "E0433",
+        "cannot find `git_sandbox` in `runtime`",
+        "crates/orbit-core/src/application/distributed/entry.rs",
+        277,
+        25,
+    );
+    let second_log = first_log.replace(":277:25", ":280:25");
+    for status in [TaskStatus::Done, TaskStatus::Archived] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        runtime
+            .apply_task_automation_update(
+                owner,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let second = file(&runtime, vec![failure(&second_log, 1, &commits[1])]);
+        assert_eq!(second["filed_count"], 1, "{status:?}: {second}");
+        assert_ne!(second["filed"][0]["task_id"], owner);
+        assert!(runtime.get_task_comments(owner).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn ci_compiler_coverage_requires_the_same_complete_diagnostic_set() {
+    if !isolated("ci_compiler_coverage_requires_the_same_complete_diagnostic_set") {
+        return;
+    }
+    use orbit_core::application::task::TaskUpdateParams;
+    let message = "cannot find `git_sandbox` in `runtime`";
+    let path = "crates/orbit-core/src/application/distributed/entry.rs";
+    let first_log = compiler_log("E0433", message, path, 277, 25);
+    let shifted = compiler_log("E0433", message, path, 280, 25);
+    let other = compiler_log(
+        "E0425",
+        "cannot find value `foo` in this scope",
+        path,
+        300,
+        10,
+    );
+    for (label, original, observed, sweep_tag) in [
+        (
+            "code",
+            first_log.clone(),
+            compiler_log("E0425", message, path, 280, 25),
+            true,
+        ),
+        (
+            "path",
+            first_log.clone(),
+            compiler_log(
+                "E0433",
+                message,
+                "crates/orbit-core/src/runtime/mod.rs",
+                280,
+                25,
+            ),
+            true,
+        ),
+        (
+            "message",
+            first_log.clone(),
+            compiler_log(
+                "E0433",
+                "cannot find `other_sandbox` in `runtime`",
+                path,
+                280,
+                25,
+            ),
+            true,
+        ),
+        (
+            "superset",
+            first_log.clone(),
+            format!("{shifted}{other}"),
+            true,
+        ),
+        (
+            "subset",
+            format!("{first_log}{other}"),
+            shifted.clone(),
+            true,
+        ),
+        ("manual owner", first_log.clone(), shifted.clone(), false),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let first = file(&runtime, vec![failure(&original, 0, &commits[0])]);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        if !sweep_tag {
+            let tags = runtime
+                .get_task(owner)
+                .unwrap()
+                .tags
+                .into_iter()
+                .filter(|tag| tag != "ci-failure-sweep")
+                .collect();
+            runtime
+                .update_task_as_human(
+                    owner,
+                    TaskUpdateParams {
+                        tags: Some(tags),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        }
+        let second = file(&runtime, vec![failure(&observed, 1, &commits[1])]);
+        assert_eq!(second["filed_count"], 1, "{label}: {second}");
+        assert!(runtime.get_task_comments(owner).unwrap().is_empty());
+    }
+
+    // The identity comes from the full supplied diagnostic set, even when the
+    // description window omits a later diagnostic. Older owners without the
+    // new identity must fail closed if their excerpt cannot prove completeness.
+    let (_root, runtime, commits) = operator_fixture("");
+    let padding = "    source context\n".repeat(30);
+    let first = file(
+        &runtime,
+        vec![failure(
+            &format!("{first_log}{padding}{other}"),
+            0,
+            &commits[0],
+        )],
+    );
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    let second = file(
+        &runtime,
+        vec![failure(
+            &format!("{shifted}{padding}{other}"),
+            1,
+            &commits[1],
+        )],
+    );
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(second["skipped_existing"][0]["task_id"], owner);
+    let description = runtime.get_task(owner).unwrap().description;
+    runtime
+        .update_task_as_human(
+            owner,
+            TaskUpdateParams {
+                description: Some(
+                    description
+                        .lines()
+                        .filter(|line| {
+                            !line.starts_with("- Open compiler diagnostic set identity:")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let subset = file(&runtime, vec![failure(&shifted, 2, &commits[2])]);
+    assert_eq!(
+        subset["filed_count"], 1,
+        "a partial legacy excerpt cannot prove set equality: {subset}"
+    );
+
+    // Ordering and repeated occurrences are not differences in a diagnostic set.
+    let (_root, runtime, commits) = operator_fixture("");
+    let first = file(
+        &runtime,
+        vec![failure(&format!("{first_log}{other}"), 0, &commits[0])],
+    );
+    let second = file(
+        &runtime,
+        vec![failure(
+            &format!("{other}{shifted}{shifted}"),
+            1,
+            &commits[1],
+        )],
+    );
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(
+        second["skipped_existing"][0]["task_id"],
+        first["filed"][0]["task_id"]
+    );
+}
+
 fn operator_fixture(config: &str) -> (TempDir, OrbitRuntime, Vec<String>) {
     let root = TempDir::new().unwrap();
     let global = root.path().join("home/.orbit");

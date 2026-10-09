@@ -43,14 +43,20 @@ spec:
     ci_failure.operator_suppression_hours (default 6) from the status event.
     Every operator hold appears in withheld and audit.withheld with outcome,
     reason, failure key, owner and cover or expiry; it produces no pilot.
-    Otherwise it checks still-open tasks first by a commit-independent failure key carried
+    Otherwise it checks still-open tasks first by an exact failure key carried
     as a `ci-failure:<key>` tag, then by rejected exact-key tasks whose comments
     name one still-open covering owner, then by a shared high-confidence
     material coverage assessment over untagged tasks. Coverage matches a
     generated workflow/job/step brief or a specific error together with the
     failing command or the same run and job identity; generic npx/cargo
     wrappers, a shared workflow or file, or task completion alone do not
-    suppress a current failure. After open-owner lookup misses, a bounded
+    suppress a current failure. Compiler keys preserve the complete diagnostic
+    set, source coordinates and observed checkout. A separate open-owner check
+    reuses only proposed/backlog/in-progress/review/blocked CI-sweep tasks with
+    an equal complete code/message/file-path set, ignoring coordinates and
+    checkout. It appends each new run URL, checkout and exact key as a comment
+    once, leaving the owner's exact tag intact. Different diagnostic sets and
+    closed owners do not match this check. After open-owner lookup misses, a bounded
     completed-owner assessment verifies structured task artifacts against the
     exact source diagnostics, failing and passing command results, authoritative
     delivery state and Git applicability. Proven pre-fix observations are
@@ -219,7 +225,7 @@ spec:
               type: string
             match_kind:
               type: string
-              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
+              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair, open_compiler_diagnostics]
             match_evidence:
               type: object
       attributed:
