@@ -54,9 +54,9 @@ orbit --workspace <name> clock tick      # only that workspace's schedules
 
 ## 2. Turn on routines
 
-`orbit workspace init` seeds five routines into `.orbit/routines/`, all
-disabled: task pilot, ship sweep, worktree GC, and the CI-failure and
-dependency-alert sweeps. `orbit workspace sync` refreshes them after an
+`orbit workspace init` seeds six routines into `.orbit/routines/`, all
+disabled: task pilot, ship sweep, worktree GC, store GC (daily audit and
+run-state retention), and the CI-failure and dependency-alert sweeps. `orbit workspace sync` refreshes them after an
 upgrade and keeps your edits.
 
 Turn one on with its switch in **Automation → Routines**, or set

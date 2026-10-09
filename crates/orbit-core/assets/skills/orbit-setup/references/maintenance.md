@@ -314,6 +314,41 @@ The audit store is persistent invocation metadata: who called what, when, and
 whether it was denied. It grows without bound until pruned. Prune requires
 `--confirm`; export first if the history matters.
 
+## Store retention
+
+The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
+pipeline state, and each workspace keeps the blobs those events name under
+`.orbit/state/audit/blobs/`. Two commands bound them. Both only report until
+you pass `--apply`:
+
+```bash
+orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
+orbit gc audit --apply                # delete them
+orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
+orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc audit --older-than-days 30   # one-off window instead of the configured one
+```
+
+`retention.audit_days` and `retention.runs_days` default to 60 days. `gc audit`
+prunes the host-wide command audit and this workspace's run audit, then removes
+blobs that no remaining audit row, run step or pipeline state names. A blob
+written in the last 24 hours, or one a write in progress has marked as pending,
+is always kept. `gc runs` never touches a held run or one still in flight, so
+`orbit run show`, run history and the scoreboard keep working.
+
+Deletes run in batches of 1,000 rows, each its own short write transaction, so
+running workers are not starved. Freed pages stay inside the database file; each
+report shows the freelist, and `VACUUM` returns it to the filesystem. Run
+`VACUUM` yourself while nothing is using Orbit:
+
+```bash
+sqlite3 ~/.orbit/orbit.db 'VACUUM;'
+```
+
+`orbit doctor` reports what is reclaimable now (`store-retention`). To run both
+sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
+On a replica checkout it is owner-only and never fires.
+
 ## Logs
 
 The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates from

@@ -223,6 +223,17 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
+        // The opt-in daily retention sweep: audit rows and blobs, then old
+        // terminal runs' pipeline state, under the configured windows.
+        CoreDeterministicAction::StoreGc => {
+            let failed = |error: OrbitError| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            };
+            let audit = runtime.gc_audit(true, None).map_err(failed)?;
+            let runs = runtime.gc_runs(true, None).map_err(failed)?;
+            Ok(serde_json::json!({ "audit": audit, "runs": runs }))
+        }
         // Turn one host-collected CI evidence snapshot into ordinary backlog
         // bug tasks [ORB-11107]. All GitHub access already happened in the
         // engine-private `collect_ci_evidence` step; this action only reads

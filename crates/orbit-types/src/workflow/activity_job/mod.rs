@@ -61,6 +61,7 @@ macro_rules! deterministic_action_catalog {
                 ScanUnresolvedWork => "scan_unresolved_work",
                 SelectProposedApprovals => "select_proposed_approvals",
                 Sleep => "sleep",
+                StoreGc => "store_gc",
                 ValidateBundles => "validate_bundles",
             }
             engine {

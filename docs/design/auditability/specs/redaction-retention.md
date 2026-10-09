@@ -41,6 +41,7 @@ Command audit rows:
 
 - Live in the configured SQLite audit database.
 - Are queryable, exportable, and prunable through `orbit audit`.
+- Are also pruned past `retention.audit_days` by `orbit gc audit --apply`, host-wide, in the same batches as the run audit.
 - Should remain compact and should not embed transcript bodies.
 
 Activity/job and loop traces:
@@ -48,7 +49,13 @@ Activity/job and loop traces:
 - Live under `.orbit/state/audit/` for workspace-local run reconstruction.
 - V2 envelope and loop events are persisted through the SQLite-backed v2 audit store.
 - Use content-addressed blobs for payload bodies.
-- May be manually retained or deleted with workspace state until a first-class retention policy exists.
+- Are bounded by `orbit gc audit`: it plans by default and, with `--apply`, deletes this workspace's v2 audit rows older than `retention.audit_days` (default 60) in batches of 1,000 rows, each its own write transaction, then sweeps the blobs under `.orbit/state/audit/blobs/` that no remaining run audit row, run step or pipeline state names. The opt-in `store-gc` routine runs it daily. `VACUUM` stays an operator action; each report shows the freed pages.
+- A blob is protected from the sweep while it is being published. The writer records `.orbit/state/audit/pending/<hash>` before it writes or reuses a blob and retires the marker after the row naming it commits; writing content that is already stored refreshes the blob's mtime. The sweep moves a candidate to `.orbit/state/audit/sweep/`, then rechecks the marker and the mtime (24-hour grace) and moves it back if either is fresh. A marker older than the audit cutoff belongs to a write that never published and is reclaimed with its blob.
+
+Run pipeline state:
+
+- Lives in `job_run_states`, beside the `job_runs` row.
+- Is dropped by `orbit gc runs --apply` for success, failed, timeout, cancelled and interrupted runs older than `retention.runs_days`, which also stamps `job_runs.archived_at`. Run rows, steps and summaries stay; held and non-terminal runs are never selected.
 
 Invocation metrics:
 
@@ -68,7 +75,9 @@ Global process tracing:
 - If a redactor misses an unknown secret shape, the audit layer may persist that value. Reviewers should treat new provider payload shapes as redaction-sensitive changes.
 - If redaction changes payload bytes, the stored hash identifies the redacted payload, not the raw provider payload.
 - If v2 audit-store writes fail, the run may continue with in-memory audit snapshots only; durable reconstruction is incomplete.
-- If pruning deletes command audit rows, file-backed run traces and blobs are not automatically pruned unless a future retention task adds that coupling.
+- `orbit audit prune` deletes command audit rows only; run audit rows and blobs are pruned by `orbit gc audit`.
+- A blob whose write crashed before its row committed keeps its pending marker and survives until the marker is older than `retention.audit_days`.
+- A blob named by pipeline state survives its audit row until `orbit gc runs` drops that state. A blob named by a step response or error is kept for as long as the step row exists, since run retention keeps steps.
 
 ## Migration Path
 
@@ -76,7 +85,7 @@ Redaction changes are forward-only. Orbit does not automatically sweep existing 
 
 Future retention work should add:
 
-- a single operator command that reports command-row, JSONL, blob, job-run, and invocation retention by workspace
+- JSONL and invocation-metric figures in the `orbit doctor` `store-retention` row, which already reports reclaimable audit, run-state and blob bytes
 - optional hash manifests for file-backed audit bundles
 - audit records for export and prune operations
 - a documented legacy handling policy for pre-`.orbit/state/audit/` run traces

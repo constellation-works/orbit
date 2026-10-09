@@ -162,7 +162,7 @@ as absent; it never degrades into "fire with defaults".
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `ship_sweep.yaml`, and `worktree_gc.yaml`
+`task_pilot.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `store_gc.yaml`
 with a workspace-unique name and `enabled: false`. The cron defaults resolve nothing else at
 seed time, so two hosts initializing the same workspace name write byte-identical cron
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine

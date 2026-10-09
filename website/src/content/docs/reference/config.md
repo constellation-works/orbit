@@ -295,6 +295,8 @@ crew or the workspace default.
 | `runtime.log_max_file_mb` | integer · **Default:** `100`<br>Roll the operational `orbit.jsonl` past this size (MiB). At least 1 and at most `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer · **Default:** `500`<br>Operational `orbit.jsonl` archive budget in MiB; the oldest are pruned first. |
 | `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete archives in both operational and agent feeds older than this. |
+| `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command and run audit rows, and the audit blobs no remaining row names, become reclaimable. Nothing is deleted until you run `orbit gc audit --apply` or enable the `store-gc` routine. |
+| `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (1–36500). The run, its steps and its summary stay. |
 | `security_alert_sweep.min_severity` | string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
 | `review.before_pr` | bool · **Default:** `false`<br>Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |

@@ -228,6 +228,18 @@ define_config_settings! {
         section: ConfigSection::Review, order: 20,
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
+    retention_audit_days: u32 => u32 {
+        key: "retention.audit_days", value_type: "integer",
+        description: "Days `orbit gc audit` keeps command and run audit rows; older rows, and the audit blobs no remaining row or pending write names, are reclaimable (1..=36500; default 60).",
+        section: ConfigSection::Housekeeping, order: 100,
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.audit_days"),
+    },
+    retention_runs_days: u32 => u32 {
+        key: "retention.runs_days", value_type: "integer",
+        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60).",
+        section: ConfigSection::Housekeeping, order: 110,
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
+    },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",
         description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it; a claim about any other command cannot be confirmed and settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. Captured when a delivery or claim is admitted. Default empty.",
@@ -730,6 +742,20 @@ fn normalize_logins(raw: Vec<String>) -> Vec<String> {
 /// Default `execution.proc_spawn_max_timeout_minutes`: long enough for a
 /// cold workspace build and test gate, still bounded below a typical activity.
 const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
+
+/// Default `retention.audit_days` and `retention.runs_days`.
+const DEFAULT_RETENTION_DAYS: u32 = 60;
+
+fn resolve_retention_days(raw: Option<u32>, key: &str) -> Result<u32, OrbitError> {
+    const MAX_DAYS: u32 = 36_500;
+    match raw {
+        Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_RETENTION_DAYS),
+    }
+}
 
 /// Admit a positive minute budget, defaulting when unset. A day is the
 /// ceiling: anything longer is indistinguishable from never escalating.

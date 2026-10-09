@@ -5,6 +5,8 @@ Usage: orbit gc [OPTIONS] <COMMAND>
 Commands:
   worktrees  Reap job-run worktrees whose associated task has settled to rejected, archived, or done, or whose claim this follower has settled with its owner
   tmp        Reclaim this workspace checkout's scratch contents when no job runs are active
+  audit      Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
+  runs       Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
 
 Options:
       --root <ROOT>

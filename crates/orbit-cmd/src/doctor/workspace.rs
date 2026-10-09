@@ -1,3 +1,4 @@
+use super::system::human_bytes;
 use super::*;
 
 /// The plugin section's source-built rows: each plugin this host built from
@@ -375,5 +376,41 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
             stale.len()
         ),
         "Run `orbit doctor --fix-stale-task-locks`.".to_string(),
+    )
+}
+
+/// What store retention could reclaim now under `retention.audit_days` and
+/// `retention.runs_days`. Measured without the blob reference scan, so the
+/// blob figure is an upper bound; `orbit gc audit` reports the exact one.
+pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "store-retention";
+    let overview = match runtime.store_retention_overview() {
+        Ok(overview) => overview,
+        Err(error) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot measure reclaimable store space: {error}"),
+            );
+        }
+    };
+    check(
+        CHECK,
+        WorkspaceDoctorStatus::Ok,
+        format!(
+            "reclaimable: audit {} rows ({}) older than {} days; run state of {} terminal runs \
+             ({}) older than {} days; up to {} of {} audit blobs; store file {} with {} free. \
+             Plan with `orbit gc audit` and `orbit gc runs`, apply with `--apply`",
+            overview.audit_rows,
+            human_bytes(overview.audit_bytes),
+            overview.audit_days,
+            overview.run_states,
+            human_bytes(overview.run_state_bytes),
+            overview.runs_days,
+            human_bytes(overview.blob_bytes_past_cutoff),
+            human_bytes(overview.blob_bytes),
+            human_bytes(overview.store.file_bytes),
+            human_bytes(overview.store.freelist_bytes),
+        ),
     )
 }
