@@ -321,12 +321,14 @@ spec:
        leave the worktree in a state where a re-run of the failed step succeeds
        on its own. A repair may change any path it needs, inside or outside
        the task's selectors; Orbit widens the task's selectors over the paths
-       you change and records the recovery step in task history. Do not rerun
-       or duplicate the failed operation. Write the `retry` decision; the
-       executor then performs its one post-recovery attempt and continues
-       through the normal commit, branch preparation, base sync, push, PR
-       open/reuse, and PR promotion steps. The pipeline, not you, moves the
-       task to review in this path.
+       you change and records the recovery step in task history. Leave file
+       repairs uncommitted: Git metadata is read-only in your sandbox, and
+       when the failed step runs after `commit`, Orbit commits them before the
+       retry. Do not rerun or duplicate the failed operation. Write the
+       `retry` decision; the executor then performs its one post-recovery
+       attempt and continues through the normal commit, branch preparation,
+       base sync, push, PR open/reuse, and PR promotion steps. The pipeline,
+       not you, moves the task to review in this path.
 
        Unresolved merge or rebase conflicts in the assigned worktree are a
        repair you make, not a reason to stop: resolve every unmerged path,
@@ -340,21 +342,26 @@ spec:
        task refuses writes, or the checked-out branch / pre-rewrite HEAD does
        not match the failed step's checkpoint.
 
-       A failed `validate` step (`candidate_validate`) means a command in
+       A failed `validate` step (`candidate_validate`, or `claim_validate`
+       in a claimed leaf) means a command in
        `workflow.required_validation_commands` did not pass on the committed
        candidate; the error carries its output and the task holds its log.
        Follow the workspace's own AGENTS.md for validation guidance.
        Repair the candidate so the command passes (for example apply the
-       formatter it names), run the command yourself to confirm, and commit
-       the repair on the checked-out task branch as a new commit, leaving the
-       worktree clean: the retry validates the exact committed HEAD and
-       refuses uncommitted changes. Never edit, skip, or weaken the required
-       command, and never rewrite the branch's existing commits. Before you
-       are dispatched, Orbit reruns the failing command on the base. A failure
-       the base shares is held as `baseline_red` and never reaches you, so the
-       error says whether the base passed. A failure outside the candidate's
-       changes that still reaches you is a blocker to report with the
-       `not_recovered` decision: re-running it cannot pass.
+       formatter it names) and run the command yourself to confirm. Leave the
+       repair uncommitted in the worktree: your sandbox mounts Git metadata
+       read-only, so do not run `git add` or `git commit`. Once you write
+       `retry`, Orbit commits the repair as a new commit on the task branch
+       and the retry validates that exact HEAD. Orbit refuses to commit, and
+       skips the retry, when the repair changes Git or `.orbit` metadata or an
+       environment file, leaves a symlink or gitlink, or would move a head
+       already under before-PR review. Never edit, skip, or weaken the
+       required command, and never rewrite the branch's existing commits.
+       Before you are dispatched, Orbit reruns the failing command on the
+       base. A failure the base shares is held as `baseline_red` and never
+       reaches you, so the error says whether the base passed. A failure
+       outside the candidate's changes that still reaches you is a blocker to
+       report with the `not_recovered` decision: re-running it cannot pass.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You
@@ -369,9 +376,10 @@ spec:
        that neither the current retry nor a resume of the run can execute the
        remaining delivery steps; do not preempt a viable pipeline retry. In
        that case:
-       - verify the candidate tree still matches the completed implementation;
-       - commit with the implementing crew's author identity and the
-         process-scoped Orbit committer identity;
+       - verify the candidate tree still matches the completed implementation
+         and is already committed: your sandbox mounts Git metadata
+         read-only, so a candidate that still needs a commit is a
+         repair-and-retry case, never direct delivery;
        - resolve the target base to its current tip as one exact SHA, keep
          that SHA pinned while rebasing, and resolve any conflicts the rebase
          raises rather than abandoning delivery, then push the task branch;

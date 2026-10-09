@@ -48,6 +48,7 @@ mod final_recovery;
 mod loop_block;
 mod parallel;
 mod recovery;
+mod recovery_commit;
 mod recovery_evidence;
 mod recovery_observation;
 mod reviewer;

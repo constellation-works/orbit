@@ -37,6 +37,9 @@ use tempfile::TempDir;
 
 use super::dispatch_admission::isolated;
 
+/// [ORB-14822] The host commits a recovery's repair before the retry.
+mod repair_commit;
+
 const ORIGINAL_FAILURE: &str = "required validation is red on the candidate";
 const RETRY_FAILURE: &str = "required validation is still red";
 const TASK: &str = "ORB-1";
@@ -72,6 +75,16 @@ fn git(dir: &Path, args: &[&str]) {
     });
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
+}
+
+fn git_stdout(dir: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.args(args).current_dir(dir).output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 /// A registered primary checkout; each case runs in its own linked worktree,
@@ -112,6 +125,10 @@ struct Case<'a> {
     change_validation_env: bool,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
+    /// Steps that ran before `validate`, as `(id, recorded output)`: a
+    /// `git_commit` outcome makes `validate` a step after the commit. A
+    /// `"HEAD"` string in an output is replaced with the worktree's head.
+    before: Vec<(&'a str, Value)>,
 }
 
 impl Default for Case<'_> {
@@ -125,6 +142,7 @@ impl Default for Case<'_> {
             claimed: false,
             change_validation_env: false,
             prepare: |_| {},
+            before: Vec::new(),
         }
     }
 }
@@ -141,6 +159,10 @@ struct Observed {
     envelopes: Vec<Value>,
     task_writes: usize,
     projection: orbit_core::runtime::audit::run::RunRecoveryAttempts,
+    /// The worktree's HEAD and `git status --porcelain` at each `validate`
+    /// attempt.
+    attempts_saw: Vec<(String, String)>,
+    worktree: PathBuf,
 }
 
 /// The `step.recovery_attempted` event's activity completion, failure phase
@@ -188,6 +210,7 @@ struct RecoveryHost<'a> {
     task_writes: AtomicUsize,
     slots: Mutex<Vec<StepRecoveryDecisionSlot>>,
     validation_env_marker: PathBuf,
+    attempts_saw: Mutex<Vec<(String, String)>>,
 }
 
 impl RecoveryHost<'_> {
@@ -211,6 +234,17 @@ impl RuntimeHost for RecoveryHost<'_> {
         input: &Value,
         _context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
+        if action == "checkpoint" {
+            // `HEAD` in a recorded output names the worktree's live head.
+            let head = git_stdout(
+                Path::new(input["workspace_path"].as_str().unwrap()),
+                &["rev-parse", "HEAD"],
+            );
+            let output = input["output"]
+                .to_string()
+                .replace("\"HEAD\"", &format!("\"{head}\""));
+            return Ok(serde_json::from_str(&output).unwrap());
+        }
         if action != "deliver" {
             self.hooks
                 .lock()
@@ -218,6 +252,11 @@ impl RuntimeHost for RecoveryHost<'_> {
                 .push((action.to_string(), input.clone()));
             return Ok(json!({}));
         }
+        let worktree = Path::new(input["workspace_path"].as_str().unwrap());
+        self.attempts_saw.lock().unwrap().push((
+            git_stdout(worktree, &["rev-parse", "HEAD"]),
+            git_stdout(worktree, &["status", "--porcelain"]),
+        ));
         let call = self.deliveries.fetch_add(1, Ordering::SeqCst);
         if call > 0 && self.retry_succeeds {
             return Ok(json!({"delivered": true}));
@@ -365,7 +404,27 @@ impl RuntimeHost for RecoveryHost<'_> {
 
 /// The failing step under the shipped recovery activity, in a job with a
 /// final recovery and a failure activity scripted as deterministic actions.
-fn job(worktree: &Path) -> JobV2 {
+fn job(worktree: &Path, before: &[(&str, Value)]) -> JobV2 {
+    let mut steps = before
+        .iter()
+        .map(|(id, output)| {
+            json!({
+                "id": id,
+                "spec": {"type": "deterministic", "action": "checkpoint", "config": {}},
+                "default_input": {"output": output, "workspace_path": worktree},
+            })
+        })
+        .collect::<Vec<_>>();
+    steps.push(json!({
+        "id": "validate",
+        "recovery_activity": "step_failure_recovery",
+        "spec": {"type": "deterministic", "action": "deliver", "config": {}},
+        "default_input": {
+            "task_id": TASK,
+            "workspace_path": worktree,
+            "repo_root": worktree,
+        },
+    }));
     let mut job = load_job_asset(
         &json!({
             "schemaVersion": 2,
@@ -376,16 +435,7 @@ fn job(worktree: &Path) -> JobV2 {
                 "kind": "workflow",
                 "failure_activity": "preserve_candidate",
                 "final_recovery_activity": "final_look",
-                "steps": [{
-                    "id": "validate",
-                    "recovery_activity": "step_failure_recovery",
-                    "spec": {"type": "deterministic", "action": "deliver", "config": {}},
-                    "default_input": {
-                        "task_id": TASK,
-                        "workspace_path": worktree,
-                        "repo_root": worktree,
-                    },
-                }],
+                "steps": steps,
             },
         })
         .to_string(),
@@ -480,6 +530,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         task_writes: AtomicUsize::new(0),
         slots: Mutex::new(Vec::new()),
         validation_env_marker: worktree.join(".orbit/tmp/validation-env-changed"),
+        attempts_saw: Mutex::new(Vec::new()),
     };
     let run_id = format!("run-{}", case.name);
     let audit = V2AuditWriter::with_disk_sinks(
@@ -492,7 +543,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
     )
     .unwrap();
     let result = execute_job_with_resume(
-        &job(&worktree),
+        &job(&worktree, &case.before),
         json!({"task_id": TASK}),
         &run_id,
         audit.clone(),
@@ -572,6 +623,8 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
             .runtime
             .collect_run_recovery_attempts(&run_id)
             .unwrap(),
+        attempts_saw: std::mem::take(&mut *host.attempts_saw.lock().unwrap()),
+        worktree,
     }
 }
 
