@@ -602,7 +602,10 @@ for the regression coverage.
 Build fixture Git commands with `git_repo::command()` from
 `crates/orbit-cli/tests/support/git_repo.rs`, which applies the shared authority
 scrub before deliberate fixture environment settings. Use it for reads as well
-as setup, commits, clones and pushes. `GIT_DIR`, `GIT_WORK_TREE`, and
+as setup, commits, clones and pushes. Initialize repositories with
+`git_repo::init()`; fixtures that require another branch can then set `HEAD`
+with a scrubbed `symbolic-ref` command before their first commit.
+`GIT_DIR`, `GIT_WORK_TREE`, and
 `GIT_COMMON_DIR` override cwd independently of Orbit's environment; index and
 object-directory variables can redirect writes too. Leaving them inherited can
 initialize or amend the parent repository and even force-push to its origin.

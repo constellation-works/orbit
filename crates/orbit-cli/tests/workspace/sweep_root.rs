@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -264,7 +263,7 @@ fn assert_home_empty(home: &Path) {
 }
 
 fn init_git_repo(repo: &Path) {
-    run_git(repo, &["init", "--quiet"]);
+    crate::git_repo::init(repo);
     run_git(repo, &["config", "user.name", "Orbit Test"]);
     run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -274,7 +273,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

@@ -11,7 +11,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -528,7 +527,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = git_repo::command()
         .args(args)
         .current_dir(cwd)
         .output()

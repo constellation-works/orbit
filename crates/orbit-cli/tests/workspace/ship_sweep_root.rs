@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -155,13 +154,13 @@ fn orbit(cwd: &Path, home: &Path, root_env: Option<&Path>, args: &[&str]) -> Vec
 }
 
 fn init_git_repo(repo: &Path) {
+    crate::git_repo::init(repo);
     for args in [
-        vec!["init", "--quiet"],
         vec!["config", "user.name", "Orbit Test"],
         vec!["config", "user.email", "orbit-test@example.com"],
         vec!["config", "commit.gpgsign", "false"],
     ] {
-        let status = StdCommand::new("git")
+        let status = crate::git_repo::command()
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -170,14 +169,14 @@ fn init_git_repo(repo: &Path) {
         assert!(status.success(), "git setup failed");
     }
     fs::write(repo.join("README.md"), "# fixture\n").expect("write fixture file");
-    let status = StdCommand::new("git")
+    let status = crate::git_repo::command()
         .arg("-C")
         .arg(repo)
         .args(["add", "README.md"])
         .status()
         .expect("git add");
     assert!(status.success(), "git add failed");
-    let status = StdCommand::new("git")
+    let status = crate::git_repo::command()
         .arg("-C")
         .arg(repo)
         .args(["commit", "--quiet", "-m", "initial"])

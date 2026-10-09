@@ -10,7 +10,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -122,13 +121,14 @@ fn config_set_under_root_refuses_without_workspace_layer_and_names_global() {
 }
 
 fn init_git_repo(repo: &Path) {
-    let status = StdCommand::new("git")
-        .args(["init", "--quiet", "-b", "agent-main"])
+    crate::git_repo::init(repo);
+    let status = crate::git_repo::command()
+        .args(["symbolic-ref", "HEAD", "refs/heads/agent-main"])
         .current_dir(repo)
         .status()
-        .expect("git init");
+        .expect("set fixture branch");
     assert!(status.success());
-    let status = StdCommand::new("git")
+    let status = crate::git_repo::command()
         .args(["commit", "--quiet", "--allow-empty", "-m", "init"])
         .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "test")

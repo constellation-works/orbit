@@ -21,6 +21,7 @@ mod config_set_root;
 #[cfg(unix)]
 mod doctor_confirm;
 mod generation_root;
+mod git_fixture_isolation;
 #[cfg(unix)]
 mod host_dashboard;
 #[cfg(unix)]
