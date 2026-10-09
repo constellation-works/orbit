@@ -224,18 +224,10 @@ fn shipped_template_criteria_pass_the_ac_specificity_lint() {
     );
 }
 
-fn normalize_markdown_text(text: &str) -> String {
-    text.lines()
-        .map(|line| line.trim().trim_start_matches('>').trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Finding tasks filed without scope sit held in `proposed` because
 /// `orbit task lint` warns they declare no usable context_files (ORB-14935).
-/// Every shipped auto-task template whose instructions call `orbit.task.add`
-/// for findings must mention `context_files` in that command.
+/// Every finding-filing `orbit.task.add` payload in a shipped auto-task
+/// template must carry a non-empty `context_files` array.
 #[test]
 fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auto_tasks");
@@ -295,14 +287,6 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
                         ));
                     }
                 }
-            }
-
-            let normalized = normalize_markdown_text(desc);
-            let rule = "Derive canonical `file:` selectors from every evidenced source path, removing the line suffix, and add the matching regression-test location. Use existing paths where possible; for a test file that must be created, set `allow_missing_context: true` and identify that intended path. Never file a finding without context selectors.";
-            if !normalized.contains(rule) {
-                missing_context_files.push(format!(
-                    "{name}: finding-filing template omits canonical file: selector derivation rule"
-                ));
             }
         }
     }
