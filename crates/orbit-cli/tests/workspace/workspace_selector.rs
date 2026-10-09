@@ -1455,8 +1455,7 @@ fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
 }
 
 fn init_git_repo(repo: &Path) {
-    fs::create_dir_all(repo).expect("create repo");
-    run_git(repo, &["init"]);
+    crate::git_repo::init(repo);
     run_git(repo, &["config", "user.name", "Orbit Test"]);
     run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -1466,7 +1465,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

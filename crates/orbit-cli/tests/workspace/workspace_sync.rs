@@ -638,7 +638,7 @@ fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
         "exactly one `.orbit/` ignore: {migrated}"
     );
     for path in [".orbit/config.toml", ".orbit/config.yaml"] {
-        let ignored = std::process::Command::new("git")
+        let ignored = git_repo::command()
             .args(["check-ignore", "--quiet", path])
             .current_dir(&repo)
             .status()
@@ -732,7 +732,7 @@ fn relocated_root_checkout_ignores_its_delivery_worktrees() {
 /// The untracked set the primary-checkout snapshot reads must not reach into
 /// `.orbit/`, where Orbit keeps its own nested delivery worktrees.
 fn assert_snapshot_omits_orbit_dir(repo: &Path, when: &str) {
-    let output = std::process::Command::new("git")
+    let output = git_repo::command()
         .args(["status", "--porcelain=v2", "--untracked-files=all"])
         .current_dir(repo)
         .output()
@@ -746,7 +746,7 @@ fn assert_snapshot_omits_orbit_dir(repo: &Path, when: &str) {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = git_repo::command()
         .args([
             "-c",
             "user.name=fixture",
