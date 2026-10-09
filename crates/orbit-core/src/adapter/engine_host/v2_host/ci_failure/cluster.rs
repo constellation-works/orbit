@@ -3,17 +3,18 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
-    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
-    MAX_LISTED_RUNS,
+    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
+    DESCRIPTION_LOG_BYTES, MAX_LISTED_RUNS,
 };
 use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
 use super::log_signature::{
-    FailedStepExcerpt, compiler_cause, relevant_log_query_errors, render_failed_step_excerpt,
-    specific_command_from_log, specific_error_anchors,
+    FailedStepExcerpt, compiler_cause, compiler_diagnostic_set, relevant_log_query_errors,
+    render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
@@ -26,6 +27,8 @@ use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
 /// Description line naming a compiler-cause identity. Completed repairs are
 /// matched on it, so the rendering and the reader share the prefix.
 pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
+/// Complete location-free set, retained independently of the bounded excerpt.
+const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
 /// Description line naming a concrete normalized error signature (never the
 /// step-name fallback, which is no diagnostic).
 pub(super) const SIGNATURE_LINE: &str =
@@ -70,6 +73,33 @@ impl FailureCluster {
     ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
         if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
             return Ok(Some(found));
+        }
+        if let Some(identity) = self.open_compiler_identity() {
+            let tasks = lookup.list_tasks()?;
+            if let Some(owner) = tasks
+                .iter()
+                .filter(|task| {
+                    matches!(
+                        task.status,
+                        TaskStatus::Proposed
+                            | TaskStatus::Backlog
+                            | TaskStatus::InProgress
+                            | TaskStatus::Review
+                            | TaskStatus::Blocked
+                    ) && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                        && task_open_compiler_identity(task).as_ref() == Some(&identity)
+                })
+                .min_by(|left, right| left.id.cmp(&right.id))
+            {
+                return Ok(Some(DuplicateTaskMatch {
+                    task_id: owner.id.clone(),
+                    match_kind: "open_compiler_diagnostics",
+                    evidence: json!({
+                        "fingerprint": "ci_open_compiler_diagnostics",
+                        "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
+                    }),
+                }));
+            }
         }
         // Shipped per-job keys (including the old first-marker signature) are
         // durable references. Keep their exact/rejected-owner continuity, but
@@ -182,6 +212,11 @@ impl FailureCluster {
         fingerprints.extend(self.provenance_fingerprints());
         DuplicateCandidate::new(exact_tag, fingerprints)
             .with_completed_fingerprints(self.completed_provenance_fingerprints())
+    }
+
+    pub(super) fn open_compiler_identity(&self) -> Option<String> {
+        self.compiler_cause.as_ref()?;
+        compiler_diagnostic_set(&self.log_excerpt).map(|set| digest(&[&set]))
     }
 
     fn provenance_fingerprints(&self) -> Vec<CoverageFingerprint> {
@@ -410,6 +445,9 @@ impl FailureCluster {
         out.push_str(&runner_os_line(runners));
         if let Some(cause) = &self.compiler_cause {
             out.push_str(&format!("{COMPILER_CAUSE_LINE}{}`\n", digest(&[cause])));
+            if let Some(identity) = self.open_compiler_identity() {
+                out.push_str(&format!("{OPEN_COMPILER_SET_LINE}{identity}`\n"));
+            }
         }
         if self.signature_is_step_fallback {
             out.push_str(&format!(
@@ -601,8 +639,25 @@ impl FailureCluster {
     }
 }
 
-/// The job whose own log supplied this failure's excerpt, if the run-scoped
-/// read produced nothing and collection fell back per job.
+/// Old descriptions carry only the exact-cause digest. Verify that their
+/// retained excerpt contains that entire cause before deriving a weaker set;
+/// a truncated subset must never claim coverage of another diagnostic set.
+fn task_open_compiler_identity(task: &Task) -> Option<String> {
+    let identity_line = |prefix| {
+        task.description
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix)?.strip_suffix('`'))
+    };
+    if let Some(identity) = identity_line(OPEN_COMPILER_SET_LINE) {
+        return Some(identity.to_string());
+    }
+    let cause = compiler_cause(&task.description)?;
+    if identity_line(COMPILER_CAUSE_LINE) != Some(digest(&[&cause]).as_str()) {
+        return None;
+    }
+    compiler_diagnostic_set(&task.description).map(|set| digest(&[&set]))
+}
+
 /// The `Runner OS` line: what each distinct runner was, where that came
 /// from, and the `os:` tags it gives the task.
 fn runner_os_line(runners: &[Value]) -> String {
@@ -644,6 +699,8 @@ fn runner_os_line(runners: &[Value]) -> String {
     format!("- Runner OS: {observed}; {routing}\n")
 }
 
+/// The job whose own log supplied this failure's excerpt, if the run-scoped
+/// read produced nothing and collection fell back per job.
 pub(super) fn job_log_source(failure: &Value) -> Option<String> {
     if value_string(failure, "log_source") != "job_api_log" {
         return None;

@@ -30,8 +30,11 @@
 //! without conflating different compiler operands or source revisions. Shipped
 //! per-job test tags remain exact owners; legacy compiler tags require the
 //! same immutable supplying evidence.
+//! A separate complete code/message/path identity reuses an open CI-sweep
+//! compiler owner across checkout and coordinate changes. Each new observation
+//! is appended to its comments with the exact key preserved as evidence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
@@ -50,11 +53,13 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
+use super::cluster::FailureCluster;
 use super::evidence::{
     audit_summary, bounded_error, deferral_audit, deferred_errors, exclude_already_repaired,
     filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
     repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
 };
+use super::fields::value_string;
 use super::grouping::cluster_failures;
 use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
@@ -372,6 +377,7 @@ where
     // Two clusters in one snapshot can share a failure key when the same root
     // cause was tested at two commits. The first filing closes the second.
     let mut filed_keys: BTreeSet<String> = BTreeSet::new();
+    let mut filed_compiler_sets: BTreeMap<String, String> = BTreeMap::new();
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
     // Every cluster and legacy key is assessed against one snapshot: the
@@ -493,6 +499,18 @@ where
             withheld.push(entry);
             continue;
         }
+        let duplicate_match = duplicate_match.or_else(|| {
+            let identity = cluster.open_compiler_identity()?;
+            let task_id = filed_compiler_sets.get(&identity)?.clone();
+            Some(DuplicateTaskMatch {
+                task_id,
+                match_kind: "open_compiler_diagnostics",
+                evidence: json!({
+                    "fingerprint": "ci_open_compiler_diagnostics",
+                    "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
+                }),
+            })
+        });
         if let Some(DuplicateTaskMatch {
             task_id,
             match_kind,
@@ -501,6 +519,9 @@ where
         {
             if match_kind == "covered_by_repair" {
                 repair_assessment::retain(runtime, &task_id, &evidence)?;
+            }
+            if match_kind == "open_compiler_diagnostics" {
+                retain_compiler_observations(runtime, &task_id, cluster)?;
             }
             if let Some(existing) = duplicate_task {
                 let expected_key_tag =
@@ -615,6 +636,9 @@ where
             )
         })?;
         filed_keys.insert(cluster.failure_key.clone());
+        if let Some(identity) = cluster.open_compiler_identity() {
+            filed_compiler_sets.insert(identity, task_id.clone());
+        }
         let mut filing = cluster.filing_entry(&task_id);
         filing["runner_os"] = json!(runners);
         filing["os_tags"] = json!(os_tags);
@@ -685,6 +709,39 @@ fn task_branch_owner(failure: &Value) -> Option<String> {
     let mut parts = branch.splitn(3, '-');
     let owner = format!("{}-{}", parts.next()?, parts.next()?);
     is_valid_orb_task_id(&owner).then_some(owner)
+}
+
+/// Re-read comments on each append so retries and repeated sources within one
+/// snapshot retain one comment per observation without mutating the exact tag.
+fn retain_compiler_observations(
+    runtime: &OrbitRuntime,
+    owner: &str,
+    cluster: &FailureCluster,
+) -> Result<(), OrbitError> {
+    for run in &cluster.runs {
+        let message = format!(
+            "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
+            value_string(run, "run_id"),
+            value_string(run, "url"),
+            cluster.tested_commit,
+            cluster.failure_key,
+        );
+        if runtime
+            .get_task_comments(owner)?
+            .iter()
+            .any(|comment| comment.message == message)
+        {
+            continue;
+        }
+        runtime.update_task(
+            owner,
+            TaskUpdateParams {
+                comment: Some(message),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Immutable, content-addressed receipts survive retries without duplicate
