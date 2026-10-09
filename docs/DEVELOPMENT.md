@@ -354,6 +354,16 @@ node crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/audit-browser
 ```
 
+Dashboard labels retain recorded roles and failure classes in tooltips while
+using operator-facing names in the tables; filtering still uses the recorded
+tokens. Auto-task status pills share the Tasks renderer and colour, including
+statuses supplied with underscores. Reliability names its fleet scope in the
+header and marks the workspace filter inactive. Plugin certification chips
+warn when certification predates the serving host's Orbit version, using
+SemVer precedence; missing or unrecognized versions do not establish lag.
+The panel behavior fixture covers certification comparisons and refreshes;
+the Operations browser fixture checks last-minted status tokens and colours.
+
 The dashboard polish browser fixture checks every Settings, Health and
 Automation deep link on load and reload at 375px, plus hash changes. Long view
 lists scroll within the space beside their destination so both selections stay

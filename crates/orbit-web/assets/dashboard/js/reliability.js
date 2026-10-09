@@ -426,9 +426,8 @@ function renderReliability(payload) {
   if (meta) {
     const range = fmtWindowRange(payload.window);
     const unreadable = (payload.unreadable_workspaces || []).length;
-    const fleet = "Fleet-wide";
     const independent = rel.independent ? " · independent window" : "";
-    meta.textContent = `${fleet} · ${range}${independent}${unreadable ? ` · ${unreadable} workspace(s) unreadable` : ""}`;
+    meta.textContent = `${range}${independent}${unreadable ? ` · ${unreadable} workspace(s) unreadable` : ""}`;
   }
   const count = $("reliability-count");
   if (count) {

@@ -993,7 +993,7 @@ after **cancel**: a one-line summary counting each outcome, with any
 settlement that has not reached its owner called out (`owner_unreachable` and
 `pending_delivery` say to run Stop again once the owner is reachable;
 `launch_uncertain` says it needs manual recovery, below). With no live window
-the auto card's button reads **Settle pending** and runs the same settle-only
+the auto card's button reads **Send pending results** and runs the same settle-only
 pass; it stays available because the pass needs no active drain.
 
 Leaf delivery can still fail — the owner was unreachable when the leaf ended,

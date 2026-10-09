@@ -325,6 +325,7 @@ pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> 
         "unsandboxed": summary.unsandboxed,
         "granted": summary.granted,
         "certified_orbit_version": summary.certified_orbit_version,
+        "host_orbit_version": env!("CARGO_PKG_VERSION"),
         "diagnostic": summary.diagnostic,
         "permissions": summary
             .permissions

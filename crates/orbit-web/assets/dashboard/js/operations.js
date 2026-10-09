@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
@@ -136,7 +136,7 @@ function nextEvaluationText(projection, fallbackAt, trigger) {
 
 function lastMintedText(definition) {
   if (!definition.last_minted_task_id) return "None";
-  const status = definition.last_minted_task_status ? ` · ${definition.last_minted_task_status}` : "";
+  const status = definition.last_minted_task_status ? ` · ${normalizeTaskStatus(definition.last_minted_task_status)}` : "";
   const schedulerId = definition.last_evaluation?.last_task_id;
   const source = schedulerId && definition.last_minted_task_id !== schedulerId
     ? " · manual mint"
@@ -1082,8 +1082,9 @@ function syncAutoTaskSchedulerNote() {
     : null;
   note.textContent = "";
   note.className = "operation-control-note auto-tasks-scheduler-note";
+  note.title = "Definitions are stored in .orbit/auto_tasks/ and evaluated on the host sweep clock. Toggle enables or disables a definition; Mint now bypasses its schedule, enabled flag and duplicate checks.";
   if (!scheduler) {
-    note.appendChild(el("span", { text: "Definitions live in .orbit/auto_tasks/ and are evaluated on the host sweep clock. Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe." }));
+    note.appendChild(el("span", { text: "Enabled definitions create tasks automatically when their trigger is due." }));
     return;
   }
   const link = el("a", { class: "operation-run-link operation-routine-link operation-link", text: scheduler.name });
@@ -1091,11 +1092,11 @@ function syncAutoTaskSchedulerNote() {
   if (!scheduler.enabled) {
     note.className += " warn";
     note.appendChild(el("span", { text: "The " }));
-    note.append(link, el("span", { text: " routine is paused, so scheduled definitions will not mint until it runs. Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe." }));
+    note.append(link, el("span", { text: " routine is paused, so scheduled tasks will wait until it resumes." }));
     return;
   }
-  note.appendChild(el("span", { text: "Minted by " }));
-  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}). Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe.` }));
+  note.appendChild(el("span", { text: "Scheduled tasks are created by " }));
+  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
 }
 
 function renderAutoTasks(payload) {
@@ -1877,13 +1878,13 @@ const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-deliver
 // The pull drain's stop reads differently from the auto window's: its leaves
 // were assigned by the owner and stay claimed there until they settle.
 const PULL_DRAIN_STOP_CONFIRM = "Stop new admissions for this replica's pull drain? Leaves it already admitted keep running and stay claimed by their owner. This is not cancellation, and cancelling one leaf fails its claim on the owner. Any settlement already recorded is also delivered to its owner.";
-const AUTO_DRAIN_SETTLE_CONFIRM = "Deliver the settlements this workspace has recorded but not yet delivered? No auto-delivery window needs to be live. Nothing is cancelled; running workers are left alone.";
+const AUTO_DRAIN_SETTLE_CONFIRM = "Send completed task results to their owner? This retries results waiting to be delivered, even after the drain has finished. Running tasks keep running.";
 
 // [ORB-12728] Counterpart to `orbit run auto --stop`: stops new admissions on
 // the live coordinator without cancelling it or the workers it already
 // admitted, then runs the settle-only pass that delivers recorded settlements
 // [ORB-13663]. That pass needs no live window, so with none (or with
-// admissions already stopped) the button stays usable as "Settle pending" —
+// admissions already stopped) the button stays usable as "Send pending results" —
 // the remedy for leaves stuck `settling` and claims stranded `running`.
 // Only a read-only view or a missing operator session disables it, and the
 // reason is visible text beside the button rather than a title alone.
@@ -1922,7 +1923,7 @@ function autoDrainStopCopy(payload) {
   const already = stopped.length
     ? `Admissions are already stopped for ${stopped.join(" and ")}. `
     : "No auto-delivery window is live. ";
-  return { label: "Settle pending", busy: "Settling…", aria: "Settle pending settlements", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Deliver settlements recorded for finished or cancelled drains.` };
+  return { label: "Send pending results", busy: "Sending…", aria: "Send pending task results", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Send completed task results to their owner.` };
 }
 
 // The outcome word for the admissions half of a stop result.
@@ -1942,7 +1943,7 @@ function autoDrainStopButton(payload) {
   const button = el("button", {
     class: "operation-button drain-stop",
     text: pending ? copy.busy : copy.label,
-    title: reasons.stop || copy.description,
+    title: reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
   });
   button.type = "button";
   button.dataset.drainFocus = "stop";
@@ -1956,7 +1957,7 @@ function autoDrainStopButton(payload) {
     const windowLine = targets.length ? `Window: ${targets.join(" and ")} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
     if (!window.confirm(`${copy.confirm}\n\n${windowLine}`)) return;
     pendingOperations.add(key);
-    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Delivering recorded settlements…");
+    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Sending completed task results…");
     renderAutoDrain(payload);
     try {
       const result = await postJson(visit.path("/api/workflows/auto/stop"), {});

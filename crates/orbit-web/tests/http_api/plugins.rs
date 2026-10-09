@@ -52,6 +52,11 @@ fn plugin_enable_requires_matching_recorded_grants_and_program_paths() {
             error_code(enable(), 409, "plugin_refused");
             let listed = json_ok(server.get("/api/plugins?workspace=ws_http_fixture"));
             assert_eq!(
+                listed[0]["host_orbit_version"],
+                env!("CARGO_PKG_VERSION"),
+                "plugin certification is compared with the serving host version"
+            );
+            assert_eq!(
                 listed[0]["host_enabled"], false,
                 "HTTP cannot mint consent on behalf of an operator"
             );
