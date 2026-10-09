@@ -114,6 +114,10 @@ def update(event):
 
 
 def terminate(_signal, _frame):
+    if mode == "term-delay":
+        (state / "terminating").touch()
+        while not (state / "release-owner").exists():
+            time.sleep(0.02)
     raise SystemExit(143)
 
 
@@ -122,12 +126,22 @@ update("start")
 try:
     if mode == "sleep":
         time.sleep(duration)
-    elif mode == "block":
+    elif mode in {"block", "term-delay"}:
         while True:
             time.sleep(1)
     elif mode == "fail":
         time.sleep(duration)
         raise SystemExit(23)
+    elif mode == "detached":
+        if os.fork() == 0:
+            os.setsid()
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            lock_file.close()
+            (state / "detached-pid").write_text(str(os.getpid()))
+            while True:
+                time.sleep(1)
+        while not (state / "release-owner").exists():
+            time.sleep(0.02)
 finally:
     update("end")
 PY
@@ -251,6 +265,97 @@ run_queue_case after-success sleep
 run_queue_case after-failure fail
 run_queue_case after-termination block
 
+# A detached descendant must not retain admission after its direct parent exits.
+# fork() deliberately retains inherited descriptors to reproduce the leaked flock.
+detached_state="$TMP/detached"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-detached" ORBIT_BUILD_SLOTS=1 \
+  "$WRAPPER" -- "$TMP/helper.py" "$detached_state" owner detached &
+owner_pid=$!
+BACKGROUND_PIDS+=("$owner_pid")
+wait_for "$detached_state/detached-pid"
+detached_pid="$(cat "$detached_state/detached-pid")"
+BACKGROUND_PIDS+=("$detached_pid")
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-detached" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
+  2>"$TMP/detached-queue.err" &
+queued_pid=$!
+BACKGROUND_PIDS+=("$queued_pid")
+sleep 0.08
+[[ ! -e "$detached_state/started-queued" ]] \
+  || fail "detached case admitted a second command while the owner was running"
+touch "$detached_state/release-owner"
+wait "$owner_pid"
+forget_pid "$owner_pid"
+wait "$queued_pid" || fail "a surviving detached child retained the build slot"
+forget_pid "$queued_pid"
+kill -0 "$detached_pid" || fail "detached child exited before the admission assertion"
+kill -TERM "$detached_pid"
+forget_pid "$detached_pid"
+
+# Forward cancellation, but keep admission until the command finishes handling it.
+termination_state="$TMP/termination-delay"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-termination-delay" ORBIT_BUILD_SLOTS=1 \
+  "$WRAPPER" -- "$TMP/helper.py" "$termination_state" owner term-delay &
+owner_pid=$!
+BACKGROUND_PIDS+=("$owner_pid")
+wait_for "$termination_state/started-owner"
+kill -TERM "$owner_pid"
+wait_for "$termination_state/terminating"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-termination-delay" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 &
+queued_pid=$!
+BACKGROUND_PIDS+=("$queued_pid")
+sleep 0.08
+[[ ! -e "$termination_state/started-queued" ]] \
+  || fail "cancellation released the slot before the command finished"
+touch "$termination_state/release-owner"
+set +e
+wait "$owner_pid"
+owner_status=$?
+set -e
+forget_pid "$owner_pid"
+[[ "$owner_status" == "143" ]] || fail "cancellation lost the command's exit status"
+wait "$queued_pid" || fail "cancellation did not release admission after the command exited"
+forget_pid "$queued_pid"
+
+# Check actual signal termination, not just the equivalent shell exit code.
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-signals" ORBIT_BUILD_SLOTS=1 \
+  timeout 10 python3 - "$WRAPPER" "$TMP" <<'PY'
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+wrapper, scratch = sys.argv[1:]
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+for signum in (signal.SIGTERM, signal.SIGKILL):
+    child = subprocess.run([wrapper, "--", sys.executable, "-c",
+                            "import os,sys; os.kill(os.getpid(), int(sys.argv[1]))",
+                            str(signum)])
+    assert child.returncode == -signum, child.returncode
+
+for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    # The test runner can inherit ignored signals; this case requires delivery.
+    signal.signal(signum, signal.SIG_DFL)
+    ready = Path(scratch) / f"signal-ready-{signum}"
+    child = subprocess.Popen([wrapper, "--", sys.executable, "-c",
+                              "import pathlib,signal,sys; "
+                              "pathlib.Path(sys.argv[1]).touch(); signal.pause()",
+                              str(ready)], stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 2
+        while not ready.exists():
+            assert time.monotonic() < deadline, "signal command never started"
+            time.sleep(0.01)
+        child.send_signal(signum)
+        assert child.wait(timeout=2) == -signum, child.returncode
+    finally:
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=2)
+PY
+
 # A held slot produces bounded diagnostics on stderr while the wrapped command
 # remains queued. The private interval override keeps this process test short.
 wait_state="$TMP/wait-reporting"
@@ -320,8 +425,26 @@ ORBIT_BUILD_BUDGET_DIR="$TMP/locks-immediate" ORBIT_BUILD_SLOTS=1 \
 
 # A nested admitted entry point must not try to acquire a second slot.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
-  timeout 5 "$WRAPPER" -- "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" nested sleep 0.01
+  "$WRAPPER" -- "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" nested block &
+owner_pid=$!
+BACKGROUND_PIDS+=("$owner_pid")
+wait_for "$TMP/nested/started-nested"
 grep -Fq 'jobs=5' "$TMP/nested/events" || fail "nested command lost Cargo job limit"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 &
+queued_pid=$!
+BACKGROUND_PIDS+=("$queued_pid")
+sleep 0.08
+[[ ! -e "$TMP/nested/started-queued" ]] || fail "nested command lost its parent's slot"
+kill -TERM "$owner_pid"
+set +e
+wait "$owner_pid"
+owner_status=$?
+set -e
+forget_pid "$owner_pid"
+[[ "$owner_status" == "143" ]] || fail "nested command lost its termination status"
+wait "$queued_pid" || fail "nested command did not release admission"
+forget_pid "$queued_pid"
 
 # Exercise a real Make entry point inside an existing admission. The inner
 # wrapper inherits the marker and must not wait on the only slot.
