@@ -154,6 +154,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.metadata.outputs.version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
       darwin_arm_asset: ${{ steps.metadata.outputs.darwin_arm_asset }}
       darwin_arm_sha: ${{ steps.metadata.outputs.darwin_arm_sha }}
       darwin_intel_asset: ${{ steps.metadata.outputs.darwin_intel_asset }}
@@ -242,6 +243,11 @@ jobs:
             exit 1
           fi
           VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
           DARWIN_ARM_ASSET="orbit-aarch64-apple-darwin.tar.gz"
           DARWIN_INTEL_ASSET="orbit-x86_64-apple-darwin.tar.gz"
           DARWIN_ARM_SHA="$(awk '$2 == "'"$DARWIN_ARM_ASSET"'" { print $1 }' dist/orbit-checksums.txt)"
@@ -252,6 +258,7 @@ jobs:
 
           {
             echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
             echo "darwin_arm_asset=$DARWIN_ARM_ASSET"
             echo "darwin_arm_sha=$DARWIN_ARM_SHA"
             echo "darwin_intel_asset=$DARWIN_INTEL_ASSET"
@@ -263,6 +270,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
           files: |
             dist/orbit-aarch64-apple-darwin.tar.gz
             dist/orbit-aarch64-unknown-linux-gnu.tar.gz
@@ -302,6 +310,7 @@ jobs:
   bump-homebrew-tap:
     name: Update Homebrew tap
     needs: publish-release
+    if: ${{ needs.publish-release.outputs.prerelease == 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
