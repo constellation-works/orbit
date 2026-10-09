@@ -161,7 +161,8 @@ export function card(task: OrbitTask, workspace: string): string {
 
 // Sticky: tried only where a command can start. The subcommand must end at
 // whitespace or a shell separator, so `commit-tree` and `commit-graph` miss.
-const COMMIT = /git(?:\s+-[cC]\s+\S+)*\s+commit(?=[\s;&|()<>]|$)/y
+const COMMIT =
+  /(?:(?:[A-Za-z_]\w*=\S*|then|else|do|time)\s+)*git(?:\s+-[cC]\s+\S+)*\s+commit(?=[\s;&|()<>]|$)/y
 const COMMAND_START = new Set([';', '&', '|', '(', ')', '{', '\n'])
 
 /** End index of the first `git commit` at a command position outside quotes. */
@@ -173,6 +174,10 @@ function commitEnd(command: string): number | null {
     if (quote !== null) {
       if (ch === '\\' && quote === '"') i++
       else if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '\n') {
+      atStart = true
       continue
     }
     if (/\s/.test(ch)) continue

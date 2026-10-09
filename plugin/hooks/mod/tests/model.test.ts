@@ -26,6 +26,12 @@ test('only a git commit at a command position gains the trailer', () => {
   expect(withTaskTrailer('git status; git -c user.name=x commit -m x', 'ORB-7')).toBe(
     `git status; git -c user.name=x commit --trailer 'Task: ORB-7' -m x`,
   )
+  expect(withTaskTrailer('git add .\ngit commit -m x', 'ORB-7')).toBe(
+    `git add .\ngit commit --trailer 'Task: ORB-7' -m x`,
+  )
+  expect(withTaskTrailer('GIT_EDITOR=true git commit -m x', 'ORB-7')).toBe(
+    `GIT_EDITOR=true git commit --trailer 'Task: ORB-7' -m x`,
+  )
   expect(withTaskTrailer('echo "it\\" quote" && (git commit)', 'ORB-7')).toBe(
     `echo "it\\" quote" && (git commit --trailer 'Task: ORB-7')`,
   )
