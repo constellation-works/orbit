@@ -159,16 +159,44 @@ export function card(task: OrbitTask, workspace: string): string {
   return lines.join('\n')
 }
 
-const COMMIT = /\bgit((?:\s+-c\s+\S+|\s+-C\s+\S+)*)\s+commit\b/
+// Sticky: tried only where a command can start. The subcommand must end at
+// whitespace or a shell separator, so `commit-tree` and `commit-graph` miss.
+const COMMIT = /git(?:\s+-[cC]\s+\S+)*\s+commit(?=[\s;&|()<>]|$)/y
+const COMMAND_START = new Set([';', '&', '|', '(', ')', '{', '\n'])
+
+/** End index of the first `git commit` at a command position outside quotes. */
+function commitEnd(command: string): number | null {
+  let quote: string | null = null
+  let atStart = true
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (quote !== null) {
+      if (ch === '\\' && quote === '"') i++
+      else if (ch === quote) quote = null
+      continue
+    }
+    if (/\s/.test(ch)) continue
+    if (atStart) {
+      COMMIT.lastIndex = i
+      if (COMMIT.test(command)) return COMMIT.lastIndex
+    }
+    atStart = COMMAND_START.has(ch)
+    if (ch === '\\') i++
+    else if (ch === "'" || ch === '"') quote = ch
+  }
+  return null
+}
 
 /**
  * The command with a `Task:` trailer on its first `git commit`, or null when
- * the command makes no commit or already names a trailer or a task line.
+ * the command makes no commit there (quoted text and other `git commit-*`
+ * subcommands do not count) or already names a trailer or a task line.
  */
 export function withTaskTrailer(command: string, taskId: string): string | null {
-  if (!COMMIT.test(command) || /--trailer\b|\bTask:/.test(command)) return null
+  const end = commitEnd(command)
+  if (end === null || /--trailer\b|\bTask:/.test(command)) return null
   if (/\s--amend\b/.test(command)) return null
-  return command.replace(COMMIT, match => `${match} --trailer 'Task: ${taskId}'`)
+  return `${command.slice(0, end)} --trailer 'Task: ${taskId}'${command.slice(end)}`
 }
 
 export const findRunId = (output: string): string | null => RUN_ID.exec(output)?.[0] ?? null

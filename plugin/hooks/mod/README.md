@@ -38,8 +38,10 @@ this folder.
   context.
 - **Commit trailer.** While the session works a task (after **Work here**,
   **Rescue here**, or an `orbit_task_update` to in-progress), a Bash
-  `git commit` gains `--trailer 'Task: <id>'`. A commit that already has
-  a trailer, or uses `--amend`, is left alone.
+  `git commit` gains `--trailer 'Task: <id>'`. Only a command that starts
+  with `git commit` counts (after `;`, `&&`, `|` or `(`): `git commit-tree`
+  and quoted text such as `--grep="git commit"` are left alone, as is a
+  commit that already has a trailer or uses `--amend`.
 
 Approve runs as soon as you press it. Accept, reject and ship ask for
 confirmation first. **Work here** and **Rescue here** submit a prompt to

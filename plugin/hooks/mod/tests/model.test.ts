@@ -14,6 +14,23 @@ test('a commit gains the task trailer once, and only a commit', () => {
   expect(withTaskTrailer('git status', 'ORB-7')).toBeNull()
 })
 
+test('only a git commit at a command position gains the trailer', () => {
+  expect(withTaskTrailer('git commit-tree abc -m x', 'ORB-7')).toBeNull()
+  expect(withTaskTrailer('git commit-graph write --reachable', 'ORB-7')).toBeNull()
+  expect(withTaskTrailer('git log --grep="git commit"', 'ORB-7')).toBeNull()
+  expect(withTaskTrailer(`echo 'git commit' && git status`, 'ORB-7')).toBeNull()
+  expect(withTaskTrailer('echo git commit', 'ORB-7')).toBeNull()
+  expect(withTaskTrailer('git add . && git commit -m "a git commit"', 'ORB-7')).toBe(
+    `git add . && git commit --trailer 'Task: ORB-7' -m "a git commit"`,
+  )
+  expect(withTaskTrailer('git status; git -c user.name=x commit -m x', 'ORB-7')).toBe(
+    `git status; git -c user.name=x commit --trailer 'Task: ORB-7' -m x`,
+  )
+  expect(withTaskTrailer('echo "it\\" quote" && (git commit)', 'ORB-7')).toBe(
+    `echo "it\\" quote" && (git commit --trailer 'Task: ORB-7')`,
+  )
+})
+
 test('remote arguments reach the owner as one quoted word each', () => {
   const argv = remoteArgv('box', ['task', 'list', "it's; rm -rf ~"])
   expect(argv.slice(0, 7)).toEqual(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--', 'box'])
