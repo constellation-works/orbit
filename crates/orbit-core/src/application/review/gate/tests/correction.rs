@@ -163,7 +163,7 @@ fn a_defect_in_what_the_checks_observed_is_left_to_settlement() {
 
 /// [ORB-15083] A skipped command filed as a `not_run` diagnostic is returned
 /// to the reviewer once, with the correction its class takes: a baseline
-/// command the host reruns is recorded `excluded`, and the corrected report
+/// command is recorded `excluded`, and the corrected report
 /// settles in the same attempt.
 #[test]
 fn a_skipped_baseline_command_filed_as_diagnostic_is_returned_and_settles_excluded() {

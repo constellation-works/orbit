@@ -243,8 +243,7 @@ spec:
          requirement. Never perform an unauthorized action to clear a record.
          It is also where a baseline command you deliberately skipped goes: a
          `baseline_commands` entry (and not a `required_validation_commands`
-         one) that the host reruns may be left unrun, recorded `excluded` with
-         a note, or omitted. Never use `excluded` for a check that repository
+         one) may be left unrun, recorded `excluded` with a note, or omitted. Never use `excluded` for a check that repository
          guidance requires, such as local Rust CodeQL: that silently drops the
          coverage. Run it, or name it in `external_evidence` (an entry the
          manifest's `owed_external_evidence` lists is already owner-fulfilled)

@@ -59,8 +59,8 @@ pub enum SkippedCheck {
     /// A captured `workflow.required_validation_commands` entry: it needs a
     /// passing `required` record, so only running it settles.
     HostRequired,
-    /// A `review.baseline_commands` entry the owner reruns on the host: the
-    /// reviewer may leave it unrun, recorded `excluded` or omitted.
+    /// A `review.baseline_commands` entry: the reviewer may leave it unrun,
+    /// recorded `excluded` or omitted.
     Baseline,
     /// Neither list names it. If repository policy requires it (local Rust
     /// CodeQL), it is never `excluded`: it is run, or owed as external
@@ -77,7 +77,7 @@ impl SkippedCheck {
                  `excluded` never establishes one"
             }
             SkippedCheck::Baseline => {
-                "it is a baseline command the host reruns, so record it `excluded` or omit it"
+                "it is a baseline command, so record it `excluded` or omit it"
             }
             SkippedCheck::Unlisted => {
                 "if repository policy requires this check (for example local Rust CodeQL), \
