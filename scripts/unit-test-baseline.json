@@ -1,7 +1,7 @@
 {
   "crates": {
     "orbit-agent": {
-      "test_functions": 26
+      "test_functions": 19
     },
     "orbit-automation": {
       "test_functions": 36
