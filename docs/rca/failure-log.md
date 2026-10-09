@@ -31,6 +31,64 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-09: An owner task-lock timeout fails a follower's final recovery
+
+- **Where:** Mac pull follower, `final_recovery` after `landing_review_gate_settle`.
+- **Symptom:** `remote tool failed (internal_error): ... timed out after 30000ms
+  acquiring task commit boundary lock`. On the box, `orbit-sweep.service` failed on
+  the same lock at the same instant (18:37:24Z).
+- **Cause:** under drain load the workspace partition lock
+  (`tasks/workspaces/<ws>/.task-commit.lock`) is held for more than 30 s. Its
+  holder is never recorded (`holder=unknown`), and a follower's owner call reports
+  the timeout as `internal_error` with no retry.
+- **Fix:** ORB-15088 (open): record the holder and how long it held the lock, find
+  and bound the slow sections, and return a typed retryable error that final
+  recovery retries.
+- **Tasks:** ORB-15029 (`jrun-20261009-1653-c1`). The operator pushed the reviewer's
+  fix commit to PR #3963, ran the SIGTERM test on the box (Linux runs the path the
+  macOS guard skips), and landed it.
+- **Final recovery:** none applied (the invocation failed to load the task).
+
+## 2026-10-09: Before-landing review holds correct candidates on report-shape or base-state claims
+
+- **Where:** `landing_review_gate_settle` (`review.before_landing`, trial ORB-14849).
+- **Symptom:** `review_gate_blocked: verdict incomplete` with 0 open candidate
+  findings, as one of:
+  (a) `validation_contradicted: <cmd> was recorded as diagnostic but is not_run`;
+  (b) the reviewer claims a red base and the host's `baseline_claim_refused`
+  contradicts it;
+  (c) `review_timeout_incomplete` at exactly 3600 s.
+- **Cause:** (a) a skipped baseline or CodeQL command labelled `diagnostic`
+  instead of `excluded`. `RoleContradicted` is not in `correctable()`, so the
+  reviewer never gets its correction pass. (b) Reviewer environment failures
+  inside the managed run: the proc_spawn fixture inherited `ORBIT_ACTIVITY_*`
+  (fixed by ORB-15052). A host baseline that ran zero Rust tests counted as
+  passing (friction F2026-10-211). (c) The reviewer process is bounded by
+  `min(review.minutes, agent_review_repair wall_clock_timeout_seconds 3600)`,
+  while its manifest advertises the full 120 minutes (F2026-10-214).
+- **Fix:** ORB-15083 (open) for (a), and ORB-15094 (open) for (c).
+  Friction curation will file a task for the zero-test baseline.
+- **Tasks:** ORB-15021 (PR #3957), ORB-15038 (PR #3967), ORB-15078 (PR #3977),
+  ORB-15050 (PR #3962), ORB-15043 (PR #3969), ORB-14916 (PR #3966, timeout),
+  ORB-14934 (PR #3972, timeout). All landed by operator decision after their red checks
+  matched agent-main's.
+- **Final recovery:** escalated (human_action: operator decision).
+
+## 2026-10-09: Final recovery escalates a forward resume after an agent yields mid-implement
+
+- **Where:** box leaf `implement_bundle` (crew gemini-flash), then final recovery.
+- **Symptom:** `the provider exited 0 but stdout carried no valid terminating Orbit
+  response envelope`. Final recovery returns `resume` from `commit` and is refused
+  ("neither the failed step … nor an earlier step of its phase"), so the task goes
+  `blocked` even though a complete candidate is in the worktree.
+- **Cause:** `admit_resume_step` turns any forward resume into `escalate`, and the
+  recovery prompt does not list the allowed resume steps.
+- **Fix:** ORB-15079 (open): list the allowed steps in the prompt, and downgrade a
+  forward resume to the failed step.
+- **Tasks:** ORB-15018 (`jrun-20261009-1613-c7`; partial candidate as failure-handoff
+  PR #3960), requeued on sol by the operator.
+- **Final recovery:** escalated (invalid resume step).
+
 ## 2026-10-09: Git protection refuses git's own temp leftovers in `.git/objects`
 
 - **Where:** Mac pull-drain leaves at sandbox resolution, right after deploying
