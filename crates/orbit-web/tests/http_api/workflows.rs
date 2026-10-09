@@ -303,6 +303,12 @@ fn malformed_bodies_do_not_select_defaults_and_auto_requires_workspace() {
         "workflows::malformed_bodies_do_not_select_defaults_and_auto_requires_workspace",
         || {
             let fixture = Fixture::new();
+            // The server opens its own runtime; discovery here tests HTTP defaults.
+            std::fs::write(
+                fixture.path("global/config.toml"),
+                "[workflow.resource_throttle]\nenabled = false\n",
+            )
+            .unwrap();
             fixture.job("task_auto_pipeline");
             let cancel_target = fixture.seed_run(
                 "jrun-cancel-target",

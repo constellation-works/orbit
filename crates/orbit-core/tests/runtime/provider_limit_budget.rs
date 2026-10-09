@@ -55,7 +55,8 @@ impl Fixture {
                 base_branch: Some("main".into()),
             },
         )
-        .unwrap();
+        .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm());
         Self {
             _root: root,
             runtime,

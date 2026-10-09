@@ -42,8 +42,9 @@ fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRu
         ship_mode,
         base_branch: Some("main".to_string()),
     };
-    let runtime =
-        OrbitRuntime::from_roots_with_binding(&global_root, &workspace_root, binding).unwrap();
+    let runtime = OrbitRuntime::from_roots_with_binding(&global_root, &workspace_root, binding)
+        .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm());
     (root, runtime)
 }
 
