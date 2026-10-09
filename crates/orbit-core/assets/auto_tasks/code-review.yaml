@@ -32,9 +32,13 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a finding with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Omit the `regression_from` relation only when no task in the window can be
-      held responsible.
+      held responsible. Derive canonical `file:` selectors from every evidenced
+      source path, removing the line suffix, and add the matching
+      regression-test location. Use existing paths where possible; for a test file
+      that must be created, set `allow_missing_context: true` and identify that
+      intended path. Never file a finding without context selectors.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Fail open. A window with no confirmed findings is a successful no-op. Do not
       invent work to justify the run.

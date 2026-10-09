@@ -223,3 +223,106 @@ fn shipped_template_criteria_pass_the_ac_specificity_lint() {
         flagged.join("\n")
     );
 }
+
+fn normalize_markdown_text(text: &str) -> String {
+    text.lines()
+        .map(|line| line.trim().trim_start_matches('>').trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Finding tasks filed without scope sit held in `proposed` because
+/// `orbit task lint` warns they declare no usable context_files (ORB-14935).
+/// Every shipped auto-task template whose instructions call `orbit.task.add`
+/// for findings must mention `context_files` in that command.
+#[test]
+fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auto_tasks");
+    let mut templates = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read auto-task directory entry: {error}"))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect::<Vec<_>>();
+    templates.sort();
+    assert!(
+        !templates.is_empty(),
+        "no shipped auto-task templates under {}",
+        dir.display()
+    );
+
+    let mut checked_finding_templates = Vec::new();
+    let mut missing_context_files = Vec::new();
+
+    for path in &templates {
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("template file name is not UTF-8: {}", path.display()));
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let definition = parse_template(name, &source);
+        let desc = &definition.template.description;
+
+        let calls_task_add_for_findings =
+            desc.contains("orbit.task.add") && desc.to_lowercase().contains("finding");
+
+        if calls_task_add_for_findings {
+            checked_finding_templates.push(name.to_string());
+            let payloads = task_add_payloads(desc);
+            let finding_payloads = payloads
+                .into_iter()
+                .filter(|payload| payload["type"] == "bug")
+                .collect::<Vec<_>>();
+
+            if finding_payloads.is_empty() {
+                missing_context_files.push(format!(
+                    "{name}: instructions call orbit.task.add for findings but no valid task-add payload was found"
+                ));
+            } else {
+                for payload in &finding_payloads {
+                    let has_context_files = payload
+                        .get("context_files")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|arr| !arr.is_empty());
+                    if !has_context_files {
+                        missing_context_files.push(format!(
+                            "{name}: finding task-add payload omits context_files: {payload}"
+                        ));
+                    }
+                }
+            }
+
+            let normalized = normalize_markdown_text(desc);
+            let rule = "Derive canonical `file:` selectors from every evidenced source path, removing the line suffix, and add the matching regression-test location. Use existing paths where possible; for a test file that must be created, set `allow_missing_context: true` and identify that intended path. Never file a finding without context selectors.";
+            if !normalized.contains(rule) {
+                missing_context_files.push(format!(
+                    "{name}: finding-filing template omits canonical file: selector derivation rule"
+                ));
+            }
+        }
+    }
+
+    for expected in [
+        "code-review",
+        "delivery-code-review",
+        "full-code-review",
+        "qa-sweep",
+        "security-review",
+    ] {
+        assert!(
+            checked_finding_templates.iter().any(|t| t == expected),
+            "expected template {expected} to be checked for context_files in finding filing command"
+        );
+    }
+
+    assert!(
+        missing_context_files.is_empty(),
+        "shipped auto-task templates call orbit.task.add for findings without context_files:\n{}",
+        missing_context_files.join("\n")
+    );
+}
