@@ -46,6 +46,7 @@ use crate::task_store;
 
 mod automation;
 mod commands;
+mod git_protection;
 mod permissions;
 mod report;
 mod system;

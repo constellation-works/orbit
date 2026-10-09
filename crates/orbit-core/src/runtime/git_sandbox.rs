@@ -59,6 +59,18 @@ pub(crate) fn append_git_denies(
     Ok(())
 }
 
+/// Run the host-side protection scan on a checkout exactly as sandbox
+/// preparation does, without a profile to extend. Errors are the refusals a
+/// leaf in that checkout would meet.
+pub(crate) fn scan_checkout(cwd: &Path) -> Result<(), OrbitError> {
+    let mut scratch = ResolvedFsProfile {
+        name: "git-protection-scan".to_string(),
+        read: Vec::new(),
+        modify: Vec::new(),
+    };
+    append_git_denies(cwd, &mut scratch)
+}
+
 fn find_git_pointer(cwd: &Path) -> Result<Option<PathBuf>, OrbitError> {
     for root in cwd.ancestors() {
         let pointer = root.join(".git");
@@ -128,10 +140,19 @@ fn validate_git_tree(root: &Path) -> Result<(), OrbitError> {
     loop {
         attempts += 1;
         validate_git_tree_ancestors(root, &mut directories)?;
-        let result = scan_git_tree(root, &mut directories);
+        // Names are counted per attempt: a retry rescans every entry.
+        let mut links = ObjectLinks::default();
+        let result = scan_git_tree(root, ScanScope::Root, &mut directories, &mut links);
         validate_git_tree_ancestors(root, &mut directories)?;
         match result {
-            Ok(()) => return Ok(()),
+            Ok(()) => match links.first_escape() {
+                None => return Ok(()),
+                // Git may have unlinked a temporary name between its inode
+                // being read and its sibling being counted; a name that is
+                // still missing on the last attempt escapes the store.
+                Some(escape) if attempts == MAX_ATTEMPTS => return Err(escape),
+                Some(_) => {}
+            },
             Err(GitTreeScanError::Denied(error)) => return Err(error),
             Err(GitTreeScanError::Disappeared { path, error }) => {
                 if attempts == MAX_ATTEMPTS {
@@ -206,9 +227,91 @@ fn scan_error(path: &Path, error: io::Error) -> GitTreeScanError {
     }
 }
 
+/// Where a directory sits in the protected tree. Only the object store
+/// directly under the scan root tolerates hard links among its own names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanScope {
+    Root,
+    Metadata,
+    ObjectStore,
+}
+
+/// Git writes an object to a temporary name, links it to the final name and
+/// unlinks the temporary one. A write interrupted between the last two steps
+/// leaves both names, so `objects/` may hold hard links that are Git's own.
+/// They are accepted only when every name of the inode is inside the store.
+#[derive(Default)]
+struct ObjectLinks {
+    inodes: HashMap<(u64, u64), ObjectInode>,
+}
+
+struct ObjectInode {
+    nlink: u64,
+    names_seen: u64,
+    reported: PathBuf,
+    reported_is_temp: bool,
+}
+
+impl ObjectLinks {
+    fn record(&mut self, path: &Path, metadata: &fs::Metadata) {
+        let temp = is_git_temp_name(path);
+        let entry = self
+            .inodes
+            .entry((metadata.dev(), metadata.ino()))
+            .or_insert_with(|| ObjectInode {
+                nlink: metadata.nlink(),
+                names_seen: 0,
+                reported: path.to_path_buf(),
+                reported_is_temp: temp,
+            });
+        entry.names_seen += 1;
+        if temp && !entry.reported_is_temp {
+            entry.reported = path.to_path_buf();
+            entry.reported_is_temp = true;
+        }
+    }
+
+    /// A name of some inode that lives outside the store, if any.
+    fn first_escape(&self) -> Option<OrbitError> {
+        self.inodes
+            .values()
+            .find(|inode| inode.names_seen < inode.nlink)
+            .map(|inode| metadata_entry_refusal(&inode.reported, true))
+    }
+}
+
+/// The names Git gives a loose object, pack or index until it is complete.
+fn is_git_temp_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            ["tmp_obj_", "tmp_pack_", "tmp_idx_"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
+}
+
+fn metadata_entry_refusal(path: &Path, hard_linked: bool) -> OrbitError {
+    let remedy = if hard_linked && is_git_temp_name(path) {
+        format!(
+            "; it is a temporary file left by an interrupted Git write. Delete `{}` and run \
+             `git fsck`",
+            path.display()
+        )
+    } else {
+        String::new()
+    };
+    OrbitError::PolicyDenied(format!(
+        "Git protection refuses symlink, special-file or hard-linked metadata entry `{}`{remedy}",
+        path.display()
+    ))
+}
+
 fn scan_git_tree(
     root: &Path,
+    scope: ScanScope,
     directories: &mut DirectoryIdentities,
+    links: &mut ObjectLinks,
 ) -> Result<(), GitTreeScanError> {
     #[cfg(all(test, target_os = "linux"))]
     run_scan_hook(GitScanStage::ReadDirectory, root).map_err(|error| scan_error(root, error))?;
@@ -221,18 +324,24 @@ fn scan_git_tree(
         run_scan_hook(GitScanStage::InspectEntry, &path)
             .map_err(|error| scan_error(&path, error))?;
         let metadata = fs::symlink_metadata(&path).map_err(|error| scan_error(&path, error))?;
-        if (!metadata.is_file() && !metadata.is_dir())
-            || (metadata.is_file() && metadata.nlink() > 1)
-        {
-            return Err(OrbitError::PolicyDenied(format!(
-                "Git protection refuses symlink, special-file or hard-linked metadata entry `{}`",
-                path.display()
-            ))
-            .into());
+        if !metadata.is_file() && !metadata.is_dir() {
+            return Err(metadata_entry_refusal(&path, false).into());
+        }
+        if metadata.is_file() && metadata.nlink() > 1 {
+            if scope == ScanScope::ObjectStore {
+                links.record(&path, &metadata);
+            } else {
+                return Err(metadata_entry_refusal(&path, true).into());
+            }
         }
         if metadata.is_dir() {
             validate_git_directory(&path, &metadata, directories)?;
-            scan_git_tree(&path, directories)?;
+            let child = match scope {
+                ScanScope::Root if entry.file_name() == "objects" => ScanScope::ObjectStore,
+                ScanScope::ObjectStore => ScanScope::ObjectStore,
+                ScanScope::Root | ScanScope::Metadata => ScanScope::Metadata,
+            };
+            scan_git_tree(&path, child, directories, links)?;
         }
     }
     // read_dir may have opened an older directory after a concurrent rename.

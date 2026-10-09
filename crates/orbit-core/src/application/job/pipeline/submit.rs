@@ -353,6 +353,7 @@ impl OrbitRuntime {
             false,
         )?
         .into_result()?;
+        self.preflight_git_protection()?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
