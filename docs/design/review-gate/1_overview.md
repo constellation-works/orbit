@@ -2,7 +2,7 @@
 title: Review Gate — Overview
 owner: codex
 last_updated: 2026-10-04
-last_validated: 2026-09-21
+last_validated: 2026-10-08
 status: Accepted
 feature: review-gate
 doc_role: overview
