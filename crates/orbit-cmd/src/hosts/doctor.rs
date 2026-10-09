@@ -16,6 +16,8 @@ const CHECK: &str = "hosts";
 /// exist, or when a host this machine pulls from (the owner of a local replica
 /// checkout) runs a pull protocol or version that pull admission refuses.
 /// Warns on an unreachable host, any other version or protocol difference, a
+/// reachable host that reports no version or protocol fingerprint (an unknown
+/// is never a match, and fails like a difference on a host pulled from), a
 /// replica owner with no entry, and while only the legacy file exists.
 pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     let registry = match load_host_registry(global_root) {
@@ -132,17 +134,33 @@ fn classify(
         }
         return;
     }
-    if !host.skew {
+    // A field the host did not report is not a match: pull admission refuses a
+    // missing fingerprint, so an older owner omitting its facts is skew too.
+    let unknown = [
+        ("binary_version", host.binary_version.is_none()),
+        ("protocol_fingerprint", host.protocol_fingerprint.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect::<Vec<_>>();
+    if !host.skew && unknown.is_empty() {
         return;
     }
+    let mut details = Vec::new();
+    if host.skew {
+        details.push(format!("differs in {}", host.skew_fields.join(" and ")));
+    }
+    if !unknown.is_empty() {
+        details.push(format!("did not report {}", unknown.join(" and ")));
+    }
     let line = format!(
-        "{name} differs in {} (version {}, protocol {})",
-        host.skew_fields.join(" and "),
+        "{name} {} (version {}, protocol {})",
+        details.join(" and "),
         host.binary_version.as_deref().unwrap_or("unknown"),
         host.protocol_fingerprint.as_deref().unwrap_or("unknown")
     );
-    // Pull admission refuses any version or fingerprint difference, so on a
-    // host this machine pulls from every skew stops the drain.
+    // Pull admission refuses any version or fingerprint difference or absence,
+    // so on a host this machine pulls from every skew stops the drain.
     if pulled_from {
         failures.push(format!("{line}; pull admission from it will refuse"));
     } else {
