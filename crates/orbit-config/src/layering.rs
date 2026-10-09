@@ -276,9 +276,11 @@ pub(crate) fn validate_staged_workspace_document(
     raw: &str,
 ) -> Result<ResolvedConfig, OrbitError> {
     if !roots.has_workspace_layer() {
-        return Err(OrbitError::InvalidInput(
-            "workspace validation requires a distinct workspace root".to_string(),
-        ));
+        return Err(OrbitError::InvalidInput(format!(
+            "`--root` or `ORBIT_ROOT` pins one config root for both layers, so there is no \
+             workspace config layer; rerun with `--global` to edit '{}'",
+            redact_home_dir(&roots.global().join("config.toml").display().to_string())
+        )));
     }
     load_layered_resolved_with_workspace(roots, Some((workspace_path, raw)))
         .map(|loaded| loaded.resolved)
