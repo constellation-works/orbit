@@ -14,8 +14,8 @@
 
 use chrono::{TimeZone, Utc};
 use orbit_automation::review::{
-    LandingFacts, ValidationContext, ValidationDefect, certificate_acceptable, exclusion,
-    mutation_targets, validation_evidence, validation_limitations,
+    LandingFacts, SkippedCheck, ValidationContext, ValidationDefect, certificate_acceptable,
+    exclusion, mutation_targets, validation_evidence, validation_limitations,
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
@@ -1881,6 +1881,128 @@ fn a_run_that_executed_its_confined_path_stays_coverage() {
         Err(ValidationDefect::RequiredNotPassed {
             command: CONFINED.to_string(),
             outcome: ValidationOutcome::Failed,
+        })
+    );
+}
+
+/// [ORB-15083] A diagnostic that never ran is a skipped check under the wrong
+/// role. The reviewer can fix that without rerunning anything, so it is
+/// correctable, and the correction depends on what the owner makes of the
+/// command. A denied diagnostic and a passed control stay observations.
+#[test]
+fn a_not_run_diagnostic_is_correctable_with_the_remedy_of_its_class() {
+    const LINT: &str = "make ci-lint";
+    const GOLDENS: &str = "make goldens";
+    let host_required = [LINT.to_string()];
+    let baseline = [GOLDENS.to_string(), LINT.to_string()];
+    let passing = required("make ci-fast", None, true);
+    let judged = |command: &str| {
+        let records = [
+            passing.clone(),
+            diagnostic(command, ValidationOutcome::NotRun, &[]),
+        ];
+        let context = ValidationContext {
+            required_validation_commands: Some(&host_required),
+            baseline_commands: &baseline,
+            ..ValidationContext::default()
+        };
+        validation_evidence(&records, &context).expect_err(command)
+    };
+
+    for (command, class, remedy) in [
+        (
+            LINT,
+            SkippedCheck::HostRequired,
+            "run it and record it `required`",
+        ),
+        (
+            GOLDENS,
+            SkippedCheck::Baseline,
+            "record it `excluded` or omit it",
+        ),
+        (CODEQL, SkippedCheck::Unlisted, "never record it `excluded`"),
+    ] {
+        let defect = judged(command);
+        assert_eq!(
+            defect,
+            ValidationDefect::DiagnosticNotRun {
+                command: command.into(),
+                class
+            }
+        );
+        assert!(defect.correctable(), "{}", defect.reason());
+        let reason = defect.reason();
+        assert!(
+            reason.starts_with("validation_contradicted:")
+                && reason.contains(&format!(
+                    "`{command}` was recorded as diagnostic but is not_run"
+                ))
+                && reason.contains(remedy),
+            "{reason}"
+        );
+    }
+
+    for (name, records, defect) in [
+        (
+            "a denied diagnostic",
+            vec![
+                passing.clone(),
+                diagnostic(CODEQL, ValidationOutcome::Denied, &[]),
+            ],
+            ValidationDefect::RoleContradicted {
+                command: CODEQL.into(),
+                role: ValidationRole::Diagnostic,
+                outcome: ValidationOutcome::Denied,
+            },
+        ),
+        (
+            "a control that never ran",
+            vec![
+                passing.clone(),
+                control(
+                    CODEQL,
+                    Some(NegativeControl::PreFix),
+                    ValidationOutcome::NotRun,
+                    &["crates/orbit-review/src/fix.rs"],
+                ),
+            ],
+            ValidationDefect::RoleContradicted {
+                command: CODEQL.into(),
+                role: ValidationRole::ExpectedFailure,
+                outcome: ValidationOutcome::NotRun,
+            },
+        ),
+    ] {
+        let context = ValidationContext {
+            scope: &scope(),
+            ..ValidationContext::default()
+        };
+        let observed = validation_evidence(&records, &context).expect_err(name);
+        assert_eq!(observed, defect, "{name}");
+        assert!(!observed.correctable(), "{name}: {}", observed.reason());
+    }
+
+    // The relabel the correction asks for establishes the candidate, and a
+    // host-required command recorded excluded does not.
+    let relabelled = |command: &str| {
+        let mut skipped = diagnostic(command, ValidationOutcome::NotRun, &[]);
+        skipped.role = ValidationRole::Excluded;
+        let context = ValidationContext {
+            required_validation_commands: Some(&host_required),
+            baseline_commands: &baseline,
+            ..ValidationContext::default()
+        };
+        let mut records = vec![passing.clone(), skipped];
+        if command != LINT {
+            records.push(required(LINT, None, true));
+        }
+        validation_evidence(&records, &context)
+    };
+    assert_eq!(relabelled(GOLDENS), Ok(()));
+    assert_eq!(
+        relabelled(LINT),
+        Err(ValidationDefect::HostCheckNotEstablished {
+            command: LINT.into()
         })
     );
 }

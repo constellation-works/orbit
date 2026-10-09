@@ -52,6 +52,43 @@ use orbit_types::workflow::{
     ValidationRole, record_gap,
 };
 
+/// [ORB-15083] What a command the reviewer skipped is to the owner, which
+/// decides the correction that keeps the skip honest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkippedCheck {
+    /// A captured `workflow.required_validation_commands` entry: it needs a
+    /// passing `required` record, so only running it settles.
+    HostRequired,
+    /// A `review.baseline_commands` entry the owner reruns on the host: the
+    /// reviewer may leave it unrun, recorded `excluded` or omitted.
+    Baseline,
+    /// Neither list names it. If repository policy requires it (local Rust
+    /// CodeQL), it is never `excluded`: it is run, or owed as external
+    /// evidence for the owner to fulfil.
+    Unlisted,
+}
+
+impl SkippedCheck {
+    /// The correction this class of skipped command takes.
+    fn remedy(self) -> &'static str {
+        match self {
+            SkippedCheck::HostRequired => {
+                "it is a host-required check, so run it and record it `required`; \
+                 `excluded` never establishes one"
+            }
+            SkippedCheck::Baseline => {
+                "it is a baseline command the host reruns, so record it `excluded` or omit it"
+            }
+            SkippedCheck::Unlisted => {
+                "if repository policy requires this check (for example local Rust CodeQL), \
+                 run it, or name it in `external_evidence` so the owner fulfils it, keeping \
+                 its record `required` and `not_run`; never record it `excluded`, which drops \
+                 the coverage. Otherwise omit it"
+            }
+        }
+    }
+}
+
 /// Why a validation set does not establish a validated candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationDefect {
@@ -72,6 +109,13 @@ pub enum ValidationDefect {
         command: String,
         role: ValidationRole,
         outcome: ValidationOutcome,
+    },
+    /// [ORB-15083] A diagnostic that never ran. A diagnostic is an observation,
+    /// so `not_run` contradicts the role; the record is really a skipped check,
+    /// and where a skipped check goes depends on `class`.
+    DiagnosticNotRun {
+        command: String,
+        class: SkippedCheck,
     },
     /// A superseded attempt that no same-identity required pass replaced, so the
     /// diagnostic never reached a final-candidate outcome.
@@ -144,9 +188,11 @@ impl ValidationDefect {
     /// sources, or a source outside the scope (such as a counterfactual
     /// naming the file it mutated in `sources` instead of
     /// `mutation_target`), or a mutation target that is not a
-    /// repository-relative path. The reviewer can correct such a report without
-    /// rerunning anything, so it is returned to the reviewer once before the
-    /// verdict settles.
+    /// repository-relative path. A diagnostic recorded `not_run` is likewise a
+    /// skipped check under the wrong role [ORB-15083]; its correction is a
+    /// relabel, an omission or an owed-evidence entry. The reviewer can correct
+    /// such a report without rerunning anything, so it is returned to the
+    /// reviewer once before the verdict settles.
     pub fn correctable(&self) -> bool {
         matches!(
             self,
@@ -154,6 +200,7 @@ impl ValidationDefect {
                 | ValidationDefect::ClassificationUnevidenced { .. }
                 | ValidationDefect::ControlOutOfScope { .. }
                 | ValidationDefect::MutationTargetInvalid { .. }
+                | ValidationDefect::DiagnosticNotRun { .. }
         )
     }
 
@@ -192,6 +239,11 @@ impl ValidationDefect {
                 "validation_contradicted: `{command}` was recorded as {} but is {}",
                 role.as_str(),
                 outcome.as_str()
+            ),
+            ValidationDefect::DiagnosticNotRun { command, class } => format!(
+                "validation_contradicted: `{command}` was recorded as diagnostic but is not_run; \
+                 a diagnostic is an observation that ran, so {}",
+                class.remedy()
             ),
             ValidationDefect::SupersededWithoutReplacement { command } => format!(
                 "validation_incomplete: superseded attempt `{command}` has no same-identity \
@@ -533,7 +585,9 @@ fn negative_control(
     Ok(())
 }
 
-/// A diagnostic is an observation that ran. A failed one is no check the
+/// A diagnostic is an observation that ran; a `not_run` one is a skipped
+/// check under the wrong role, returned to the reviewer with the correction
+/// its class takes [ORB-15083]. A failed one is no check the
 /// owner trusts, names where its failures lie, every place outside the
 /// candidate's scope, and does not share its check with a required pass on
 /// the same candidate.
@@ -576,7 +630,32 @@ fn diagnostic(
             }
             Ok(())
         }
-        ValidationOutcome::Denied | ValidationOutcome::NotRun => Err(contradiction(record)),
+        ValidationOutcome::NotRun => Err(ValidationDefect::DiagnosticNotRun {
+            command: record.command.clone(),
+            class: skipped_check(record, context),
+        }),
+        ValidationOutcome::Denied => Err(contradiction(record)),
+    }
+}
+
+/// [ORB-15083] What the owner makes of a skipped command: a captured required
+/// command wins over a baseline entry, and anything else is unlisted.
+fn skipped_check(record: &ReviewValidation, context: &ValidationContext<'_>) -> SkippedCheck {
+    let host_required = context
+        .required_validation_commands
+        .unwrap_or_default()
+        .iter()
+        .any(|command| same_host_command(record, command));
+    if host_required {
+        SkippedCheck::HostRequired
+    } else if context
+        .baseline_commands
+        .iter()
+        .any(|command| same_host_command(record, command))
+    {
+        SkippedCheck::Baseline
+    } else {
+        SkippedCheck::Unlisted
     }
 }
 
