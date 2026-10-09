@@ -73,6 +73,9 @@ jobs:
       - name: Build website
         run: npm run build
 
+      - name: Test security.txt validator
+        run: npm run test:security-txt
+
       - name: Validate security.txt
         run: |
           npm run validate:security-txt -- public/.well-known/security.txt
