@@ -1,6 +1,52 @@
 use std::io;
 
-use crate::update::stage::restore_backup_with_rename;
+use crate::update::stage::{restore_backup_with_rename, write_staging_file_with_mode};
+
+// Fault injection: chmod failures are not reproducible across filesystems or privileges.
+#[test]
+fn a_failed_executable_mode_change_removes_the_complete_staging_file() {
+    let root = tempfile::tempdir().expect("fixture root");
+    let destination = root.path().join("orbit");
+    let previous = b"previous executable";
+    let replacement = b"complete replacement executable";
+    std::fs::write(&destination, previous).expect("write installed executable");
+
+    let error = write_staging_file_with_mode(
+        &destination,
+        replacement.as_slice(),
+        replacement.len() as u64,
+        |path| {
+            assert_eq!(path.parent(), destination.parent());
+            assert_ne!(path, destination);
+            assert_eq!(
+                std::fs::read(path).expect("read completed staging file"),
+                replacement
+            );
+            Err(orbit_common::OrbitError::Io(
+                "injected mode failure".to_string(),
+            ))
+        },
+    )
+    .expect_err("mode failure must reject the staged executable");
+
+    assert!(matches!(
+        error,
+        orbit_common::OrbitError::Io(message) if message == "injected mode failure"
+    ));
+    assert_eq!(
+        std::fs::read(&destination).expect("read installed executable"),
+        previous
+    );
+    let remaining: Vec<_> = std::fs::read_dir(root.path())
+        .expect("read fixture directory")
+        .map(|entry| entry.expect("fixture entry").path())
+        .collect();
+    assert_eq!(
+        remaining,
+        [destination],
+        "mode failure must leave no staging file"
+    );
+}
 
 #[test]
 fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
