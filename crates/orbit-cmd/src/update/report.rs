@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::converge::{ConvergenceStep, run_reporting_step, run_step};
 use super::environment::UpdateEnvironment;
 use super::local_candidate::LocalCandidateEvidence;
+use super::version::ReleaseVersion;
 
 /// Exit code for an update that installed the new executable but could not
 /// finish converging workspace state. Distinct from a plain failure: the
@@ -309,10 +310,27 @@ fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&
             ),
             format!("`{}`", local.retry_command),
         ),
-        None => (
-            format!("orbit {}", report.target_version),
-            command("update"),
-        ),
+        None => {
+            let downgrade = match (
+                ReleaseVersion::parse(&report.target_version),
+                ReleaseVersion::parse(&report.current_version),
+            ) {
+                (Ok(target), Ok(current)) => target < current,
+                _ => false,
+            };
+            let update_args = if downgrade {
+                format!(
+                    "update --version {} --allow-downgrade",
+                    report.target_version
+                )
+            } else {
+                format!("update --version {}", report.target_version)
+            };
+            (
+                format!("orbit {}", report.target_version),
+                command(&update_args),
+            )
+        }
     };
     let direct = failed
         .iter()

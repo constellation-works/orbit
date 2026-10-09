@@ -5,12 +5,12 @@ use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
 };
 
-use crate::update::run_update;
 use crate::update::source::{
     HttpReleaseSource, MAX_ARCHIVE_BYTES, MAX_MANIFEST_BYTES, MAX_METADATA_BYTES,
     MAX_SIGNATURE_BYTES, MIRROR_LATEST_FILE, validated_release_url,
 };
 use crate::update::tests::fixture::{FakeBinary, Fixture, request, tar_gz_named};
+use crate::update::{UpdateOutcome, UpdateRequest, run_update};
 
 /// Read an HTTP request through its blank line. Closing a socket with request
 /// bytes still unread makes the kernel send RST instead of FIN (macOS does this
@@ -321,4 +321,93 @@ fn an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release() {
         "{:?}",
         fixture.invocations()
     );
+}
+
+fn parse_retry_request_from_recovery(report: &crate::update::UpdateReport) -> UpdateRequest {
+    let recovery = report.recovery.as_deref().expect("recovery text");
+    let marker = "Re-run `";
+    let start = recovery.find(marker).expect("Re-run marker") + marker.len();
+    let end = recovery[start..].find('`').expect("closing backtick") + start;
+    let command = &recovery[start..end];
+    let mut request = UpdateRequest::default();
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "--version" && i + 1 < words.len() {
+            request.target_version = Some(words[i + 1].to_string());
+            i += 2;
+        } else if words[i] == "--allow-downgrade" {
+            request.allow_downgrade = true;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    request
+}
+
+#[test]
+fn recovery_hint_targets_requested_version_when_newer_release_is_published() {
+    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        &recovery_hint_targets_requested_version_when_newer_release_is_published,
+    )) {
+        return;
+    }
+
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::FailsMigrationConfirm);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let mut requested = request();
+    requested.target_version = Some("0.19.0".to_string());
+    let report = run_update(&fixture.environment(), &requested).expect("update");
+
+    assert_eq!(report.outcome, UpdateOutcome::NeedsRecovery);
+    assert_eq!(report.target_version, "0.19.0");
+    assert!(report.replaced);
+
+    let retry_request = parse_retry_request_from_recovery(&report);
+    assert_eq!(retry_request.target_version.as_deref(), Some("0.19.0"));
+    assert!(!retry_request.allow_downgrade);
+
+    fixture.repair_migration();
+    let retry_report = run_update(&fixture.environment(), &retry_request).expect("retry update");
+
+    assert_eq!(retry_report.outcome, UpdateOutcome::AlreadyCurrent);
+    assert_eq!(retry_report.target_version, "0.19.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+}
+
+#[test]
+fn recovery_hint_preserves_allow_downgrade_when_retrying_older_release() {
+    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        &recovery_hint_preserves_allow_downgrade_when_retrying_older_release,
+    )) {
+        return;
+    }
+
+    let fixture = Fixture::new("0.19.0");
+    fixture.publish("0.18.0", FakeBinary::FailsMigrationConfirm);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let mut requested = request();
+    requested.target_version = Some("0.18.0".to_string());
+    requested.allow_downgrade = true;
+    let report = run_update(&fixture.environment(), &requested).expect("downgrade update");
+
+    assert_eq!(report.outcome, UpdateOutcome::NeedsRecovery);
+    assert_eq!(report.target_version, "0.18.0");
+    assert_eq!(report.current_version, "0.19.0");
+    assert!(report.replaced);
+
+    let retry_request = parse_retry_request_from_recovery(&report);
+    assert_eq!(retry_request.target_version.as_deref(), Some("0.18.0"));
+    assert!(retry_request.allow_downgrade);
+
+    fixture.repair_migration();
+    let retry_report = run_update(&fixture.environment(), &retry_request).expect("retry downgrade");
+
+    assert_eq!(retry_report.outcome, UpdateOutcome::AlreadyCurrent);
+    assert_eq!(retry_report.target_version, "0.18.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
 }

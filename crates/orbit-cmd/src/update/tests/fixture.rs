@@ -91,6 +91,8 @@ pub enum FakeBinary {
     ReadOnlyStore,
     /// Candidate cannot coordinate with protected clients.
     NoAdmissionContract,
+    /// Post-replacement convergence step `migrate --confirm` fails until repaired.
+    FailsMigrationConfirm,
 }
 
 /// A fake installation plus the release mirror it updates from.
@@ -266,6 +268,12 @@ impl Fixture {
         names.sort();
         names
     }
+
+    /// Allow subsequent `migrate --confirm` calls for `FakeBinary::FailsMigrationConfirm` to succeed.
+    pub fn repair_migration(&self) {
+        std::fs::write(format!("{}.repaired", self.invocation_log.display()), b"")
+            .expect("write repaired marker");
+    }
 }
 
 /// A default request: latest version, apply, no downgrade.
@@ -293,6 +301,14 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
     } else {
         r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#
     };
+    let migration_confirm = if behavior == FakeBinary::FailsMigrationConfirm {
+        format!(
+            "if [ \"$1\" = migrate ] && [ \"$2\" = --confirm ] && [ ! -f '{log}.repaired' ]; then exit 1; fi\n",
+            log = log.display()
+        )
+    } else {
+        String::new()
+    };
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
@@ -302,6 +318,7 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
          echo \"{version}: $all_args\" >> '{log}'\n\
          if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
          if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
+         {migration_confirm}\
          exit 0\n",
         log = log.display()
     )

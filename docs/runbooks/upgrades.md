@@ -442,10 +442,13 @@ checks stay in force.
 
 ### Recovery and resumption
 
-Re-running `orbit update` is the resume. At the installed version it skips the replacement and
+Re-running the update is the resume. At the installed version it skips the replacement and
 re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm`,
 `workspace sync`, or `clock repair` is finished by running it again — or by running that one
-command directly and reading its diagnostics. `clock repair` fails when the unit manager
+command directly and reading its diagnostics. A bare `orbit update` resolves the newest published
+release, so it resumes only when that release is the installed one. The recovery output for a
+published release names the exact command instead: `orbit update --version <installed>`, plus
+`--allow-downgrade` when the run replaced a newer binary with an older one. `clock repair` fails when the unit manager
 refuses to reload the rewritten unit; it names the `launchctl`/`systemctl` command to run. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
 includes that root explicitly, so retrying from a different checkout does not silently switch the
 workspace being repaired.
