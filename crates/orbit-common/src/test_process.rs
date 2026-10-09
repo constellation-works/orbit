@@ -5,7 +5,7 @@
 //! spawn can briefly inherit a writable descriptor on *this* file across
 //! `fork` before close-on-exec runs, and Linux rejects a concurrent exec of a
 //! file that still looks open for writing with `ETXTBSY` (ORB-11340).
-//! [`retry_executable_busy`] absorbs that bounded, load-dependent transient
+//! `retry_executable_busy` (Linux only) absorbs that bounded, load-dependent transient
 //! for provider launches and test fixtures.
 //!
 //! Always available so provider runtime code and integration tests in sibling
