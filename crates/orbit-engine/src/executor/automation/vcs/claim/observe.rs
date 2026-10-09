@@ -34,7 +34,9 @@ use super::{delivery, require_clean_checkout};
 /// `refs/heads/<base>`. The recorded base is then the merge-base of the
 /// candidate and that ref — the tip the candidate sits on — not the live
 /// fetched tip. A later advance of `origin/<base>` is therefore not a
-/// refusal of a candidate that was synchronized onto the earlier SHA.
+/// refusal of a candidate that was synchronized onto the earlier SHA. A
+/// NoDiff candidate must be that merge-base: it is contained in the base ref
+/// and carries no commits of its own [ORB-15074].
 /// If a remote fetch exhausts its transport retries, a delivered candidate
 /// may use the cached remote ref when its merge-base still resolves. Missing
 /// or unrelated cached refs preserve the transient fetch failure. Refusals
@@ -106,10 +108,14 @@ pub fn observe_candidate(
     )?;
     let base = revision(workspace_path, &merge_base)?;
     if let HandoffDelivery::NoDiff { .. } = delivery {
-        if candidate != tip {
-            return Err(refused(
-                "a NoDiff handoff must validate the current base itself",
-            ));
+        // [ORB-15074] A clean base is the base the run synchronized onto, which
+        // the tip may since have passed; a commit beyond it is a change.
+        if candidate != base {
+            return Err(refused(format!(
+                "a NoDiff handoff must be the base it was synchronized onto; candidate '{}' \
+                 carries commits beyond base '{}'",
+                candidate.commit, base.commit
+            )));
         }
     } else if base.commit == candidate.commit {
         return Err(refused(
@@ -153,6 +159,7 @@ pub fn observe_candidate(
 /// this claim was synchronized onto. A `base_sha` carried from `sync_base`
 /// must be contained in the candidate (an ancestor), never compared to the
 /// live `origin/<base>` tip: a later advance of that tip is not a refusal.
+/// A NoDiff candidate must be that `base_sha` itself.
 pub(super) fn observe(
     workspace_path: &Path,
     context: &ClaimExecutionContext,
@@ -192,6 +199,15 @@ pub(super) fn observe_with(
         if !contains_declared {
             return Err(refused(format!(
                 "candidate '{}' does not descend from validated base '{declared}'",
+                candidate.candidate.commit
+            )));
+        }
+        if matches!(candidate.delivery, HandoffDelivery::NoDiff { .. })
+            && revision(workspace_path, &declared)?.commit != candidate.candidate.commit
+        {
+            return Err(refused(format!(
+                "a NoDiff handoff must be the base it was synchronized onto; candidate '{}' \
+                 is not synchronized base '{declared}'",
                 candidate.candidate.commit
             )));
         }

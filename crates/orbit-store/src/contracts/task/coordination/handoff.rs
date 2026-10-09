@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 /// For already-landed delivery, the adapter must run the existing typed evidence,
 /// scope, ancestry, delivery-marker and clean-tree checks before constructing this.
 /// For NoDiff it must re-run the clean-tree checkpoint verifier against the
-/// owner's current base and pinned report, without trusting an executor branch.
+/// pinned report and the base the run synchronized onto, which the owner's
+/// current base must contain, without trusting an executor branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandoffObservation {
     /// Owner-observed eligible additions outside the original footprint.

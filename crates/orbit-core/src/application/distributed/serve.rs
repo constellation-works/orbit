@@ -248,8 +248,9 @@ impl crate::OrbitRuntime {
     ///
     /// `remote` refuses a local candidate: it exists only in the executor's
     /// checkout, which the owner cannot read, and followers never run local
-    /// mode. NoDiff verifies a clean-tree checkpoint against the owner's live
-    /// base; the executor's branch need not be published.
+    /// mode. NoDiff verifies a clean-tree checkpoint against the base its run
+    /// synchronized onto, which the owner's live base must still contain; the
+    /// executor's branch need not be published.
     pub(crate) fn observe_claim_handoff(
         &self,
         handoff: &TaskHandoff,

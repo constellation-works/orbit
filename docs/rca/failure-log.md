@@ -31,26 +31,6 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
-## 2026-10-09: claimed no-diff chores are refused when the base advances
-
-- **Where:** Mac pull-drain leaf, `validate_no_diff` (`claim_validate`), at the
-  end of a no-diff-expected chore.
-- **Symptom:** `policy denied: a NoDiff handoff must validate the current base
-  itself`. The chore's work (findings filed) is done, but the task goes
-  `blocked`.
-- **Cause:** a claimed NoDiff handoff must equal the live `origin/<base>`. Under
-  a busy drain agent-main moves every few minutes, so any long claimed chore
-  fails. ORB-12655 fixed the same problem for PR-mode leaves only. Owner-local
-  no-diff chores are unaffected.
-- **Fix:** ORB-15074 (open). Until it lands, the backlog no-diff chores and the
-  enabled no-diff auto-task templates (code-org-sweep, friction-curation,
-  qa-sweep, security-review, skill-validation, test-layout-sweep) carry
-  `os:linux`, so only the owner runs them. Remove the tag when the fix lands.
-- **Tasks:** ORB-14963 (`jrun-20261009-1559-c3`, qa-sweep), archived. Its
-  findings ORB-15069..15073 were filed, and the next qa-sweep re-covers the range.
-- **Final recovery:** escalated. Moving the checkout to the new base needs Git
-  writes that recovery cannot make.
-
 ## 2026-10-09: Git protection refuses git's own temp leftovers in `.git/objects`
 
 - **Where:** Mac pull-drain leaves at sandbox resolution, right after deploying

@@ -242,7 +242,9 @@ impl CleanLeaf {
         }
     }
 
-    fn prepare_handoff(&self) -> TaskHandoff {
+    /// The `claim_validate` input after the real commit verifier and review
+    /// gate ran on the clean checkout.
+    fn validate_input(&self) -> Value {
         let committed = self.action("git_commit", &self.input);
         assert!(
             matches!(
@@ -259,6 +261,25 @@ impl CleanLeaf {
             review["applies"], false,
             "a clean base opens no PR and runs no reviewer: {review}"
         );
+        input
+    }
+
+    /// Advance the owner's published base by one commit, as a busy drain does
+    /// while a claimed chore runs, and return the new tip.
+    fn advance_base(&self, round: usize) -> String {
+        let repo = &self.pair.owner_repo;
+        std::fs::write(repo.join("src/advanced.rs"), format!("// round {round}\n")).unwrap();
+        git(repo, &["add", "src/advanced.rs"]);
+        git(
+            repo,
+            &["commit", "-q", "-m", &format!("Base advances {round}")],
+        );
+        publish_origin(repo);
+        git(repo, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    fn prepare_handoff(&self) -> TaskHandoff {
+        let mut input = self.validate_input();
         let validated = self.action("claim_validate", &input);
         assert_eq!(validated["candidate"]["delivery"]["kind"], "no_diff");
         input["no_diff_evidence"] = validated["no_diff_evidence"].clone();
@@ -829,7 +850,7 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
     ) {
         return;
     }
-    for changed in ["report", "log", "base", "required_check"] {
+    for changed in ["report", "log", "rewritten_base", "required_check"] {
         let fixture = CleanLeaf::new(false, "done");
         let mut handoff = fixture.prepare_handoff();
         match changed {
@@ -846,14 +867,19 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
                     "exit_code": 0, "output": "changed after checkpoint",
                 }),
             ),
-            "base" => {
-                std::fs::write(fixture.pair.owner_repo.join("src/f0.rs"), "fn newer() {}\n")
-                    .unwrap();
+            // An advance is accepted [ORB-15074]; a base the owner's history
+            // no longer contains is not.
+            "rewritten_base" => {
+                let repo = &fixture.pair.owner_repo;
+                std::fs::write(repo.join("src/f0.rs"), "fn rewritten() {}\n").unwrap();
                 git(
-                    &fixture.pair.owner_repo,
-                    &["commit", "-q", "-am", "Base advances"],
+                    repo,
+                    &["commit", "-q", "-a", "--amend", "-m", "Base rewritten"],
                 );
-                publish_origin(&fixture.pair.owner_repo);
+                git(
+                    repo,
+                    &["push", "-q", "-f", "origin", "HEAD:refs/heads/main"],
+                );
             }
             "required_check" => handoff.validation.clear(),
             _ => unreachable!(),
@@ -868,6 +894,14 @@ fn owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_withou
             ),
             "{changed}: {error}"
         );
+        if changed == "rewritten_base" {
+            assert!(
+                error
+                    .to_string()
+                    .contains("is not contained in the owner's base"),
+                "the refusal names the rewritten base: {error}"
+            );
+        }
         assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
         assert!(
             fixture
@@ -920,4 +954,109 @@ fn claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs() {
     assert!(error.to_string().contains("validation log"), "{error}");
     assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
     fixture.assert_no_blocked();
+}
+
+/// The QA-sweep shape that blocked on a follower: a claimed no-diff chore whose
+/// `origin/<base>` advances after its run synchronized. `claim_validate` judges
+/// the base the run synchronized onto, the handoff records that base rather
+/// than the new tip, and the owner accepts and completes it with no operator
+/// action, even when the base advances again before landing [ORB-15074].
+#[test]
+fn a_claimed_no_diff_chore_completes_after_its_base_advances() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_chore_completes_after_its_base_advances",
+    ) {
+        return;
+    }
+    for tagged in [false, true] {
+        let fixture = if tagged {
+            let fixture = CleanLeaf::review_only("done");
+            fixture.attach("automation-coverage.json", json!({"findings": []}));
+            fixture
+        } else {
+            CleanLeaf::new(false, "done")
+        };
+        let tip = fixture.advance_base(1);
+        assert_ne!(tip, fixture.base);
+
+        // The shipped pipeline's `validate_no_diff` step is `claim_validate`.
+        let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+        assert_eq!(
+            handoff.candidate.base.commit, fixture.base,
+            "tagged={tagged}"
+        );
+        assert_eq!(handoff.candidate.candidate, handoff.candidate.base);
+        assert_ne!(handoff.candidate.base.commit, tip);
+        let settled = fixture
+            .settle(&handoff)
+            .expect("owner accepts the synchronized base its base still contains");
+        assert_eq!(settled["status"], "review", "tagged={tagged}: {settled}");
+
+        let landing_tip = fixture.advance_base(2);
+        let accepted = fixture
+            .pair
+            .wire
+            .owner
+            .accepted_task_handoff(&handoff.claim_id)
+            .unwrap();
+        let landed = engine_action(
+            &fixture.pair.wire.owner,
+            "handoff_land",
+            &json!({"handoff_id": accepted.handoff_id}),
+        )
+        .unwrap();
+        assert_eq!(landed["evidence"]["delivery"], "no_diff", "{landed}");
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "done");
+        assert_eq!(
+            git(&fixture.pair.owner_repo, &["rev-parse", "main"]).trim(),
+            landing_tip,
+            "a NoDiff landing moves no branch"
+        );
+        fixture.assert_no_blocked();
+    }
+}
+
+/// The same advanced base does not excuse a change: a NoDiff leaf whose
+/// worktree carries an uncommitted tracked change or an extra commit after its
+/// commit verifier ran is refused at `claim_validate`, naming the change, and
+/// the task is not blocked [ORB-15074].
+#[test]
+fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name",
+    ) {
+        return;
+    }
+    for (tagged, committed) in [(false, false), (false, true), (true, false), (true, true)] {
+        let fixture = if tagged {
+            CleanLeaf::review_only("done")
+        } else {
+            CleanLeaf::new(false, "done")
+        };
+        let input = fixture.validate_input();
+        fixture.advance_base(1);
+        let follower = &fixture.pair.follower_repo;
+        std::fs::write(follower.join("src/f0.rs"), "fn reviewed() {}\n").unwrap();
+        if committed {
+            git(follower, &["commit", "-q", "-am", "Chore edits code"]);
+        }
+        let error = engine_action(&fixture.bound, "claim_validate", &input).unwrap_err();
+        let named = if committed {
+            "Chore edits code"
+        } else {
+            "src/f0.rs"
+        };
+        assert!(
+            matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains(named),
+            "tagged={tagged} committed={committed}: {error}"
+        );
+        assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+        assert!(
+            fixture.pair.admission(&fixture.leaf).settlement.is_none(),
+            "a refused leaf records no handoff"
+        );
+        fixture.assert_no_blocked();
+    }
 }
