@@ -125,27 +125,16 @@ const PROBE: &str = "set -e\n\
 /// both, and the owner accepts it only with them. On macOS the probe applies
 /// a real Seatbelt profile, so a pass shows no `sandbox_apply` EPERM.
 #[test]
-// The macOS skip notice goes to stderr so a host without a working
-// sandbox-exec says why the test returned early.
-#[cfg_attr(target_os = "macos", allow(clippy::print_stderr))]
 fn a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept() {
-    if !isolated(
-        module_path!(),
+    if !orbit_exec::macos_sandbox_test_guard(
         "a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept",
     ) {
         return;
     }
-    #[cfg(target_os = "macos")]
-    if !std::process::Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-        .status()
-        .is_ok_and(|status| status.success())
-    {
-        assert!(
-            std::env::var_os("ORBIT_REQUIRE_SANDBOX_EXEC").is_none(),
-            "ORBIT_REQUIRE_SANDBOX_EXEC=1 but sandbox-exec cannot apply a profile here"
-        );
-        eprintln!("SKIP: sandbox-exec cannot apply a profile on this host");
+    if !isolated(
+        module_path!(),
+        "a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept",
+    ) {
         return;
     }
     let command = "cargo test -p orbit-exec --test probe";

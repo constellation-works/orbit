@@ -5,8 +5,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-#[cfg(not(target_os = "linux"))]
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -176,27 +174,19 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
 /// sandbox).
 fn platform_sandbox() -> Option<ExecutorSandboxKind> {
     #[cfg(target_os = "linux")]
-    let available = {
+    {
         let probe = orbit_exec::probe_bwrap();
-        (probe.available)
-            .then_some(ExecutorSandboxKind::LinuxBwrap)
-            .ok_or(probe.detail)
-    };
+        if !probe.available {
+            orbit_exec::report_bwrap_deferral("v2 CLI plugin broker check", &probe.detail);
+            return None;
+        }
+        Some(ExecutorSandboxKind::LinuxBwrap)
+    }
     #[cfg(not(target_os = "linux"))]
-    let available = orbit_exec::sandbox_exec_available()
-        .then_some(ExecutorSandboxKind::MacosSandboxExec)
-        .ok_or_else(|| "sandbox-exec is unavailable".to_string());
-    available
-        .inspect_err(|reason| {
-            #[cfg(target_os = "linux")]
-            orbit_exec::report_bwrap_deferral("v2 CLI plugin broker check", reason);
-            #[cfg(not(target_os = "linux"))]
-            let _ = writeln!(
-                std::io::stderr(),
-                "skipped the plugin broker check: the agent sandbox is unavailable: {reason}"
-            );
-        })
-        .ok()
+    {
+        orbit_exec::macos_sandbox_test_guard("v2 CLI plugin broker check")
+            .then_some(ExecutorSandboxKind::MacosSandboxExec)
+    }
 }
 
 struct RecordingHost {

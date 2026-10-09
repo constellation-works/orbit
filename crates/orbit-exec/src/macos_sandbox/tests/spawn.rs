@@ -4,7 +4,7 @@ use super::super::spawn::{
 };
 #[cfg(target_os = "macos")]
 use super::super::test_support::{
-    EnvOverrides, NEUTRAL_PROVIDER, compile_with_env, profile, sandbox_exec_can_apply, shell_escape,
+    EnvOverrides, NEUTRAL_PROVIDER, compile_with_env, profile, shell_escape,
 };
 use std::path::Path;
 use std::process::Stdio;
@@ -18,7 +18,9 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
     let _lock = TEST_PROFILE_CACHE_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path",
+    ) {
         return;
     }
 
@@ -83,7 +85,9 @@ fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
     let _lock = TEST_PROFILE_CACHE_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment",
+    ) {
         return;
     }
 
@@ -172,7 +176,7 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
     let _lock = TEST_PROFILE_CACHE_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard("pty_allocation_is_allowed_under_compiled_profile") {
         return;
     }
 

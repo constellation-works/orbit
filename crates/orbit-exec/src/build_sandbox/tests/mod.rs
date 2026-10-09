@@ -21,9 +21,6 @@ mod macos {
         BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest, BuildSandboxSpec,
         probe_build_sandbox, run_build_phase,
     };
-    use crate::macos_sandbox::test_support::sandbox_exec_can_apply;
-
-    const REQUIRE_ENV: &str = "ORBIT_REQUIRE_SANDBOX_EXEC";
 
     fn request<'a>(
         build_dir: &'a Path,
@@ -77,11 +74,7 @@ mod macos {
     /// beside it or open a TCP connection, even to loopback.
     #[test]
     fn an_offline_phase_reaches_only_its_build_directory() {
-        if !sandbox_exec_can_apply() {
-            assert!(
-                std::env::var(REQUIRE_ENV).as_deref() != Ok("1"),
-                "{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here"
-            );
+        if !crate::macos_sandbox_test_guard("an_offline_phase_reaches_only_its_build_directory") {
             return;
         }
         let dir = tempfile::tempdir().expect("build dir");

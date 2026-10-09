@@ -330,6 +330,10 @@ fn stdout_json(output: &std::process::Output) -> Value {
 #[cfg(unix)]
 #[test]
 fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
+    if !orbit_exec::macos_sandbox_test_guard("plugin_error_is_json_on_tool_run_with_a_nonzero_exit")
+    {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("errors");
     write_status_plugin(&source, "errors", "");
@@ -428,6 +432,11 @@ fn derived_plugin_groups_expand_tilde_roots_and_anchor_relative_roots() {
 
 #[test]
 fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_derived_group_is_the_same_operation_and_result_as_tool_run",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("shapes");
     write_fixture_plugin(&source);
@@ -606,6 +615,11 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 #[cfg(unix)]
 #[test]
 fn unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("shapes");
     write_fixture_plugin(&source);
@@ -1318,6 +1332,9 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
+    if !orbit_exec::macos_sandbox_test_guard("scaffold_validate_test_and_install_run_end_to_end") {
+        return;
+    }
     let fixture = Fixture::new();
     // Installation refuses sources inside a workspace repository, so this
     // end-to-end install exercises the explicit external destination.
@@ -1815,6 +1832,11 @@ fn copy_tree(from: &Path, to: &Path) {
 #[cfg(unix)]
 #[test]
 fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     // The fixture is a plugin root; this source is that `.orbit-plugin/`.
     let source = fixture.source("uvdemo").join(".orbit-plugin");

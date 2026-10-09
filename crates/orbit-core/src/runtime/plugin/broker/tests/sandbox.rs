@@ -111,19 +111,7 @@ fn platform_sandbox() -> Result<ExecutorSandboxKind, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let applies = orbit_exec::sandbox_exec_path().is_some_and(|path| {
-            std::process::Command::new(path)
-                .args(["-p", "(version 1)\n(allow default)\n", "/usr/bin/true"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        });
-        if applies {
-            Ok(ExecutorSandboxKind::MacosSandboxExec)
-        } else {
-            Err("sandbox-exec cannot apply a profile on this host".to_string())
-        }
+        Ok(ExecutorSandboxKind::MacosSandboxExec)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -133,6 +121,9 @@ fn platform_sandbox() -> Result<ExecutorSandboxKind, String> {
 
 /// A scratch tree for one test, or `None` after reporting why it is skipped.
 fn scratch_or_skip(test: &str) -> Option<Scratch> {
+    if !orbit_exec::macos_sandbox_test_guard(test) {
+        return None;
+    }
     match platform_sandbox() {
         Ok(kind) => Some(Scratch::new(kind)),
         Err(reason) => {

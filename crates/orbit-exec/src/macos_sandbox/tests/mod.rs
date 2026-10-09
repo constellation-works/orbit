@@ -3,3 +3,5 @@
 mod compile;
 mod provider_dirs;
 mod spawn;
+
+mod probe;

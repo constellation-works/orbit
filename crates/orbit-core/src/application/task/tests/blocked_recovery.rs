@@ -559,8 +559,11 @@ fn field_edit_after_the_block_is_never_overridden(
 }
 
 #[test]
-#[allow(clippy::print_stdout)] // Report unavailable native sandbox checks visibly.
 fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
+    // Report the kernel-only deferral in the outer harness too: the recovery
+    // assertions still run in the isolated child, whose successful output is captured.
+    #[cfg(target_os = "macos")]
+    let _ = orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch");
     if !enter_isolated_child(
         module_path!(),
         "a_recovery_applies_one_decision_recorded_with_its_run_id",
@@ -720,7 +723,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             let profile_text =
                 orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "claude")
                     .expect("compile the effective recovery sandbox");
-            if orbit_exec::sandbox_exec_available() {
+            if orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch") {
                 let (child, _profile_file) =
                     orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
                         profile_text: &profile_text,
@@ -737,13 +740,6 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
                     .expect("bounded recovery agent step");
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
-            } else {
-                assert_ne!(
-                    std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref(),
-                    Ok("1"),
-                    "native recovery launch must run on the admitted macOS CI host"
-                );
-                println!("SKIP: recovery agent kernel launch: sandbox-exec is unavailable");
             }
         }
     }

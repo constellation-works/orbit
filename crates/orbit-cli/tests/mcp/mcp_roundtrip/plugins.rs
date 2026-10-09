@@ -88,6 +88,11 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 #[cfg(unix)]
 #[test]
 fn brokered_plugin_calls_audit_only_caller_owned_failures() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "brokered_plugin_calls_audit_only_caller_owned_failures",
+    ) {
+        return;
+    }
     for scope in ["workspace", "global"] {
         check_brokered_plugin_audit(scope);
     }
@@ -338,6 +343,9 @@ fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64,
 #[cfg(unix)]
 #[test]
 fn managed_global_plugin_tool_refusals_are_audited() {
+    if !orbit_exec::macos_sandbox_test_guard("managed_global_plugin_tool_refusals_are_audited") {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin_with_scope(&workspace.home, "policyglobal", "global");
     run_orbit(
@@ -531,6 +539,11 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
 #[cfg(unix)]
 #[test]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "exec_plugin_error_reaches_mcp_caller_as_structured_content",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "pluginerror");
     std::fs::write(
@@ -558,6 +571,11 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
 #[cfg(unix)]
 #[test]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "roundtrip");
     let source = source.to_str().expect("utf8 plugin source");
@@ -669,6 +687,11 @@ fn add_global_tool(source: &Path) {
 #[cfg(unix)]
 #[test]
 fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "toggled");
     add_global_tool(&source);
@@ -809,6 +832,11 @@ fn write_callback_plugin_with_scope(
 #[cfg(unix)]
 #[test]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_callback_reaches_only_its_granted_orbit_tools",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_callback_plugin(&workspace.home, "callback", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -972,6 +1000,11 @@ fn callback_probe_input(tool: &str, forge: Option<&str>) -> String {
 #[cfg(unix)]
 #[test]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "forgecb", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -1041,6 +1074,11 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
 #[cfg(unix)]
 #[test]
 fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(
         &workspace.home,
@@ -1114,6 +1152,11 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
 #[cfg(unix)]
 #[test]
 fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_callback_plugin_with_scope(
         &workspace.home,
@@ -1221,6 +1264,11 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
 #[cfg(unix)]
 #[test]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "clearplug", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -1478,6 +1526,9 @@ fn setsid_available() -> bool {
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_plugin_is_advertised_and_proxied() {
+    if !orbit_exec::macos_sandbox_test_guard("an_mcp_backend_plugin_is_advertised_and_proxied") {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;
@@ -1528,6 +1579,11 @@ const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31c
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
+    ) {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;
@@ -1644,6 +1700,11 @@ const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
+    ) {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;

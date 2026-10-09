@@ -846,6 +846,9 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
     /// the real backend sandbox.
     #[test]
     fn each_plugin_backend_sees_only_its_own_state() {
+        if !orbit_exec::macos_sandbox_test_guard("each_plugin_backend_sees_only_its_own_state") {
+            return;
+        }
         let host = Host::new();
         for (namespace, other) in [("alpha", "beta"), ("beta", "alpha")] {
             let plugin = Plugin {
