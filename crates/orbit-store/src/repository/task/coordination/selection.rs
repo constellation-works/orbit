@@ -14,7 +14,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_types::task::{
-    Task, TaskStatus, automatic_dispatch_cmp, satisfy_completed_archived_dependencies,
+    Task, TaskStatus, automatic_dispatch_cmp_for_host, satisfy_completed_archived_dependencies,
 };
 
 use super::TaskCommitBoundary;
@@ -216,7 +216,11 @@ impl Screen<'_> {
 impl TaskCommitBoundary {
     /// The partition's backlog and in-flight tasks, read under the ordinary
     /// (shared) boundary, with the statuses the backlog's dependencies have.
-    pub(super) fn admission_snapshot(&self) -> Result<AdmissionSnapshot, OrbitError> {
+    pub(super) fn admission_snapshot(
+        &self,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+    ) -> Result<AdmissionSnapshot, OrbitError> {
         self.enter_ordinary(|| {
             let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
             let filter = TaskIndexFilter {
@@ -246,7 +250,16 @@ impl TaskCommitBoundary {
                     _ => {}
                 }
             }
-            backlog.sort_by(automatic_dispatch_cmp);
+            backlog.sort_by(|left, right| {
+                automatic_dispatch_cmp_for_host(
+                    left,
+                    ordering.expiring_tasks.contains(&left.id),
+                    right,
+                    ordering.expiring_tasks.contains(&right.id),
+                    ordering.owner_os,
+                    request.os,
+                )
+            });
             let dependencies = backlog.iter().flat_map(Task::dependencies).collect();
             let statuses = self.dependency_statuses(dependencies, &known)?;
             Ok(AdmissionSnapshot {

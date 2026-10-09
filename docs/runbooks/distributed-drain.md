@@ -171,6 +171,13 @@ owner accepts its handoff without validation logs. Every other handoff check
 (footprint, protected paths, candidate and base integrity) still applies.
 `orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
+Within the same dispatch band and priority, after the frozen-batch expiry
+boost, pull admission prefers tasks the follower's OS satisfies but the
+owner's OS does not, before age and task ID. A macOS follower of a Linux
+owner therefore takes macOS-only work before ordinary work the owner can
+run. Critical work still leads. Tasks tagged for both hosts have no affinity
+boost, and owner-local admission keeps its existing order.
+
 The latest applied task-pilot disposition `host_operational` identifies work
 that requires an operator-side action no managed lane can perform. Human
 approval to backlog does not clear that finding: local drain and ship
@@ -1289,6 +1296,8 @@ tooltip gives the verdict, reason and sample age.
 - A task minted over a frozen delivery batch within two hours of the batch's
   admission deadline (`retry_until`, or an operator reissue's) sorts ahead of
   same-priority backlog, corrective work included; critical work still leads.
+  Local dispatch and pull admission use the same owner-side expiry set and
+  ordering. If deadlines cannot be read, both retain the ordinary order.
   Readiness names that deadline as `frozen-batch-deadline` (JSON
   `frozen_batch_deadline`). Raising such a task to critical is no longer
   needed to keep its batch from expiring behind ordinary work.

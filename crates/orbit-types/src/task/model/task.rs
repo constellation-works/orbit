@@ -675,6 +675,23 @@ pub fn automatic_dispatch_cmp_with_expiry(
     right: &Task,
     right_expiring: bool,
 ) -> std::cmp::Ordering {
+    automatic_dispatch_cmp_for_host(left, left_expiring, right, right_expiring, None, None)
+}
+
+/// Automatic dispatch order for an executor pulling from an owner.
+///
+/// After band, priority and frozen-batch expiry, prefer tasks whose OS
+/// requirement the executor satisfies but the owner does not. Age and task
+/// ID settle the remaining ties. Equal host OSes preserve local dispatch
+/// order; an owner outside the OS namespace can run only unrestricted tasks.
+pub fn automatic_dispatch_cmp_for_host(
+    left: &Task,
+    left_expiring: bool,
+    right: &Task,
+    right_expiring: bool,
+    owner_os: Option<crate::task::HostOs>,
+    executor_os: Option<crate::task::HostOs>,
+) -> std::cmp::Ordering {
     let band = |task: &Task, expiring: bool| {
         if task.priority == TaskPriority::Critical {
             0
@@ -696,10 +713,15 @@ pub fn automatic_dispatch_cmp_with_expiry(
         TaskPriority::Medium => 2,
         TaskPriority::Low => 3,
     };
+    let affinity = |task: &Task| {
+        let requirement = crate::task::TaskOsRequirement::from_tags(&task.tags);
+        requirement.satisfied_by(executor_os) && !requirement.satisfied_by(owner_os)
+    };
     band(left, left_expiring)
         .cmp(&band(right, right_expiring))
         .then(priority(left.priority).cmp(&priority(right.priority)))
         .then(right_expiring.cmp(&left_expiring))
+        .then_with(|| affinity(right).cmp(&affinity(left)))
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

@@ -6,6 +6,15 @@ use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
+/// Owner-side ordering facts, separate from the executor's wire request.
+#[derive(Debug, Default)]
+pub struct AdmissionOrdering {
+    /// The owner's OS. Outside the namespace, it runs only unrestricted tasks.
+    pub owner_os: Option<orbit_types::task::HostOs>,
+    /// Tasks whose admitted frozen delivery batch nears its deadline.
+    pub expiring_tasks: std::collections::BTreeSet<String>,
+}
+
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
 /// The caller must already have session agent capability. SSH login establishes owner
 /// access; remote machine labels are attribution, not destination credentials.

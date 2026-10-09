@@ -124,6 +124,7 @@ impl Owner {
                     machine_name: None,
                 }),
                 &request(request_id),
+                &AdmissionOrdering::default(),
                 "test",
                 &self.repo,
                 &self.orbit_dir,

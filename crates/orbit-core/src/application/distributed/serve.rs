@@ -31,9 +31,9 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
-    ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    HandoffObservation, HandoffReviewObservation, JobRunQuery,
+    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
+    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
+    ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
@@ -428,9 +428,27 @@ impl crate::OrbitRuntime {
                 _ => {}
             }
         }
+        // Match local dispatch's expiry boost and its best-effort fallback:
+        // unreadable deadlines affect ordering, never admission eligibility.
+        let expiring_tasks = match crate::application::automation::expiring_frozen_batch_tasks(
+            self,
+            chrono::Utc::now(),
+        ) {
+            Ok(expiring) => expiring.into_keys().collect(),
+            Err(error) => {
+                tracing::warn!(
+                    "could not read frozen batch deadlines; pull backlog keeps its ordinary order: {error}"
+                );
+                Default::default()
+            }
+        };
         boundary.admit_task(
             identity,
             request,
+            &AdmissionOrdering {
+                owner_os: self.host_os(),
+                expiring_tasks,
+            },
             owner_binary_version(),
             &self.paths().repo_root,
             &self.data_root(),
