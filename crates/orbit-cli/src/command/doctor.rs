@@ -93,6 +93,12 @@ impl Execute for DoctorCommand {
             }
             None => {}
         }
+        if self.fix_orphan_task_stores && !self.confirm {
+            return Err(orbit_core::OrbitError::InvalidInput(
+                "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
+                    .to_string(),
+            ));
+        }
         let mut results = Vec::new();
         if self.fix_state_directory_permissions {
             let started = std::time::Instant::now();
@@ -185,12 +191,6 @@ impl Execute for DoctorCommand {
         }
         if self.fix_orphan_task_stores {
             let started = std::time::Instant::now();
-            if !self.confirm {
-                return Err(orbit_core::OrbitError::InvalidInput(
-                    "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
-                        .to_string(),
-                ));
-            }
             let removed = runtime.remove_orphan_task_stores()?;
             let message = orphan_task_store_removal_message(&removed);
             eprintln!("{message}");
