@@ -23,6 +23,10 @@
 //! attribution. [`INHERITED_AUTHORITY_ENV`] is the canonical list for that
 //! case and [`clear_inherited_authority`] applies it.
 //!
+//! A whole test binary gets the same defense from [`isolate_test_process!`](crate::isolate_test_process):
+//! it clears [`INHERITED_AUTHORITY_ENV`] before `main`, so a bare `cargo test`
+//! from an agent shell behaves like one from a clean shell (ORB-14926).
+//!
 //! Always available so integration tests and sibling crates share one
 //! implementation without changing `orbit-common`'s feature set. Child-test
 //! guards reject successful libtest exits that never executed the exact filter.
@@ -32,6 +36,8 @@ use std::io::Write;
 mod fifo;
 #[cfg(unix)]
 pub use fifo::{create_fixture_fifo, release_fixture_fifo};
+mod process_scrub;
+pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicUsize, Ordering},
