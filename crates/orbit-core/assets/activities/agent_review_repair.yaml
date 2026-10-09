@@ -241,6 +241,14 @@ spec:
          deliberately did not perform, such as a live deployment. Record it as
          `not_run` (or `denied`); it supplies no coverage and creates no
          requirement. Never perform an unauthorized action to clear a record.
+         It is also where a baseline command you deliberately skipped goes: a
+         `baseline_commands` entry (and not a `required_validation_commands`
+         one) may be left unrun, recorded `excluded` with a note, or omitted. Never use `excluded` for a check that repository
+         guidance requires, such as local Rust CodeQL: that silently drops the
+         coverage. Run it, or name it in `external_evidence` (an entry the
+         manifest's `owed_external_evidence` lists is already owner-fulfilled)
+         and keep its record `required` and `not_run`. A required command in
+         `required_validation_commands` is never `excluded`; run it.
        - `superseded`: an earlier diagnostic attempt a later required check
          replaced, such as a run in a misconfigured environment you then
          corrected. Keep it and list it before the replacing required pass so
@@ -256,7 +264,10 @@ spec:
        - `diagnostic`: an observation of the final candidate the task does not
          require, such as a workspace-wide suite run beyond the task's checks.
          Record its real outcome (`passed` or `failed`); it supplies no
-         coverage. A failed diagnostic lists in `sources` the files its
+         coverage. A command you did not run is never a diagnostic: a
+         `not_run` diagnostic is returned to you once to relabel (see
+         `excluded`), and a report that still carries one settles
+         `incomplete`. A failed diagnostic lists in `sources` the files its
          failures lie in, every one outside the task's selectors and the paths
          the candidate changes; a failure inside them is the task's own and
          must be `required`. It cannot share its check with a required pass.

@@ -445,8 +445,19 @@ settlement had them restored.
 A defect in a record's shape rather than in what its checks observed — a
 missing `note`, `control` or `sources`, a source outside the scope such as
 an old-shape counterfactual's mutated file, or a mutation target that is not
-a repository-relative path — goes back to the reviewer once
-before the verdict settles [ORB-14616]. When the reviewer step returns
+a repository-relative path, or a diagnostic recorded `not_run` — goes back to the reviewer once
+before the verdict settles [ORB-14616]. A `not_run` diagnostic is a skipped check
+under the wrong role [ORB-15083], and the correction names the fix for its
+class: a `workflow.required_validation_commands` entry is run and recorded
+`required` (`excluded` never establishes one); a `review.baseline_commands`
+entry is recorded `excluded` or omitted; any other command, such as policy-required
+local Rust CodeQL, is run or named in `external_evidence` for the owner to
+fulfil, and is never recorded `excluded`, which would drop the coverage. The
+validator cannot tell an unlisted policy check from an optional one, so that
+rule is contract text only. A report that still carries the `not_run`
+diagnostic after the correction settles `incomplete` with
+`validation_contradicted`; a denied diagnostic or a control that never ran
+stays an observation. When the reviewer step returns
 successfully, the engine asks the host (`RuntimeHost::review_report_correction`)
 to judge the attached report as settlement would, over the scope settlement
 would derive (the task selectors plus the implementation's paths and the
