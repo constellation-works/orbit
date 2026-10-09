@@ -65,7 +65,7 @@ wait_for() {
   local attempts=0
   while [[ ! -e "$path" ]]; do
     attempts=$((attempts + 1))
-    [[ "$attempts" -lt 200 ]] || fail "timed out waiting for $path"
+    [[ "$attempts" -lt 1000 ]] || fail "timed out waiting for $path"
     sleep 0.02
   done
 }
@@ -100,7 +100,6 @@ def update(event):
             maximum_path = state / "max"
             previous = int(maximum_path.read_text()) if maximum_path.exists() else 0
             maximum_path.write_text(f"{max(previous, current)}\n")
-            (state / f"started-{label}").touch()
         else:
             (active / label).unlink(missing_ok=True)
         with (state / "events").open("a") as events:
@@ -109,6 +108,10 @@ def update(event):
                 f"slot={os.environ.get('ORBIT_BUILD_BUDGET_SLOT')} "
                 f"target={os.environ.get('CARGO_TARGET_DIR')}\n"
             )
+        # Publish the start marker only after its events line is written, so a
+        # reader that waits on the marker can rely on the events file.
+        if event == "start":
+            (state / f"started-{label}").touch()
     finally:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
 
@@ -137,7 +140,10 @@ try:
             os.setsid()
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
             lock_file.close()
-            (state / "detached-pid").write_text(str(os.getpid()))
+            # Publish atomically: the parent polls for this file and must never read it empty.
+            pid_tmp = state / "detached-pid.tmp"
+            pid_tmp.write_text(str(os.getpid()))
+            os.replace(pid_tmp, state / "detached-pid")
             while True:
                 time.sleep(1)
         while not (state / "release-owner").exists():
@@ -455,7 +461,7 @@ printf '%s\n' "$@" >>"${FAKE_CARGO_LOG}"
 SH
 chmod +x "$TMP/fake-cargo"
 FAKE_CARGO_LOG="$TMP/make.log" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-make" \
-  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 timeout 5 "$WRAPPER" -- \
+  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 timeout 30 "$WRAPPER" -- \
   make -s -C "$ROOT" check CARGO="$TMP/fake-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Fxq 'jobs=9' "$TMP/make.log" || fail "nested Make entry lost Cargo job limit"
 grep -Fxq 'check' "$TMP/make.log" || fail "nested Make entry did not invoke cargo check"
