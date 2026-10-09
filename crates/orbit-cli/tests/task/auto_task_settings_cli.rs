@@ -187,3 +187,203 @@ fn settings_only_fork_migrates_and_a_body_fork_is_preserved_and_reported() {
         "a body fork's remedy must not discard its settings by moving the file: {remediation}"
     );
 }
+
+#[test]
+fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
+    let fixture = Fixture::new();
+    for (name, older) in [
+        (
+            "run-failure-patterns",
+            include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml"),
+        ),
+        (
+            "delivery-code-review",
+            include_str!("../fixtures/auto-task-body-history/delivery-code-review.yaml"),
+        ),
+        (
+            "security-review",
+            include_str!("../fixtures/auto-task-body-history/security-review.yaml"),
+        ),
+    ] {
+        let path = definition_path(&fixture, name);
+        let bundled = fs::read_to_string(&path).unwrap();
+        let dir = path.parent().unwrap();
+        let mut edited = older.replacen("crew: system", "crew: opus", 1);
+        if name == "delivery-code-review" {
+            edited = edited
+                .replacen("enabled: false", "enabled: true", 1)
+                .replacen("threshold: 3", "threshold: 2", 1)
+                .replacen("max_wait_minutes: 360", "max_wait_minutes: 120", 1)
+                .replacen("retries: 0", "retries: 1", 1)
+                .replacen(
+                    "  - delivery-code-review\n",
+                    "  - delivery-code-review\n  - os:linux\n",
+                    1,
+                );
+            // CRUD reserialization drops YAML comments and changes formatting;
+            // shipped-body recognition must still use the parsed body.
+            let definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&edited).unwrap();
+            edited = serde_yaml::to_string(&definition).unwrap();
+        }
+        assert_ne!(edited, older, "fixture must change the crew");
+        fs::write(&path, &edited).unwrap();
+        // Stale operator copies can be untracked, or carry the old raw digest.
+        set_manifest_digest(
+            dir,
+            name,
+            if name == "security-review" {
+                Some(sha256_hex(older.as_bytes()))
+            } else {
+                None
+            },
+        );
+
+        let row = auto_task_doctor_row(&fixture);
+        let message = row["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!(
+                "`{name}` has a stale shipped body (will upgrade on sync)"
+            )),
+            "{message}"
+        );
+        assert!(!message.contains("body fork"), "{message}");
+        let preview = fixture
+            .command(&["workspace", "sync", "--check", "--json"])
+            .assert()
+            .code(3)
+            .get_output()
+            .stdout
+            .clone();
+        let preview: Value = serde_json::from_slice(&preview).unwrap();
+        assert_eq!(sync_outcome(&preview, name), "migrated");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            edited,
+            "check mode must preserve the file"
+        );
+        assert!(
+            !dir.join(SETTINGS_FILE).exists()
+                || read_json(&dir.join(SETTINGS_FILE))["definitions"][name].is_null()
+        );
+
+        let sync = fixture.json(&["workspace", "sync", "--json"]);
+        assert_eq!(sync_outcome(&sync, name), "migrated");
+        assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
+        let shown = fixture.json(&["auto-task", "show", name, "--json"]);
+        assert_eq!(shown["layering"]["body"], "managed");
+        assert_eq!(shown["layering"]["settings"]["crew"], "opus");
+        assert_eq!(shown["template"]["crew"], "opus");
+        if name == "delivery-code-review" {
+            assert_eq!(shown["enabled"], true);
+            let settings = &shown["layering"]["settings"];
+            let trigger = &settings["schedule"]["deliveries_landed"];
+            assert_eq!(trigger["threshold"], 2);
+            assert_eq!(trigger["max_wait_minutes"], 120);
+            assert_eq!(trigger["retries"], 1);
+            assert_eq!(settings["tags"], serde_json::json!(["os:linux"]));
+            assert!(
+                settings["complexity"].is_null(),
+                "an unchanged old default must not pin the new complexity"
+            );
+        }
+        fixture
+            .command(&["auto-task", "show", name])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("body: managed bundled default"));
+        assert_eq!(auto_task_doctor_row(&fixture)["status"], "ok");
+    }
+
+    let path = definition_path(&fixture, "run-failure-patterns");
+    let old = include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml");
+    for edited in [
+        old.replacen("title: ", "title: Operator body edit ", 1),
+        format!("# Operator note must survive\n{old}"),
+        old.replacen("  - run-failure-patterns\n", "", 1),
+        old.replacen("  crew: system\n", "", 1),
+    ] {
+        assert_ne!(edited, old);
+        fs::write(&path, &edited).unwrap();
+        let row = auto_task_doctor_row(&fixture);
+        let message = row["message"].as_str().unwrap();
+        assert!(
+            message.contains("`run-failure-patterns` is a body fork"),
+            "{message}"
+        );
+        assert!(!message.contains("stale shipped body"), "{message}");
+        let sync = fixture.json(&["workspace", "sync", "--json"]);
+        assert_eq!(sync_outcome(&sync, "run-failure-patterns"), "preserved");
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+        let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+        assert_eq!(shown["layering"]["body"], "forked");
+    }
+}
+
+#[test]
+fn older_shipped_body_keeps_explicit_settings_and_their_edit_stamp() {
+    let fixture = Fixture::new();
+    let path = definition_path(&fixture, "run-failure-patterns");
+    let dir = path.parent().unwrap();
+    let current = fs::read(&path).unwrap();
+    let old = include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml")
+        .replacen("crew: system", "crew: sonnet", 1);
+    fs::write(&path, old).unwrap();
+    let explicit = serde_json::json!({
+        "enabled": false, "crew": "system", "tags": ["operator-tag"],
+        "updated_by": "human:operator", "updated_at": "2026-10-09T00:00:00Z"
+    });
+    fs::write(
+        dir.join(SETTINGS_FILE),
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "definitions": {"run-failure-patterns": explicit}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, "run-failure-patterns"), "migrated");
+    assert_eq!(fs::read(&path).unwrap(), current);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert_eq!(shown["layering"]["settings"], explicit);
+    assert_eq!(shown["template"]["crew"], "system");
+    assert_eq!(shown["updated_by"], "human:operator");
+    assert_eq!(shown["enabled"], false);
+}
+
+#[test]
+fn older_shipped_probe_bodies_recognize_rendered_and_historical_base_branches() {
+    let fixture = Fixture::new();
+    fixture.json(&[
+        "workspace",
+        "init",
+        "--name",
+        "audit-qa",
+        "--force",
+        "--base-branch",
+        "main",
+        "--json",
+    ]);
+    fixture.json(&["workspace", "sync", "--json"]);
+    let path = definition_path(&fixture, "qa-sweep");
+    let bundled = fs::read(&path).unwrap();
+    let old = include_str!("../fixtures/auto-task-body-history/qa-sweep.yaml");
+    for branch in ["main", "agent-main", "operator-branch"] {
+        let edited =
+            old.replace("__ORBIT_BASE_BRANCH__", branch)
+                .replacen("crew: system", "crew: opus", 1);
+        fs::write(&path, &edited).unwrap();
+        let sync = fixture.json(&["workspace", "sync", "--json"]);
+        let shown = fixture.json(&["auto-task", "show", "qa-sweep", "--json"]);
+        if branch == "operator-branch" {
+            assert_eq!(sync_outcome(&sync, "qa-sweep"), "preserved");
+            assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+            assert_eq!(shown["layering"]["body"], "forked");
+        } else {
+            assert_eq!(sync_outcome(&sync, "qa-sweep"), "migrated");
+            assert_eq!(fs::read(&path).unwrap(), bundled);
+            assert_eq!(shown["skip_if_unchanged"]["ref"], "main");
+            assert_eq!(shown["layering"]["settings"]["crew"], "opus");
+        }
+    }
+}

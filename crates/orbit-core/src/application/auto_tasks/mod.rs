@@ -23,6 +23,7 @@
 
 use std::borrow::Cow;
 
+mod body_history;
 mod change_probe;
 pub mod crud;
 pub mod delete;

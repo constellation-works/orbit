@@ -337,14 +337,45 @@ its file. `delete` and `restore` drop the entry, as does `add` for a reused name
 `forked_fields` and `settings_fields`.
 
 `orbit workspace sync` migrates a fork of a shipped default whose differences
-from the bundled body are only settings fields (ignoring `created_*` and
-`updated_*`): it writes those fields into the settings table, restores the
+from the current or a previously shipped body are only settings fields
+(ignoring `created_*` and `updated_*`): it writes those fields into the settings table, restores the
 bundled body, and records its digest (`migrated`). A fork with any body edit is
-preserved, and so is one carrying a YAML comment the bundled body lacks (body
-field `comments`): no settings entry can hold the operator's note. `orbit doctor`'s `artifacts-auto-tasks` row reports a settings-only
+preserved, and so is one carrying a YAML comment the matching shipped body lacks
+(body field `comments`): no settings entry can hold the operator's note.
+`orbit doctor`'s `artifacts-auto-tasks` row reports a settings-only
 fork as `stale` with `orbit workspace sync` as its remedy, and a body fork as
 `forked` naming the differing body and settings fields; neither remedy moves
 or renames the file.
+
+Previously shipped bodies are recognized by the per-default canonical SHA-256
+digests compiled from [body-history.json](../../../crates/orbit-core/assets/auto_tasks/body-history.json).
+This works even when a checkout's managed manifest no longer records the old
+bytes. A digest covers the parsed definition with settings and edit stamps
+removed; JSON keys are sorted, and `skip_if_unchanged.ref` uses the bundled
+base-branch placeholder after workspace rendering (including the historical
+hardcoded `agent-main`). Each history entry also
+records its source integration commit, the original settings and body tags,
+and its `#` lines. The original tags, crew and complexity distinguish body
+edits from upstream changes; tag removal, clearing a shipped crew or complexity,
+and added notes remain body edits. Existing settings-table overrides take
+precedence and keep their edit stamp. A recognized historical copy upgrades
+to the current bundled body, and doctor calls it a **stale shipped body (will
+upgrade on sync)** rather than a body fork.
+
+Representable settings differences are measured against the current default,
+preserving the copy's effective values even when an older release also used
+those values as defaults. Body fields newly introduced upstream still arrive
+with the current body, including tags or a previously absent complexity.
+
+After landing changes to bundled defaults, run
+`python3 scripts/update-auto-task-body-history.py` (requires PyYAML) and commit
+the resulting history with the next asset change or release preparation.
+The script scans first-parent integration history, retains existing records
+for shallow clones, and never records uncommitted asset edits. Current bodies
+are compared directly and need no history entry until they become historical.
+The fingerprint format follows the v1 definition's serde defaults; update the
+generator together with any schema change. Unrecognized bodies are preserved
+conservatively; the manifest's exact-byte provenance behavior is unchanged.
 
 Apply-mode migration holds the same workspace auto-task cursor sidecar lock as
 CRUD from the settings-table load through the table write, body restoration and

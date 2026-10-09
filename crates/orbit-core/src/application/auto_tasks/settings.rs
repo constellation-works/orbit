@@ -31,6 +31,7 @@ use crate::application::managed_assets::{
     resolve_confined_asset_path, restore_managed_asset,
 };
 
+use super::body_history::historical_overrides;
 use super::loader::auto_tasks_dir;
 use super::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 
@@ -75,34 +76,53 @@ pub(crate) fn rendered_bundled_body(name: &str, base_branch: &str) -> Option<Str
         .map(|(_, content)| render_default_auto_task(content, base_branch).into_owned())
 }
 
-/// Compare a shipped default's file with its bundled body.
-///
-/// `None` means the file is the managed body: the manifest digest proves Orbit
-/// wrote these bytes (possibly an older release that sync refreshes), or they
-/// equal the current bundled body. Otherwise the file is a fork, split into
-/// settings and body differences after applying `settings` over it.
+/// Differences from a shipped body, with stale historical copies distinguished
+/// from settings-only edits of the current template.
+pub(crate) struct BundledFileOverrides {
+    pub overrides: AutoTaskOverrides,
+    pub stale_shipped_body: bool,
+}
+
+/// `None` means the manifest proves Orbit wrote these exact bytes, or they
+/// equal the current bundle. Other files are compared with the current body
+/// first, then with shipped history if their body differs.
 pub(crate) fn classify_bundled_file(
     rendered: &str,
     on_disk: &str,
     tracked: Option<&String>,
     settings: Option<&AutoTaskSettings>,
-) -> Result<Option<AutoTaskOverrides>, OrbitError> {
+    base_branch: &str,
+) -> Result<Option<BundledFileOverrides>, OrbitError> {
     let digest = sha256_hex(on_disk.as_bytes());
     if tracked == Some(&digest) || digest == sha256_hex(rendered.as_bytes()) {
         return Ok(None);
     }
-    let mut effective = parse_auto_task_yaml(on_disk)?;
+    let definition = parse_auto_task_yaml(on_disk)?;
+    let body = parse_auto_task_yaml(rendered)?;
+    let mut effective = definition.clone();
     if let Some(settings) = settings {
         settings.apply(&mut effective);
     }
-    let body = parse_auto_task_yaml(rendered)?;
     let mut overrides = split_overrides(&body, &effective);
     // A YAML comment is body content no settings entry can hold: an operator's
     // note keeps the file a fork rather than being dropped by migration.
     if has_added_comment(rendered, on_disk) {
         overrides.body_fields.push("comments");
     }
-    Ok(Some(overrides))
+    if !overrides.body_fields.is_empty()
+        && definition.name == body.name
+        && let Some(overrides) =
+            historical_overrides(&body, &definition, on_disk, base_branch, settings)?
+    {
+        return Ok(Some(BundledFileOverrides {
+            overrides,
+            stale_shipped_body: true,
+        }));
+    }
+    Ok(Some(BundledFileOverrides {
+        overrides,
+        stale_shipped_body: false,
+    }))
 }
 
 /// Whether `on_disk` carries a `#` line the bundled body lacks. Lines inside
@@ -231,6 +251,7 @@ impl OrbitRuntime {
             &on_disk,
             tracked.as_ref(),
             settings.as_ref(),
+            self.workspace_base_branch(),
         )? {
             None => AutoTaskLayering {
                 body: AutoTaskBody::Managed,
@@ -238,11 +259,11 @@ impl OrbitRuntime {
                 forked_fields: Vec::new(),
                 settings_fields: Vec::new(),
             },
-            Some(overrides) => AutoTaskLayering {
+            Some(classified) => AutoTaskLayering {
                 body: AutoTaskBody::Forked,
                 settings,
-                settings_fields: overrides.settings.field_names(),
-                forked_fields: overrides.body_fields,
+                settings_fields: classified.overrides.settings.field_names(),
+                forked_fields: classified.overrides.body_fields,
             },
         };
         Ok(layering)
@@ -301,14 +322,16 @@ pub(crate) fn migrate_settings_only_forks(
             continue;
         };
         // An unparsable fork stays where it is; doctor reports it faulty.
-        let Ok(Some(overrides)) = classify_bundled_file(
+        let Ok(Some(classified)) = classify_bundled_file(
             &rendered,
             &on_disk,
             manifest.assets.get(*name),
             table.get(*name),
+            base_branch,
         ) else {
             continue;
         };
+        let overrides = classified.overrides;
         if !overrides.body_fields.is_empty() {
             continue;
         }
