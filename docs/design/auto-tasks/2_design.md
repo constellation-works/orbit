@@ -258,7 +258,8 @@ job, activity, or job run is created, and fires do not appear on
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields; toggle (the CLI command,
+rejects duplicate names; update patches present fields (on a managed shipped
+default, settings fields go to the settings table, §5c); toggle (the CLI command,
 or `orbit.auto_task.update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
 toggle re-read the definition and write it while holding the cursor sidecar
@@ -306,6 +307,44 @@ Orbit wrote for each shipped default, so a default dropped from a later release
 can be retired by content provenance instead of remaining loadable forever.
 Seeding still never overwrites an existing definition, and an operator-edited
 default is preserved under `.retired-managed/auto_tasks/` rather than deleted.
+
+### 5c. Operator settings over bundled bodies
+
+A shipped default's YAML is its *body*; `orbit workspace sync` refreshes it
+only while its bytes match the recorded digest. The fields an operator is meant
+to tune are kept out of the body, in one settings table beside the definitions:
+`.orbit/auto_tasks/.orbit-auto-task-settings.json` (JSON, so discovery never
+loads it as a definition), keyed by definition name
+(`orbit_automation::auto_tasks::settings`). Settings fields are `enabled`,
+`schedule`, `dedupe`, and the template's `crew`, `priority`, `complexity` and
+tag additions (tags appended after the body's own); each entry also carries the
+edit's `updated_by`/`updated_at`. The loader applies an entry over its body, so
+the scheduler, admission revalidation, mint, list, show and doctor all see the
+same effective definition. An unreadable settings table fails every definition
+closed, since any of them may carry settings.
+
+`update` and `toggle` on a shipped default whose body is still managed (file
+digest equals the manifest's) write only the settings table when the edited
+definition differs from the body in settings fields alone, so the body keeps
+refreshing and the settings keep applying. A body edit — description, title,
+criteria, required tools, context files, removing a body tag, clearing a crew or
+complexity — forks the file as before: the whole effective definition is
+written to the YAML and its settings entry is dropped, so the fork alone is
+authoritative. Every later edit of a fork or user-authored definition writes
+its file. `delete` and `restore` drop the entry, as does `add` for a reused name.
+`orbit auto-task show` reports `layering.body` (`managed`, `forked`,
+`user_authored`), the stored `layering.settings`, and for a fork its
+`forked_fields` and `settings_fields`.
+
+`orbit workspace sync` migrates a fork of a shipped default whose differences
+from the bundled body are only settings fields (ignoring `created_*` and
+`updated_*`): it writes those fields into the settings table, restores the
+bundled body, and records its digest (`migrated`). A fork with any body edit is
+preserved, and so is one carrying a YAML comment the bundled body lacks (body
+field `comments`): no settings entry can hold the operator's note. `orbit doctor`'s `artifacts-auto-tasks` row reports a settings-only
+fork as `stale` with `orbit workspace sync` as its remedy, and a body fork as
+`forked` naming the differing body and settings fields; neither remedy moves
+or renames the file.
 
 ## 5b. Manual mint — `mint` (ORB-10439, renamed by ORB-10446)
 

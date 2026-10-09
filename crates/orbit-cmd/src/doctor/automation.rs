@@ -685,7 +685,7 @@ pub(super) fn doctor_check_definition_artifacts(
                     format!("no {} on disk yet", health.kind.as_str())
                 } else {
                     format!(
-                        "{} {} loaded, none residual, stale, deprecated, faulty, or missing",
+                        "{} {} loaded, none residual, stale, forked, deprecated, faulty, or missing",
                         health.scanned,
                         health.kind.as_str()
                     )
@@ -736,6 +736,7 @@ pub(super) fn doctor_check_definition_artifacts(
             let breakdown = [
                 ArtifactCondition::Missing,
                 ArtifactCondition::Stale,
+                ArtifactCondition::Forked,
                 ArtifactCondition::Faulty,
                 ArtifactCondition::Residual,
                 ArtifactCondition::Deprecated,

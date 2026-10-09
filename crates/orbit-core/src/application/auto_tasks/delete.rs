@@ -32,10 +32,10 @@ use crate::{AuditEventInsertParams, OrbitRuntime};
 
 use super::loader::{auto_tasks_dir, definition_path};
 use super::scheduler::open_auto_task_instances;
+use super::settings::AUTO_TASK_ASSET_KIND as ASSET_KIND;
 use super::state::cursor_state_path;
 use super::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 
-const ASSET_KIND: &str = "auto_task";
 /// Reset reason recorded for a delivery consumer when the delete gave none.
 const DEFAULT_DELETE_REASON: &str = "auto-task definition deleted";
 
@@ -138,6 +138,17 @@ impl OrbitRuntime {
                     now,
                 )
                 .map_err(|error| restore_after_failure(&path, &original, error))?;
+                // The definition is gone; a leftover settings entry would only
+                // resurface on a later restore or same-named add, which both
+                // drop it again.
+                if let Err(error) = self.drop_auto_task_settings(name) {
+                    tracing::warn!(
+                        target: "orbit.core.auto_tasks",
+                        auto_task = name,
+                        %error,
+                        "deleted auto-task kept its settings entry"
+                    );
+                }
                 Ok((open_tasks, removed))
             },
         )?;
@@ -189,6 +200,8 @@ impl OrbitRuntime {
 
         let rendered = render_default_auto_task(embedded, self.workspace_base_branch());
         let definition = parse_auto_task_yaml(&rendered)?;
+        // Restore means the shipped definition, without earlier settings.
+        self.drop_auto_task_settings(name)?;
         atomic_write_text(&path, &rendered).map_err(|error| {
             OrbitError::Io(format!(
                 "restore auto-task '{name}' at {}: {error}",

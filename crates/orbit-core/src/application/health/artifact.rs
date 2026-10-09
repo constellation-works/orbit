@@ -16,7 +16,13 @@
 //!   reporting the catalog healthy would contradict it [DANI-10502].
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
-//!   default name.
+//!   default name. An auto-task file that differs from its bundled body only
+//!   in operator settings is stale too: `orbit workspace sync` moves the
+//!   settings into the settings table and manages the body again.
+//! - **Forked** — an auto-task file edited away from its bundled body in a
+//!   body field (description, criteria, …). It is preserved as authored but
+//!   no longer receives upstream template changes; the finding names the
+//!   differing fields.
 //! - **Missing** — the managed catalog was previously reconciled, and a primary
 //!   shipped default this binary still embeds is absent from disk. Warm opens
 //!   skip reconciliation when the defaults stamp matches, so this state can
@@ -144,6 +150,8 @@ pub enum ArtifactCondition {
     Deprecated,
     /// Drifted from the current release, or colliding with a bundled name.
     Stale,
+    /// An auto-task body edited away from its bundled default.
+    Forked,
     /// A primary shipped default this binary still embeds is not on disk.
     Missing,
     /// A provider discovery symlink points to a missing target.
@@ -157,6 +165,7 @@ impl ArtifactCondition {
             Self::Residual => "residual",
             Self::Deprecated => "deprecated",
             Self::Stale => "stale",
+            Self::Forked => "forked",
             Self::Missing => "missing",
             Self::DanglingLink => "dangling link",
         }
@@ -215,6 +224,7 @@ impl ArtifactFinding {
             ArtifactCondition::Residual
             | ArtifactCondition::Deprecated
             | ArtifactCondition::Stale
+            | ArtifactCondition::Forked
             | ArtifactCondition::DanglingLink => false,
         }
     }

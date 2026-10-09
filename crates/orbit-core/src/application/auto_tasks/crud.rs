@@ -9,6 +9,11 @@
 //! Disabling is a `toggle`; removal is the separate audited delete in
 //! [`super::delete`].
 //!
+//! Reads return the effective definition: the YAML body with its operator
+//! settings applied ([`super::settings`]). On a shipped default whose body is
+//! still managed, `update` and `toggle` write only the settings table when
+//! the change is limited to settings fields; a body edit forks the file.
+//!
 //! `mint` (CLI-only by design — see `docs/design/mcp-bridge/2_design.md`)
 //! rides here too: it mints a task from a definition on demand by reusing the
 //! scheduler's mint path, so there is exactly one template→task mapping.
@@ -18,6 +23,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use orbit_automation::auto_tasks::settings::load_settings_table;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::task::{Task, normalize_required_tools};
@@ -133,6 +139,7 @@ impl OrbitRuntime {
             )));
         }
         self.write_auto_task(&definition)?;
+        self.drop_auto_task_settings(&definition.name)?;
         Ok(definition)
     }
 
@@ -179,7 +186,8 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Show one definition by name, or `None` if no regular in-scope file exists.
+    /// Show one effective definition by name, or `None` if no regular
+    /// in-scope file exists.
     ///
     /// Absolute paths, parent-directory traversal, and any other name that is
     /// not a single definition stem are rejected before the filesystem is
@@ -191,9 +199,14 @@ impl OrbitRuntime {
         };
         let raw = std::fs::read_to_string(&path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        Ok(Some(orbit_common::protocol::yaml::parse_auto_task_yaml(
-            &raw,
-        )?))
+        let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
+        let settings = load_settings_table(&auto_tasks_dir(&self.paths().local_dir))
+            .map_err(|error| OrbitError::InvalidInput(format!("auto-task '{name}': {error}")))?;
+        if let Some(entry) = settings.get(&definition.name) {
+            entry.apply(&mut definition);
+            definition.validate()?;
+        }
+        Ok(Some(definition))
     }
 
     /// Apply a present-field patch to a definition.
@@ -480,8 +493,9 @@ impl OrbitRuntime {
             definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
-            self.write_auto_task(&definition)?;
-            Ok(definition)
+            self.persist_auto_task_edit(&definition)?;
+            // Settings re-apply over the body on load; return what loads.
+            self.require_validated_auto_task(name)
         })
     }
 
@@ -498,7 +512,10 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    fn write_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {
+    pub(super) fn write_auto_task(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<(), OrbitError> {
         // The runtime has already selected the definition root. A managed
         // tool call reaches this method only in the registered owner host.
         let path = definition_path(&self.paths().local_dir, &definition.name);

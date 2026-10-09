@@ -202,12 +202,15 @@ pub(super) fn retarget(fixture: &Fixture, trigger: &Value) {
 
 /// A persisted definition may still name the retired coverage. Add and schedule
 /// update refuse to select it, so the doctor case plants the bytes the loader
-/// still decodes.
+/// still decodes. A schedule update on the shipped consumer persists in the
+/// auto-task settings table, which overrides the body, so plant it there too.
 fn plant_retired_coverage(fixture: &Fixture) {
     let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
-    let path = shown["definition_source"]["path"]
-        .as_str()
-        .expect("definition path");
+    let path = std::path::Path::new(
+        shown["definition_source"]["path"]
+            .as_str()
+            .expect("definition path"),
+    );
     let current = fs::read_to_string(path).unwrap();
     let planted = current
         .replace(
@@ -223,6 +226,20 @@ fn plant_retired_coverage(fixture: &Fixture) {
         "the persisted consumer must still be loadable with the retired coverage"
     );
     fs::write(path, planted).unwrap();
+    let settings = path
+        .parent()
+        .unwrap()
+        .join(".orbit-auto-task-settings.json");
+    if let Ok(table) = fs::read_to_string(&settings) {
+        fs::write(
+            &settings,
+            table.replace(
+                "\"coverage\": \"landed_code_review_v1\"",
+                "\"coverage\": \"integrated_qa_v1\"",
+            ),
+        )
+        .unwrap();
+    }
 }
 
 pub(super) fn trigger() -> Value {
