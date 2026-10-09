@@ -51,6 +51,7 @@ FILE_READERS = (
     (Path("scripts/build-budget.py"), ("orbit-engine",)),
     (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
     (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
+    (Path("crates/orbit-core/assets/auto_tasks"), ("orbit-cli",)),
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
 )

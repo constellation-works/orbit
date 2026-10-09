@@ -139,6 +139,7 @@ selects those crates and their reverse dependents. Today this covers
 `crates/orbit-core/assets/jobs/` (read by `orbit-engine` and `orbit-cli`
 tests), `crates/orbit-core/assets/activities/` (read by `orbit-engine`
 tests, though `orbit-core` depends on `orbit-engine`, not the reverse),
+`crates/orbit-core/assets/auto_tasks/` (read by `orbit-cli` history tests),
 `plugin/hooks/` and the root `server.json` (read by `orbit-cli` tests), and
 `scripts/build-budget.py` (executed by `orbit-engine` boundary tests). When a
 test starts reading another crate's or a repository-root file, add its prefix
