@@ -14,9 +14,9 @@ use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest
 use orbit_core::application::automation::evaluate_auto_task;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionRequest, AdmissionReviewContract,
-    AdmissionRunContext, AdmissionShipContract, ClaimEvidence, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-    ExecutionLocation, HandoffReviewObservation,
+    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
+    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation, HandoffReviewObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::TaskArtifact;
@@ -163,6 +163,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
                 machine_name: None,
             }),
             &request,
+            &AdmissionOrdering::default(),
             "test",
             &repo,
             &repo.join(".orbit"),

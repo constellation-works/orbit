@@ -2167,7 +2167,7 @@ fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
 /// Record `task_id` as the admitted action of a frozen batch on this
 /// workspace's `name` consumer, due `remaining` from now — the state delivery
 /// automation leaves after minting the batch's task.
-fn admitted_frozen_batch(
+pub(super) fn admitted_frozen_batch(
     runtime: &OrbitRuntime,
     name: &str,
     task_id: &str,

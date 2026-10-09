@@ -241,11 +241,16 @@ impl TaskCommitBoundary {
     /// base to why [ORB-14258]. Its last delivery failed a required command
     /// the base fails the same way; it is deferred until the held command
     /// passes on a new base tip, as it would be on the owner's own drain.
+    ///
+    /// `ordering` supplies the owner's OS and expiring frozen-batch tasks.
+    /// Candidates share local dispatch's band, priority and expiry order,
+    /// then prefer work this executor can run but the owner cannot.
     #[allow(clippy::too_many_arguments)]
     pub fn admit_task(
         &self,
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
         owner_version: &str,
         repo_root: &Path,
         orbit_dir: &Path,
@@ -254,7 +259,7 @@ impl TaskCommitBoundary {
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
-        let snapshot = self.admission_snapshot()?;
+        let snapshot = self.admission_snapshot(request, ordering)?;
         #[cfg(test)]
         super::selection::after_selection::run();
         self.with_admission(|| {

@@ -40,8 +40,11 @@ The queue is a logical owner-side query, not a required maintained table:
 - **Members:** `backlog` tasks whose every dependency is `done` (or archived after it reached
   `done`). After epic retirement, the `epic` tag and parent/child hierarchy introduce no special
   admission path. Sequencing uses dependencies.
-- **Order:** the canonical automatic-dispatch comparator, including corrective tag bands, priority,
-  age, and task-ID tie-breaker. Readiness reporting and admission share it.
+- **Order:** the canonical automatic-dispatch comparator: critical, corrective and ordinary
+  bands, then priority, frozen-batch expiry, age and task ID. Pull admission uses the owner's
+  same expiring frozen-batch set as local dispatch. Before age, it prefers work whose OS
+  requirement the executor satisfies but the owner does not. This affinity never crosses a
+  band, priority or expiry boost; owner-local admission retains local dispatch order.
 - **Validation:** selection, dependency checks, current status, canonicalized own `context_files`,
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
@@ -52,9 +55,10 @@ The queue is a logical owner-side query, not a required maintained table:
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty
   declaration requires operator correction before admission; execution cannot expand its scope.
 
-V1 has no platform filter. Each participant must meet all workspace execution requirements.
-Crews are the one owner-evaluated eligibility rule [ORB-13941]: a request declares the crews its
-executor can run (`crews`, below), and the owner skips a ready candidate whose crew the executor
+Each participant must meet all workspace execution requirements. The owner checks a task's
+`os:` tags against the executor's declared OS; mismatches stay in the backlog with an
+`os_unavailable` diagnostic. A request also declares the crews its
+executor can run (`crews`, below) [ORB-13941], and the owner skips a ready candidate whose crew the executor
 cannot run — its own `task.crew`, or the executor's `default_crew` for a task naming none. The
 skipped task keeps its place in the owner's order for the owner or another follower. The owner
 still orders every admission; the declaration only narrows what this executor is offered.

@@ -33,10 +33,10 @@ use orbit_store::compose::{
     CoordinatedWorkspaceBackends, workspace_coordinated_backends, workspace_job_run_store,
 };
 use orbit_store::contracts::{
-    ActiveTaskReservation, AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest,
-    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
-    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ClaimWorkerUpdate,
-    ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
+    ActiveTaskReservation, AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt,
+    AdmissionRequest, AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
+    ClaimWorkerUpdate, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
     HandoffReviewObservation, HandoffReviewRefusal, JobRunStoreBackend, PullDestination,
     TaskArtifactUpdateParams, TaskCreateParams,
 };
@@ -72,6 +72,8 @@ use tempfile::TempDir;
 
 #[path = "allocation_admission/dependencies.rs"]
 mod dependencies;
+#[path = "allocation_admission/ordering.rs"]
+mod ordering;
 #[path = "allocation_admission/reservation_grants.rs"]
 mod reservation_grants;
 #[path = "allocation_admission/task_index.rs"]
@@ -1103,6 +1105,14 @@ impl Coordinated {
     }
 
     fn try_pull(&self, request: &AdmissionRequest) -> Result<AdmissionLookup, OrbitError> {
+        self.try_pull_with_ordering(request, &AdmissionOrdering::default())
+    }
+
+    fn try_pull_with_ordering(
+        &self,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+    ) -> Result<AdmissionLookup, OrbitError> {
         let location = ExecutionLocation {
             machine_id: "machine-a".into(),
             machine_name: Some("display".into()),
@@ -1110,6 +1120,7 @@ impl Coordinated {
         self.backends.commit_boundary.admit_task(
             &AdmissionIdentity::trusted_remote(location),
             request,
+            ordering,
             "test",
             self.orbit_dir.parent().unwrap(),
             &self.orbit_dir,
