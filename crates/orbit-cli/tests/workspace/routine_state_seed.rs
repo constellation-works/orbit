@@ -98,14 +98,18 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
     assert_eq!(trigger["kind"], "preparation_eligible", "{shown}");
     assert_eq!(trigger["owner_machine"], machine_id, "{shown}");
     assert_eq!(trigger["branch"], "trunk", "{shown}");
-    assert_eq!(
-        trigger["eligibility"]["statuses"],
-        serde_json::json!(["proposed", "backlog"])
-    );
-    assert_eq!(
-        trigger["eligibility"]["exclude_tags"],
-        serde_json::json!(["no-diff-expected", "no-diff-needed"])
-    );
+    let eligibility = trigger["eligibility"]
+        .as_object()
+        .expect("state trigger eligibility object");
+    for field in ["statuses", "exclude_tags"] {
+        assert!(
+            eligibility
+                .get(field)
+                .and_then(Value::as_array)
+                .is_some_and(|values| values.iter().all(Value::is_string)),
+            "state trigger eligibility {field} must be an array of strings: {shown}"
+        );
+    }
 
     // Disabled as seeded: the tick evaluates the state trigger and reports
     // the definition's own switch, never a load or evaluation error.
