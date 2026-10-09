@@ -795,7 +795,13 @@ fn backlog_snapshot_in_mode(
             }
             // A multi-lock task would otherwise lose every race: each lock it
             // waits on is taken by lower-ranked work the moment it frees.
-            backlog = withhold_reserved_surfaces(kept, &reserving, workspace_root, &mut excluded);
+            backlog = withhold_reserved_surfaces(
+                kept,
+                &reserving,
+                &expiring_batches,
+                workspace_root,
+                &mut excluded,
+            );
         }
     }
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
@@ -977,9 +983,9 @@ fn pilot_preparation_exclusion(task_id: &str) -> BacklogTaskExclusion {
 }
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical
-/// first, then corrective work, then priority, age, and the task ID as the
-/// total tie-breaker. A task in `expiring` leads its priority outside the
-/// critical band (`automatic_dispatch_cmp_with_expiry`).
+/// first, then corrective or expiring work, then priority, expiry, age, and
+/// the task ID as the total tie-breaker. Uses the same expiry-aware comparison
+/// as surface reservations (`automatic_dispatch_cmp_with_expiry`).
 pub(in crate::adapter::engine_host::v2_host) fn sort_tasks_for_automatic_dispatch<
     T: Borrow<Task>,
 >(
