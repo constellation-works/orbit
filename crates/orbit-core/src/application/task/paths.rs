@@ -564,7 +564,7 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
     false
 }
 
-pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
+pub(super) fn extract_task_path_mentions(text: &str, workspace_root: &Path) -> Vec<String> {
     let mut paths = std::collections::BTreeSet::new();
     let is_wrapper = |ch: char| {
         matches!(
@@ -579,6 +579,9 @@ pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
             .trim_start_matches(is_wrapper)
             .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
         if let Some(path) = normalize_path_token(trimmed) {
+            if path.starts_with('/') && !is_path_under_workspace(Path::new(&path), workspace_root) {
+                continue;
+            }
             paths.insert(path);
         }
     }
@@ -587,11 +590,53 @@ pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
 
 /// Whether a token names a pattern, a placeholder, or a host location rather
 /// than a path inside the checkout: globs (`.orbit/**`), `<repo>/README.md`
-/// placeholders, and `~/` or absolute host paths (`~/.orbit/config.toml`,
-/// `/tmp/u.json`). A description names these legitimately, and they are never
-/// in the checkout, so reading them as missing repository files misleads.
+/// placeholders, and `~/` home-relative host paths (`~/.orbit/config.toml`).
+/// A description names these legitimately, and they are never in the checkout,
+/// so reading them as missing repository files misleads. Absolute host paths
+/// (such as `/tmp/u.json`) are filtered by workspace root rather than token
+/// shape so that absolute paths inside the checkout are still checked.
 fn is_non_repository_token(token: &str) -> bool {
-    token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with(['~', '/'])
+    token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with('~')
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    while let Some(parent) = ancestor.parent() {
+        if parent == ancestor {
+            break;
+        }
+        if let Some(name) = ancestor.file_name() {
+            missing.push(name.to_os_string());
+        }
+        if let Ok(canonical) = parent.canonicalize() {
+            let mut resolved = canonical;
+            for name in missing.iter().rev() {
+                resolved.push(name);
+            }
+            return resolved;
+        }
+        ancestor = parent;
+    }
+    path.to_path_buf()
+}
+
+pub(super) fn is_path_under_workspace(path: &Path, workspace_root: &Path) -> bool {
+    if path.starts_with(workspace_root) {
+        return true;
+    }
+    let canonical_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| canonicalize_existing_prefix(workspace_root));
+    if path.starts_with(&canonical_root) {
+        return true;
+    }
+    let canonical_path = canonicalize_existing_prefix(path);
+    canonical_path.starts_with(&canonical_root)
 }
 
 pub(super) fn normalize_path_token(token: &str) -> Option<String> {
