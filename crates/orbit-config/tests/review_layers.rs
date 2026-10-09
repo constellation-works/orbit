@@ -5,7 +5,10 @@
 
 use std::path::Path;
 
-use orbit_config::{ConfigRoots, OperationLayerSource, ResolvedConfig, admit_settable_config_key};
+use orbit_config::{
+    ConfigRoots, ConfigScope, ConfigStore, OperationLayerSource, ResolvedConfig,
+    admit_settable_config_key,
+};
 
 fn write_config(root: &Path, body: &str) {
     std::fs::write(root.join("config.toml"), body).expect("write config");
@@ -69,4 +72,68 @@ fn before_pr_and_before_landing_both_on_fail_the_load_naming_both_keys() {
         error.contains("review.before_pr") && error.contains("review.before_landing"),
         "{error}"
     );
+}
+
+#[test]
+fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let global_path = global.path().join("config.toml");
+
+    // Each pairing: the workspace layer already has one switch on, and the
+    // global edit turns on the other.
+    for (workspace_key, global_key) in [
+        ("before_pr", "review.before_landing"),
+        ("before_landing", "review.before_pr"),
+    ] {
+        write_config(
+            workspace.path(),
+            &format!("[review]\n{workspace_key} = true\n"),
+        );
+        write_config(global.path(), "");
+
+        let mut store =
+            ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+        store
+            .set_value(global_key, "true")
+            .expect("stage global set");
+        let error = store
+            .validate_global_for_set(global_key, workspace.path())
+            .expect_err("a global set that conflicts with the workspace layer is refused")
+            .to_string();
+        assert!(
+            error.contains(&format!("review.{workspace_key} (workspace)"))
+                && error.contains(&format!("{global_key} (global)")),
+            "{error}"
+        );
+
+        // Refused before `save`, so the workspace still loads.
+        assert_eq!(
+            std::fs::read_to_string(&global_path).expect("read global"),
+            ""
+        );
+        ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+
+        // The other switch off in the workspace layer is not a conflict.
+        write_config(
+            workspace.path(),
+            "[review]\nbefore_pr = false\nbefore_landing = false\n",
+        );
+        store
+            .validate_global_for_set(global_key, workspace.path())
+            .expect("no workspace switch is on");
+    }
+
+    // With one pinned root there is no workspace layer; the one-file check still applies.
+    write_config(global.path(), "[review]\nbefore_pr = true\n");
+    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
+    store
+        .set_value("review.before_landing", "true")
+        .expect("stage global set");
+    let error = store
+        .validate_global_for_set("review.before_landing", global.path())
+        .expect_err("one file alone still refuses both on")
+        .to_string();
+    assert!(error.contains("review.before_landing"), "{error}");
 }

@@ -286,6 +286,25 @@ pub(crate) fn validate_staged_workspace_document(
         .map(|loaded| loaded.resolved)
 }
 
+/// Admit an in-memory global edit against the workspace layer it would be
+/// read with, for the one cross-layer rule a global-only validation cannot
+/// see: both review layers on [ORB-14932]. Without this a global
+/// `review.before_landing` set beside a workspace `review.before_pr` saves
+/// cleanly and leaves that workspace's config unloadable, including for the
+/// `config set` that would repair it.
+pub(crate) fn validate_staged_global_document(
+    roots: &ConfigRoots,
+    global_path: &Path,
+    raw: &str,
+) -> Result<(), OrbitError> {
+    if !roots.has_workspace_layer() {
+        return Ok(());
+    }
+    let global = parse_config_document(global_path, raw)?;
+    let workspace = read_config_document(&roots.workspace().join("config.toml"))?;
+    resolve_operation_layers(Some(&global), workspace.as_ref()).map(|_| ())
+}
+
 /// Resolve workspace file values with only crew definitions inherited from
 /// global. Other global settings must not appear in a scoped file snapshot.
 pub(crate) fn resolve_workspace_file_document(
