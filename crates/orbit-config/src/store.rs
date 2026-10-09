@@ -23,6 +23,7 @@ use crate::layering::{
     reject_workspace_machine_table, resolve_workspace_file_document,
     validate_staged_global_document, validate_staged_workspace_document,
 };
+use crate::operation::OperationLayerSource;
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
@@ -223,7 +224,16 @@ impl ConfigStore {
         // the config document, and are irrelevant to key validation here.
         let persistence =
             PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
-        ResolvedConfig::from_raw_str(&self.doc.to_string(), &self.path, persistence)
+        let operation_layer_source = match self.scope {
+            ConfigScope::Global => OperationLayerSource::Global,
+            ConfigScope::Workspace => OperationLayerSource::Workspace,
+        };
+        ResolvedConfig::from_raw_str(
+            &self.doc.to_string(),
+            &self.path,
+            persistence,
+            operation_layer_source,
+        )
     }
 
     /// Look up the effective value of a single admitted key.
