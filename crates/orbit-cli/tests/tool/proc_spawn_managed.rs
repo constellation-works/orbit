@@ -506,6 +506,9 @@ fn orbit_command(workspace: &Path, home: &Path) -> AssertCommand {
         command.env_remove(name);
     });
     command
+        .env_remove("ORBIT_ACTIVITY_BUILD_BUDGET_DIR")
+        .env_remove("ORBIT_ACTIVITY_TIMEOUT_MS");
+    command
         .current_dir(workspace)
         .env("HOME", home)
         .env("USERPROFILE", home);

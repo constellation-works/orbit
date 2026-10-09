@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/fixture_crew.rs"]
+mod fixture_crew;
 #[path = "../support/git_authority.rs"]
 mod git_authority;
 #[path = "../support/git_repo.rs"]
