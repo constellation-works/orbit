@@ -203,10 +203,14 @@ spec:
     # on the exact synchronized candidate, before review and publication. An
     # agent's report that it ran them is not evidence; this step's attached
     # logs are. A failing command fails here, so step recovery can repair the
-    # candidate (committing the fix) and the post-recovery attempt reruns the
-    # whole suite on the new head. It precedes the review gate so such a
-    # repair is reviewed and pinned like any other candidate change. An empty
-    # list is a no-op.
+    # candidate and the post-recovery attempt reruns the whole suite on the
+    # new head. ORB-14822: the recovery sandbox keeps Git metadata read-only,
+    # so the agent leaves its repair uncommitted and Orbit commits it, with
+    # recovery provenance, before that attempt. A repair touching Git or
+    # `.orbit` metadata, an environment file, a symlink or a gitlink is
+    # refused with a typed `recovery_commit_refused` reason and nothing is
+    # committed. It precedes the review gate so such a repair is reviewed and
+    # pinned like any other candidate change. An empty list is a no-op.
     # ORB-14258: a network-inconclusive failure is rerun first, and one that
     # survives is rerun on `base_sha`. A failure the base shares fails as a
     # typed `baseline_red`: no recovery runs, and the failure handoff keeps

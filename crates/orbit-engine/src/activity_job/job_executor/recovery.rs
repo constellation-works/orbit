@@ -3,12 +3,14 @@ use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_types::workflow::AgentBlocker;
 use orbit_types::workflow::activity_job::StepRecoveryDecisionRecord;
 
+use super::recovery_commit::commit_recovery_repair_for_retry;
 use super::recovery_observation::{RecoveryObservation, recovery_base_ref};
 use super::*;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
+use crate::executor::automation::vcs::RecoveryCommitRefusal;
 use crate::executor::automation::vcs::absorbed::is_candidate_absorbed;
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
@@ -96,6 +98,26 @@ impl StepFailure {
             }),
         }
     }
+
+    /// [ORB-14822] Fail the step without its retry: the host refused to
+    /// commit the repair recovery left, and nothing was committed.
+    fn into_refused_repair(
+        self,
+        refusal: &RecoveryCommitRefusal,
+    ) -> Result<StepOutcome, DispatchError> {
+        let message = format!(
+            "{refusal}; original error before recovery: {}",
+            self.diagnostic()
+        );
+        match self {
+            Self::Error(_) => Err(DispatchError::JobExecution(message)),
+            Self::Outcome(outcome) => Ok(StepOutcome {
+                success: false,
+                output: outcome.output,
+                message: Some(message),
+            }),
+        }
+    }
 }
 
 /// What a recovery invocation admits for its failed step.
@@ -166,6 +188,17 @@ pub(super) fn recover_or_return_original(
             RecoveryAdmission::Retry => {}
             RecoveryAdmission::Original => return failure.into_result(),
             RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
+        }
+        // [ORB-14822] The agent cannot commit its repair; the host does,
+        // and the retry below runs on that commit.
+        if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
+            let mut bound = Value::Object(serde_json::Map::new());
+            let committed = bind_recovery_context(step, ctx, &mut bound)
+                .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
+                .and_then(|()| commit_recovery_repair_for_retry(step, ctx, &recovery, &bound));
+            if let Err(refusal) = committed {
+                return failure.into_refused_repair(&refusal);
+            }
         }
         let recovered_conflict = (recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
             && round < MAX_CONFLICT_RECOVERY_ROUNDS)

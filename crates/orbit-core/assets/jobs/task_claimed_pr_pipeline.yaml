@@ -262,8 +262,15 @@ spec:
     # Required validation on the final, reviewed head, before anything is
     # published (ORB-14258). No pull request exists yet, so the step runs the
     # commands and returns their results without attaching logs.
+    # ORB-14822: step recovery may repair a failing command. Its sandbox keeps
+    # Git metadata read-only, so Orbit commits the repair with recovery
+    # provenance and the post-recovery attempt reruns the commands on that
+    # head. When a before-PR review settled this head, the commit is refused
+    # (`recovery_commit_refused:reviewed_candidate`): the repair would publish
+    # an unreviewed change, so the leaf fails and carries its candidate.
     - id: validate
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
+      recovery_activity: step_failure_recovery
       target: activity:claim_validate
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
