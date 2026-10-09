@@ -8,10 +8,11 @@
   gap: 12px;
   min-height: 42px;
   padding: 4px 16px;
-  font-size: 13px;
   align-items: center;
   border-bottom: 1px solid var(--hair);
 }
+/* The header row takes its type from the shared `.col-head`. */
+.runs-row:not(.runs-header) { font-size: 13px; }
 .runs-row:not(.runs-header):hover { background: var(--bg-hover); }
 .runs-row:not(.runs-header) .id,
 .runs-row:not(.runs-header) .run-id,
@@ -193,10 +194,6 @@
 }
 .runs-row.runs-header {
   min-height: 34px;
-  color: var(--fg-mute);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 500;
   white-space: nowrap;
   border-bottom: 1px solid var(--hair);
   cursor: default;
@@ -207,11 +204,7 @@
 }
 .runs-row.runs-header > span,
 .runs-row.runs-header button {
-  font-family: var(--font-sans);
   white-space: nowrap;
-}
-.runs-row.runs-header .num {
-  font-family: var(--font-sans);
 }
 .runs-row.runs-header .run-actions-header {
   text-align: right;

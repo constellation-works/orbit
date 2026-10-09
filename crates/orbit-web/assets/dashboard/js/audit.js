@@ -47,35 +47,35 @@ let policySort = {
 const POLICY_TABLES = [
   {
     id: "by_profile",
-    label: "By Profile",
+    label: "By profile",
     nameField: "name",
     header: "profile",
     filterKey: "profile",
   },
   {
     id: "by_target",
-    label: "By Target",
+    label: "By target",
     nameField: "name",
     header: "target",
     filterKey: null,
   },
   {
     id: "by_run",
-    label: "By JobRun",
+    label: "By job run",
     nameField: "run_id",
     header: "job_run_id",
     navigateTo: "job_run",
   },
   {
     id: "by_execution",
-    label: "By Audit Invocation",
+    label: "By audit invocation",
     nameField: "execution_id",
     header: "execution_id",
     navigateTo: "audit_execution",
   },
   {
     id: "by_agent",
-    label: "By Agent",
+    label: "By agent",
     nameField: "agent",
     header: "agent",
     filterKey: "role",
@@ -178,7 +178,7 @@ function setAuditSubtab(name) {
   if (eventsBody) eventsBody.style.display = name === "events" ? "" : "none";
   if (policyBody) policyBody.style.display = name === "policy" ? "" : "none";
   const title = $("audit-title");
-  if (title) title.textContent = name === "policy" ? "Policy Denials" : "Audit Events";
+  if (title) title.textContent = name === "policy" ? "Policy denials" : "Audit events";
 }
 
 function syncAuditControls() {
@@ -379,7 +379,7 @@ function renderToolCallFailureRateCard(stats, window = "24h") {
   const rate = stats && stats.rate != null ? Number(stats.rate) : (total ? failed / total : 0);
   const card = el("div", { class: "audit-summary-card" });
   card.appendChild(el("div", {
-    class: "card-title",
+    class: "card-title section-title",
     text: `Tool call failure rate · window ${window}`,
   }));
   const body = el("div", { class: "card-body" });
@@ -403,8 +403,8 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
   const container = el("div", { class: "audit-summary-container" });
   container.appendChild(el("h3", {
-    class: "summary-title",
-    text: `Unexpected Failures by Callable Tool (${String(window).toUpperCase()})${capped ? " · capped counts" : ""}`,
+    class: "summary-title section-title",
+    text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
   }));
   if (capped) {
     container.appendChild(el("div", {
@@ -464,7 +464,7 @@ function renderAuditSummary(data, ctx) {
 
   const createCard = (title, renderBody, scrollableBody = false) => {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: title }));
+    card.appendChild(el("div", { class: "card-title section-title", text: title }));
     const body = el("div", { class: "card-body" });
     if (scrollableBody) {
       body.tabIndex = 0;
@@ -525,7 +525,7 @@ function renderAuditSummary(data, ctx) {
 
   const windowLabel = data.window || "24h";
   const title = $("audit-summary-title");
-  if (title) title.textContent = `Audit Summary ${windowLabel}`;
+  if (title) title.textContent = `Audit summary ${windowLabel}`;
 
   if (data.tool_call_failure_rate) {
     addCard(
@@ -603,7 +603,7 @@ function renderAuditSummary(data, ctx) {
     const window = data.window || "24h";
     const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
     const lifecycleCard = el("div", { class: "audit-summary-card lifecycle-failure-card" });
-    lifecycleCard.appendChild(el("div", { class: "card-title", text: lifecycleTitle }));
+    lifecycleCard.appendChild(el("div", { class: "card-title section-title", text: lifecycleTitle }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", {
       class: "lifecycle-failure-counts",
@@ -647,7 +647,7 @@ function renderAuditSummary(data, ctx) {
 
   if (data.denials_by_tool || data.denials_by_reason) {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: "Denials" }));
+    card.appendChild(el("div", { class: "card-title section-title", text: "Denials" }));
     const body = el("div", { class: "card-body" });
     const sectionLabel = (txt) => {
       const lbl = el("div", { class: "card-subtitle", text: txt });
@@ -776,7 +776,7 @@ function renderPolicy(data, ctx) {
   const grid = el("div", { class: "policy-grid" });
   for (const tbl of POLICY_TABLES) {
     const cell = el("div", { class: "policy-cell" });
-    cell.appendChild(el("h5", { text: tbl.label }));
+    cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
     const rawRows = (data[tbl.id] || []).slice();
     const sortMode = policySort[tbl.id] || "count";
     rawRows.sort((a, b) => {
@@ -856,7 +856,7 @@ function buildPolicyTable(spec, rows, sortMode, ctx) {
 function buildTopCauses(rows, ctx) {
   if (!rows.length) return null;
   const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { text: "Top Causes" }));
+  section.appendChild(el("h5", { class: "section-title", text: "Top causes" }));
   const table = el("table", { class: "policy-table policy-cause-table" });
   const thead = el("thead");
   const headRow = el("tr");
@@ -894,7 +894,7 @@ function buildTopCauses(rows, ctx) {
 function buildRecentDenials(rows, ctx) {
   if (!rows.length) return null;
   const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { text: "Recent Denials" }));
+  section.appendChild(el("h5", { class: "section-title", text: "Recent denials" }));
   const table = el("table", { class: "policy-table policy-recent-table" });
   const thead = el("thead");
   const headRow = el("tr");

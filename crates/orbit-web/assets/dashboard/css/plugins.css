@@ -64,9 +64,9 @@
 .plugin-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .plugin-table th, .plugin-table td {
   text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--hair);
-  color: var(--fg); overflow-wrap: anywhere;
+  overflow-wrap: anywhere;
 }
-.plugin-table th { color: var(--fg-dim); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+.plugin-table td { color: var(--fg); }
 .plugin-json { margin: 0; max-height: 18rem; overflow: auto; color: var(--fg); font: 11px/1.5 var(--font-mono); }
 
 @media (max-width: 900px) {

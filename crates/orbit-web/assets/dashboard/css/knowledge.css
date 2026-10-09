@@ -63,18 +63,6 @@
 }
 .friction-row:hover { background: rgba(255, 255, 255, 0.03); }
 .friction-row.active { background: rgba(110, 159, 255, 0.06); }
-.friction-row.header {
-  color: var(--fg-dim);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  cursor: default;
-  position: sticky;
-  top: 0;
-  background: var(--bg-elev);
-  z-index: 1;
-}
 .friction-row .id,
 .friction-row .title,
 .friction-row .reported {
@@ -411,12 +399,6 @@
 }
 .knowledge-side-group h4 {
   margin: 0 0 8px;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--fg);
-  text-transform: capitalize;
-  letter-spacing: 0;
-  font-weight: 600;
 }
 .knowledge-side-group .empty {
   font-family: var(--font-mono);

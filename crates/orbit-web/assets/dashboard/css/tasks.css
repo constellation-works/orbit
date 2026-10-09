@@ -468,9 +468,6 @@
   background: transparent;
   border-bottom: none;
   min-height: 32px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-mute);
   pointer-events: none;
 }
 .row.header:hover {
@@ -482,9 +479,9 @@
 .row.header .status-cell,
 .row.header .crew-cell,
 .row.header .task-quick-cell {
-  font-size: inherit;
+  /* Every cell reads as the shared `.col-head` the row carries. */
+  font: inherit;
   color: inherit;
-  font-family: var(--font-sans);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

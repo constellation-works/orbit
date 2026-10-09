@@ -350,7 +350,7 @@ function uncertainMergeBanner(intentId) {
 function buildHandoffPanel(handoff) {
   const wrap = el("div", { class: "handoff-panel" });
   wrap.setAttribute("data-handoff-id", handoff.handoff_id || "");
-  wrap.appendChild(el("h5", { text: "delivery handoff" }));
+  wrap.appendChild(el("h5", { class: "section-title", text: "Delivery handoff" }));
 
   const candidate = handoff.candidate || {};
   const delivery = candidate.delivery || {};
@@ -865,7 +865,7 @@ export function buildDistributedBlock(taskId, opts = {}) {
   // Hidden until the read says this task actually has a claim, so an ordinary
   // single-host task detail is unchanged.
   block.style.display = "none";
-  const heading = el("h4", {}, [el("span", { class: "field-title", text: "distributed execution" })]);
+  const heading = el("h4", { class: "section-title" }, [el("span", { class: "field-title", text: "Distributed execution" })]);
   const body = el("div", { class: "claim-body" });
   makeToggleRow(heading, {
     expanded: true,

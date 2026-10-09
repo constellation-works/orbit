@@ -578,7 +578,7 @@ function keyed(node, key, source) {
 
 function metricsCard(title, rows, cols) {
   const card = el("div", { class: "audit-summary-card" });
-  card.appendChild(el("div", { class: "card-title", text: title }));
+  card.appendChild(el("div", { class: "card-title section-title", text: title }));
   const body = el("div", { class: "card-body" });
   
   const table = el("table", { class: "summary-table" });
@@ -617,7 +617,7 @@ function complexityLabel(value) {
 function completionByComplexityCard(rows) {
   if (!rows.length) {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: "Task completion by complexity" }));
+    card.appendChild(el("div", { class: "card-title section-title", text: "Task completion by complexity" }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", { class: "empty", text: "No tasks." }));
     card.appendChild(body);
