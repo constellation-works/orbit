@@ -55,7 +55,10 @@ spec:
       comment:
         type: string
       # Claimed mode: findings the owner refused to file. The handoff
-      # attaches them to the claimed task as `unfiled-findings.json`.
+      # attaches them to the claimed task as `unfiled-findings.json`. The
+      # engine does not enforce this schema; the implement step fails an
+      # output whose findings are not `{title, description}` objects before
+      # any commit, push or PR.
       unfiled_findings:
         type: array
         items:

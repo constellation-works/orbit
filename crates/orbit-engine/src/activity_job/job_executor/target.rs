@@ -95,6 +95,8 @@ pub(super) fn run_target(
         dispatch.message,
         &dispatch.output,
     );
+    let (success, message) =
+        reject_malformed_implementer_findings(step, t, success, message, &dispatch.output);
     Ok(StepOutcome {
         success,
         output: dispatch.output,
@@ -196,6 +198,35 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
             );
             None
         })
+}
+
+/// Fail an implementer step whose `unfiled_findings` breaks the shape
+/// `agent_implement` declares [ORB-14927].
+///
+/// The engine does not enforce `output_schema_json`, and the claim handoff
+/// would otherwise be the first to reject the field, after the candidate is
+/// committed, pushed and opened. Failing here keeps those side effects from
+/// running; the step's retry and recovery are the repair attempt.
+fn reject_malformed_implementer_findings(
+    step: &JobV2Step,
+    target: &TargetStep,
+    success: bool,
+    message: Option<String>,
+    output: &Value,
+) -> (bool, Option<String>) {
+    if !success || !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    match orbit_types::workflow::unfiled_findings_shape_error(output) {
+        Some(defect) => (
+            false,
+            Some(format!(
+                "implementer output rejected before delivery: {defect}. Return `unfiled_findings` \
+                 as `[{{\"title\": ..., \"description\": ...}}]`."
+            )),
+        ),
+        None => (success, message),
+    }
 }
 
 /// Turn a well-formed `blocker` on an implementer step into

@@ -275,6 +275,22 @@ impl CleanLeaf {
     }
 
     fn run_clean_pipeline(&self, name: &str) -> TaskHandoff {
+        let outcome = self.execute_clean_pipeline(name).unwrap();
+        assert!(outcome.success, "{outcome:#?}");
+        for step in ["prepare_branch", "sync_base", "review", "push", "pr_open"] {
+            assert!(outcome.pipeline.get(step).is_none(), "{outcome:#?}");
+        }
+        let admission = self.pair.admission(&self.leaf);
+        let ClaimMutation::AcceptHandoff(handoff) = admission.settlement.unwrap() else {
+            panic!("shipped clean pipeline must record a typed handoff")
+        };
+        handoff
+    }
+
+    fn execute_clean_pipeline(
+        &self,
+        name: &str,
+    ) -> Result<orbit_engine::JobOutcome, orbit_engine::DispatchError> {
         use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
         use orbit_engine::{
             V2AuditWriter, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
@@ -320,18 +336,7 @@ impl CleanLeaf {
             Some(&self.pair.follower_repo),
         )
         .unwrap();
-        let outcome =
-            execute_job_with_resume(&job, input, &self.leaf, audit, &self.bound, Some(&resume))
-                .unwrap();
-        assert!(outcome.success, "{outcome:#?}");
-        for step in ["prepare_branch", "sync_base", "review", "push", "pr_open"] {
-            assert!(outcome.pipeline.get(step).is_none(), "{outcome:#?}");
-        }
-        let admission = self.pair.admission(&self.leaf);
-        let ClaimMutation::AcceptHandoff(handoff) = admission.settlement.unwrap() else {
-            panic!("shipped clean pipeline must record a typed handoff")
-        };
-        handoff
+        execute_job_with_resume(&job, input, &self.leaf, audit, &self.bound, Some(&resume))
     }
 
     fn settle(&self, handoff: &TaskHandoff) -> Result<Value, OrbitError> {
@@ -722,6 +727,77 @@ fn a_claimed_delivery_review_files_regression_findings_and_hands_off_the_rest() 
     fixture
         .settle(&handoff)
         .expect("the owner accepts the review's handoff");
+}
+
+/// A candidate that was published with plain-string `unfiled_findings` (the
+/// implement step now refuses them before delivery) still hands off: each
+/// string becomes a finding object that keeps its full text, the entry and
+/// the owner's summary say it was normalized, and object entries pass through
+/// untouched. A malformed entry that is not a string stays refused, and so
+/// does a malformed field other than the findings [ORB-14927].
+#[test]
+fn a_published_candidates_string_findings_are_normalized_at_handoff() {
+    if !isolated(
+        module_path!(),
+        "a_published_candidates_string_findings_are_normalized_at_handoff",
+    ) {
+        return;
+    }
+    let mut fixture = CleanLeaf::delivery_review("done");
+    let owner = fixture.pair.wire.owner.clone();
+    let long = format!("{} and on", "A very long first sentence".repeat(8));
+    let object = json!({
+        "title": "Already structured",
+        "description": "Kept as returned.",
+        "relations": [{"type": "spawned_from", "target": fixture.task}],
+    });
+    fixture.input["implementation"]["unfiled_findings"] = json!([
+        "The owner refused this. It needs a follow-up on the retry path.",
+        object,
+        long,
+    ]);
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    let attached = owner
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": fixture.task, "path": "unfiled-findings.json"}),
+        )
+        .expect("the handoff attaches the normalized findings");
+    let record: Value = serde_json::from_str(attached["content"].as_str().unwrap()).unwrap();
+    let findings = record["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 3, "{record}");
+    assert_eq!(findings[0]["title"], "The owner refused this.");
+    assert_eq!(
+        findings[0]["description"],
+        "The owner refused this. It needs a follow-up on the retry path.",
+        "the full text survives"
+    );
+    assert_eq!(findings[0]["normalized_from"], "string");
+    assert_eq!(findings[1], object, "an object entry is kept verbatim");
+    assert_eq!(findings[2]["description"], long);
+    assert!(findings[2]["title"].as_str().unwrap().len() <= 120);
+    assert_eq!(record["normalized_string_entries"], 2);
+    assert!(
+        handoff.execution_summary.contains("normalized_from"),
+        "the owner's summary records the repair: {}",
+        handoff.execution_summary
+    );
+    fixture
+        .settle(&handoff)
+        .expect("the owner accepts the normalized handoff");
+
+    for value in [json!([42]), json!(["   "]), json!("not an array")] {
+        let mut fixture = CleanLeaf::delivery_review("done");
+        fixture.input["implementation"]["unfiled_findings"] = value.clone();
+        let handed_off = fixture
+            .execute_clean_pipeline("task_claimed_pr_pipeline")
+            .is_ok_and(|outcome| outcome.success);
+        assert!(!handed_off, "{value} is still refused at handoff");
+        assert!(
+            fixture.pair.admission(&fixture.leaf).settlement.is_none(),
+            "{value} records no handoff"
+        );
+    }
 }
 
 #[test]
