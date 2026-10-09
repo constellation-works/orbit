@@ -56,6 +56,7 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 Admitted unit tests:
 
 - `crates/orbit-cli/src/tests/main.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
+- `crates/orbit-cmd/src/tests/agent_rules.rs`: `bad_markers_in_one_guide_leave_every_guide_unchanged` (criterion 3). It guards the no-partial-write invariant for injected agent guides: when any target has unbalanced or misordered markers, `inject_agent_rules` writes none of them. Reaching this through `orbit workspace init` would need a full workspace fixture per case, and the write ordering is decided inside `inject_agent_rules`.
 
 ## Goldens
 
