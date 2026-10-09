@@ -35,7 +35,7 @@ template:
   - Applicable application code, dependencies, secret handling, and configuration were reviewed with evidence from the current workspace.
   - Existing open tasks were searched and duplicate findings were not filed.
   - Every actionable finding was filed as a durable Orbit task with reproducible evidence, severity, and impact; narrative-only output is not delivery.
-  - A clean review with no findings succeeds as a no-op.
+  - A review with no findings finishes with status `success` and files no task.
   task_type: chore
   tags:
   - security-review
