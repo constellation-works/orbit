@@ -193,6 +193,7 @@ pub(crate) fn pull_refill(
     let host_shutdown = runtime.scheduled_host_shutdown();
     // Sustained host pressure holds new requests too [ORB-13901]; unknown
     // telemetry admits.
+    runtime.reclaim_worktrees_on_admission();
     let resource = runtime.resource_admission();
     let mut admitted = 0;
     let mut refusal = None;

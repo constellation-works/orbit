@@ -8,6 +8,9 @@ spec:
     Reap worktrees whose associated task has settled to rejected, archived,
     or done. A run that is not yet terminal, has no resolvable associated
     task, or still has a dirty tree is always retained and reported. When
+    a terminal worktree is retained, reclaim its declared worktree.reclaim
+    paths after registration, worker, symlink and Git content checks.
+    Collection never runs a checkout-authored command. When
     `scratch_older_than_hours` is set, also prune the checkout's `.orbit/tmp`
     scratch directory of top-level entries untouched for that long, skipping
     any a live process holds open or an active run names.
@@ -44,6 +47,21 @@ spec:
           type: object
           required:
             [path, run_id, run_state, task_id, task_status, action, bytes_reclaimed]
+          properties:
+            reclaim:
+              type: array
+              items:
+                type: object
+                required: [path, pattern, bytes_reclaimed, action]
+                properties:
+                  path:
+                    type: string
+                  pattern:
+                    type: string
+                  bytes_reclaimed:
+                    type: integer
+                  action:
+                    type: string
       # Present when `scratch_older_than_hours` was set. Carries `error`
       # instead of the figures when the scratch sweep itself failed.
       scratch:

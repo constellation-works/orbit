@@ -8,6 +8,8 @@ spec:
   kind: workflow
   max_active_runs: 1
   default_input:
+    # Every retained terminal worktree also reclaims worktree.reclaim paths,
+    # regardless of this whole-worktree removal age floor.
     # Delivery reaps successful task worktrees immediately. Keep one hour as
     # the bounded backstop for a cleanup report that could not be persisted or
     # an interrupted delivery path; this is no longer the normal lifetime.

@@ -26,8 +26,8 @@ Options:
       --estimate-bytes
           Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips this walk by default; `--confirm` always measures before removal
 
-      --target-only
-          Reclaim only each worktree's `target/` build output and keep the checkout. Applies to every terminal run with no live worker, whatever its task's status; combine with `--confirm` to delete
+      --reclaim
+          Reclaim worktree.reclaim paths and keep the checkout. Reports bytes per pattern for terminal runs with no live or undecidable worker; combine with --confirm to delete. --target-only is an alias
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

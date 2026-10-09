@@ -229,11 +229,11 @@ pub struct WorktreeGcArgs {
     #[arg(long)]
     pub estimate_bytes: bool,
 
-    /// Reclaim only each worktree's `target/` build output and keep the
-    /// checkout. Applies to every terminal run with no live worker, whatever
-    /// its task's status; combine with `--confirm` to delete.
-    #[arg(long)]
-    pub target_only: bool,
+    /// Reclaim worktree.reclaim paths and keep the checkout. Reports bytes
+    /// per pattern for terminal runs with no live or undecidable worker;
+    /// combine with --confirm to delete. --target-only is an alias.
+    #[arg(long, alias = "target-only")]
+    pub reclaim: bool,
 }
 
 impl Execute for WorktreeGcArgs {
@@ -243,7 +243,7 @@ impl Execute for WorktreeGcArgs {
             self.run,
             self.older_than_hours,
             self.estimate_bytes,
-            self.target_only,
+            self.reclaim,
         )?;
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))
@@ -276,6 +276,15 @@ impl Execute for WorktreeGcArgs {
                 line.push_str(&format!(" detail={detail}"));
             }
             lines.push(line);
+            for path in &report.reclaim {
+                lines.push(format!(
+                    "  path={} pattern={} action={} bytes_reclaimed={}",
+                    path.path.display(),
+                    path.pattern,
+                    path.action,
+                    path.bytes_reclaimed
+                ));
+            }
         }
         if !result.reports.is_empty() {
             lines.push(format!("total_bytes_reclaimed={}", result.bytes_reclaimed));

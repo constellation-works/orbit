@@ -33,7 +33,7 @@
 //! - **A new drain** for the same owner, whose refill carries every earlier
 //!   admission for that owner forward, whichever drain made it.
 //!
-//! Once settled, a leaf's `target/` build output is reclaimed by the drain's
+//! Once settled, a leaf's declared rebuildable output is reclaimed by the drain's
 //! next pass ([`OrbitRuntime::reclaim_settled_leaf_build_output`]); its
 //! checkout is left to worktree GC.
 //!
@@ -60,7 +60,7 @@ use crate::application::distributed::{
     PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
 };
 use orbit_common::OrbitError;
-use orbit_engine::run_worktree_has_build_output;
+use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
 use orbit_store::contracts::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
@@ -495,17 +495,17 @@ impl OrbitRuntime {
                 return 0;
             }
         };
+        // Skip settled history with no output before paying for Git queries.
+        let patterns = self.worktree_reclaim_patterns();
         let repo_root = &self.paths().repo_root;
-        // Cheap probes first, so a pass over a long settled history costs a
-        // row read and a stat per leaf, and Git runs only where there is
-        // something to reclaim.
         let leaves = admissions
             .into_iter()
             .filter(|record| record.phase == LocalPullPhase::Settled)
             .filter_map(|record| record.leaf_run_id)
             .filter(|leaf| {
                 jobs.get_job_run(leaf).ok().flatten().is_some_and(|run| {
-                    run.state.is_terminal() && run_worktree_has_build_output(repo_root, &run)
+                    run.state.is_terminal()
+                        && run_worktree_has_reclaim_output(repo_root, &run, &patterns)
                 })
             })
             .collect::<Vec<_>>();

@@ -267,6 +267,8 @@ fn git_args(args: &[&str]) -> Vec<String> {
         "-c".to_string(),
         "core.hooksPath=/dev/null".to_string(),
         "-c".to_string(),
+        "core.fsmonitor=false".to_string(),
+        "-c".to_string(),
         "gc.auto=0".to_string(),
     ];
     if let Some((command, rest)) = args.split_first()

@@ -19,8 +19,8 @@ use super::resolve::{
     resolve_bounded_minutes, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_machine_id, resolve_machine_name,
     resolve_material_fields, resolve_memory_limit, resolve_non_empty, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_retention_days, resolve_task_prefix,
-    resolve_validation_path_mode, resolve_worker_tasks_max,
+    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
+    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -260,6 +260,18 @@ define_config_settings! {
         description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60).",
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
+    },
+    worktree_reclaim: Vec<String> => Vec<String> {
+        key: "worktree.reclaim", value_type: "array<string>",
+        description: "Rebuildable paths to reclaim in terminal, registered run worktrees: relative globs with '*' within a component and '**' across components. Replaces earlier lists; defaults to ['target']. Symlinks, tracked content and live or undecidable workers are protected. Collection never runs a command.",
+        section: ConfigSection::Housekeeping, order: 120,
+        resolve: resolve_reclaim,
+    },
+    worktree_reclaim_below_free_mib: Option<u64> => u64 {
+        key: "worktree.reclaim_below_free_mib", value_type: "integer",
+        description: "When free MiB under the state directory falls below this optional threshold, admission reclaims declared paths in oldest terminal worktrees first. Unset disables admission reclamation.",
+        section: ConfigSection::Housekeeping, order: 130,
+        resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw),
     },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",

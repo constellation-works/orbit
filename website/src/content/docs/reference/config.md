@@ -297,6 +297,8 @@ crew or the workspace default.
 | `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete archives in both operational and agent feeds older than this. |
 | `retention.audit_days` | integer · **Default:** `60`<br>Days `orbit gc audit` keeps audit rows (1–36500). Older command and run audit rows, and the audit blobs no remaining row names, become reclaimable. Nothing is deleted until you run `orbit gc audit --apply` or enable the `store-gc` routine. |
 | `retention.runs_days` | integer · **Default:** `60`<br>Days after a run finishes before `orbit gc runs` may drop its pipeline state (1–36500). The run, its steps and its summary stay. |
+| `worktree.reclaim` | array&lt;string&gt; · **Default:** `["target"]`<br>Rebuildable paths in kept terminal run worktrees. Relative globs use `*` within a component and whole-component `**` across components. An explicit list replaces earlier layers; `[]` disables reclamation. Absolute, parent and root-matching patterns fail config load. Only ignored or untracked paths without tracked content are deleted, after registration, confinement, symlink and worker checks. Inspect with `orbit gc worktrees --reclaim`, apply with `--confirm`. |
+| `worktree.reclaim_below_free_mib` | integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |
 | `security_alert_sweep.min_severity` | string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
 | `review.before_pr` | bool · **Default:** `false`<br>Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
@@ -335,6 +337,13 @@ Crew fields are settable as `crews.<name>.<field>`, where the field is
 example, `orbit config set crews.sol.effort high`. `orbit config set` cannot
 create a crew: first add a `[crews.<name>]` table with `model` and `provider`.
 An installed plugin's declared settings are settable as `plugins.<ns>.<key>`.
+
+The scheduled worktree GC also reclaims declared output in every kept terminal
+worktree. Candidate commits, branches, tracked files and unmatched `.orbit/tmp`
+evidence remain; resumed runs rebuild reclaimed output. Collection never runs a
+cleanup command: checkout-authored Cargo configuration can redirect `cargo clean`
+outside the worktree, and Make or npm scripts can execute code with host authority.
+Declare only rebuildable paths; evidence matching a declared pattern is reclaimable.
 
 ## Root override
 

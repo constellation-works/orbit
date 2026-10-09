@@ -57,6 +57,107 @@ struct Workspace {
 }
 
 #[test]
+fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&repo).unwrap();
+    init_git_repo(&repo);
+    run_success(
+        &repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "reclaim-fixture",
+            "--task-prefix",
+            "RC",
+        ],
+    );
+    fixture_crew::configure_sol(&home.join(".orbit"));
+    let workspace = register_workspace(&repo, &home, "reclaim-fixture");
+    let (worktree, _) = seed_eligible_worktree(&workspace, &home, "reclaim");
+    run_success(
+        &repo,
+        &home,
+        &[
+            "config",
+            "set",
+            "worktree.reclaim",
+            "['target', '.orbit/tmp/codeql-*']",
+            "--seed-from-global",
+        ],
+    );
+    fs::create_dir_all(worktree.join("target")).unwrap();
+    // Sparse logical bytes exercise the warning without allocating 11 GiB.
+    fs::File::create(worktree.join("target/output"))
+        .unwrap()
+        .set_len(11 * 1024 * 1024 * 1024)
+        .unwrap();
+    fs::create_dir_all(worktree.join(".orbit/tmp/codeql-fixture")).unwrap();
+    fs::write(
+        worktree.join(".orbit/tmp/codeql-fixture/database"),
+        "database",
+    )
+    .unwrap();
+    fs::write(worktree.join(".orbit/tmp/evidence.json"), "evidence").unwrap();
+    let dry = run_json(&repo, &home, &["gc", "worktrees", "--reclaim", "--json"]);
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(dry["bytes_reclaimed"], 11 * 1024 * 1024 * 1024u64 + 8);
+    let paths = dry["reports"][0]["reclaim"].as_array().unwrap();
+    assert!(
+        paths.iter().any(|path| path["pattern"] == "target"
+            && path["bytes_reclaimed"] == 11 * 1024 * 1024 * 1024u64)
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path["pattern"] == ".orbit/tmp/codeql-*" && path["bytes_reclaimed"] == 8)
+    );
+    assert!(worktree.join("target/output").exists());
+    let output = command(&repo, &home)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["check"] == "worktree-reclaim")
+        .unwrap();
+    assert_eq!(row["status"], "warning", "{row}");
+    assert!(
+        row["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("orbit gc worktrees --reclaim")
+    );
+    assert!(
+        worktree.join("target/output").exists(),
+        "doctor never reclaims output"
+    );
+    let output = command(&repo, &home)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["gc", "worktrees", "--reclaim", "--confirm", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["dry_run"], false);
+    assert_eq!(applied["bytes_reclaimed"], dry["bytes_reclaimed"]);
+    assert!(!worktree.join("target").exists());
+    assert!(!worktree.join(".orbit/tmp/codeql-fixture").exists());
+    assert!(worktree.join(".git").exists());
+    assert_eq!(
+        fs::read_to_string(worktree.join(".orbit/tmp/evidence.json")).unwrap(),
+        "evidence"
+    );
+}
+
+#[test]
 fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");

@@ -2,6 +2,7 @@ mod cleanup;
 mod dependency_delivery;
 mod gc;
 mod merge;
+mod reclaim;
 
 pub(in crate::executor::automation::vcs) use merge::{
     checkout_holding_branch, ensure_clean_checkout,
@@ -68,10 +69,11 @@ pub(super) fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bo
 }
 
 pub use gc::{
-    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_build_output,
+    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_reclaim_output,
     run_worktree_paths,
 };
 pub(in crate::executor::automation) use merge::merge_batch_worktree_into_base;
+pub use reclaim::WorktreeReclaimReport;
 pub(in crate::executor::automation) use setup::setup_worktree;
 
 const SHARED_WORKTREE_NAME_PREFIX: &str = "parallel-batch";

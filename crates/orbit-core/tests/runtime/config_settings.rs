@@ -10,6 +10,73 @@ use tempfile::TempDir;
 use super::dispatch_admission::isolated;
 
 #[test]
+fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
+    if !isolated(
+        "config_settings::reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let roots = orbit_config::ConfigRoots::new(&global, &workspace);
+    let load = || orbit_config::ResolvedConfig::load(&roots);
+    assert_eq!(load().unwrap().snapshot.worktree_reclaim, ["target"]);
+    std::fs::write(
+        global.join("config.toml"),
+        "[worktree]\nreclaim = ['target', 'node_modules']\nreclaim_below_free_mib = 100\n",
+    )
+    .unwrap();
+    assert_eq!(
+        load().unwrap().snapshot.worktree_reclaim,
+        ["target", "node_modules"]
+    );
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[worktree]\nreclaim = ['.orbit/tmp/*target*', 'website/**/node_modules']\n",
+    )
+    .unwrap();
+    let config = load().unwrap();
+    assert_eq!(
+        config.snapshot.worktree_reclaim,
+        [".orbit/tmp/*target*", "website/**/node_modules"]
+    );
+    assert_eq!(config.snapshot.worktree_reclaim_below_free_mib, Some(100));
+    std::fs::write(workspace.join("config.toml"), "[worktree]\nreclaim = []\n").unwrap();
+    assert!(load().unwrap().snapshot.worktree_reclaim.is_empty());
+    for pattern in [
+        "/home",
+        "../target",
+        "target/../output",
+        ".",
+        "",
+        "**",
+        "**/**",
+        "C:/home",
+        "\\\\server\\share",
+        "**/.",
+    ] {
+        let config = format!(
+            "[worktree]\nreclaim = [{}]\n",
+            serde_json::to_string(pattern).unwrap()
+        );
+        std::fs::write(workspace.join("config.toml"), config).unwrap();
+        let error = load().unwrap_err().to_string();
+        assert!(error.contains("worktree.reclaim"), "{pattern}: {error}");
+    }
+    // Invalid declarations in an earlier layer fail even if replaced later.
+    std::fs::write(
+        global.join("config.toml"),
+        "[worktree]\nreclaim = ['/home']\n",
+    )
+    .unwrap();
+    std::fs::write(workspace.join("config.toml"), "[worktree]\nreclaim = []\n").unwrap();
+    assert!(load().is_err());
+}
+
+#[test]
 fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
     if !isolated(
         "config_settings::settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing",

@@ -143,6 +143,8 @@ pub(crate) fn execute_engine_action<
                     older_than,
                     estimate_bytes: false,
                     target_only: false,
+                    reclaim_patterns: Some(host.worktree_reclaim_patterns()),
+                    reclaim_kept: true,
                 },
             )?;
             let mut output = serde_json::to_value(result).map_err(|error| {

@@ -412,6 +412,18 @@
       "state": "default",
       "path": null,
       "shadowed_by": []
+    },
+    "worktree.reclaim": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "worktree.reclaim_below_free_mib": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
     }
   }
 }

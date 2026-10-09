@@ -120,6 +120,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // every resource is back below its resume mark. Live children are never
     // touched, and unknown telemetry admits. [ORB-14624] CPU pressure alone
     // still admits CPU-light leaves within their reserved budget, below.
+    runtime.reclaim_worktrees_on_admission();
     let resource = runtime.resource_admission();
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy

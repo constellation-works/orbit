@@ -428,6 +428,8 @@ pub(crate) struct OrbitRuntimeSettings {
     worker_containment: orbit_config::WorkerContainmentSettings,
     /// Existing machine identity's task namespace; ORB for legacy runtimes.
     machine_task_prefix: String,
+    worktree_reclaim: Vec<String>,
+    worktree_reclaim_below_free_mib: Option<u64>,
 }
 
 impl OrbitRuntimeSettings {
@@ -456,6 +458,8 @@ impl OrbitRuntimeSettings {
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
         machine_task_prefix: String,
+        worktree_reclaim: Vec<String>,
+        worktree_reclaim_below_free_mib: Option<u64>,
     ) -> Self {
         Self {
             persistence,
@@ -481,7 +485,17 @@ impl OrbitRuntimeSettings {
             operation,
             worker_containment,
             machine_task_prefix,
+            worktree_reclaim,
+            worktree_reclaim_below_free_mib,
         }
+    }
+
+    pub(crate) fn worktree_reclaim(&self) -> &[String] {
+        &self.worktree_reclaim
+    }
+
+    pub(crate) fn worktree_reclaim_below_free_mib(&self) -> Option<u64> {
+        self.worktree_reclaim_below_free_mib
     }
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {

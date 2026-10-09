@@ -499,6 +499,10 @@ pub trait RuntimeHost: Send + Sync {
             "worktree GC is not implemented for this runtime host".to_string(),
         ))
     }
+    /// Admitted rebuildable paths, independent of checkout-authored commands.
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        vec!["target".to_string()]
+    }
     /// A task's settlement state for worktree GC, read from the store that
     /// owns the workspace's tasks. `run_id` is the run whose worktree is
     /// being classified, so a replica can ask through that run's own claim
