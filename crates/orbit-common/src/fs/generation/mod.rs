@@ -31,7 +31,11 @@
 //!   newer participants.
 //!
 //! Participants register PID, role and start time under
-//! `.generation-participants/`, each record held by its own lock.
+//! `.generation-participants/`, each record held by its own lock. A live
+//! record means its owner holds `.generation.lock`; on release the record is
+//! first renamed to a releasing name, still locked, then the generation lock
+//! is released, and only then is the record withdrawn. A holder of the lock
+//! with neither record never registered.
 //!
 //! # Admission
 //!
@@ -74,8 +78,9 @@
 //! [`GenerationUpdate`] holds admission exclusively, so nothing joins behind
 //! it, and then waits up to [`quiesce_bound`] for short-lived participants
 //! ([`ParticipantRole::is_short_lived`]) to exit before it takes the
-//! generation exclusively. Any other live participant refuses it at once,
-//! named with its role and what would end its hold.
+//! generation exclusively, and likewise for a participant whose record is
+//! releasing. Any other live participant refuses it at once, named with its
+//! role and what would end its hold.
 //! [`GenerationUpdate::acquire_for_candidate`] is the same admission for an
 //! installer that renames a candidate over the executable: a participant
 //! whose registered capability the candidate reports will hand over after
@@ -111,6 +116,9 @@ mod records;
 mod refusal;
 mod registry;
 mod update;
+
+#[cfg(test)]
+mod tests;
 
 pub use admission::{
     GenerationGuard, Participant, pending_switch_for_this_process, process_handover,

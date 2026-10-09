@@ -11,7 +11,7 @@
 //! it, and [`CandidateAdmission::pin`] waits for it to hand over before
 //! recording the candidate. A holder that never registered (an
 //! `executable-generation-v1` binary, or a sandboxed child that cannot write
-//! the root) always refuses.
+//! the root) always refuses; one whose record is releasing is waited for.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -163,6 +163,16 @@ impl GenerationUpdate {
                 break Vec::new();
             }
             let live = registry::live_participants(root, None, false);
+            if live.is_empty() && registry::releasing(root) {
+                // A registered participant has withdrawn its record and is
+                // releasing the lock: it is finishing, not unregistered.
+                unregistered_since = None;
+                if Instant::now() >= deadline {
+                    return Err(holders_outlasted(bound, &live, candidate));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
             if live.is_empty() {
                 // A queued joiner's upgrade probe holds the lock shared for
                 // an instant; only a hold that outlasts a short retry belongs
