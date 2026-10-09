@@ -55,6 +55,9 @@ fn observation(
         run_id: Some(format!("run-{}", observed_at.timestamp())),
         crew: Some("gemini-flash".to_string()),
         detail: "Individual quota reached.".to_string(),
+        used_percent: None,
+        window_minutes: None,
+        gating: true,
     }
 }
 
@@ -102,13 +105,32 @@ fn the_latest_observation_per_provider_scope_wins() {
     assert!(store.record_provider_limit(&opus).unwrap());
     assert_eq!(
         store.provider_limits().unwrap(),
-        [close, opus],
+        [close.clone(), opus.clone()],
         "newest first, one row per scope"
     );
+
+    // [ORB-14696] A provider's own reading of a window keeps its percent,
+    // length and gating, and replaces the older failure on the same key.
+    let reading = ProviderLimitObservation {
+        exhausted: false,
+        source: ProviderLimitSource::Event,
+        used_percent: Some(91.5),
+        window_minutes: Some(10080),
+        gating: false,
+        detail: "status=allowed".to_string(),
+        ..observation("claude", at(12, 30), Some(at(23, 0)))
+    };
+    let reading = ProviderLimitObservation {
+        model: opus.model.clone(),
+        window: opus.window.clone(),
+        ..reading
+    };
+    assert!(store.record_provider_limit(&reading).unwrap());
+    assert_eq!(store.provider_limits().unwrap(), [close, reading]);
 }
 
-/// A store from before the table gains it on open without touching what it
-/// held, and records limits afterwards.
+/// A store from before the table gains it, with its v41 reading columns, on
+/// open without touching what it held, and records limits afterwards.
 #[test]
 fn an_existing_store_gains_the_provider_limit_table_additively() {
     if !isolated("an_existing_store_gains_the_provider_limit_table_additively") {
@@ -121,7 +143,7 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
     // Recreate schema v39, with a row the older binary wrote.
     conn.execute_batch(
         "DROP TABLE provider_limit_observations;
-        DELETE FROM schema_meta WHERE key = 'migration.v0040';
+        DELETE FROM schema_meta WHERE key IN ('migration.v0040', 'migration.v0041');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",
@@ -151,4 +173,36 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
         assert!(store.record_provider_limit(&limit).unwrap());
         assert_eq!(store.provider_limits().unwrap().len(), 1);
     }
+}
+
+/// [ORB-14696] A v40 table gains the reading columns on open. A row an older
+/// binary wrote reads back as a gating failure with no percent.
+#[test]
+fn a_v40_table_gains_the_reading_columns_additively() {
+    if !isolated("a_v40_table_gains_the_reading_columns_additively") {
+        return;
+    }
+    let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+    let path = root.path().join("orbit.db");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    // Recreate schema v40, with a row the older binary wrote.
+    conn.execute_batch(
+        "ALTER TABLE provider_limit_observations DROP COLUMN used_percent;
+        ALTER TABLE provider_limit_observations DROP COLUMN window_minutes;
+        ALTER TABLE provider_limit_observations DROP COLUMN gating;
+        DELETE FROM schema_meta WHERE key = 'migration.v0041';
+        INSERT INTO provider_limit_observations (provider, model_scope, window_label,
+            exhausted, source, resets_at, observed_at, run_id, crew, detail)
+        VALUES ('codex', '', '', 1, 'error', NULL, '2026-10-08T14:00:00.000000Z',
+            'run-1', 'sol', 'You''ve hit your usage limit.');",
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = provider_limit_store_from_store(Store::open(&path).unwrap());
+    let [row] = store.provider_limits().unwrap().try_into().unwrap();
+    assert_eq!(row.source, ProviderLimitSource::Error);
+    assert_eq!((row.used_percent, row.window_minutes), (None, None));
+    assert!(row.gating, "a failure an older binary recorded still gates");
 }

@@ -2,6 +2,7 @@
 //! composition, the run's plugin broker, and spawn supervision.
 
 use std::cell::Cell;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -576,6 +577,9 @@ pub(crate) fn run_cli_backend_for_step(
         });
     };
 
+    let codex_home = (provider == "codex")
+        .then(|| codex_home(&child_env))
+        .flatten();
     // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
     // mounts cannot cover while compiling those mounts; take that snapshot off
     // the spawned child rather than walking the worktree a second time.
@@ -729,6 +733,7 @@ pub(crate) fn run_cli_backend_for_step(
         duration,
         timed_out,
         print_timeout,
+        codex_home,
     });
     step_error_after_provider_evidence(
         completion,
@@ -736,6 +741,20 @@ pub(crate) fn run_cli_backend_for_step(
         &stdout_blob_ref,
         &stderr_blob_ref,
     )
+}
+
+/// The `CODEX_HOME` a Codex child resolves from its environment: the
+/// `[execution.env]` value, else `$HOME/.codex`. [ORB-14696]
+fn codex_home(env: &[(String, String)]) -> Option<PathBuf> {
+    let value = |name: &str| {
+        env.iter()
+            .rev()
+            .find(|(key, value)| key == name && !value.is_empty())
+            .map(|(_, value)| value.as_str())
+    };
+    value("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| value("HOME").map(|home| Path::new(home).join(".codex")))
 }
 
 /// Keep a worktree-integrity failure as the step error, and cite the stored
