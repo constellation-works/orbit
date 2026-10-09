@@ -16,8 +16,8 @@ spec:
     `verified_no_diff` (and is not tagged `no-diff-expected`) is held as
     `pilot_verified_no_diff` with the pilot's evidence and cited commits;
     one Orbit automation filed is archived instead (`closed`) when a cited
-    commit is proven on the base branch, unless the drain's admissions are
-    stopped.
+    commit that relates to the finding is proven on the base branch, unless
+    the drain's admissions are stopped.
   input_schema_json:
     type: object
     required: [task_ids]

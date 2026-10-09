@@ -11,7 +11,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT;
+use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskRelation, TaskRelationType};
 use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -122,6 +122,31 @@ impl Workspace {
                 tags: tags.iter().map(|tag| tag.to_string()).collect(),
                 context_files: context.iter().map(|file| file.to_string()).collect(),
                 complexity,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    /// A qualifying proposed review finding with its own `description` and
+    /// `relations`.
+    fn finding(
+        &self,
+        title: &str,
+        description: String,
+        context: &[&str],
+        relations: Vec<TaskRelation>,
+    ) -> Task {
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description,
+                acceptance_criteria: vec!["The change is in place.".into()],
+                plan: "Edit README.md.".into(),
+                status: Some(TaskStatus::Proposed),
+                tags: vec!["delivery-code-review".into()],
+                context_files: context.iter().map(|file| file.to_string()).collect(),
+                complexity: TaskComplexity::Low,
+                relations,
                 ..Default::default()
             })
             .unwrap()
@@ -1041,6 +1066,126 @@ fn an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof() {
     assert_eq!(report.closed_total, 1);
     assert_eq!(report.closed, vec![covered.id.clone()]);
     assert_eq!(report.held_by_reason["pilot_verified_no_diff"], 3);
+}
+
+#[test]
+fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::a_verified_no_diff_citing_only_the_findings_own_commits_is_held",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let older = workspace.commit("older change");
+    let culprit = workspace.commit("the culprit");
+    let fix = workspace.commit("the fix");
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let named = |title: &str| {
+        format!(
+            "{title}: introduced by {} on the base branch.",
+            &culprit[..9]
+        )
+    };
+    // The relation's target has no observed delivery, so it adds no commit;
+    // the description is the culprit signal.
+    let regression = TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: workspace
+            .task(
+                "culprit task",
+                &[],
+                &["file:README.md"],
+                TaskComplexity::Low,
+            )
+            .id,
+    };
+    let own_culprit = workspace.finding(
+        "own culprit",
+        named("own culprit"),
+        &["file:README.md"],
+        vec![regression.clone()],
+    );
+    let fixed = workspace.finding(
+        "fixed after culprit",
+        named("fixed after culprit"),
+        &["file:README.md"],
+        vec![regression.clone()],
+    );
+    let before_culprit = workspace.finding(
+        "cites older commit",
+        named("cites older commit"),
+        &["file:README.md"],
+        vec![regression],
+    );
+    let other_path = workspace.finding(
+        "other path",
+        "A finding that names no commit.".into(),
+        &["file:src/other.rs"],
+        Vec::new(),
+    );
+    let related = workspace.finding(
+        "related change",
+        "A finding that names no commit.".into(),
+        &["file:README.md"],
+        Vec::new(),
+    );
+
+    let pilot = workspace.running("task_pilot_pipeline", json!({}));
+    let applied = workspace
+        .apply(
+            &pilot,
+            vec![
+                // Quoting the culprit the finding names is not a fix.
+                verified_no_diff(&own_culprit, &format!("Commit {culprit} is the culprit.")),
+                verified_no_diff(
+                    &fixed,
+                    &format!("Commit {culprit} broke it and {fix} repaired the README."),
+                ),
+                verified_no_diff(
+                    &before_culprit,
+                    &format!("Commit {older} touched the README."),
+                ),
+                verified_no_diff(&other_path, &format!("Commit {fix} repaired the README.")),
+                verified_no_diff(&related, &format!("Commit {fix} repaired the README.")),
+            ],
+            json!({}),
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+
+    let selection = workspace.select(&drain);
+    let mut closed = selection["closed"].as_array().unwrap().clone();
+    closed.sort_by_key(|id| id.as_str().unwrap().to_string());
+    let mut expected = vec![json!(fixed.id), json!(related.id)];
+    expected.sort_by_key(|id| id.as_str().unwrap().to_string());
+    assert_eq!(closed, expected, "{selection}");
+    for held in [&own_culprit, &before_culprit, &other_path] {
+        assert_eq!(
+            workspace.status(held),
+            TaskStatus::Proposed,
+            "{}",
+            held.title
+        );
+        assert_eq!(
+            held_reason(&selection, held),
+            Some("pilot_verified_no_diff"),
+            "{selection}"
+        );
+    }
+    for archived in [&fixed, &related] {
+        assert_eq!(workspace.status(archived), TaskStatus::Archived);
+    }
+    let comment = workspace
+        .runtime
+        .get_task_comments(&fixed.id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert!(
+        comment.message.contains("Covering commit(s)")
+            && comment.message.contains(&format!(": {fix}.")),
+        "only the later commit is named as covering: {comment:?}"
+    );
 }
 
 #[test]
