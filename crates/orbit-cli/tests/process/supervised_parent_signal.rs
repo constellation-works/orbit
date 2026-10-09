@@ -73,7 +73,7 @@ impl Fixture {
         std::fs::create_dir_all(&home).expect("create home");
         std::fs::create_dir_all(&work).expect("create work");
 
-        let output = Command::new("git")
+        let output = crate::git_repo::command()
             .args(["init", "--quiet"])
             .current_dir(&work)
             .output()

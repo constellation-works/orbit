@@ -13,7 +13,6 @@ mod lifecycle;
 mod unix {
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
     use std::time::{Duration, Instant};
 
     use assert_cmd::assert::OutputAssertExt;
@@ -53,11 +52,7 @@ mod unix {
             let repo = temp.path().join("repo");
             fs::create_dir_all(&home).expect("home");
             fs::create_dir_all(&repo).expect("repo");
-            Command::new("git")
-                .args(["init", "--quiet"])
-                .current_dir(&repo)
-                .status()
-                .expect("git init");
+            crate::git_repo::init(&repo);
             let fixture = Self {
                 _temp: temp,
                 home,

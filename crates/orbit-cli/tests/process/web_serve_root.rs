@@ -282,7 +282,7 @@ fn init_git_repo(repo: &Path) {
         vec!["config", "user.email", "fixture@example.com"],
         vec!["config", "user.name", "fixture"],
     ] {
-        let status = Command::new("git")
+        let status = crate::git_repo::command()
             .current_dir(repo)
             .args(&args)
             .stdout(Stdio::null())
