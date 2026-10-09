@@ -1735,7 +1735,7 @@ fn stub_first_path(bin: &Path) -> std::ffi::OsString {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)
