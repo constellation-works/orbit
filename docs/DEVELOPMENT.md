@@ -75,9 +75,13 @@ claimed executor exports it so that Orbit commands its agent runs refuse to
 start without their recorded worker binding; a test process has no binding,
 so every in-process fixture that opens a runtime would fail with `managed
 worker runtime binding unavailable`. The rest of the run envelope is passed
-through, and tests of the refusal set the marker on their own child. A focused
-`cargo test` inside a claimed executor needs the same treatment:
-`env -u ORBIT_WORKER_CONTEXT_REQUIRED cargo test ...`.
+through, and tests of the refusal set the marker on their own child.
+
+A focused `cargo test` needs no such flag in `orbit-common` or `orbit-core`:
+their test binaries call `orbit_common::isolate_test_process!()`, which clears
+the inherited managed-run authority (`INHERITED_AUTHORITY_ENV`) before `main`.
+A child a test re-executes keeps the variables its parent set for it. Add the
+macro under `#[cfg(test)]` to any other crate whose lib tests build a runtime.
 
 Tests that launch real Seatbelt-confined children use
 `orbit_exec::macos_sandbox_test_guard(test_name)`. Its process-cached probe

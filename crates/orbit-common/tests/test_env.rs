@@ -6,7 +6,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use orbit_common::test_env::{
-    FixtureProgress, assert_child_test_exists, assert_child_test_passed, clear_inherited_authority,
+    FixtureProgress, INHERITED_AUTHORITY_ENV, MANAGED_RUN_ENV, SCRUBBED_MARKER_ENV,
+    assert_child_test_exists, assert_child_test_passed, clear_inherited_authority, run_child_test,
 };
 
 const CHILD: &str = "guard_child";
@@ -160,4 +161,54 @@ fn guard_child() {
         std::env::var_os("ORBIT_GUARD_CHILD_FAIL").is_none(),
         "deliberate child failure"
     );
+}
+
+orbit_common::isolate_test_process!();
+
+/// ORB-14926: a test process launched from a managed run's shell inherits its
+/// `ORBIT_*` authority. The scrub must remove it before any test runs, and
+/// leave alone what a scrubbed parent exports to a child on purpose.
+#[test]
+fn managed_run_env_is_absent_in_a_test_process_the_parent_exported_it_to() {
+    for (expect, preset_marker) in [("absent", false), ("kept", true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "env_probe_child", "--ignored", "--nocapture"])
+            .env("ORBIT_ISOLATION_EXPECT", expect);
+        for name in INHERITED_AUTHORITY_ENV {
+            command.env(name, "exported");
+        }
+        if preset_marker {
+            command.env(SCRUBBED_MARKER_ENV, "1");
+        } else {
+            command.env_remove(SCRUBBED_MARKER_ENV);
+        }
+        let output = run_child_test(&mut command, "env_probe_child", dir.path());
+        assert_child_test_passed(
+            "env_probe_child",
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+    }
+}
+
+#[test]
+#[ignore = "re-executed by the managed-run environment regression"]
+fn env_probe_child() {
+    let expect = std::env::var("ORBIT_ISOLATION_EXPECT").unwrap();
+    for name in INHERITED_AUTHORITY_ENV {
+        assert_eq!(
+            std::env::var_os(name).is_some(),
+            expect == "kept",
+            "`{name}` must be {expect} in a test process"
+        );
+    }
+    for name in MANAGED_RUN_ENV {
+        assert!(
+            INHERITED_AUTHORITY_ENV.contains(name),
+            "`{name}` unscrubbed"
+        );
+    }
 }

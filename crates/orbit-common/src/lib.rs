@@ -22,6 +22,9 @@ pub mod text;
 
 pub mod test_env;
 
+#[cfg(test)]
+isolate_test_process!();
+
 pub mod test_fixtures;
 
 pub mod test_process;
