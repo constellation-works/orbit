@@ -92,8 +92,34 @@ impl Workspace {
 
     /// Commit a README edit on the current branch and return its SHA.
     fn commit(&self, message: &str) -> String {
-        std::fs::write(self.repo.join("README.md"), format!("{message}\n")).unwrap();
-        self.git(&["commit", "-am", message]);
+        self.commit_file("README.md", &format!("{message}\n"), message)
+    }
+
+    /// Commit one file on the current branch and return its SHA.
+    fn commit_file(&self, path: &str, contents: &str, message: &str) -> String {
+        std::fs::write(self.repo.join(path), contents).unwrap();
+        self.git(&["add", path]);
+        self.git(&["commit", "-m", message]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    /// Commit one file on a side branch and return to `main`.
+    fn branch_commit_file(
+        &self,
+        branch: &str,
+        path: &str,
+        contents: &str,
+        message: &str,
+    ) -> String {
+        self.git(&["checkout", "-b", branch]);
+        let sha = self.commit_file(path, contents, message);
+        self.git(&["checkout", "main"]);
+        sha
+    }
+
+    /// Merge `branch` into the current branch and return the merge SHA.
+    fn merge(&self, branch: &str, message: &str) -> String {
+        self.git(&["merge", "--no-ff", branch, "-m", message]);
         self.git(&["rev-parse", "HEAD"])
     }
 
@@ -941,6 +967,65 @@ fn verified_no_diff(task: &Task, evidence: &str) -> Value {
     verified["evidence"] = json!(evidence);
     verified["assessment_rationale"] = json!("The fix is already on the base branch.");
     verified
+}
+
+#[test]
+fn verified_no_diff_merge_proof_uses_only_the_first_parent_change() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::verified_no_diff_merge_proof_uses_only_the_first_parent_change",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.branch_commit_file(
+        "unrelated",
+        "side.txt",
+        "unrelated change\n",
+        "unrelated branch change",
+    );
+    let culprit = workspace.commit("the culprit");
+    let unrelated_merge = workspace.merge("unrelated", "merge unrelated branch");
+    workspace.branch_commit_file("touching", "README.md", "later fix\n", "later README fix");
+    let covering_merge = workspace.merge("touching", "merge README fix");
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let finding = |title: &str| {
+        workspace.finding(
+            title,
+            format!("Introduced by commit {culprit}."),
+            &["file:README.md"],
+            Vec::new(),
+        )
+    };
+    let unrelated = finding("unrelated merge does not cover the finding");
+    let covered = finding("first-parent change covers the finding");
+    let pilot = workspace.running("task_pilot_pipeline", json!({}));
+    let applied = workspace
+        .apply(
+            &pilot,
+            vec![
+                verified_no_diff(
+                    &unrelated,
+                    &format!("Commit {unrelated_merge} already fixed the README."),
+                ),
+                verified_no_diff(
+                    &covered,
+                    &format!("Commit {covering_merge} already fixed the README."),
+                ),
+            ],
+            json!({}),
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["closed"], json!([covered.id]));
+    assert_eq!(workspace.status(&unrelated), TaskStatus::Proposed);
+    assert_eq!(
+        held_reason(&selection, &unrelated),
+        Some("pilot_verified_no_diff"),
+        "a merge's second-parent diff must not make it cover the finding: {selection}"
+    );
+    assert_eq!(workspace.status(&covered), TaskStatus::Archived);
 }
 
 fn held_detail<'a>(selection: &'a Value, task: &Task) -> Option<&'a str> {

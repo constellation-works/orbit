@@ -407,23 +407,28 @@ fn is_ancestor(source: &Source, ancestor: &str, descendant: &str) -> bool {
 /// Whether `commit` changes a path any of the task's selectors cover. A merge
 /// commit is judged by its change against the first parent.
 fn touches_paths(source: &Source, commit: &str, selectors: &[String]) -> bool {
-    source
-        .git_preserving_output(&[
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            "-z",
-            "--root",
-            "-m",
-            commit,
-        ])
-        .is_ok_and(|changed| {
-            changed
-                .split('\0')
-                .filter(|path| !path.is_empty())
-                .any(|path| task_selectors_contain_path(selectors, path))
-        })
+    let Ok(revision) = source.git(&["rev-list", "--parents", "-n", "1", commit]) else {
+        return false;
+    };
+    let mut revisions = revision.split_whitespace();
+    let Some(commit) = revisions.next() else {
+        return false;
+    };
+    let first_parent = revisions.next();
+
+    let mut args = vec!["diff-tree", "--no-commit-id", "--name-only", "-r", "-z"];
+    if let Some(parent) = first_parent {
+        args.extend([parent, commit]);
+    } else {
+        args.extend(["--root", commit]);
+    }
+
+    source.git_preserving_output(&args).is_ok_and(|changed| {
+        changed
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .any(|path| task_selectors_contain_path(selectors, path))
+    })
 }
 
 fn commit_citation(token: &str) -> bool {
