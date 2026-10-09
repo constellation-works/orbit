@@ -75,7 +75,7 @@ pub fn observe_candidate(
         Err(error)
             if sync_mode == BaseSyncMode::Remote
                 && !matches!(delivery, HandoffDelivery::NoDiff { .. })
-                && matches!(&error, OrbitError::Execution(message) if message.starts_with(TRANSIENT_FAILURE_MARKER)) =>
+                && matches!(&error, OrbitError::Execution(message) | OrbitError::ExecutionTimeout { message, .. } if message.starts_with(TRANSIENT_FAILURE_MARKER)) =>
         {
             let cached = format!("origin/{}", normalize_base_branch(base_branch)?);
             if !git_command_success(workspace_path, &["merge-base", &candidate.commit, &cached])

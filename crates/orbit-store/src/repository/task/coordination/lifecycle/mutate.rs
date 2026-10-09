@@ -1,6 +1,6 @@
 use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
 
 use super::super::TaskCommitBoundary;
@@ -41,12 +41,12 @@ impl TaskCommitBoundary {
     ) -> Result<ClaimAuthority, OrbitError> {
         let row = self
             .coordination_row(CLAIM, &auth.claim_id)?
-            .ok_or_else(|| invalid("stale_claim"))?;
+            .ok_or_else(|| OrbitError::claim_refused(ClaimRefusalKind::StaleClaim))?;
         let claim: ExecutionClaim = decode(&row.payload_json)?;
         let recover_failed =
             auth.operator && recovering && claim.phase == ExecutionClaimPhase::Failed;
         if claim.task_id != auth.task_id || !(claim.phase.is_unsettled() || recover_failed) {
-            return Err(invalid("stale_claim"));
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         let state = self.claim_state(claim.clone())?;
         if (matches!(
@@ -63,7 +63,7 @@ impl TaskCommitBoundary {
         if !auth.operator
             && (auth.machine_id != claim.executed_on.machine_id || auth.run != state.bound_run)
         {
-            return Err(invalid("stale_claim"));
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         let bundle = self.bundle_store.read_bundle_lightweight(&claim.task_id)?;
         let current_claim = bundle
@@ -81,7 +81,7 @@ impl TaskCommitBoundary {
             .and_then(serde_json::Value::as_str)
             != Some(claim.claim_id.as_str())
         {
-            return Err(invalid("stale_claim"));
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         let expected_status = match claim.phase {
             ExecutionClaimPhase::HandedOff => TaskStatus::Review,
@@ -93,7 +93,7 @@ impl TaskCommitBoundary {
             | ExecutionClaimPhase::RepairPending => TaskStatus::InProgress,
         };
         if bundle.envelope.status != expected_status {
-            return Err(invalid("stale_claim"));
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         if let Some(bound) = &state.bound_run
             && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
@@ -104,7 +104,7 @@ impl TaskCommitBoundary {
                     .map(|location| location.machine_id.as_str())
                     != Some(bound.machine_id.as_str()))
         {
-            return Err(invalid("stale_claim"));
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         Ok(ClaimAuthority {
             row,
@@ -136,7 +136,7 @@ impl TaskCommitBoundary {
                 authority.claim.phase,
                 ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
             ) {
-                return Err(invalid("stale_claim"));
+                return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
             }
             Ok(())
         })
@@ -176,7 +176,9 @@ impl TaskCommitBoundary {
                     ..
                 }
             ) {
-                return Err(invalid("merge intent replay requires reconciliation"));
+                return Err(OrbitError::claim_refused(
+                    ClaimRefusalKind::MergeIntentReplayUnreconciled,
+                ));
             }
             // Binding is also a launch gate. Never replay historical launch permission
             // after handoff, failure, or revocation; other receipts are advisory outcomes.
@@ -185,11 +187,11 @@ impl TaskCommitBoundary {
                     .execution_claims()?
                     .into_iter()
                     .find(|c| c.claim_id == auth.claim_id)
-                    .ok_or_else(|| invalid("stale_claim"))?;
+                    .ok_or_else(|| OrbitError::claim_refused(ClaimRefusalKind::StaleClaim))?;
                 if current.phase != ExecutionClaimPhase::Running
                     || self.claim_state(current)?.bound_run.as_ref() != Some(run)
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
             }
             return self.with_friction_result(receipt.result, &receipt_id);
@@ -223,7 +225,7 @@ impl TaskCommitBoundary {
                         .expected_status
                         .is_some_and(|status| status != expected_status)
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 if let Some(status) = value.status {
                     if status == TaskStatus::Blocked && claim.phase == ExecutionClaimPhase::Running
@@ -269,7 +271,7 @@ impl TaskCommitBoundary {
                             .iter()
                             .any(|reference| !bundle.envelope.external_refs.contains(reference)))
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 evidence = value.evidence.clone();
                 params.status_note = value.status_note.clone();
@@ -284,7 +286,7 @@ impl TaskCommitBoundary {
                         .as_ref()
                         .is_some_and(|task| task != &auth.task_id)
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 let mut value = value.clone();
                 value.during_task = Some(auth.task_id.clone());
@@ -298,7 +300,7 @@ impl TaskCommitBoundary {
                     || run.machine_id != auth.machine_id
                     || run.run_id.trim().is_empty()
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 let original = self.lookup_admission(
                     &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
@@ -352,10 +354,14 @@ impl TaskCommitBoundary {
                     return Err(invalid("operator handoff revocation requires a reason"));
                 }
                 if state.unresolved_merge_intent.is_some() {
-                    return Err(invalid("unresolved external merge intent"));
+                    return Err(OrbitError::claim_refused(
+                        ClaimRefusalKind::UnresolvedMergeIntent,
+                    ));
                 }
                 if self.accepted_handoff(&auth.claim_id)?.handoff_id != *handoff_id {
-                    return Err(invalid("handoff identity mismatch"));
+                    return Err(OrbitError::claim_refused(
+                        ClaimRefusalKind::HandoffIdentityMismatch,
+                    ));
                 }
                 self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
                 state.landing_invalidated = true;
@@ -369,7 +375,7 @@ impl TaskCommitBoundary {
                         ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
                     )
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 evidence = value.clone();
                 state.last_event = "claim_evidence".into();
@@ -397,7 +403,7 @@ impl TaskCommitBoundary {
                         ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
                     )
                 {
-                    return Err(invalid("stale_claim"));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
                 let Some(reason) = value.summary.as_deref().filter(|s| !s.trim().is_empty()) else {
                     return Err(invalid("claim release requires a reason"));
@@ -493,7 +499,9 @@ impl TaskCommitBoundary {
                     return Err(invalid("operator recovery capability required"));
                 }
                 if state.unresolved_merge_intent.is_some() {
-                    return Err(invalid("unresolved external merge intent"));
+                    return Err(OrbitError::claim_refused(
+                        ClaimRefusalKind::UnresolvedMergeIntent,
+                    ));
                 }
                 if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog)
                     || reason.trim().is_empty()
@@ -641,7 +649,7 @@ impl TaskCommitBoundary {
             TaskCoordinationCommitOutcome::Committed(_) => {
                 self.with_friction_result(result, &receipt_id)
             }
-            _ => Err(invalid("stale_claim")),
+            _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }
     }
 }

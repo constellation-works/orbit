@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
     JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState, RunIdRole, run_id_candidate,
     run_id_minute_stem,
@@ -74,9 +75,9 @@ impl Store {
         // The run row and its state row commit together.
         let tx =
             rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
         upsert_job_run_for_workspace_conn(&tx, workspace_id, run, pipeline_state)?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     pub fn upsert_job_run_step_for_workspace(
@@ -123,7 +124,7 @@ impl Store {
                 agent_response_json,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         Ok(())
     }
 

@@ -307,6 +307,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact))
         }
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact(&m)),
+        OrbitError::ClaimRefused { kind, message } => OrbitError::ClaimRefused {
+            kind,
+            message: redact(&message),
+        },
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
             field: redact(&field),
             reason: redact(&reason),
@@ -344,6 +348,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             payload: redact_json_with(payload, redact),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::ExecutionTimeout {
+            timeout_ms,
+            message,
+        } => OrbitError::ExecutionTimeout {
+            timeout_ms,
+            message: redact(&message),
+        },
         OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
             timeout_ms,
             detail: redact(&detail),
@@ -433,6 +444,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::Io(m) => OrbitError::Io(redact(&m)),
         OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact(&m)),
         OrbitError::Migration(m) => OrbitError::Migration(redact(&m)),
+        OrbitError::StorageAccessDenied { layer, message } => OrbitError::StorageAccessDenied {
+            layer,
+            message: redact(&message),
+        },
     }
 }
 

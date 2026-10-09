@@ -19,7 +19,7 @@ pub struct SearchIndexStats {
     pub tasks: usize,
 }
 fn err(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
+    orbit_common::storage::sqlite::sqlite_store_error(error)
 }
 impl LexicalStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {

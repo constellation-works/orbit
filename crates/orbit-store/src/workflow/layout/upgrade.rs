@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, StorageLayer};
 
 use super::marker::{
     read_compat_record, read_marker, upgrade_lock_path, write_compat_record, write_marker,
@@ -132,12 +132,16 @@ pub(crate) fn upgrade_with(
     let mut version = from_version;
     for migration in migrations.iter().filter(|m| m.version > from_version) {
         (migration.apply)(orbit_dir).map_err(|error| {
-            OrbitError::Migration(format!(
-                "layout migration v{} ({}) failed for '{}': {error}",
-                migration.version,
-                migration.name,
-                orbit_dir.display()
-            ))
+            OrbitError::storage(
+                StorageLayer::Migration,
+                error.is_readonly_or_access_failure(),
+                format!(
+                    "layout migration v{} ({}) failed for '{}': {error}",
+                    migration.version,
+                    migration.name,
+                    orbit_dir.display()
+                ),
+            )
         })?;
         write_marker(orbit_dir, migration.version)?;
         write_compat_record(orbit_dir, migrations, migration.version)?;

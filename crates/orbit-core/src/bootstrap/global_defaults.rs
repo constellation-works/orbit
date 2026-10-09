@@ -75,10 +75,10 @@ pub(crate) fn record_global_defaults_reconciled(global_root: &Path) -> Result<()
 
     let path = validated_stamp_path(global_root)?;
     atomic_write_text(&path, &encoded).map_err(|error| {
-        OrbitError::Io(format!(
-            "write global defaults stamp '{}': {error}",
-            path.display()
-        ))
+        OrbitError::io_with_context(
+            &error,
+            format!("write global defaults stamp '{}': {error}", path.display()),
+        )
     })
 }
 
@@ -90,10 +90,13 @@ pub(crate) fn record_global_defaults_reconciled(global_root: &Path) -> Result<()
 /// stamp read or write outside the selected root.
 fn validated_stamp_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
     let canonical_root = fs::canonicalize(global_root).map_err(|error| {
-        OrbitError::Io(format!(
-            "resolve global defaults root {}: {error}",
-            global_root.display()
-        ))
+        OrbitError::io_with_context(
+            &error,
+            format!(
+                "resolve global defaults root {}: {error}",
+                global_root.display()
+            ),
+        )
     })?;
     let expected_parent = canonical_root.join("resources");
     let expected_path = expected_parent.join(".orbit-global-defaults.json");
@@ -102,10 +105,13 @@ fn validated_stamp_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(expected_path),
         Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "resolve global defaults directory {}: {error}",
-                expected_parent.display()
-            )));
+            return Err(OrbitError::io_with_context(
+                &error,
+                format!(
+                    "resolve global defaults directory {}: {error}",
+                    expected_parent.display()
+                ),
+            ));
         }
     };
     if canonical_parent != expected_parent || !canonical_parent.is_dir() {
@@ -119,10 +125,13 @@ fn validated_stamp_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(expected_path),
         Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "resolve global defaults stamp {}: {error}",
-                expected_path.display()
-            )));
+            return Err(OrbitError::io_with_context(
+                &error,
+                format!(
+                    "resolve global defaults stamp {}: {error}",
+                    expected_path.display()
+                ),
+            ));
         }
     };
     if canonical_path != expected_path || !canonical_path.is_file() {

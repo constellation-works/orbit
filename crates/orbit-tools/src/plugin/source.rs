@@ -20,9 +20,9 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
@@ -506,7 +506,12 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
     .map_err(|error| match error {
         // The consumer's own refusals (oversize, disk write) already say what
         // happened; only a failure to run curl needs the hint.
-        refusal @ (OrbitError::InvalidInput(_) | OrbitError::Io(_)) => refusal,
+        refusal
+            if matches!(refusal, OrbitError::InvalidInput(_))
+                || refusal.storage_layer() == Some(StorageLayer::Io) =>
+        {
+            refusal
+        }
         error => OrbitError::Execution(format!(
             "cannot fetch the plugin archive '{url}': {error}; fetching an `https://` plugin \
              source needs `curl` on PATH"

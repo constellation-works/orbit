@@ -9,7 +9,7 @@ use crate::driver::file::task_bundle::bundle_io::jsonl::read_task_comments;
 use crate::driver::file::task_bundle::bundle_io::jsonl::read_task_events;
 use crate::fs::yaml::parse_yaml_with;
 use orbit_common::migration::Plan;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{NotFoundKind, OrbitError, StorageLayer};
 use orbit_types::task::{
     TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
     TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
@@ -72,8 +72,8 @@ fn read_bundle_at_with(
             kind: NotFoundKind::Task,
             ..
         }
-        | OrbitError::TaskBundleCorrupt { .. }
-        | OrbitError::Io(_) => error,
+        | OrbitError::TaskBundleCorrupt { .. } => error,
+        error if error.storage_layer() == Some(StorageLayer::Io) => error,
         other => OrbitError::TaskBundleCorrupt {
             task_id: expected_task_id,
             path: bundle_dir.to_string_lossy().into_owned(),
@@ -94,8 +94,8 @@ pub(crate) fn read_envelope_at(bundle_dir: &Path) -> Result<TaskEnvelopeV2, Orbi
             kind: NotFoundKind::Task,
             ..
         }
-        | OrbitError::TaskBundleCorrupt { .. }
-        | OrbitError::Io(_) => error,
+        | OrbitError::TaskBundleCorrupt { .. } => error,
+        error if error.storage_layer() == Some(StorageLayer::Io) => error,
         other => OrbitError::TaskBundleCorrupt {
             task_id: expected_task_id,
             path: bundle_dir.to_string_lossy().into_owned(),

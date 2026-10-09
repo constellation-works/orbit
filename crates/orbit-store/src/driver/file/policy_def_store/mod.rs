@@ -39,7 +39,7 @@ impl PolicyDefFileStore {
     }
 
     pub(crate) fn ensure_layout(&self) -> Result<(), OrbitError> {
-        fs::create_dir_all(self.policies_dir()).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::create_dir_all(self.policies_dir())?;
         Ok(())
     }
 

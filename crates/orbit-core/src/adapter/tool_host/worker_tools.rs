@@ -1,6 +1,6 @@
 //! Generic coordination writes translated into owner claim transactions.
-use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
 };
@@ -319,15 +319,15 @@ fn require_active_claim(
         .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
     runtime
         .verify_worker_claim(&worker_auth(binding))
-        .map_err(|error| match error {
-            OrbitError::InvalidInput(cause) if cause == "stale_claim" => OrbitError::PolicyDenied(
+        .map_err(|error| match error.claim_refusal() {
+            Some(ClaimRefusalKind::StaleClaim) => OrbitError::PolicyDenied(
                 "stale_claim: the owner no longer holds this worker's claim as active (it was \
                  released, failed, revoked, landed or superseded, or is bound to another run), \
                  so the owner refuses its artifact reads as it refuses its writes. Do not retry \
                  or route around the owner; report the work incomplete and let the run end"
                     .into(),
             ),
-            other => other,
+            _ => error,
         })
 }
 

@@ -5,6 +5,7 @@ use super::queries::workspace_by_id;
 use super::store::TaskRegistryStore;
 use super::util::now_string;
 use crate::contracts::AllocatorSeedOutcome;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ORB_TASK_ID_MAX, format_task_id, is_valid_task_id_prefix, parse_task_number, task_id_prefix,
@@ -29,7 +30,7 @@ fn set_allocator_next_number(conn: &Connection, value: u32) -> Result<(), OrbitE
         "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
         params![i64::from(value), now_string()],
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -387,12 +388,12 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let previous = read_allocator_next_number(&tx)?;
         if target > previous {
             set_allocator_next_number(&tx, target)?;
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     /// Advance past a local on-disk task ID. SQLite's integer counter can hold

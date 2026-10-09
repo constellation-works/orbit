@@ -6,24 +6,14 @@ use super::introspect::{add_column_if_missing, table_has_column};
 pub(super) fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(
         conn,
-        "ALTER TABLE tools ADD COLUMN parameters_json TEXT NOT NULL DEFAULT '[]'",
+        "tools",
+        "parameters_json",
+        "TEXT NOT NULL DEFAULT '[]'",
     )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE tools ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE tools ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE tools ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE tools ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
-    )?;
+    add_column_if_missing(conn, "tools", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    add_column_if_missing(conn, "tools", "builtin", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "tools", "created_at", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(conn, "tools", "updated_at", "TEXT NOT NULL DEFAULT ''")?;
 
     if table_has_column(conn, "tools", "is_enabled")? {
         conn.execute(

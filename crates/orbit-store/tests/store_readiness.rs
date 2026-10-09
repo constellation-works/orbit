@@ -94,6 +94,48 @@ fn observationally_read_only_supported_store_is_not_ready() {
     assert_eq!(std::fs::read(&database).unwrap(), before);
 }
 
+/// A read-only directory refuses the WAL sidecars, so SQLite reports the
+/// denial natively; the translator, not the message text, must classify it so
+/// the store degrades to observational reads instead of failing the open.
+#[cfg(unix)]
+#[test]
+fn store_in_read_only_directory_degrades_to_observational_reads() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !isolated("store_in_read_only_directory_degrades_to_observational_reads") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let directory = root.path().join("state");
+    std::fs::create_dir(&directory).unwrap();
+    let database = supported_database(&directory);
+    // Leave a cleanly closed file set with no sidecars, so any write needs a
+    // new file in the directory.
+    Connection::open(&database)
+        .unwrap()
+        .pragma_update(None, "journal_mode", "DELETE")
+        .unwrap();
+    let before = std::fs::read(&database).unwrap();
+    let original = std::fs::metadata(&directory).unwrap().permissions();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(directory.join("probe"), b"").is_ok() {
+        // Privileged users bypass directory modes; the fixture cannot deny.
+        std::fs::set_permissions(&directory, original).unwrap();
+        return;
+    }
+
+    let opened = Store::open(&database);
+    let readiness = ensure_sqlite_store_ready(&database);
+
+    std::fs::set_permissions(&directory, original).unwrap();
+    let store = opened.expect("a denied directory degrades instead of failing the open");
+    assert!(store.is_read_only(), "the store must open observationally");
+    drop(store);
+    let error = readiness.expect_err("workers must refuse an observational store pre-claim");
+    assert!(matches!(error, OrbitError::Store(_)), "{error}");
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+}
+
 #[test]
 fn forward_compatible_read_only_store_keeps_migration_refusal() {
     if !isolated("forward_compatible_read_only_store_keeps_migration_refusal") {

@@ -29,7 +29,8 @@
 
 use std::path::Path;
 
-use orbit_common::{OrbitError, SqliteContention};
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, SqliteContention, StorageLayer};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
 use crate::contracts::{
@@ -552,9 +553,11 @@ fn write_compat_record(
         params![COMPAT_KEY, record.encode()?, crate::now_string()],
     )
     .map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to record schema compatibility metadata at v{version}: {error}"
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &error,
+            format!("failed to record schema compatibility metadata at v{version}: {error}"),
+        )
     })?;
     Ok(())
 }
@@ -637,10 +640,14 @@ fn apply_one(
     ensure_schema_meta_table(&tx)?;
 
     (migration.apply)(&tx).map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to apply migration v{} ({}): {error}",
-            migration.version, migration.name
-        ))
+        OrbitError::storage(
+            StorageLayer::Migration,
+            error.is_readonly_or_access_failure(),
+            format!(
+                "failed to apply migration v{} ({}): {error}",
+                migration.version, migration.name
+            ),
+        )
     })?;
 
     tx.execute(
@@ -653,10 +660,14 @@ fn apply_one(
         ],
     )
     .map_err(|e| {
-        OrbitError::Migration(format!(
-            "failed to record migration v{} ({}) in schema_meta: {e}",
-            migration.version, migration.name
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &e,
+            format!(
+                "failed to record migration v{} ({}) in schema_meta: {e}",
+                migration.version, migration.name
+            ),
+        )
     })?;
     write_compat_record(&tx, migrations, migration.version)?;
 
@@ -692,10 +703,14 @@ fn migration_begin_error(
         }));
     }
 
-    OrbitError::Migration(format!(
-        "failed to begin transaction for migration v{} ({}): {error}",
-        migration.version, migration.name
-    ))
+    sqlite_error(
+        StorageLayer::Migration,
+        &error,
+        format!(
+            "failed to begin transaction for migration v{} ({}): {error}",
+            migration.version, migration.name
+        ),
+    )
 }
 
 fn newer_than_supported(
@@ -721,10 +736,14 @@ pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Err
         ));
     }
 
-    OrbitError::Migration(format!(
-        "failed to commit migration v{} ({}): {error}",
-        migration.version, migration.name
-    ))
+    sqlite_error(
+        StorageLayer::Migration,
+        &error,
+        format!(
+            "failed to commit migration v{} ({}): {error}",
+            migration.version, migration.name
+        ),
+    )
 }
 
 fn ensure_schema_meta_table(conn: &Connection) -> Result<(), OrbitError> {
@@ -737,7 +756,7 @@ fn ensure_schema_meta_table(conn: &Connection) -> Result<(), OrbitError> {
             updated_at TEXT NOT NULL
         );",
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 fn validate_registry(migrations: &[Migration]) -> Result<(), OrbitError> {

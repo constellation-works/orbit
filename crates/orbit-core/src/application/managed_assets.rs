@@ -225,18 +225,21 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                 continue;
             }
             let content = fs::read_to_string(&path).map_err(|error| {
-                OrbitError::Io(format!(
-                    "read retired managed {asset_kind} '{}': {error}",
-                    path.display()
-                ))
+                OrbitError::io_with_context(
+                    &error,
+                    format!(
+                        "read retired managed {asset_kind} '{}': {error}",
+                        path.display()
+                    ),
+                )
             })?;
             if sha256_hex(content.as_bytes()) == *managed_digest {
                 if mode == ManagedAssetReconcileMode::Apply {
                     fs::remove_file(&path).map_err(|error| {
-                        OrbitError::Io(format!(
-                            "retire managed {asset_kind} '{}': {error}",
-                            path.display()
-                        ))
+                        OrbitError::io_with_context(
+                            &error,
+                            format!("retire managed {asset_kind} '{}': {error}", path.display()),
+                        )
                     })?;
                 }
             } else {
@@ -336,10 +339,10 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         if exists {
             if previous_digest.is_none() {
                 let existing = fs::read_to_string(&path).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "read existing {asset_kind} '{}': {error}",
-                        path.display()
-                    ))
+                    OrbitError::io_with_context(
+                        &error,
+                        format!("read existing {asset_kind} '{}': {error}", path.display()),
+                    )
                 })?;
                 if sha256_hex(existing.as_bytes()) == rendered_digest {
                     next_assets.insert((*name).to_string(), rendered_digest);
@@ -373,10 +376,10 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                     continue;
                 };
                 let existing = fs::read_to_string(&path).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "read existing {asset_kind} '{}': {error}",
-                        path.display()
-                    ))
+                    OrbitError::io_with_context(
+                        &error,
+                        format!("read existing {asset_kind} '{}': {error}", path.display()),
+                    )
                 })?;
 
                 // A digest match proves this is an unedited file Orbit wrote.
@@ -565,10 +568,13 @@ impl ManagedAssetOptOut {
         match &self.previous {
             Some(previous) => write_managed_asset_manifest(&self.manifest_path, previous),
             None => fs::remove_file(&self.manifest_path).map_err(|error| {
-                OrbitError::Io(format!(
-                    "remove managed asset manifest '{}': {error}",
-                    self.manifest_path.display()
-                ))
+                OrbitError::io_with_context(
+                    &error,
+                    format!(
+                        "remove managed asset manifest '{}': {error}",
+                        self.manifest_path.display()
+                    ),
+                )
             }),
         }
     }
@@ -651,10 +657,13 @@ fn managed_asset_manifest_io_error(
     asset_kind: &str,
     error: io::Error,
 ) -> OrbitError {
-    OrbitError::Io(format!(
-        "write managed {asset_kind} asset manifest '{}': {error}",
-        manifest_path.display()
-    ))
+    OrbitError::io_with_context(
+        &error,
+        format!(
+            "write managed {asset_kind} asset manifest '{}': {error}",
+            manifest_path.display()
+        ),
+    )
 }
 
 /// Record a needed manifest write, warning (instead of failing closed) when
@@ -692,10 +701,10 @@ pub(super) fn load_managed_asset_manifest(
         return Ok(None);
     }
     let raw = fs::read_to_string(path).map_err(|error| {
-        OrbitError::Io(format!(
-            "read managed asset manifest '{}': {error}",
-            path.display()
-        ))
+        OrbitError::io_with_context(
+            &error,
+            format!("read managed asset manifest '{}': {error}", path.display()),
+        )
     })?;
     let manifest: ManagedAssetManifest = serde_json::from_str(&raw).map_err(|error| {
         OrbitError::InvalidInput(format!(
@@ -819,10 +828,10 @@ pub(crate) fn resolve_confined_asset_path(
                 return Ok(ConfinedAssetPath::Missing);
             }
             Err(error) => {
-                return Err(OrbitError::Io(format!(
-                    "inspect managed artifact '{}': {error}",
-                    target.display()
-                )));
+                return Err(OrbitError::io_with_context(
+                    &error,
+                    format!("inspect managed artifact '{}': {error}", target.display()),
+                ));
             }
         };
         let expected_type = if components.peek().is_some() {
@@ -854,10 +863,10 @@ fn write_confined_asset(
         create_new_text(path, content)
     };
     written.map_err(|error| {
-        OrbitError::Io(format!(
-            "write managed {asset_kind} '{}': {error}",
-            path.display()
-        ))
+        OrbitError::io_with_context(
+            &error,
+            format!("write managed {asset_kind} '{}': {error}", path.display()),
+        )
     })
 }
 
@@ -923,10 +932,13 @@ pub(super) fn unsafe_preservation_component(
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
-                return Err(OrbitError::Io(format!(
-                    "inspect retired managed asset backup '{}': {error}",
-                    target.display()
-                )));
+                return Err(OrbitError::io_with_context(
+                    &error,
+                    format!(
+                        "inspect retired managed asset backup '{}': {error}",
+                        target.display()
+                    ),
+                ));
             }
         }
     }
@@ -981,18 +993,24 @@ pub(super) fn preserve_modified_retired_asset(
         }
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                OrbitError::Io(format!(
-                    "create retired managed asset backup '{}': {error}",
-                    parent.display()
-                ))
+                OrbitError::io_with_context(
+                    &error,
+                    format!(
+                        "create retired managed asset backup '{}': {error}",
+                        parent.display()
+                    ),
+                )
             })?;
         }
         fs::rename(source, &destination).map_err(|error| {
-            OrbitError::Io(format!(
-                "preserve modified retired {asset_kind} '{}' as '{}': {error}",
-                source.display(),
-                destination.display()
-            ))
+            OrbitError::io_with_context(
+                &error,
+                format!(
+                    "preserve modified retired {asset_kind} '{}' as '{}': {error}",
+                    source.display(),
+                    destination.display()
+                ),
+            )
         })?;
         return Ok(destination);
     }
@@ -1012,15 +1030,16 @@ fn ambiguous_legacy_yaml_files(
 ) -> Result<Vec<PathBuf>, OrbitError> {
     let mut ambiguous = Vec::new();
     let entries = fs::read_dir(dir).map_err(|error| {
-        OrbitError::Io(format!(
-            "inspect legacy managed asset directory '{}': {error}",
-            dir.display()
-        ))
+        OrbitError::io_with_context(
+            &error,
+            format!(
+                "inspect legacy managed asset directory '{}': {error}",
+                dir.display()
+            ),
+        )
     })?;
     for entry in entries {
-        let path = entry
-            .map_err(|error| OrbitError::Io(error.to_string()))?
-            .path();
+        let path = entry.map_err(OrbitError::from)?.path();
         let is_yaml = path
             .extension()
             .and_then(|extension| extension.to_str())

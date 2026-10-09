@@ -4,6 +4,7 @@ use super::envelope_cache::EnvelopeStamp;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity};
+use orbit_common::StorageLayer;
 
 impl TaskV2Store {
     pub(crate) fn task_status_index(
@@ -316,7 +317,10 @@ impl TaskV2Store {
             .registry
             .unresolved_relation_targets(&self.workspace_id, &envelopes)
             .unwrap_or_default();
-        let rejected = !matches!(error, OrbitError::Store(_) | OrbitError::Io(_));
+        let rejected = !matches!(
+            error.storage_layer(),
+            Some(StorageLayer::Store | StorageLayer::Io)
+        );
         let suppressed_reads = ticket.failed(
             rejected,
             unresolved

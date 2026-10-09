@@ -11,7 +11,7 @@
 //! claim journal transaction, so a revoked, stale or re-validated candidate
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
-use orbit_common::OrbitError;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::*;
 
@@ -53,7 +53,9 @@ impl TaskCommitBoundary {
     ) -> Result<(TaskCoordinationRow, LandingAttempt), OrbitError> {
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         if accepted.handoff_id != handoff_id {
-            return Err(invalid("handoff identity mismatch"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
         }
         let raw = self
             .attempt_row(handoff_id)?
@@ -96,7 +98,9 @@ impl TaskCommitBoundary {
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         if accepted.handoff_id != handoff_id {
-            return Err(invalid("handoff identity mismatch"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
         }
         let authorization = self.current_landing_authorization(&accepted)?;
         let now = Utc::now();
@@ -119,7 +123,9 @@ impl TaskCommitBoundary {
             Some(old) => {
                 let mut attempt: LandingAttempt = decode(&old.payload_json)?;
                 if attempt.state == LandingAttemptState::Merged {
-                    return Err(invalid("handoff has already landed"));
+                    return Err(OrbitError::claim_refused(
+                        ClaimRefusalKind::HandoffAlreadyLanded,
+                    ));
                 }
                 match job_run_id {
                     // A stopped attempt reopens deliberately, and so does one
@@ -177,7 +183,9 @@ impl TaskCommitBoundary {
             return Err(invalid("verified merge evidence required"));
         }
         if state.unresolved_merge_intent.is_some() {
-            return Err(invalid("unresolved external merge intent"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
         }
         // Full recheck: operator context, current authorization, no revocation,
         // trusted candidate observation and digest-pinned validation evidence.
@@ -224,7 +232,9 @@ impl TaskCommitBoundary {
             return Err(invalid("stopping a landing requires evidence"));
         }
         if state.unresolved_merge_intent.is_some() {
-            return Err(invalid("unresolved external merge intent"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
         attempt.state = LandingAttemptState::Stopped;

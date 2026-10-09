@@ -1,6 +1,6 @@
 //! The one transaction that decides a task commit.
 
-use orbit_common::OrbitError;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::JournalCommitOutcome;
@@ -101,7 +101,7 @@ impl Store {
                     params![workspace_id, old.kind, old.row_id, old.payload_json, new.payload_json, journal_id],
                 ).map_err(|e| OrbitError::Store(e.to_string()))?;
                 if count != 1 {
-                    return Err(OrbitError::InvalidInput("stale_claim".into()));
+                    return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
             }
             if let Some(reservation_id) = &effects.release_reservation {

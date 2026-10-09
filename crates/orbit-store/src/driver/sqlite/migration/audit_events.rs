@@ -55,13 +55,10 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN task_id TEXT")?;
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN job_run_id TEXT")?;
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN activity_id TEXT")?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE audit_events ADD COLUMN step_index INTEGER",
-    )?;
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
 
     conn.execute_batch(
         r#"
@@ -82,19 +79,19 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
 /// lease correlation for command-audit rows. Existing rows remain untouched
 /// and therefore read with NULL/empty additions.
 pub(super) fn apply_trusted_mcp_audit_provenance(conn: &Connection) -> Result<(), OrbitError> {
-    for sql in [
-        "ALTER TABLE audit_events ADD COLUMN workspace_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN caller_machine_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN caller_host_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN process_machine_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN process_host_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN transport TEXT",
-        "ALTER TABLE audit_events ADD COLUMN capabilities_json TEXT",
-        "ALTER TABLE audit_events ADD COLUMN origin_session_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN mcp_call_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN lease_id TEXT",
+    for (column, definition) in [
+        ("workspace_id", "TEXT"),
+        ("caller_machine_id", "TEXT"),
+        ("caller_host_id", "TEXT"),
+        ("process_machine_id", "TEXT"),
+        ("process_host_id", "TEXT"),
+        ("transport", "TEXT"),
+        ("capabilities_json", "TEXT"),
+        ("origin_session_id", "TEXT"),
+        ("mcp_call_id", "TEXT"),
+        ("lease_id", "TEXT"),
     ] {
-        add_column_if_missing(conn, sql)?;
+        add_column_if_missing(conn, "audit_events", column, definition)?;
     }
 
     conn.execute_batch(
@@ -133,8 +130,8 @@ pub(super) fn apply_invocation_audit_context(conn: &Connection) -> Result<(), Or
     ensure_audit_events_schema(conn)?;
     apply_trusted_mcp_audit_provenance(conn)?;
 
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN trace_id TEXT")?;
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN caller_ip TEXT")?;
+    add_column_if_missing(conn, "audit_events", "trace_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "caller_ip", "TEXT")?;
 
     conn.execute_batch(
         r#"
@@ -154,15 +151,15 @@ pub(super) fn apply_invocation_audit_context(conn: &Connection) -> Result<(), Or
 pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
 
-    for sql in [
-        "ALTER TABLE audit_events ADD COLUMN actor_kind TEXT",
-        "ALTER TABLE audit_events ADD COLUMN actor_id TEXT",
-        "ALTER TABLE audit_events ADD COLUMN actor_vendor TEXT",
-        "ALTER TABLE audit_events ADD COLUMN actor_family TEXT",
-        "ALTER TABLE audit_events ADD COLUMN actor_model TEXT",
-        "ALTER TABLE audit_events ADD COLUMN actor_alias_version INTEGER",
+    for (column, definition) in [
+        ("actor_kind", "TEXT"),
+        ("actor_id", "TEXT"),
+        ("actor_vendor", "TEXT"),
+        ("actor_family", "TEXT"),
+        ("actor_model", "TEXT"),
+        ("actor_alias_version", "INTEGER"),
     ] {
-        add_column_if_missing(conn, sql)?;
+        add_column_if_missing(conn, "audit_events", column, definition)?;
     }
 
     conn.execute_batch(
@@ -187,10 +184,7 @@ pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitE
 pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
 
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE audit_events ADD COLUMN self_reported_actor TEXT",
-    )?;
+    add_column_if_missing(conn, "audit_events", "self_reported_actor", "TEXT")?;
 
     conn.execute_batch(
         r#"
@@ -260,10 +254,7 @@ pub(crate) fn backfill_audit_actor_identity(conn: &Connection) -> Result<(), Orb
 /// columns (design `docs/design/plugins/1_scope.md` §4.4). Additive.
 pub(super) fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE audit_events ADD COLUMN plugin_grants TEXT",
-    )
+    add_column_if_missing(conn, "audit_events", "plugin_grants", "TEXT")
 }
 
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved

@@ -220,7 +220,8 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
 
 pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
-        orbit_core::OrbitError::InvalidInput(msg) => bad_request(msg),
+        orbit_core::OrbitError::InvalidInput(msg)
+        | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
         orbit_core::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
             StatusCode::CONFLICT,

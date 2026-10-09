@@ -10,7 +10,7 @@ use super::absorbed::{AbsorbedReason, AbsorbedRefusal, verify_absorbed_candidate
 use super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_failure_error,
     git_output, git_output_raw, git_run, git_success, git_timeout_error,
-    resolve_worktree_start_point,
+    resolve_worktree_start_point, timeout_recovery_error,
 };
 use super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, rebase_in_progress,
@@ -508,9 +508,12 @@ fn recover_started_rebase_timeout<T>(
         &outcome.stderr,
     );
     if !rebase_in_progress(workspace_path).unwrap_or(false) {
-        return Err(OrbitError::Execution(format!(
-            "{timeout}; git_rebase of '{head}' onto '{base_sha}' timed out. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
-        )));
+        return Err(timeout_recovery_error(
+            outcome.timeout_ms,
+            format!(
+                "{timeout}; git_rebase of '{head}' onto '{base_sha}' timed out. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
+            ),
+        ));
     }
     let conflicting_paths = unmerged_paths(workspace_path).unwrap_or_default();
     if !conflicting_paths.is_empty() {
@@ -525,9 +528,12 @@ fn recover_started_rebase_timeout<T>(
         )?);
     }
     abort_owned_rebase(workspace_path)?;
-    Err(OrbitError::Execution(format!(
-        "{timeout}; interrupted rebase started by this attempt was aborted. Retry can start clean. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
-    )))
+    Err(timeout_recovery_error(
+        outcome.timeout_ms,
+        format!(
+            "{timeout}; interrupted rebase started by this attempt was aborted. Retry can start clean. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
+        ),
+    ))
 }
 
 pub(super) fn abort_owned_rebase(workspace_path: &Path) -> Result<(), OrbitError> {

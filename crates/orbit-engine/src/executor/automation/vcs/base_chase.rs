@@ -20,7 +20,7 @@ use super::freshness::{
     ensure_clean_for_rewrite, original_base_sha, perform_rebase_onto_base, recovery_run_id,
     unmerged_paths,
 };
-use super::git::{git_failure_error, git_run, git_timeout_error};
+use super::git::{git_failure_error, git_run, git_timeout_error, timeout_recovery_error};
 use super::handoff::{HandoffContext, rebase_in_progress};
 
 /// How many times one step may carry its certified recovery onto a base that
@@ -121,10 +121,13 @@ pub(super) fn chase_advanced_base<H: RuntimeHost + ?Sized>(
             chased.timeout_ms,
             &chased.stderr,
         );
-        return Err(OrbitError::Execution(format!(
-            "{timeout}; the rebase of recovered HEAD '{recovered}' onto '{base_sha}' was aborted \
+        return Err(timeout_recovery_error(
+            chased.timeout_ms,
+            format!(
+                "{timeout}; the rebase of recovered HEAD '{recovered}' onto '{base_sha}' was aborted \
              and the recovered HEAD kept. This is timeout recovery, not a merge conflict."
-        )));
+            ),
+        ));
     }
     if conflicting_paths.is_empty() {
         return Err(git_failure_error(

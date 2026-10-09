@@ -142,7 +142,9 @@ pub(crate) fn create_context_task(
 
 pub(crate) fn invalid_input_message<T>(result: Result<T, OrbitError>) -> String {
     match result {
-        Err(OrbitError::InvalidInput(message)) => message,
+        Err(OrbitError::InvalidInput(message) | OrbitError::ClaimRefused { message, .. }) => {
+            message
+        }
         Err(error) => panic!("expected invalid input, got {error:?}"),
         Ok(_) => panic!("expected invalid input"),
     }

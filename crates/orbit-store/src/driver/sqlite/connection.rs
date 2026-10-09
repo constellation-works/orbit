@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
+use orbit_common::storage::sqlite::{apply_default_pragmas, open_private, sqlite_store_error};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
@@ -142,7 +142,7 @@ impl Store {
                 updated_at = excluded.updated_at"#,
             rusqlite::params![key, value, crate::now_string()],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         Ok(())
     }
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
@@ -298,14 +298,11 @@ impl Store {
 
         let tx = conn
             .transaction_with_behavior(behavior)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut store_tx = StoreTx { tx };
         let result = op(&mut store_tx)?;
-        store_tx
-            .tx
-            .commit()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        store_tx.tx.commit().map_err(sqlite_store_error)?;
 
         Ok(result)
     }

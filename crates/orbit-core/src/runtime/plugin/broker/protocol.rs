@@ -244,7 +244,9 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
             kind: NotFoundKind::Tool,
             ..
         } => REFUSED,
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => INVALID_INPUT,
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => INVALID_INPUT,
         _ => CALL_FAILED,
     };
     error_response(code, &error.to_string(), false)

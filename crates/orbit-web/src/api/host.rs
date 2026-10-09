@@ -2,7 +2,7 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_HOST_EDIT;
-use orbit_common::{HostRegistryCode, OrbitError};
+use orbit_common::{HostRegistryCode, OrbitError, StorageLayer};
 use orbit_registry::hosts::validated_host_root;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -201,15 +201,21 @@ pub(super) async fn remove_host(
 pub(crate) fn host_error_code(error: &OrbitError) -> &str {
     match error {
         OrbitError::HostRegistry { code, .. } => code.as_str(),
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::UnreachableDestination(_) => "unreachable_destination",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::ProcessTimeout { .. } => "process_timeout",
-        OrbitError::Execution(_) => "execution_failed",
+        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::WorkspaceError(_) => "workspace_error",
-        OrbitError::Io(_) => "io_error",
+        OrbitError::Io(_)
+        | OrbitError::StorageAccessDenied {
+            layer: StorageLayer::Io,
+            ..
+        } => "io_error",
         _ => "internal_error",
     }
 }

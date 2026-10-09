@@ -6,11 +6,11 @@ use super::introspect::{add_column_if_missing, table_exists, table_has_column};
 pub(super) fn apply_flat_crew_model(conn: &Connection) -> Result<(), OrbitError> {
     // ADR-0213: keep the legacy role columns nullable for existing databases;
     // new reads fall back to implementer_model when crew_model is not populated.
-    add_column_if_missing(conn, "ALTER TABLE job_runs ADD COLUMN crew_model TEXT")
+    add_column_if_missing(conn, "job_runs", "crew_model", "TEXT")
 }
 
 pub(super) fn apply_job_run_archive_stage(conn: &Connection) -> Result<(), OrbitError> {
-    add_column_if_missing(conn, "ALTER TABLE job_runs ADD COLUMN archived_at TEXT")
+    add_column_if_missing(conn, "job_runs", "archived_at", "TEXT")
 }
 
 /// v19 `job_runs_created_index`: cover the listing's per-workspace
@@ -118,10 +118,7 @@ pub(super) fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitE
     if !table_exists(conn, "job_runs")? {
         return Ok(());
     }
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE job_runs ADD COLUMN executed_on_json TEXT",
-    )
+    add_column_if_missing(conn, "job_runs", "executed_on_json", "TEXT")
 }
 
 /// v33 `job_run_id_allocations`: every run id a workspace has ever held, so

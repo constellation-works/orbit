@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{OrbitError, SqliteContention};
+use crate::{OrbitError, SqliteContention, StorageLayer};
 
 /// Default `busy_timeout` applied to every Orbit SQLite connection, in
 /// milliseconds. Writers under WAL still serialize; this bounds how long a
@@ -383,10 +383,45 @@ fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn sqlite_path_error(action: &str, path: &Path, error: io::Error) -> OrbitError {
-    OrbitError::Store(format!(
-        "failed to {action} SQLite state '{}': {error}",
-        path.display()
-    ))
+    OrbitError::storage(
+        StorageLayer::Store,
+        crate::fs::io::is_readonly_or_access_error(&error),
+        format!(
+            "failed to {action} SQLite state '{}': {error}",
+            path.display()
+        ),
+    )
+}
+
+/// Whether SQLite refused an operation because the database or its directory
+/// is read-only or denies access: `SQLITE_READONLY` (and its extended codes),
+/// `SQLITE_CANTOPEN` or `SQLITE_PERM`.
+pub fn is_readonly_or_access_sqlite_error(error: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::ReadOnly | ErrorCode::CannotOpen | ErrorCode::PermissionDenied)
+    )
+}
+
+/// A `layer` failure described by `message`, keeping whether SQLite refused
+/// it as read-only or access-denied (see
+/// [`is_readonly_or_access_sqlite_error`]). Use it wherever a
+/// `rusqlite::Error` on a write or open path is wrapped into an
+/// [`OrbitError`].
+pub fn sqlite_error(
+    layer: StorageLayer,
+    error: &rusqlite::Error,
+    message: impl Into<String>,
+) -> OrbitError {
+    OrbitError::storage(layer, is_readonly_or_access_sqlite_error(error), message)
+}
+
+/// [`OrbitError::Store`] carrying `error`'s own text, classified as
+/// [`sqlite_error`] does; the `map_err` form of `Store(e.to_string())`.
+pub fn sqlite_store_error(error: rusqlite::Error) -> OrbitError {
+    sqlite_error(StorageLayer::Store, &error, error.to_string())
 }
 
 /// Result of [`apply_default_pragmas`]: what SQLite actually settled on for
@@ -485,7 +520,11 @@ fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Er
         _ => phase,
     };
     let path = path.map_or_else(String::new, |path| format!(" for '{}'", path.display()));
-    OrbitError::Store(format!("{operation}{path}: {detail}"))
+    sqlite_error(
+        StorageLayer::Store,
+        error,
+        format!("{operation}{path}: {detail}"),
+    )
 }
 
 fn sqlite_error_detail(error: &rusqlite::Error) -> String {
@@ -740,11 +779,15 @@ pub fn filesystem_is_read_only(path: &Path) -> Result<bool, OrbitError> {
     // writable storage for one `statvfs` value. A zero return initializes it.
     let status = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
     if status != 0 {
-        return Err(OrbitError::Store(format!(
-            "cannot inspect SQLite filesystem for '{}': {}",
-            path.to_string_lossy(),
-            std::io::Error::last_os_error()
-        )));
+        let error = std::io::Error::last_os_error();
+        return Err(OrbitError::storage(
+            StorageLayer::Store,
+            crate::fs::io::is_readonly_or_access_error(&error),
+            format!(
+                "cannot inspect SQLite filesystem for '{}': {error}",
+                path.to_string_lossy(),
+            ),
+        ));
     }
     // SAFETY: `statvfs` returned zero, so it initialized the output value.
     let stats = unsafe { stats.assume_init() };
@@ -779,7 +822,7 @@ fn request_wal_journal_mode(conn: &Connection, path: Option<&Path>) -> (String, 
                 error = detail,
                 "could not set WAL mode; continuing with the active journal mode",
             );
-            let write_denied = OrbitError::Store(error.to_string()).is_readonly_or_access_failure();
+            let write_denied = is_readonly_or_access_sqlite_error(&error);
             (
                 conn.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
                     .unwrap_or_else(|_| "unknown".to_string()),

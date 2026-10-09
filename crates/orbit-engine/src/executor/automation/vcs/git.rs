@@ -164,12 +164,25 @@ pub(crate) fn git_timeout_error(
     timeout_ms: u64,
     stderr: &str,
 ) -> OrbitError {
-    OrbitError::Execution(format!(
-        "git {} timed out after {timeout_ms}ms in '{}': {}",
-        args.join(" "),
-        current_dir.display(),
-        stderr.trim()
-    ))
+    timeout_recovery_error(
+        timeout_ms,
+        format!(
+            "git {} timed out after {timeout_ms}ms in '{}': {}",
+            args.join(" "),
+            current_dir.display(),
+            stderr.trim()
+        ),
+    )
+}
+
+/// An execution failure caused by a Git deadline, worded by the caller. The
+/// timeout class travels in the variant, so recovery guidance never has to
+/// recognize it from the text.
+pub(crate) fn timeout_recovery_error(timeout_ms: u64, message: String) -> OrbitError {
+    OrbitError::ExecutionTimeout {
+        timeout_ms,
+        message,
+    }
 }
 
 pub(crate) fn git_failure_error(current_dir: &Path, args: &[&str], stderr: &str) -> OrbitError {
@@ -406,10 +419,18 @@ fn fetch_remote_base_locked(
         let remaining = hold_limit.saturating_sub(held_since.elapsed());
         if remaining.is_zero() {
             return Err(match last_transport_error {
-                Some(error) => OrbitError::Execution(format!(
-                    "{TRANSIENT_FAILURE_MARKER} remote base fetch hit the {}ms fetch-lock hold limit after {attempt} attempts: {error}",
-                    hold_limit.as_millis()
-                )),
+                Some(error) => {
+                    let message = format!(
+                        "{TRANSIENT_FAILURE_MARKER} remote base fetch hit the {}ms fetch-lock hold limit after {attempt} attempts: {error}",
+                        hold_limit.as_millis()
+                    );
+                    match error {
+                        OrbitError::ExecutionTimeout { timeout_ms, .. } => {
+                            timeout_recovery_error(timeout_ms, message)
+                        }
+                        _ => OrbitError::Execution(message),
+                    }
+                }
                 None => OrbitError::Execution(format!(
                     "failed to fetch remote base 'origin/{branch}' in '{}': fetch-lock hold limit of {}ms reached: {last_stderr}",
                     repo_root.display(),
@@ -444,10 +465,15 @@ fn fetch_remote_base_locked(
                 git_failure_error(repo_root, &["fetch", "origin", &spec], &outcome.stderr)
             };
             if attempt + 1 == GIT_FETCH_CAS_ATTEMPTS {
-                return Err(OrbitError::Execution(format!(
+                let message = format!(
                     "{TRANSIENT_FAILURE_MARKER} remote base fetch failed after {} attempts: {error}",
                     attempt + 1
-                )));
+                );
+                return Err(if outcome.timed_out {
+                    timeout_recovery_error(outcome.timeout_ms, message)
+                } else {
+                    OrbitError::Execution(message)
+                });
             }
             tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
             last_transport_error = Some(error);

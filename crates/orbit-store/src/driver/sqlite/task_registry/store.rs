@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::is_readonly_or_access_sqlite_error;
 use rusqlite::{Connection, OpenFlags};
 
 use super::schema::{
@@ -50,8 +51,7 @@ impl TaskRegistryStore {
         // fsync cost is negligible. Scoped to this connection only — the shared
         // Store::open stays at NORMAL for higher-write stores.
         if !read_only && let Err(error) = conn.pragma_update(None, "synchronous", "FULL") {
-            let mapped = OrbitError::Store(format!("failed to set synchronous=FULL: {error}"));
-            if mapped.is_readonly_or_access_failure() {
+            if is_readonly_or_access_sqlite_error(&error) {
                 orbit_common::tracing::warn!(
                     target: "orbit.store.task_registry",
                     path = %path.display(),
@@ -59,7 +59,9 @@ impl TaskRegistryStore {
                     "could not set synchronous=FULL on a read-only task registry; continuing for reads"
                 );
             } else {
-                return Err(mapped);
+                return Err(OrbitError::Store(format!(
+                    "failed to set synchronous=FULL: {error}"
+                )));
             }
         }
         // Setup, migration and recovery all need a write transaction, so a
