@@ -818,8 +818,18 @@ fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     );
     pin_default_crew_for_isolated_root(&custom_root);
 
-    let registry_path = custom_root.join("tasks/registry.db");
-    let registry_writer = rusqlite::Connection::open(&registry_path).expect("open registry writer");
+    // Match the task store's task_registry_path and the checkout-binding fixtures.
+    let registry_path = custom_root.join("tasks").join("index.sqlite");
+    assert!(
+        registry_path.is_file(),
+        "workspace init must create the task registry before contention: {}",
+        registry_path.display()
+    );
+    let registry_writer = rusqlite::Connection::open_with_flags(
+        &registry_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .expect("open existing task registry writer without creating it");
     registry_writer
         .execute_batch("BEGIN IMMEDIATE")
         .expect("hold registry WAL writer");
