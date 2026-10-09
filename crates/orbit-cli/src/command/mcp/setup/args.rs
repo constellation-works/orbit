@@ -7,7 +7,7 @@ use orbit_core::OrbitError;
 
 use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
 use super::providers::ServerLaunch;
-use super::workspace::{env_home_dir, resolve_workspace_layout};
+use super::workspace::{WorkspaceLayout, env_home_dir, resolve_workspace_layout};
 use crate::command::CommandOut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -212,20 +212,20 @@ pub struct InitArgs {
 
 impl InitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let layout = resolve_workspace_layout(root_override)?;
+        let layout = federated_layout(self.federated, self.scope, root_override)?;
         // Bare `orbit mcp init` keeps its pre-existing agent-only authority;
         // only the `orbit workspace init --mcp` bootstrap path (below, via
         // `init_auto_for_workspace`) selects operator authority.
         let launch = if self.federated {
             ServerLaunch::Federated
         } else {
-            ServerLaunch::local(false, layout.workspace_id.as_deref())
+            ServerLaunch::local(false, layout_workspace_id(layout.as_ref()))
         };
         let home_dir = env_home_dir();
         let providers = run_action(
             McpAction::Init(launch),
-            &layout.repo_root,
-            &layout.orbit_root,
+            layout.as_ref().map(|layout| layout.repo_root.as_path()),
+            layout_orbit_root(layout.as_ref()),
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
@@ -233,10 +233,10 @@ impl InitArgs {
         action_payload(
             McpAction::Init(launch),
             &providers,
-            &layout.repo_root,
+            layout.as_ref().map(|layout| layout.repo_root.as_path()),
             home_dir.as_deref(),
             self.scope,
-            layout.workspace_id.as_deref(),
+            reported_workspace_id(self.federated, layout.as_ref()),
         )
     }
 }
@@ -257,7 +257,7 @@ pub struct RemoveArgs {
 
 impl RemoveArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let layout = resolve_workspace_layout(root_override)?;
+        let layout = federated_layout(self.federated, self.scope, root_override)?;
         let action = if self.federated {
             McpAction::RemoveFederated
         } else {
@@ -266,8 +266,8 @@ impl RemoveArgs {
         let home_dir = env_home_dir();
         let providers = run_action(
             action,
-            &layout.repo_root,
-            &layout.orbit_root,
+            layout.as_ref().map(|layout| layout.repo_root.as_path()),
+            layout_orbit_root(layout.as_ref()),
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
@@ -275,11 +275,44 @@ impl RemoveArgs {
         action_payload(
             action,
             &providers,
-            &layout.repo_root,
+            layout.as_ref().map(|layout| layout.repo_root.as_path()),
             home_dir.as_deref(),
             self.scope,
-            layout.workspace_id.as_deref(),
+            reported_workspace_id(self.federated, layout.as_ref()),
         )
+    }
+}
+
+/// The checkout layout a run operates on.
+///
+/// A federated home-scope run writes only user-level config, so it needs no
+/// checkout and must work from outside any workspace (`None`).
+fn federated_layout(
+    federated: bool,
+    scope: ScopeArg,
+    root_override: Option<&Path>,
+) -> Result<Option<WorkspaceLayout>, OrbitError> {
+    if federated && scope == ScopeArg::Home {
+        return Ok(None);
+    }
+    resolve_workspace_layout(root_override).map(Some)
+}
+
+fn layout_workspace_id(layout: Option<&WorkspaceLayout>) -> Option<&str> {
+    layout.and_then(|layout| layout.workspace_id.as_deref())
+}
+
+fn layout_orbit_root(layout: Option<&WorkspaceLayout>) -> &Path {
+    layout.map_or(Path::new(""), |layout| layout.orbit_root.as_path())
+}
+
+/// The workspace id a run reports. The federated server entry is never bound
+/// to a workspace, so reporting one would misdescribe what was written.
+fn reported_workspace_id(federated: bool, layout: Option<&WorkspaceLayout>) -> Option<&str> {
+    if federated {
+        None
+    } else {
+        layout_workspace_id(layout)
     }
 }
 
@@ -300,14 +333,14 @@ pub(crate) fn init_auto_for_workspace(
     // The workspace being registered is known here, so the generated server is
     // bound to it directly rather than re-derived from the checkout.
     let home_dir = env_home_dir();
-    let providers = auto_detected_providers(repo_root, home_dir.as_deref());
+    let providers = auto_detected_providers(Some(repo_root), home_dir.as_deref());
     let mut files = BTreeSet::new();
     let mut legacy_before = Vec::new();
     for provider in &providers {
         let target = ConfigTarget::resolve(
             ScopeArg::Workspace,
             provider,
-            repo_root,
+            Some(repo_root),
             home_dir.as_deref(),
         )?;
         files.insert(target.mcp_path);
@@ -326,7 +359,7 @@ pub(crate) fn init_auto_for_workspace(
     }
     let configured = run_action(
         McpAction::Init(ServerLaunch::local(true, Some(workspace_id))),
-        repo_root,
+        Some(repo_root),
         orbit_root,
         ProviderSelectionMode::Explicit(providers),
         home_dir,

@@ -334,6 +334,116 @@ fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
     fixture.assert_no_client_config_outside_the_checkout();
 }
 
+/// Run a federated setup command and return its text and JSON renderings.
+fn federated_setup_outputs(
+    fixture: &ExternalRootFixture,
+    cwd: &Path,
+    rooted: bool,
+    args: &[&str],
+) -> (String, Value) {
+    let run = |extra: &[&str]| {
+        let mut full = argv(args);
+        full.extend(argv(extra));
+        if rooted {
+            let mut with_root = fixture.rooted(&[]);
+            with_root.extend(full);
+            full = with_root;
+        }
+        let assert = fixture.orbit(cwd, &full).success();
+        String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout")
+    };
+    let text = run(&[]);
+    let json = serde_json::from_str(&run(&["--format", "json"])).expect("setup json output");
+    (text, json)
+}
+
+#[test]
+fn federated_home_setup_works_outside_a_workspace_and_reports_no_binding() {
+    let fixture = ExternalRootFixture::init();
+    let codex_config = fixture.home.join(".codex").join("config.toml");
+
+    let (text, json) = federated_setup_outputs(
+        &fixture,
+        &fixture.elsewhere,
+        false,
+        &[
+            "mcp",
+            "init",
+            "--federated",
+            "--client",
+            "codex",
+            "--scope",
+            "home",
+        ],
+    );
+    assert!(
+        !text.contains("ws_") && !text.contains("bound to"),
+        "federated init names no workspace binding: {text}"
+    );
+    assert!(json["workspace_id"].is_null(), "json binding: {json}");
+    assert!(json["repo_root"].is_null(), "json repo_root: {json}");
+    let written = fs::read_to_string(&codex_config).expect("federated codex config");
+    assert!(written.contains("orbit-federated"), "{written}");
+    assert!(
+        !written.contains("--workspace"),
+        "the federated entry is unbound: {written}"
+    );
+
+    let (text, json) = federated_setup_outputs(
+        &fixture,
+        &fixture.elsewhere,
+        false,
+        &[
+            "mcp",
+            "remove",
+            "--federated",
+            "--client",
+            "codex",
+            "--scope",
+            "home",
+        ],
+    );
+    assert!(
+        !text.contains("ws_") && !text.contains("bound to"),
+        "federated remove names no workspace binding: {text}"
+    );
+    assert!(json["workspace_id"].is_null(), "json binding: {json}");
+    let remaining = fs::read_to_string(&codex_config).unwrap_or_default();
+    assert!(!remaining.contains("orbit-federated"), "{remaining}");
+}
+
+#[test]
+fn federated_setup_inside_a_registered_checkout_reports_no_binding() {
+    let fixture = ExternalRootFixture::init();
+
+    for scope in ["home", "workspace"] {
+        for action in ["init", "remove"] {
+            let (text, json) = federated_setup_outputs(
+                &fixture,
+                &fixture.checkout,
+                true,
+                &[
+                    "mcp",
+                    action,
+                    "--federated",
+                    "--client",
+                    "codex",
+                    "--scope",
+                    scope,
+                ],
+            );
+            assert!(
+                !text.contains("ws_wsname") && !text.contains("bound to"),
+                "federated {action} --scope {scope} names a binding: {text}"
+            );
+            assert!(
+                json["workspace_id"].is_null(),
+                "federated {action} --scope {scope} json binding: {json}"
+            );
+        }
+    }
+}
+
 #[test]
 fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
     let fixture = ExternalRootFixture::init();

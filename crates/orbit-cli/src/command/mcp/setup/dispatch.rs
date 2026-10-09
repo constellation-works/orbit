@@ -119,7 +119,7 @@ fn is_legacy_orbit_grok_entry(entry: &toml::Value, server_id: &str) -> bool {
 
 pub(super) fn run_action(
     action: McpAction<'_>,
-    repo_root: &Path,
+    repo_root: Option<&Path>,
     orbit_root: &Path,
     selection: ProviderSelectionMode,
     home_dir: Option<PathBuf>,
@@ -199,12 +199,24 @@ pub(super) struct ConfigTarget {
 }
 
 impl ConfigTarget {
+    /// `repo_root` is `None` only for a run that never resolved a checkout
+    /// (federated home scope); workspace scope cannot be targeted without one.
     pub(super) fn resolve(
         scope: ScopeArg,
         provider: &McpProvider,
-        repo_root: &Path,
+        repo_root: Option<&Path>,
         home_dir: Option<&Path>,
     ) -> Result<Self, OrbitError> {
+        let repo_root = match (scope, repo_root) {
+            (_, Some(repo_root)) => repo_root,
+            // Home-scope paths are derived from `home_dir` alone.
+            (ScopeArg::Home, None) => Path::new(""),
+            (ScopeArg::Workspace, None) => {
+                return Err(OrbitError::InvalidInput(
+                    "workspace-scope MCP config needs a resolved checkout".to_string(),
+                ));
+            }
+        };
         let paths = mcp_clients::client_config_paths(
             scope.client_scope(),
             provider.client(),
@@ -222,7 +234,7 @@ impl ConfigTarget {
 
 fn resolve_providers(
     selection: ProviderSelectionMode,
-    repo_root: &Path,
+    repo_root: Option<&Path>,
     home_dir: Option<&Path>,
 ) -> Vec<McpProvider> {
     match selection {
@@ -232,11 +244,11 @@ fn resolve_providers(
 }
 
 pub(super) fn auto_detected_providers(
-    repo_root: &Path,
+    repo_root: Option<&Path>,
     home_dir: Option<&Path>,
 ) -> Vec<McpProvider> {
     let mut providers = Vec::new();
-    let claude_repo = repo_root.join(".claude").is_dir();
+    let claude_repo = repo_root.is_some_and(|root| root.join(".claude").is_dir());
     // A bare `~/.claude` directory is not evidence that Claude Code is
     // installed: `orbit init` creates `~/.claude/skills/` for its own skill
     // links (`orbit_core::bootstrap::init`), so a directory test would detect
@@ -257,14 +269,15 @@ pub(super) fn auto_detected_providers(
     {
         providers.push(McpProvider::Codex);
     }
-    let gemini_repo = repo_root.join(".gemini").is_dir();
+    let gemini_repo = repo_root.is_some_and(|root| root.join(".gemini").is_dir());
     let gemini_home = home_dir
         .map(|home| home.join(".gemini").join("settings.json").is_file())
         .unwrap_or(false);
     if gemini_repo || gemini_home {
         providers.push(McpProvider::Gemini);
     }
-    let antigravity_repo = repo_root.join(".agents").join("mcp_config.json").is_file();
+    let antigravity_repo =
+        repo_root.is_some_and(|root| root.join(".agents").join("mcp_config.json").is_file());
     let antigravity_home = home_dir
         .map(|home| {
             home.join(".gemini")
@@ -277,21 +290,21 @@ pub(super) fn auto_detected_providers(
     if antigravity_repo || antigravity_home {
         providers.push(McpProvider::Antigravity);
     }
-    let grok_repo = repo_root.join(".grok").is_dir();
+    let grok_repo = repo_root.is_some_and(|root| root.join(".grok").is_dir());
     let grok_home = home_dir
         .map(|home| home.join(".grok").join("config.toml").is_file())
         .unwrap_or(false);
     if grok_repo || grok_home {
         providers.push(McpProvider::Grok);
     }
-    let cursor_repo = repo_root.join(".cursor").is_dir();
+    let cursor_repo = repo_root.is_some_and(|root| root.join(".cursor").is_dir());
     let cursor_home = home_dir
         .map(|home| home.join(".cursor").join("mcp.json").is_file())
         .unwrap_or(false);
     if cursor_repo || cursor_home {
         providers.push(McpProvider::Cursor);
     }
-    let vscode_repo = repo_root.join(".vscode").is_dir();
+    let vscode_repo = repo_root.is_some_and(|root| root.join(".vscode").is_dir());
     let vscode_home = home_dir
         .map(|home| vscode_home_user_dir(home).join("mcp.json").is_file())
         .unwrap_or(false);
@@ -326,7 +339,7 @@ pub(super) fn auto_detected_providers(
 pub(super) fn action_payload(
     action: McpAction<'_>,
     providers: &[McpProvider],
-    repo_root: &Path,
+    repo_root: Option<&Path>,
     home_dir: Option<&Path>,
     scope: ScopeArg,
     workspace_id: Option<&str>,
@@ -340,7 +353,7 @@ pub(super) fn action_payload(
         "action": action.label(),
         "scope": scope_label,
         "workspace_id": workspace_id,
-        "repo_root": repo_root.display().to_string(),
+        "repo_root": repo_root.map(|root| root.display().to_string()),
         "providers": providers.iter().map(|provider| provider.label()).collect::<Vec<_>>(),
     });
     Ok(Payload::detail(doc, text).into())
@@ -350,7 +363,7 @@ pub(super) fn action_payload(
 fn format_action_summary(
     action: McpAction<'_>,
     providers: &[McpProvider],
-    repo_root: &Path,
+    repo_root: Option<&Path>,
     home_dir: Option<&Path>,
     scope: ScopeArg,
     workspace_id: Option<&str>,
@@ -361,6 +374,11 @@ fn format_action_summary(
 
     match scope {
         ScopeArg::Workspace => {
+            let repo_root = repo_root.ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "workspace-scope MCP config needs a resolved checkout".to_string(),
+                )
+            })?;
             let labels = providers
                 .iter()
                 .map(|provider| provider.label())
