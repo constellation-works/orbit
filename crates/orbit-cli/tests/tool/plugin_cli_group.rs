@@ -2006,3 +2006,82 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
     assert_eq!(std::fs::read_to_string(&manifest).unwrap(), yaml);
     assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
 }
+
+#[test]
+fn plugin_show_and_derived_groups_accept_the_global_json_shorthand() {
+    let fixture = Fixture::new();
+    let source = fixture.source("jsonfixture");
+    write_status_plugin(&source, "jsonfixture", "");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source.to_str().expect("utf8 source"),
+            "--enable",
+        ])
+        .assert()
+        .success();
+    for args in [
+        &["plugin", "show", "jsonfixture", "--json"][..],
+        &["jsonfixture", "status", "--explain", "--json"],
+        &["--json", "jsonfixture", "status", "--explain"],
+    ] {
+        let output = fixture
+            .orbit()
+            .args(args)
+            .output()
+            .expect("run JSON shorthand");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+        assert!(document.is_object(), "{args:?}");
+    }
+}
+
+#[test]
+fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
+    let fixture = Fixture::new();
+    let source = fixture.source("jsoninput");
+    write_status_plugin(&source, "jsoninput", "");
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let mut text = std::fs::read_to_string(&manifest).expect("fixture manifest");
+    text.push_str("      input_schema:\n        type: object\n        properties:\n          json: { type: boolean }\n");
+    std::fs::write(manifest, text).expect("write tool-input schema");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ])
+        .assert()
+        .success();
+    for args in [
+        &["--json", "jsoninput", "status", "--json", "--explain"][..],
+        &["jsoninput", "--json", "status", "--json", "--explain"],
+        &[
+            "jsoninput",
+            "status",
+            "--json",
+            "--format",
+            "json",
+            "--explain",
+        ],
+    ] {
+        let output = fixture.orbit().args(args).output().expect("plugin explain");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).expect("JSON output");
+        assert_eq!(document["input"], json!({"json": true}));
+    }
+}

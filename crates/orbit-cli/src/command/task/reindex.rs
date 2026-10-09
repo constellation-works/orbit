@@ -10,9 +10,6 @@ pub struct TaskReindexArgs {
     /// Task-registry workspace id to reindex (default: current workspace).
     #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
     pub task_workspace: Option<String>,
-    /// Emit machine-readable JSON instead of a human summary.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskReindexArgs {

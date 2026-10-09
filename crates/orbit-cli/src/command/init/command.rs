@@ -26,10 +26,6 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
                   linux_sandbox.status (ready, skipped, or not_ready) and its reason."
 )]
 pub struct InitCommand {
-    /// Output the initialization result as JSON.
-    #[arg(long)]
-    pub json: bool,
-
     /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
     /// initialization, including executor sandbox settings
     #[arg(long)]

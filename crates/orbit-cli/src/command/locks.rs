@@ -68,11 +68,7 @@ impl Execute for LocksSubcommand {
 
 #[derive(Args)]
 #[command(about = "Show files locked by active (in-progress/review) tasks and reservations")]
-pub struct LocksListArgs {
-    /// Output the lock projection as JSON
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct LocksListArgs {}
 
 impl Execute for LocksListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
@@ -104,9 +100,6 @@ pub struct LocksContentionArgs {
     /// Maximum hotspot rows to show. Default 10.
     #[arg(long, default_value_t = DEFAULT_CONTENTION_LIMIT)]
     pub limit: usize,
-    /// Output the contention report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for LocksContentionArgs {
@@ -234,9 +227,6 @@ pub struct LocksReserveArgs {
     /// How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 2h.
     #[arg(long, value_name = "DURATION", default_value = DEFAULT_RESERVATION_TTL)]
     pub ttl: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for LocksReserveArgs {

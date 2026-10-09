@@ -13,10 +13,6 @@ pub struct ArtifactsCommand {
     /// Treat the ID as a task ID instead of a run ID
     #[arg(long)]
     pub task: bool,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ArtifactsCommand {

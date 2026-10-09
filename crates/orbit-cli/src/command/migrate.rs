@@ -26,9 +26,6 @@ pub struct MigrateCommand {
     /// Explicitly request the default non-destructive inspection mode
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,
-    /// Emit machine-readable JSON instead of the table.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl MigrateCommand {

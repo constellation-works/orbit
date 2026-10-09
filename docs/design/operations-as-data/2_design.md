@@ -36,7 +36,6 @@ pub struct OperationSpec<V: 'static> {
     pub params: &'static [ParamSpec],  // declaration order is contract
     pub rejects_agent_field: bool,
     pub mcp_scope: Option<McpToolScope>,
-    pub cli_json_flag: bool,
     pub cli_render: CliRender,
 }
 ```

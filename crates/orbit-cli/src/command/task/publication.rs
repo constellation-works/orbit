@@ -94,9 +94,6 @@ pub struct TaskPublicationPublishArgs {
     /// Deliberately permit `include` when no sensitivity scanner is configured.
     #[arg(long, requires = "attachments")]
     allow_unscanned_attachments: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for TaskPublicationPublishArgs {
@@ -204,11 +201,7 @@ fn record_success_at_registry_path(
 }
 
 #[derive(Args)]
-pub struct TaskPublicationStatusArgs {
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
-}
+pub struct TaskPublicationStatusArgs {}
 
 impl Execute for TaskPublicationStatusArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
@@ -322,9 +315,6 @@ impl PublicationConsumerArgs {
 pub struct TaskPublicationInspectArgs {
     #[command(flatten)]
     publication: PublicationConsumerArgs,
-    /// Emit machine-readable JSON including validated task content.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for TaskPublicationInspectArgs {
@@ -345,9 +335,6 @@ pub struct TaskPublicationRestoreArgs {
     /// Confirm deliberate mutation of the destination canonical task store.
     #[arg(long)]
     pub confirm: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for TaskPublicationRestoreArgs {

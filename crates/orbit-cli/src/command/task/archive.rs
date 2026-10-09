@@ -12,9 +12,6 @@ use super::output::task_to_json_for_runtime;
 pub struct TaskArchiveArgs {
     /// Task ID
     pub id: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskArchiveArgs {

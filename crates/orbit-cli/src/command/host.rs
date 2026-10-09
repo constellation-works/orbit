@@ -59,9 +59,6 @@ pub struct HostAddArgs {
     /// Name for the host (defaults to the remote's own machine.name)
     #[arg(long)]
     pub name: Option<String>,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Args)]
@@ -69,9 +66,6 @@ pub struct HostListArgs {
     /// Print the stored fields only, without contacting any host
     #[arg(long)]
     pub no_probe: bool,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Args)]
@@ -79,9 +73,6 @@ pub struct HostShowArgs {
     /// Host name (case-insensitive) or machine_id
     #[arg(value_name = "HOST")]
     pub host: String,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Args)]
@@ -92,9 +83,6 @@ pub struct HostRenameArgs {
     /// The new name
     #[arg(value_name = "NEW_NAME")]
     pub new_name: String,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Args)]
@@ -110,9 +98,6 @@ pub struct HostRemoveArgs {
     /// Remove the entry even while a replica checkout or pull drain routes to it
     #[arg(long)]
     pub force: bool,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl HostCommand {

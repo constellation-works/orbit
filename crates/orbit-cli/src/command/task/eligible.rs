@@ -43,9 +43,6 @@ pub struct TaskEligibleArgs {
     /// the in-progress or review task holding it
     #[arg(long)]
     pub explain: bool,
-    /// Output the result as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskEligibleArgs {

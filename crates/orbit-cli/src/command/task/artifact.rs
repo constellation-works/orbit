@@ -54,9 +54,6 @@ pub struct TaskArtifactPutArgs {
     /// Explicit agent model to persist on the task artifact update
     #[arg(long)]
     pub model: Option<String>,
-    /// Output the updated task as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskArtifactPutArgs {
@@ -66,7 +63,6 @@ impl Execute for TaskArtifactPutArgs {
             source_path,
             artifact_path,
             model,
-            json: _,
         } = self;
         let (agent, model) = super::mutation_identity(model);
         let artifact = task_artifact_from_source_file(&source_path, artifact_path.as_deref())?;
@@ -99,19 +95,11 @@ pub struct TaskArtifactGetArgs {
     /// Write the artifact's bytes to this file instead of printing them
     #[arg(long = "out")]
     pub out: Option<PathBuf>,
-    /// Output the artifact's metadata as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskArtifactGetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let TaskArtifactGetArgs {
-            id,
-            path,
-            out,
-            json: _,
-        } = self;
+        let TaskArtifactGetArgs { id, path, out } = self;
         // Resolve the owning task first so an unknown id fails as a task
         // not-found rather than as a missing artifact.
         let task = runtime.get_task(&id)?;

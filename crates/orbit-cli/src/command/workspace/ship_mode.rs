@@ -31,9 +31,6 @@ pub struct WorkspaceShipModeArgs {
     /// New ship mode. Omit to print the current one.
     #[arg(value_enum, value_name = "MODE")]
     mode: Option<CliShipMode>,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for WorkspaceShipModeArgs {

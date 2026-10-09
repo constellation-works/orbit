@@ -18,6 +18,8 @@ const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 /// Each argv (after `orbit`) whose `--help` is pinned, and its golden path
 /// under `tests/help_goldens/`.
 const CASES: &[(&[&str], &str)] = &[
+    (&[], "root.txt"),
+    (&["run"], "run/root.txt"),
     (&["init"], "init.txt"),
     (&["host", "add"], "host/add.txt"),
     (&["host", "remove"], "host/remove.txt"),

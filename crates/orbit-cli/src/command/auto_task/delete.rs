@@ -20,9 +20,6 @@ pub struct AutoTaskDeleteArgs {
     /// executing. The open tasks stay as they are.
     #[arg(long)]
     pub force: bool,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskDeleteArgs {

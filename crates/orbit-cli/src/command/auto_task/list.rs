@@ -18,9 +18,6 @@ pub struct AutoTaskListArgs {
     /// workspace or on the host, marked inactive with the reason
     #[arg(long, visible_alias = "all")]
     pub include_inactive_plugins: bool,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskListArgs {

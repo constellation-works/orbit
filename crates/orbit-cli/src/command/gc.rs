@@ -53,10 +53,6 @@ pub struct TmpGcArgs {
     /// Explicitly request the default non-destructive mode
     #[arg(long, conflicts_with = "confirm")]
     pub dry_run: bool,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TmpGcArgs {
@@ -109,10 +105,6 @@ pub struct AuditGcArgs {
     /// Retention window in days, overriding `retention.audit_days` (default 60)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AuditGcArgs {
@@ -167,10 +159,6 @@ pub struct RunGcArgs {
     /// Retention window in days, overriding `retention.runs_days` (default 60)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for RunGcArgs {
@@ -246,10 +234,6 @@ pub struct WorktreeGcArgs {
     /// its task's status; combine with `--confirm` to delete.
     #[arg(long)]
     pub target_only: bool,
-
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for WorktreeGcArgs {

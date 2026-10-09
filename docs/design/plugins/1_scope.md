@@ -1011,6 +1011,9 @@ removed. A typed task field would do the same job as the tag but change the pers
 - A property whose flag would collide with a CLI-owned flag (`--input`, `--input-file`,
   `--dry-run`, `--explain`, `--format`, `--root`, `--workspace`, `--help`, `--version`) gets no
   flag and stays reachable through `--input`.
+- The global `--json` shorthand selects pretty JSON output. A plugin-derived `--json`
+  tool-input flag keeps its own meaning; select output JSON before the verb or with
+  `--format json` on that leaf.
 - `--input '<json>'` and `--input-file` are always accepted and win. The group declares the
   same `CommandOperation` and dispatches through the same `ToolRunArgs` as `orbit tool run`, so
   both spellings are one audited operation. `--dry-run` is accepted.

@@ -17,10 +17,6 @@ use super::steps::{RunRead, resolve_run};
 pub struct RunTraceArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
     pub run_id: Option<String>,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for RunTraceArgs {

@@ -61,9 +61,6 @@ pub struct AutoTaskUpdateArgs {
     /// New minted-task status
     #[arg(long, value_enum)]
     pub status: Option<TaskStatus>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Waive a settled failed delivery batch, retaining its coverage gap.
     #[arg(long, requires = "waiver_reason")]
     pub waive_batch: Option<String>,

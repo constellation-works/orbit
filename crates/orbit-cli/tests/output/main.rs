@@ -13,6 +13,7 @@ mod git_repo;
 
 mod doctor;
 mod error_output;
+mod global_json;
 mod help_examples;
 mod help_goldens;
 mod help_skips_log_io;
