@@ -26,4 +26,4 @@ pub use publication::{
 };
 
 #[cfg(test)]
-pub(crate) use io::load_registry_from_with_writer;
+pub(crate) use io::{load_registry_from_with_context_and_writer, load_registry_from_with_writer};
