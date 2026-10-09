@@ -5,7 +5,7 @@ summary: "Threat model and binding decisions for an opt-in spec.build that build
 owner: claude
 status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
