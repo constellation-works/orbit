@@ -44,8 +44,7 @@ creates newly introduced missing defaults but never rewrites existing routine fi
 files belong to the workspace after seeding. A destructive force initialization recreates
 templates from defaults. [ORB-10739]
 
-`task_triage` is a retired prior default. Existing definitions are handled through the
-retired-routine reconciliation path rather than being seeded into new workspaces.
+The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: workspace sync compares a definition with them to tell an Orbit-seeded copy from an operator's.
 
 ---
 

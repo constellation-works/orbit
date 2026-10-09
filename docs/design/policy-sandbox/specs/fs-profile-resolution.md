@@ -56,7 +56,7 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 - New profile fields must extend `FsProfile` and `ResolvedFsProfile` together; the resolver and the validator both consume `ResolvedFsProfile`.
 - New deny categories (e.g., `denyExec`) must be injected as negated rules into a corresponding rule list rather than evaluated as a separate pass; this preserves the single-walk evaluation contract.
 - Schema version bumps must reject the previous version explicitly at load and name the migration in the error message, the same way v1 → v2 currently does.
-- The `denyModify` exception syntax extends schema v2; policies without exceptions need no migration. Installing new shipped defaults is not enough by itself: run `orbit init` to refresh the machine-global policy assets before validating live `orbit policy check` and sandbox mount plans. Do not use `--force` merely to refresh defaults.
+- The `denyModify` exception syntax extends schema v2; policies without exceptions need no migration. Installing new shipped defaults is not enough by itself: run `orbit init` to refresh the machine-global policy assets before validating live sandbox mount plans. Do not use `--force` merely to refresh defaults.
 
 ## Agent Signature
 

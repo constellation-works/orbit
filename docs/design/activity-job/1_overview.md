@@ -111,7 +111,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.
-- **[T20260418-2143]** — Wire the v2 runtime host in orbit-core and add `orbit activity run-v2`.
+- **[T20260418-2143]** — Wire the v2 runtime host in orbit-core and add its standalone activity runner.
 - **[T20260418-2210]** — Reshape the v2 runtime host to keep `orbit-agent` types out of orbit-core.
 - **[T20260419-0002]** — Add `workspace_path` provenance to the v2 audit envelope.
 - **[T20260419-0104]** — Add `backend: cli` dispatch for v2 `agent_loop`.

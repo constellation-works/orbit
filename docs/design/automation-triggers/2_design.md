@@ -59,7 +59,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
-| `execution_failed` | A settled failure incident crosses into retry-exhausted, diagnosis-eligible state. | Accepted incident disposition or explicit escalation. |
+| `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 
 The last two are the v1 state-transition/eligibility vocabulary. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
@@ -438,66 +438,9 @@ needs a small contract extension. A trigger never bypasses domain eligibility.
 Mode-driven promotion must consume a fresh accepted readiness record and its
 separate grant; populated selectors or a successful wrapper are insufficient.
 
-## 7. Triage incidents, cancellation, and recursion
+## 7. Retired: failed-run triage
 
-> **Retired.** Terminal failed-run triage — the `task_triage_pipeline` this
-> section's `execution_failed` trigger fires — is gone
-> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
-> A failed run parks its task in `blocked` with the failure attached and waits
-> for a reader; re-backlogging is a deliberate human transition. The
-> `execution_failed` trigger kind and its incident semantics remain in the code
-> for persisted state, but they have no shipped target job, so an existing
-> definition loads as retired and fires nothing. The recursion guard described
-> below is removed with the pipeline that made it necessary. The rest of this
-> section records the contract as authored.
-
-Observe the transition into **settled execution failure after applicable retry
-exhaustion**, not every failed step. Engine retry/recovery and authorized resumes
-remain the owners of recovery. A durable episode records attempts consumed,
-remaining budgets, scheduled retry, active descendants, and whether the failure
-is settled. Triage defers while any applicable retry or causally related child is
-active. Do not wait for the entire unrelated workspace coordinator to finish.
-
-Incident identity is `(workspace, execution episode, causal failing step/child)`.
-A wrapper failure explicitly caused by that child shares its incident; unrelated
-sibling failures remain separate. Run IDs, persisted child dispatches and error
-references establish causality; close timestamps or similar messages do not.
-Resumes preserve episode identity; a new authorized execution after a diagnosis
-starts a new episode, while per-task re-backlog budgets survive both. Missing
-lineage yields `incident_unresolved`, not guessed duplicate suppression.
-
-Filter intentional operator cancellation, withdrawal, admissions stop, known
-supersession, and cancellation cascaded solely from those causes. Admissions stop
-is not itself a run failure. An unrelated child failure that preceded an operator
-stop remains diagnosable only if current task intent permits it. Current generic
-`cancelled` state is insufficient: require typed cancellation cause/provenance;
-unknown cancellations are held for inspection, never auto-rebacklogged.
-Interrupted/dead-owner runs take existing deterministic reconciliation/resume
-first; a proven exhausted execution failure can later create an incident.
-
-Candidate tasks must still be blocked by that exact episode with no later human
-block/withdrawal. Check the failure history event and current coupling, not just
-the existence of `job_run_id`. For a bundle diagnose the cause once, then apply
-per-task dispositions after rechecking each task's status/revision/coupling and
-durable re-backlog budget. A failure before task admission can receive a run-level
-diagnosis/escalation; it cannot authorize task lifecycle writes.
-
-Keep deterministic recovery (stopped-owner reconciliation, recorded retry state,
-verified stale reservations) before model diagnosis. Preserve the current narrow
-evidence-gated already-landed reconciliation; triggers grant no new done/merge
-rights. Model diagnosis returns environmental/task/code/unknown findings; only
-the existing authorized deterministic boundary may re-backlog environmental
-failures within budget. Unknown or unresolved product intent remains blocked
-for human/Astra judgment. Moving already-landed work to backlog is prohibited.
-
-Every diagnostic action carries `origin=triage` and a root incident reference;
-propagate that ancestry into children and tasks it creates. Exclude triage's own
-execution failures and automation-generated diagnostic descendants from automatic
-triage. Retry the original diagnostic batch within a small separate budget, then
-record one escalation on the original incident. Do not spawn a triage of triage.
-Ordinary approved implementation of a resulting repair is a new execution episode
-and can be triaged normally; ancestry suppression is scoped to diagnostic work,
-not a permanent ban on every descendant task.
+Terminal failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): a failed run parks its task in `blocked` with the failure attached. The `execution_failed` trigger kind still parses for persisted state but has no shipped target job and fires nothing.
 
 ## 8. Proposed YAML examples
 
@@ -603,32 +546,8 @@ validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
 
-The triage routine below is retired (see the note in §7); it is kept as the
-authored example of a state trigger's shape, not as a definition to write.
-
-```yaml
-# Retired routine: one diagnosis per settled causal incident.
-schemaVersion: 2
-name: task_triage
-enabled: false
-target: job:task_triage_pipeline
-trigger:
-  kind: execution_failed
-  after: retry_exhaustion
-  settle_minutes: 2
-batch:
-  max_items: 20
-  max_active: 1
-policy:
-  overlap: forbid
-  timeout_minutes: 30
-  retries: {max: 1, backoff_minutes: 5}
-```
-
-Triage cancellation/recursion filters are mandatory domain rules, not disableable
-YAML flags. `settle_minutes` is a coalescing delay, never proof of exhaustion.
-For both routine examples Core supplies a reserved `trigger_batch` input plus
-explicit `task_ids`/incident members; templates or arbitrary run input cannot
+For the routine example Core supplies a reserved `trigger_batch` input plus
+explicit `task_ids` members; templates or arbitrary run input cannot
 override the server-issued batch. Auto-task creation attaches the same manifest
 as task input evidence without invoking a job. These input paths need implementation.
 Time alternatives are `trigger: {kind: cron, cron: "0 6 * * *", missed_run: catch_up_once}`
@@ -647,8 +566,6 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | Crash after T1 creation before scheduler acknowledgement | Action-key lookup recovers T1. A second evaluator cannot mint T2 for B1. |
 | Pilot captures task fingerprint F1, user changes criteria to F2 | F1 apply is stale; F2 stays pending. Successful F2 selector write certifies its post-apply fingerprint and does not loop. |
 | Pilot claims T1 and T2 at H0; a pull moves the head to H1 through T1's selector file | T1 settles `superseded_by_source` with no failure record and is claimed afresh at H1 as a first attempt; T2 applies and is certified. |
-| Child fails, wrapper propagates failure, retry remains | One unsettled incident, no diagnosis. Final retry exhaustion settles it; one triage batch includes affected tasks. |
-| Operator intentionally cancels instead / triage itself fails | Intentional cancellation is filtered; triage failure retries or escalates the original incident without recursive diagnosis. |
 
 ## 10. Compatibility and migration
 

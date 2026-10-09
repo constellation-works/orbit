@@ -241,9 +241,7 @@ extension, so this check does not enforce PTY ownership or isolation. Normal
 OS access checks still apply. The added allocation and ioctl permissions
 target PTY devices; Linux Bubblewrap has no equivalent SBPL operation gate.
 
-`agent_implement` also exposes `orbit.adr.add` and `orbit.adr.update` ([ORB-10596]). On Linux, only the active managed worktree's `.orbit/adrs/proposed` and `.orbit/adrs/.locks` directories are bind-mounted writable after the enclosing worktree `.orbit/**` read-only mount; Accepted/Superseded ADRs and learning, task, state, and unknown local stores remain read-only. Allocation still uses the workspace-shared semantic database and `.id_alloc.lock`, so simultaneous worktrees serialize ID selection while each Proposed body lands under `<job-worktree>/.orbit/adrs/proposed/<id>/`. The allocator records that worktree-relative body path, allowing an orchestrator runtime to resolve and search it as a federated artifact while the worktree is live. macOS already re-allows the active job worktree as a whole after the policy deny for a write-capable profile, so this change adds no macOS SBPL allowance and changes no policy YAML.
-
-Creation remains Proposed-only. In a managed-run context, `orbit.adr.update` may correct the title, body, and metadata of a Proposed record, but it cannot transition lifecycle status or modify an Accepted record. Acceptance and historical correction remain separate unmanaged human/orchestrator actions. A hub-side allocator or a second pending-decision queue was rejected: the existing shared allocator and federated artifact resolution already provide collision safety and discovery, while another protocol would duplicate allocation and introduce a second promotion lifecycle.
+The ADR lifecycle tools are retired: the tool host refuses any ADR action ("ADR lifecycle tools have been retired"), `agent_implement` exposes none of them, and the sandbox adds no writable `.orbit/adrs` mount. Decisions are edited in `docs/design/**/4_decisions.md` like any other document.
 
 Negated `read` / `modify` rules become explicit SBPL denies in resolved order. Explicit host-policy exceptions and host-owned runtime roots appear after the enclosing deny, preserving last-match-wins without opening unrelated siblings. Simple path and `/**` subtree denials compile to `subpath`; non-subpath globs such as `**/*.env` compile to `regex`.
 
@@ -258,8 +256,6 @@ The wrapper creates a fresh session, and parent-death cleanup remains enabled. W
 The plugin mask comes after every one of those mounts, the stable toolchain aliases included, and before `--chdir`: `--ro-bind <sentinel> <tree>` for `state/plugins/` and `state/plugin-secrets/`, so no earlier grant can expose a tree again. Mounts in the sandbox are locked, so an agent's nested user namespace cannot unmount the mask. A mount hides one path, so the plan refuses to start if a tree is also reachable through another: an alias bind of the plan's own (a tree under the managed worktree would reappear under `/tmp/orbit-workspace`), or a second host mount of the tree's filesystem that the recursive bind of `/` carries, found in `/proc/self/mountinfo` and confirmed by device and inode.
 
 Linked worktrees whose `.git` file points into host `/tmp` restore only their canonical gitdir and common directory as read-only `--ro-bind-fd` mounts. Retained descriptors let Bubblewrap resolve those sources after `/tmp` becomes private, without exposing unrelated scratch.
-
-The ADR authoring exception follows that same ordering: trusted host setup ensures only `<active-worktree>/.orbit/adrs/{proposed,.locks}` exists, then mounts those exact directories writable after the local `.orbit/**` deny. The ADR parent and its Accepted/Superseded lifecycle directories remain read-only. This does not add a policy exception, does not re-allow the shared workspace ADR tree, and does not expose any sibling under the worktree-local `.orbit` directory.
 
 #### 7.1.1 Write-grant anchors are derived from the effective profile at each spawn
 
@@ -506,12 +502,9 @@ tests compile argv and exercise fail-closed/fallback behavior on every host;
 kernel tests probe real `/usr/bin/bwrap` and skip with its concrete capability
 failure when user or mount namespaces are unavailable. The Linux argv and
 kernel cases also cover writable versioned `.orbit` paths versus protected
-state, record, database/lock, and unknown paths ([ORB-10560]). Runtime-host
-tests pin the managed-worktree ADR mount as the sole local record-store
-exception, tool-host tests prove executors can refine Proposed ADRs but cannot
-accept or rewrite Accepted records, and the SQLite allocator race test launches
-two child processes with distinct worktree roots against one database/lock and
-asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
+state, record, database/lock, and unknown paths ([ORB-10560]). The SQLite
+allocator race test launches two child processes with distinct worktree roots against one
+database/lock and asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
 
 ---
 
@@ -559,7 +552,7 @@ asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
 - **[ORB-10560]** — Add host-policy modify exceptions for the explicit versioned `.orbit` surface while preserving protected stores and unknown-path denial.
 - **[ORB-10573]** — Materialize only exact missing versioned-config anchors gated by both task scope and the effective host policy/profile before Linux provider launch.
 - **[ORB-10602]** — Replace that table-and-selector gate with per-spawn derivation from the effective profile, and surface every unmountable grant against its path and rule.
-- **[ORB-10596]** — Allow executor-authored Proposed ADRs through one narrow managed-worktree mount while preserving global allocation, federated discovery, and separate acceptance.
+- **[ORB-10596]** — Add a narrow managed-worktree mount for executor-authored Proposed ADRs and a collision-free shared ID allocator; the ADR tools and mount are since retired.
 - **[ORB-11376]** — Remove checkout-local runtime identity from the managed-agent write exception so absent identities cannot be published as empty anchors.
 - **[ORB-14017]** — Run a confined worker's read-only `github.*` tools on the host through the run's plugin broker, so the credential mask no longer breaks them.
 

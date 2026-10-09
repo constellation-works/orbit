@@ -950,18 +950,10 @@ admission boundary.
 
 ### 7.1 Epic machinery
 
-Retired by [ORB-12491] ([Epic is a tag, not a
-pipeline](./4_decisions.md#epic-is-a-tag-not-a-pipeline)). Removed:
-
-| Piece | Anchor |
-|---|---|
-| `epic_pipeline` job and its `list_epic_descendants` / drain loop / finisher steps | `crates/orbit-core/assets/jobs/epic_pipeline.yaml` |
-| `epic_orchestrator` activity | `crates/orbit-core/assets/activities/` |
-| `start_epic` step and `has_epic` / `epic_task_id` / `active_epic_run_id` outputs | `workspace_auto_pipeline.yaml`, `classify_workspace_auto_tasks.yaml` |
-| Epic-tag exclusion from leaf admission and the refusal to ship an `epic`-tagged root | `list_backlog_tasks`, `classify_workspace_auto_tasks`, ship admission |
-| Descendant-union footprint for `epic`-tagged roots | `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task` — the `tags.contains("epic")` branch |
-| Epic-specific worktree identity/GC handling | `crates/orbit-engine/src/executor/automation/vcs/worktree/mod.rs::WorktreeIdentity::from_input`, `crates/orbit-core/src/application/gc.rs::delivery_job_owns_worktree`; decoding needed to reap historical worktrees is preserved |
-| `docs/design/resident-orchestrator/` | removed (history in git) |
+Retired by [ORB-12491] (decision "Epic is a tag, not a pipeline"): the epic pipeline job and its
+activity, the `start_epic` step and its outputs, the epic exclusion in leaf admission, the
+descendant-union footprint for `epic`-tagged roots, and the epic-specific worktree identity and
+GC handling are gone. Decoding needed to reap historical worktrees is preserved.
 
 Kept:
 
@@ -970,29 +962,29 @@ Kept:
   ignores it except for one carve-out: a tagged root with no `context_files` of its own *while a
   descendant has some* is withheld, since nothing inherits the union it used to reserve. A tagged
   root with its own surface, or a tagged family with none anywhere, is an ordinary leaf.
-- **`workspace_auto_pipeline`'s drain window, slot refill and detached leaves.**
+- **`workspace_auto_pipeline`'s drain window, slot refill and detached leaves**
+  (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`).
 
-**Migration check.** `application::epic_retirement::assess_epic_retirement` is a pure decision over
-a tasks/runs/reservations snapshot; `OrbitRuntime::epic_retirement_readiness` is its read-only
-gatherer. It refuses while any old epic execution, child execution, reservation or uncertain
-landing is unreconciled, regardless of root status (a root in `review` can still have a live
-`complete_pr` step), and reports inherited-only roots and the historical runs GC must still find.
+**Migration check.** `assess_epic_retirement` in `crates/orbit-core/src/application/epic_retirement.rs`
+is a pure decision over a tasks/runs/reservations snapshot; `OrbitRuntime::epic_retirement_readiness`
+is its read-only gatherer. It refuses while any old epic execution, child execution, reservation or
+uncertain landing is unreconciled, regardless of root status (a root in `review` can still have a
+live `complete_pr` step), and reports inherited-only roots and the historical runs GC must still find.
 
 **Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
 withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
 descendants and repair), `list_backlog_tasks` applies it to explicit ship overrides, and
-`reserve_with_index` refuses them before the `EmptyTaskSurfacePolicy` compatibility `Admit`.
+`reserve_with_index` in `crates/orbit-core/src/runtime/task/locks/commands.rs` refuses them before the
+`EmptyTaskSurfacePolicy` compatibility `Admit`.
 
 ### 7.2 Failed-run triage
 
-Retired ([Blocked tasks wait for a reader, not a
-classifier](./4_decisions.md#blocked-tasks-wait-for-a-reader-not-a-classifier)): the owner cannot
-see a follower's failed run, and automatic re-backlogging would hide host-specific failures.
-Removed: `task_triage_pipeline.yaml`, the `list_triage_candidates` / `triage_failed_runs` /
-`apply_triage_dispositions` activities, the triage recursion guard in
-`application/automation/incidents.rs`, and the seed entry. The routine survives only as
-`routines/retired/task_triage.yaml`, a provenance shape so `orbit workspace sync` can tell a
-seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in `application/routine.rs`).
+Retired by [ORB-12488] (decision "Blocked tasks wait for a reader, not a classifier"): the owner
+cannot see a follower's failed run, and automatic re-backlogging would hide host-specific failures.
+The triage job, its activities and its recursion guard are gone, and the routine survives only as
+the provenance shape `crates/orbit-core/assets/routines/retired/task_triage.yaml`, which lets
+`orbit workspace sync` tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
+`crates/orbit-core/src/application/routines/seed.rs`).
 
 Nothing automatic replaces it: a failed run parks its task in `blocked` with the failure and
 `job_run_machine` attached, and re-backlogging is a deliberate transition by whoever read it.

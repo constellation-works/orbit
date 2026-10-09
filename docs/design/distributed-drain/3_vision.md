@@ -61,9 +61,7 @@ Claimed PR leaves can run the owner's captured `review.before_pr` gate when the 
 
 `workspace_auto_pipeline` already refills slots from the whole backlog as each child finishes and
 treats a live wrapper run as the claim. The distributed drain keeps that throughput model, moves
-the claim into authoritative store transactions and drops the epic branch of the loop. The
-resident-orchestrator design folder has been removed; its drain loop lives on in
-`workspace_auto_pipeline`.
+the claim into authoritative store transactions and drops the epic branch of the loop.
 
 ### Federated MCP and remote authority
 

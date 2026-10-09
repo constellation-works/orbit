@@ -218,7 +218,7 @@ Local-first Orbit uses `~/.orbit/tasks/` as the canonical store for task artifac
 
 - the machine-local allocation authority and its next available numeric suffix;
 - workspace bindings, including `workspace_id`, slug, repo root, workspace path, `.orbit` path, and optional remote/path fingerprints for rebind;
-- task-to-workspace bindings for resolving local operations such as `orbit task start`;
+- task-to-workspace bindings for resolving local operations such as `orbit task show`;
 - generated status, terminal-month, relation, and tag indexes for fast list/filter/relation surfaces;
 - task-lock reservations or pointers to the existing `task_reservations` SQLite store, keyed by workspace binding and canonical task IDs while preserving file-overlap conflict checks.
 
