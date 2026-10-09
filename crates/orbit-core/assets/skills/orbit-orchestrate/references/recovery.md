@@ -25,6 +25,29 @@ history; reject proven duplicates with a link to the delivered fix. Cancel a
 duplicate's active child only within authorization and after inspecting its
 state; do not cancel the whole drain.
 
+When a hand fix is open, archive the sweep finding with a `covered_by`
+relation in the same task update. Preserve all existing relations and append
+`{"type":"covered_by","target":"<covering task id>"}` or
+`{"type":"covered_by","target":"github-pr:https://github.com/OWNER/REPO/pull/NUMBER"}`.
+`github-pr:NUMBER` uses the checkout's GitHub repository. This is durable
+operator coverage of the exact failure key: later sweeps report `covered`
+with the archived owner and cover, and create no pilot candidate. A rejected
+finding can carry the same relation. A missing or unreadable cover remains
+withheld with `operator_cover_unavailable`; inspect that reason rather than
+assuming the PR is open. A closed, unmerged PR (or archived/rejected cover task)
+releases the key. After a merged cover's commit is in the failing checkout,
+the sweep files a new repair and names that cover as a fix that did not hold;
+older checkouts stay covered while waiting for the fix.
+
+A plain archive or rejection without `covered_by` suppresses the exact key
+for `ci_failure.operator_suppression_hours` (default 6) from the operator's
+status decision. Its report entry is `withheld`, reason `operator_archived`,
+with the owner and expiry. After expiry a current failure can file again.
+Matching normalized failing-test signatures across jobs share one task with
+all job names and source identities; different signatures remain separate.
+Read `file.withheld` and its matching audit entries alongside
+`skipped_existing` and `pending_supersession` when assessing CI relief.
+
 Post-merge code review and QA follow the same loop. Exercise real user paths
 and report concrete defects; do not replace verification with an agent's
 claim that the change is correct. Pilot and promptly promote authorized
