@@ -826,6 +826,20 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         }),
     );
     let task_id = task["id"].as_str().expect("task id").to_string();
+    let foreign_task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Task outside delivery run",
+            "description": "Not submitted with the delivery run.",
+            "complexity": "low",
+            "model": "codex",
+        }),
+    );
+    let foreign_task_id = foreign_task["id"]
+        .as_str()
+        .expect("foreign task id")
+        .to_string();
+    assert_ne!(foreign_task_id, task_id);
 
     // The run row and its checkpoints, written against the fixture's own
     // disposable roots exactly as the host's pipeline worker leaves them.
@@ -935,12 +949,34 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         "run input or step output leaked: {observed}"
     );
 
-    // A task the run was not submitted with is refused, not answered.
+    // The real foreign task is absent from the run input above, so this call
+    // must reach the run-membership refusal instead of failing task lookup.
     let foreign = client.call_tool_err(
         "orbit_task_show",
-        json!({ "id": "TST-99999", "field": "delivery", "run_id": RUN_ID }),
+        json!({ "id": foreign_task_id, "field": "delivery", "run_id": RUN_ID }),
     );
-    assert_ne!(foreign["code"], "capability_denied", "{foreign}");
+    assert_eq!(
+        foreign["code"], "invalid_input",
+        "a real task omitted from the run must reach the membership refusal: {foreign}"
+    );
+    for field in [
+        "schema_version",
+        "workspace_id",
+        "repository",
+        "task_id",
+        "run_id",
+        "job_id",
+        "run_state",
+        "run_finished_at",
+        "delivery_status",
+        "commit",
+        "landing",
+    ] {
+        assert!(
+            foreign.get(field).is_none(),
+            "refused delivery response included observation field {field}: {foreign}"
+        );
+    }
 
     // The full run view is still the operator's.
     let denied = client.call_tool_err("orbit_workflow_run_show", json!({ "id": RUN_ID }));
