@@ -79,6 +79,15 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<(), OrbitError> {
         Ok(())
     }
+    /// Coverage evidence `task_id` submitted as a delivery automation action,
+    /// when the automation's own settlement accepts or would accept it for the
+    /// frozen batch [ORB-14837]. A host without delivery automation has none.
+    fn accepted_automation_coverage(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::automation::CoverageEvidence>, OrbitError> {
+        Ok(None)
+    }
 
     fn insert_job_run(
         &self,

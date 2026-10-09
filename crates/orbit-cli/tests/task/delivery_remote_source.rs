@@ -21,6 +21,8 @@ use crate::auto_task_lifecycle_cli::{git, publish_origin_if_configured};
 use crate::isolated_cli_fixture::Fixture;
 
 #[cfg(unix)]
+mod review_commit;
+#[cfg(unix)]
 mod tick;
 
 const BRANCH: &str = "fixture-delivery";
@@ -557,6 +559,29 @@ fn stopped_action_with_coverage(
     name: &str,
     examination_complete: bool,
 ) -> (orbit_core::OrbitRuntime, BatchAttempt) {
+    let (runtime, attempt, run_id) = admitted_action(fixture, retries, name);
+    let action_id = attempt.action_id.clone().expect("admitted action");
+    let mut evidence = orbit_types::workflow::automation::evidence_template(&attempt);
+    evidence.examination_complete = examination_complete;
+    evidence.checks = vec![ExaminationCheck {
+        subject: "frozen range".into(),
+        method: "review".into(),
+        observation: "examined the commits named by the batch".into(),
+    }];
+    put_coverage(fixture, &runtime, &action_id, &run_id, &evidence);
+    fixture.json(&[
+        "task", "update", &action_id, "--status", "rejected", "--force", "--json",
+    ]);
+    (runtime, attempt)
+}
+
+/// Lands one remote commit, admits its batch, and binds the minted action to
+/// an executor run whose id is returned beside the attempt.
+fn admitted_action(
+    fixture: &Fixture,
+    retries: u32,
+    name: &str,
+) -> (orbit_core::OrbitRuntime, BatchAttempt, String) {
     let runtime = baseline_named_consumer(fixture, retries, name);
     let publisher = publisher(fixture);
     fs::write(publisher.join("fixture.txt"), "landed on the remote only\n").unwrap();
@@ -603,17 +628,20 @@ fn stopped_action_with_coverage(
         },
     )
     .expect("bind the executor run");
+    (runtime, attempt, run.run_id)
+}
 
-    let mut evidence = orbit_types::workflow::automation::evidence_template(&attempt);
-    evidence.examination_complete = examination_complete;
-    evidence.checks = vec![ExaminationCheck {
-        subject: "frozen range".into(),
-        method: "review".into(),
-        observation: "examined the commits named by the batch".into(),
-    }];
+/// Attaches `evidence` as the action's coverage from its executor run `run_id`.
+fn put_coverage(
+    fixture: &Fixture,
+    runtime: &orbit_core::OrbitRuntime,
+    action_id: &str,
+    run_id: &str,
+    evidence: &orbit_types::workflow::automation::CoverageEvidence,
+) {
     fs::write(
         fixture.repo.join("automation-coverage.json"),
-        serde_json::to_vec(&evidence).expect("coverage serializes"),
+        serde_json::to_vec(evidence).expect("coverage serializes"),
     )
     .unwrap();
     let input = json!({
@@ -626,20 +654,16 @@ fn stopped_action_with_coverage(
     fixture
         .command(&["tool", "run", "orbit.task.artifact.put", "--input", &input])
         .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
-        .env("ORBIT_RUN_ID", &run.run_id)
+        .env("ORBIT_RUN_ID", run_id)
         .assert()
         .success();
     assert!(
         runtime
-            .get_task_artifact(&action_id, EVIDENCE_AUTHORITY_ARTIFACT)
+            .get_task_artifact(action_id, EVIDENCE_AUTHORITY_ARTIFACT)
             .expect("read authority")
             .is_some(),
         "coverage put did not record the executor run"
     );
-    fixture.json(&[
-        "task", "update", &action_id, "--status", "rejected", "--force", "--json",
-    ]);
-    (runtime, attempt)
 }
 
 /// Evaluation's evidence verification fetches origin. A fetch failure while a stopped

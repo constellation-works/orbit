@@ -2,9 +2,10 @@
 
 use super::{COVERAGE_ARTIFACT, source::Source};
 use crate::OrbitRuntime;
+use chrono::{DateTime, Utc};
 use orbit_automation::{
     AutomationError,
-    delivery::{ActionOutcome, digest, evidence::EvidenceFacts},
+    delivery::{ActionOutcome, digest, evidence, evidence::EvidenceFacts},
 };
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::TaskStatus;
@@ -114,6 +115,86 @@ pub(super) fn outcome(
     }
 
     Ok(ActionOutcome::Pending)
+}
+
+const CONSUMER_PAGE_LIMIT: usize = 100;
+const RECEIPT_LIMIT: usize = 100;
+
+/// [ORB-14837] The coverage evidence task `task_id` submitted as a delivery
+/// automation action, when settlement accepts or would accept it: a stored
+/// receipt names the task, or the admitted attempt that names it holds an
+/// `automation-coverage.json` that passes the same validation settlement
+/// applies, checked against existing refs without fetching. Anything else,
+/// including incomplete or mismatched evidence, is `None`.
+pub(crate) fn accepted_action_coverage(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<CoverageEvidence>, OrbitError> {
+    let Some(machine) = runtime.automation_machine_identity() else {
+        return Ok(None);
+    };
+    let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
+    let store = runtime.automation_store()?;
+    let mut after: Option<String> = None;
+    loop {
+        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
+        for state in &page {
+            if after.as_ref().is_some_and(|key| state.consumer <= *key) {
+                return Err(OrbitError::Store(
+                    "automation state page is not strictly ordered".into(),
+                ));
+            }
+            after = Some(state.consumer.clone());
+        }
+        if page.is_empty() {
+            return Ok(None);
+        }
+        for state in page {
+            let accepted = match state
+                .active
+                .as_ref()
+                .filter(|attempt| attempt.action_id.as_deref() == Some(task_id))
+            {
+                Some(attempt) => validated_evidence(runtime, attempt, now)?,
+                None => store
+                    .automation_receipts(&state.consumer, RECEIPT_LIMIT)?
+                    .into_iter()
+                    .find(|receipt| receipt.action_id == task_id)
+                    .map(|receipt| receipt.evidence),
+            };
+            if let Some(bytes) = accepted {
+                return serde_json::from_slice(&bytes)
+                    .map(Some)
+                    .map_err(|error| OrbitError::Store(format!("accepted coverage: {error}")));
+            }
+        }
+    }
+}
+
+/// Bytes settlement would accept for `attempt` now. Unverifiable evidence is
+/// not acceptance, so a deferral here is `None`, never an error.
+fn validated_evidence(
+    runtime: &OrbitRuntime,
+    attempt: &BatchAttempt,
+    now: DateTime<Utc>,
+) -> Result<Option<Vec<u8>>, OrbitError> {
+    let source = Source::read_only(&runtime.paths().repo_root);
+    let facts = match outcome(runtime, &source, attempt) {
+        Ok(ActionOutcome::Evidence(facts)) => facts,
+        Ok(_) => return Ok(None),
+        Err(error) => {
+            tracing::warn!(batch = attempt.batch.id, %error, "cannot verify coverage evidence");
+            return Ok(None);
+        }
+    };
+    match evidence::validate(attempt, &facts, now) {
+        Ok(receipt) => Ok(Some(receipt.evidence)),
+        Err(error) => {
+            tracing::info!(batch = attempt.batch.id, %error, "coverage evidence not accepted");
+            Ok(None)
+        }
+    }
 }
 
 /// A claim can survive the mint but miss the action-id checkpoint. Resolve

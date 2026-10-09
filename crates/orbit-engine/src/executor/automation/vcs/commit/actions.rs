@@ -248,7 +248,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         // the pipeline filled it when the implementing agent skipped the
         // instruction to persist one. Derive it read-only from the change about
         // to be delivered — never from the agent's advisory response envelope —
-        // and only when the agent persisted nothing of its own.
+        // and only when the agent persisted nothing of its own. ORB-14837: a
+        // clean delivery automation review derives it from the coverage
+        // evidence the host accepts for its frozen batch instead.
         let task = ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id)?;
 
         // ORB-10313: fail closed on the durable execution outcome before staging

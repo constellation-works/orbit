@@ -40,6 +40,7 @@ pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
 pub(crate) use source_cache::SourceCache;
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
+pub(crate) use task::accepted_action_coverage;
 
 #[cfg(test)]
 mod tests;
