@@ -30,6 +30,12 @@ The live implementation has five layers.
 
 MachineIdentity and the one-release host.toml migration live in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
+Registry loads that need migration re-read `workspaces.json` while holding
+`with_registry_lock` before persisting it. This preserves registrations written
+after the initial read. Loads that need no migration remain lock-free; callers that
+already hold the re-entrant registry lock can keep it across their complete
+read-modify-write operation. Read-only loaders never persist migration.
+
 ## 2. Machine identity
 
 The current file is:

@@ -1,6 +1,8 @@
 use crate::workspace_registry::{
-    assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
-    find_workspace_by_path, load_registry_from, load_registry_from_with_writer, remove_workspace,
+    WorkspaceRegistryMachineContext, assign_checkout_role, find_checkout_by_path, find_workspace,
+    find_workspace_by_id, find_workspace_by_path, load_registry_from,
+    load_registry_from_with_context_and_writer, load_registry_from_with_writer, remove_workspace,
+    save_registry_to, with_registry_lock,
 };
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
@@ -351,4 +353,70 @@ fn injected_migration_write_failure_preserves_readable_legacy_registry() {
     let recovered = load_registry_from(&path).expect("legacy source remains migratable");
     assert_eq!(recovered.workspaces[0].id, "ws_orbit");
     assert_eq!(recovered.checkouts[0].workspace_id, "ws_orbit");
+}
+
+#[test]
+fn migrating_read_rechecks_under_lock_and_preserves_interleaved_registration() {
+    const TEST: &str = "tests::workspace_registry::migrating_read_rechecks_under_lock_and_preserves_interleaved_registration";
+    const CHILD: &str = "ORBIT_TEST_REGISTRY_MIGRATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output_dir = tempdir().expect("child output directory");
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1");
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = orbit_common::test_env::run_child_test(&mut command, TEST, output_dir.path());
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    write_json(
+        &path,
+        &json!({
+            "workspaces": [],
+            "path_overrides": {}
+        }),
+    );
+    let reads = std::cell::Cell::new(0);
+
+    let loaded = load_registry_from_with_context_and_writer(
+        &path,
+        |_| {
+            reads.set(reads.get() + 1);
+            if reads.get() == 1 {
+                // The reader already holds legacy bytes. Complete a second writer's
+                // locked registration before the reader can acquire the migration lock.
+                with_registry_lock(&path, || {
+                    let mut registered = load_registry_from(&path)?;
+                    registered
+                        .workspaces
+                        .push(logical_workspace("ws_new", None));
+                    save_registry_to(&registered, &path)
+                })
+                .expect("interleaved locked registration");
+            }
+            Ok(WorkspaceRegistryMachineContext { machine_id: None })
+        },
+        save_registry_to,
+    )
+    .expect("load and migrate under lock");
+
+    let persisted = load_registry_from(&path).expect("read persisted registry");
+    assert!(
+        find_workspace_by_id(&persisted, "ws_new").is_some(),
+        "migration must not overwrite the interleaved locked registration"
+    );
+    assert!(
+        find_workspace_by_id(&loaded, "ws_new").is_some(),
+        "the returned snapshot must include the interleaved registration"
+    );
 }
