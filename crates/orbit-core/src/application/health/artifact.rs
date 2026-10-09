@@ -3,7 +3,7 @@
 //!
 //! `orbit doctor` already diagnoses infrastructure (config, database, disk,
 //! indexes, locks, runs). This module supplies the missing half: the
-//! definitions themselves, classified into four conditions.
+//! definitions themselves and their provider discovery links.
 //!
 //! - **Faulty** — the file fails to parse or validate, so its definition is
 //!   absent at dispatch time even though the file is still on disk.
@@ -23,6 +23,9 @@
 //!   persist until `orbit init` or `orbit workspace sync` restores the file.
 //!   A default the manifest records as operator-deleted (`orbit auto-task
 //!   delete`) is an opt-out, reported neither missing nor stale.
+//! - **Dangling link** — a symlink directly under a provider discovery root
+//!   beside the selected global root points to a missing target. Ownership is
+//!   unknown, so diagnosis warns and leaves repair to the operator.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
 //! `crate::application::managed_assets::reconcile_managed_assets`. Residual
@@ -63,7 +66,10 @@ use crate::application::managed_assets::{
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::DEFAULT_ROUTINE_FILES;
-use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::skill::{
+    DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
+    skill_link_remediation,
+};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_common::security::release::sha256_hex;
 
@@ -140,6 +146,8 @@ pub enum ArtifactCondition {
     Stale,
     /// A primary shipped default this binary still embeds is not on disk.
     Missing,
+    /// A provider discovery symlink points to a missing target.
+    DanglingLink,
 }
 
 impl ArtifactCondition {
@@ -150,6 +158,7 @@ impl ArtifactCondition {
             Self::Deprecated => "deprecated",
             Self::Stale => "stale",
             Self::Missing => "missing",
+            Self::DanglingLink => "dangling link",
         }
     }
 }
@@ -205,7 +214,8 @@ impl ArtifactFinding {
             ArtifactCondition::Missing => true,
             ArtifactCondition::Residual
             | ArtifactCondition::Deprecated
-            | ArtifactCondition::Stale => false,
+            | ArtifactCondition::Stale
+            | ArtifactCondition::DanglingLink => false,
         }
     }
 }
@@ -331,7 +341,49 @@ impl OrbitRuntime {
     pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
         let mut report = Vec::new();
         for catalog in managed_catalogs(self) {
-            report.push(diagnose_catalog(self, &catalog));
+            let mut health = diagnose_catalog(self, &catalog);
+            if catalog.kind == ArtifactKind::Skill
+                && let Some(base) = self.global_root().parent()
+            {
+                let roots = crate::bootstrap::init::skill_link_roots(base);
+                let links = match dangling_client_skill_links(&roots) {
+                    Ok(links) => links,
+                    Err(error) => {
+                        health.findings.push(ArtifactFinding {
+                            kind: ArtifactKind::Skill,
+                            name: "provider discovery links".to_string(),
+                            path: base.to_path_buf(),
+                            condition: ArtifactCondition::Faulty,
+                            provenance: ArtifactProvenance::UserAuthored,
+                            detail: format!("cannot inspect provider skill links: {error}"),
+                            remediation: format!(
+                                "Check access to the skill discovery roots beside `{}`, then rerun `orbit doctor`.",
+                                base.display(),
+                            ),
+                        });
+                        Vec::new()
+                    }
+                };
+                for path in links {
+                    health.findings.push(ArtifactFinding {
+                        kind: ArtifactKind::Skill,
+                        name: path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("?")
+                            .to_string(),
+                        condition: ArtifactCondition::DanglingLink,
+                        provenance: ArtifactProvenance::UserAuthored,
+                        detail: format!(
+                            "dangling skill link at {} (target missing)",
+                            path.display(),
+                        ),
+                        remediation: skill_link_remediation(&path),
+                        path,
+                    });
+                }
+            }
+            report.push(health);
         }
         Ok(report)
     }

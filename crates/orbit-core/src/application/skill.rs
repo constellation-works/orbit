@@ -329,7 +329,36 @@ impl OrbitRuntime {
 pub(crate) fn doctor_client_skill_links(
     skills_links_dirs: &[PathBuf],
 ) -> Result<Vec<SkillDoctorResult>, OrbitError> {
-    let mut rows = Vec::new();
+    Ok(dangling_client_skill_links(skills_links_dirs)?
+        .into_iter()
+        .map(|path| SkillDoctorResult {
+            skill_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("?")
+                .to_string(),
+            status: SkillDoctorStatus::Warning,
+            message: format!(
+                "dangling skill link at {} (target missing). {}",
+                path.display(),
+                skill_link_remediation(&path),
+            ),
+        })
+        .collect())
+}
+
+pub(crate) fn skill_link_remediation(path: &Path) -> String {
+    format!(
+        "Restore the skill target or manually remove the dangling symlink at `{}`.",
+        path.display(),
+    )
+}
+
+/// Inspect only immediate symlinks, without modifying discovery entries or targets.
+pub(crate) fn dangling_client_skill_links(
+    skills_links_dirs: &[PathBuf],
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let mut links = Vec::new();
     for dir in skills_links_dirs {
         if !dir.exists() {
             continue;
@@ -348,17 +377,8 @@ pub(crate) fn doctor_client_skill_links(
             if path.exists() {
                 continue;
             }
-            let skill_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("?")
-                .to_string();
-            rows.push(SkillDoctorResult {
-                skill_name,
-                status: SkillDoctorStatus::Error,
-                message: format!("dangling skill link at {} (target missing)", path.display()),
-            });
+            links.push(path);
         }
     }
-    Ok(rows)
+    Ok(links)
 }
