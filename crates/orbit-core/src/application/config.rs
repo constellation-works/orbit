@@ -243,7 +243,7 @@ pub fn set_key(
     match scope {
         ConfigScope::Global => {
             store.validate()?;
-            store.validate_for_set(key)?;
+            store.validate_global_for_set(key, &runtime.shared_root())?;
         }
         ConfigScope::Workspace => {
             let global_root = runtime.global_root();
@@ -309,7 +309,7 @@ pub fn set_crew(
     validate_store(runtime, scope, &store)?;
     for key in &keys {
         match scope {
-            ConfigScope::Global => store.validate_for_set(key)?,
+            ConfigScope::Global => store.validate_global_for_set(key, &runtime.shared_root())?,
             ConfigScope::Workspace => {
                 let global_root = runtime.global_root();
                 store.validate_workspace_for_set(key, &global_root)?;
@@ -474,7 +474,10 @@ fn validate_store(
     store: &ConfigStore,
 ) -> Result<(), OrbitError> {
     match scope {
-        ConfigScope::Global => store.validate(),
+        ConfigScope::Global => {
+            store.validate()?;
+            store.validate_global_with_workspace(&runtime.shared_root())
+        }
         ConfigScope::Workspace => store.validate_workspace_with_global(&runtime.global_root()),
     }
 }

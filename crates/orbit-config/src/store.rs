@@ -500,10 +500,27 @@ impl ConfigStore {
         self.validate_set_target(key, &resolved)
     }
 
-    /// [`Self::validate_for_set`] for a global edit, plus the workspace layer
-    /// at `workspace_root` that the edit would be read with. A global file
-    /// that is valid alone can still make that workspace's config unloadable
-    /// (both review layers on), so the write is refused here instead.
+    /// Validate a staged global document against the workspace layer at
+    /// `workspace_root` that it would be read with, through the same layered
+    /// load a runtime performs. A global file that is valid alone can still
+    /// make that workspace's config unloadable (both review layers on,
+    /// resource-throttle resume at or above a workspace high, a crew a
+    /// workspace pool names), so the write is refused here instead.
+    pub fn validate_global_with_workspace(&self, workspace_root: &Path) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Global {
+            return Err(OrbitError::InvalidInput(
+                "layered global validation requires a global config store".to_string(),
+            ));
+        }
+        let global_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("global config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        validate_staged_global_document(&roots, &self.path, &self.doc.to_string())
+    }
+
+    /// [`Self::validate_for_set`] for a global edit, plus the layered
+    /// admission of [`Self::validate_global_with_workspace`].
     pub fn validate_global_for_set(
         &self,
         key: &str,
@@ -515,11 +532,7 @@ impl ConfigStore {
             ));
         }
         self.validate_for_set(key)?;
-        let global_root = self.path.parent().ok_or_else(|| {
-            OrbitError::InvalidInput("global config path has no parent directory".to_string())
-        })?;
-        let roots = ConfigRoots::new(global_root, workspace_root);
-        validate_staged_global_document(&roots, &self.path, &self.doc.to_string())
+        self.validate_global_with_workspace(workspace_root)
     }
 
     fn validate_set_target(&self, key: &str, resolved: &ResolvedConfig) -> Result<(), OrbitError> {

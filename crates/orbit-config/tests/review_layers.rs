@@ -137,3 +137,99 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
         .to_string();
     assert!(error.contains("review.before_landing"), "{error}");
 }
+
+#[test]
+fn global_set_that_breaks_a_cross_layer_throttle_rule_is_refused_before_saving() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let global_path = global.path().join("config.toml");
+    let original = "[workflow.resource_throttle]\ncpu_resume_percent = 70\n";
+    write_config(global.path(), original);
+    write_config(
+        workspace.path(),
+        "[workflow.resource_throttle]\ncpu_high_percent = 80\n",
+    );
+    ResolvedConfig::load(&roots).expect("the layers load before the edit");
+
+    // Valid in the global file alone, but not beside the workspace's high.
+    let key = "workflow.resource_throttle.cpu_resume_percent";
+    let mut store =
+        ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+    store.set_value(key, "85").expect("stage global set");
+    store
+        .validate_for_set(key)
+        .expect("the global file alone admits the value");
+    let error = store
+        .validate_global_for_set(key, workspace.path())
+        .expect_err("a global set that breaks the workspace's layered load is refused")
+        .to_string();
+    assert!(
+        error.contains("cpu_resume_percent must be less than cpu_high_percent"),
+        "{error}"
+    );
+    store
+        .validate_global_with_workspace(workspace.path())
+        .expect_err("the layered check alone refuses it too");
+
+    // Refused before `save`: the global file is untouched and the workspace loads.
+    assert_eq!(
+        std::fs::read_to_string(&global_path).expect("read global"),
+        original
+    );
+    ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+
+    // A value below the workspace's high is admitted and saves.
+    store.set_value(key, "60").expect("stage a lower value");
+    store
+        .validate_global_for_set(key, workspace.path())
+        .expect("resume below the workspace high is admitted");
+    store.save().expect("save");
+    ResolvedConfig::load(&roots).expect("still loadable after the admitted write");
+}
+
+#[test]
+fn global_edit_that_removes_a_crew_a_workspace_names_is_refused_before_saving() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let global_path = global.path().join("config.toml");
+    let original = "[crews.terra]\nmodel = \"m\"\nprovider = \"codex\"\n";
+    write_config(global.path(), original);
+    write_config(workspace.path(), "[workflow]\ndefault_crew = \"terra\"\n");
+    ResolvedConfig::load(&roots).expect("the workspace names a global crew");
+
+    let mut store =
+        ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+    assert!(
+        store
+            .remove_crew_table("terra")
+            .expect("stage crew removal")
+    );
+    store
+        .validate()
+        .expect("the global file alone has no crew to miss");
+    store
+        .validate_global_with_workspace(workspace.path())
+        .expect_err("removing the crew the workspace default names is refused");
+
+    assert_eq!(
+        std::fs::read_to_string(&global_path).expect("read global"),
+        original
+    );
+    ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+}
+
+#[test]
+fn global_validation_with_one_pinned_root_has_no_workspace_layer_to_check() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let global_path = root.path().join("config.toml");
+    write_config(root.path(), "");
+    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
+    store
+        .set_value("workflow.resource_throttle.cpu_resume_percent", "85")
+        .expect("stage global set");
+    store
+        .validate_global_with_workspace(root.path())
+        .expect("one pinned root has no second layer");
+}
