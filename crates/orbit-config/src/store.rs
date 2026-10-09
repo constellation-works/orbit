@@ -21,7 +21,7 @@ use orbit_common::security::redaction::redact_home_dir;
 use crate::ConfigRoots;
 use crate::layering::{
     reject_workspace_machine_table, resolve_workspace_file_document,
-    validate_staged_workspace_document,
+    validate_staged_global_document, validate_staged_workspace_document,
 };
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
@@ -498,6 +498,28 @@ impl ConfigStore {
         self.reject_workspace_machine_table()?;
         let resolved = self.resolved()?;
         self.validate_set_target(key, &resolved)
+    }
+
+    /// [`Self::validate_for_set`] for a global edit, plus the workspace layer
+    /// at `workspace_root` that the edit would be read with. A global file
+    /// that is valid alone can still make that workspace's config unloadable
+    /// (both review layers on), so the write is refused here instead.
+    pub fn validate_global_for_set(
+        &self,
+        key: &str,
+        workspace_root: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Global {
+            return Err(OrbitError::InvalidInput(
+                "layered global validation requires a global config store".to_string(),
+            ));
+        }
+        self.validate_for_set(key)?;
+        let global_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("global config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        validate_staged_global_document(&roots, &self.path, &self.doc.to_string())
     }
 
     fn validate_set_target(&self, key: &str, resolved: &ResolvedConfig) -> Result<(), OrbitError> {
