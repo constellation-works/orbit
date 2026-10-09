@@ -165,6 +165,17 @@ path string, a numeric finding id or string `schema_version`, a missing
 `schema_version`, `summary`, or finding `severity`, and `null` lists — and
 refuses anything else.
 
+The shared review contract reserves the canonical `review-*` artifact
+namespace, ignoring ASCII case, for the gate. Core's task update path checks names
+after task-path normalization and accepts gate artifacts only from its
+trusted system writer; actor labels and tool input cannot grant that authority.
+This covers local puts, task updates, CLI and dashboard writes. The exception
+is the exact `review-report.json` name: a live reviewer may attach a report
+that passes the shared version and attempt validator, with its
+revision retained by the store. The claimed-worker broker uses the same
+namespace classifier and additionally requires the running reviewer's admitted
+attempt for report writes. External evidence cannot name this reserved namespace.
+
 Admission and settlement retry transient failures (three attempts,
 exponential backoff) and the reviewer step retries once; each then gets one
 `step_failure_recovery` diagnosis before the run fails. A retried reviewer

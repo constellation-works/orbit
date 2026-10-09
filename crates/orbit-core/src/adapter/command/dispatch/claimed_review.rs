@@ -41,19 +41,7 @@ const CONTRACT_READS: [&str; 4] = [
     REVIEW_EVIDENCE_HOLD_ARTIFACT,
 ];
 
-/// Whether the canonical artifact `path` is in the before-PR gate's artifact
-/// namespace, which only the running reviewer's attempt scope reaches through
-/// the broker. The gate names every artifact it writes or reads `review-*`;
-/// refusing the whole prefix keeps a worker from forging one the gate adds
-/// later. The prefix is matched without ASCII case, so an owner on a
-/// case-insensitive filesystem cannot be handed a `Review-gate.json` whose
-/// blob is the certificate's.
-pub(super) fn is_review_artifact(path: &str) -> bool {
-    path.get(..REVIEW_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(REVIEW_PREFIX))
-}
-
-const REVIEW_PREFIX: &str = "review-";
+pub(super) use orbit_types::workflow::is_reserved_review_artifact as is_review_artifact;
 
 /// The review attempt a broker serves, derived from host records.
 struct ClaimedReviewScope<'a> {

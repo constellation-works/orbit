@@ -14,10 +14,10 @@ use orbit_types::task::{
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
-    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    REVIEW_REPORT_HISTORY_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
+    REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
     ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
     ReviewExternalEvidence, ReviewValidation, ValidationOutcome, ValidationRole,
+    is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
 
@@ -93,7 +93,7 @@ pub(super) fn with_external_checks_passed(
 pub(super) fn evidence_artifact_path(raw: &str) -> Option<String> {
     validate_relative_artifact_path(raw).ok()?;
     let path = canonical_artifact_path(raw).ok()?;
-    (!reserved_artifact(&path)).then_some(path)
+    (!is_reserved_review_artifact(&path)).then_some(path)
 }
 
 /// Normalize locators before persisting a hold or comparing requirements.
@@ -200,7 +200,7 @@ pub(super) fn satisfied_external_evidence(
         .collect();
     let mut satisfied = BTreeMap::new();
     for (path, writer) in &writers {
-        if reserved_artifact(path) || writer.is_none() {
+        if is_reserved_review_artifact(path) || writer.is_none() {
             continue;
         }
         let Some(artifact) = runtime.get_task_artifact(task_id, path)? else {
@@ -372,17 +372,6 @@ pub(super) fn carried_external_evidence(
             (path, evidence)
         })
         .collect())
-}
-
-fn reserved_artifact(path: &str) -> bool {
-    matches!(
-        path,
-        REVIEW_EVIDENCE_HOLD_ARTIFACT
-            | REVIEW_GATE_ARTIFACT
-            | REVIEW_MANIFEST_ARTIFACT
-            | REVIEW_REPORT_ARTIFACT
-            | REVIEW_REPORT_HISTORY_ARTIFACT
-    )
 }
 
 /// Whether `hold` is still the in-progress task's latest delivery decision:

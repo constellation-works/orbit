@@ -5,9 +5,11 @@ use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus,
-    is_system_identity_tag, is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags,
-    validate_os_tags, validate_task_dependencies_with,
+    canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    validate_task_dependencies_with,
 };
+use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
@@ -316,6 +318,28 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        // Gate records are certificates and authority, not agent claims.
+        // Only the trusted system entry point may write them; an actor label
+        // or artifact/tool field cannot opt into that authority. Normalize
+        // before checking exactly the key the store will persist.
+        for artifact in &mut params.upsert_artifacts {
+            artifact.path = canonical_artifact_path(&artifact.path)?;
+            if !system_writer && is_reserved_review_artifact(&artifact.path) {
+                if artifact.path != REVIEW_REPORT_ARTIFACT {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{} is reserved for the review gate's system writer",
+                        artifact.path
+                    )));
+                }
+                // The report is the live reviewer's schema-checked claim;
+                // the store retains revisions and settlement certifies it.
+                ReviewReport::parse_attachment(&artifact.content).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+                    ))
+                })?;
+            }
+        }
         if let Some(expected_status) = expected_status
             && task.status != expected_status
         {

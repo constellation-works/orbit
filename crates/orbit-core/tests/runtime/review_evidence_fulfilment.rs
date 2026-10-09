@@ -14,8 +14,11 @@
 use std::os::unix::fs::PermissionsExt;
 
 use chrono::Utc;
+use orbit_common::security::release::sha256_hex;
 use orbit_core::TaskStatus;
 use orbit_core::application::review::{EVIDENCE_FULFILMENT_AUDIT, REVIEW_EVIDENCE_FULFILMENT_JOB};
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     EvidenceHostOs, JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
@@ -34,6 +37,33 @@ const SHIPPED_JOB: &str =
 const SHIPPED_ACTIVITY: &str = include_str!("../../assets/activities/fulfil_review_evidence.yaml");
 /// Far more free space than any test host has.
 const UNREACHABLE_MIB: u64 = 1 << 40;
+
+/// Seed an existing system hold in the isolated fixture's persisted bundle.
+/// These cases model legacy/corrupt stored bytes; operator and agent task
+/// updates must no longer be able to rewrite the gate's authority records.
+fn seed_persisted_hold(fixture: &Fixture, hold: &ReviewEvidenceHold) {
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
+    let bundle = registry
+        .canonical_task_bundle_path(&fixture.runtime.workspace_id().unwrap(), &fixture.task_id)
+        .unwrap();
+    let manifest_path = bundle
+        .join("artifacts")
+        .join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+    let mut manifest: ArtifactManifestV2 =
+        serde_yaml::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    let file = manifest
+        .files
+        .iter_mut()
+        .find(|file| file.path == REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .unwrap();
+    let content = serde_json::to_vec(hold).unwrap();
+    file.sha256 = sha256_hex(&content);
+    file.blob = format!("files/fixture-hold-{}.json", file.sha256);
+    file.size_bytes = content.len() as u64;
+    std::fs::write(bundle.join("artifacts").join(&file.blob), content).unwrap();
+    std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+}
 
 /// How the stub behaves once it has recorded its run.
 #[derive(Clone, Copy)]
@@ -281,11 +311,7 @@ fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() 
     // A benign legacy spelling must write the same canonical evidence/log
     // pair as a new hold; suffix derivation must follow normalization.
     hold.requirements[0].artifact = " evidence//./codeql-rust-linux.json/ ".into();
-    super::review_continuation::attach_as_operator(
-        &fixture,
-        REVIEW_EVIDENCE_HOLD_ARTIFACT,
-        &serde_json::to_value(&hold).unwrap(),
-    );
+    seed_persisted_hold(&fixture, &hold);
 
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
@@ -457,11 +483,7 @@ fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwri
             // Seed a hostile persisted hold after normal admission. This
             // reaches the owner's guard independently of the report guard.
             hold.requirements[0].artifact = alias.clone();
-            super::review_continuation::attach_as_operator(
-                &fixture,
-                REVIEW_EVIDENCE_HOLD_ARTIFACT,
-                &serde_json::to_value(&hold).unwrap(),
-            );
+            seed_persisted_hold(&fixture, &hold);
             let before_gate = fixture
                 .runtime
                 .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)

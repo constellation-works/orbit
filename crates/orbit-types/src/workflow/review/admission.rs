@@ -32,6 +32,16 @@ pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 /// report makes.
 pub const REVIEW_BASELINE_ARTIFACT: &str = "review-baseline.json";
 
+/// Whether a canonical task artifact belongs to the reserved review namespace.
+/// Callers must first use [`crate::task::canonical_artifact_path`]. Reserving
+/// the whole prefix also protects future gate artifacts; ASCII case folding
+/// protects owners on case-insensitive filesystems.
+pub fn is_reserved_review_artifact(path: &str) -> bool {
+    const PREFIX: &str = "review-";
+    path.get(..PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+}
+
 /// Default `review.minutes`: reviewer runtime for one candidate's review,
 /// its fix commit and final validation included [ORB-13992].
 pub const DEFAULT_REVIEW_MINUTES: u32 = 30;

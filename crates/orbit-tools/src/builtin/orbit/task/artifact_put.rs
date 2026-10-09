@@ -7,9 +7,9 @@ use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_common::tracing;
 use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
-use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
+use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact, canonical_artifact_path};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewReport};
+use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport};
 use serde_json::{Map, Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
@@ -146,26 +146,15 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
 /// learns of a contract mismatch while it can still fix the file rather than
 /// at settlement, where it would make the review incomplete.
 fn validate_review_report(artifact: &TaskArtifact) -> Result<(), OrbitError> {
-    if artifact.path != REVIEW_REPORT_ARTIFACT {
+    let path = canonical_artifact_path(&artifact.path)?;
+    if path != REVIEW_REPORT_ARTIFACT {
         return Ok(());
     }
-    let report = ReviewReport::parse(&artifact.content).map_err(|error| {
+    ReviewReport::parse_attachment(&artifact.content).map_err(|error| {
         OrbitError::InvalidInput(format!(
             "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
         ))
     })?;
-    if report.schema_version != REVIEW_CONTRACT_VERSION {
-        return Err(OrbitError::InvalidInput(format!(
-            "{REVIEW_REPORT_ARTIFACT} has schema_version {}; the review report contract is \
-             version {REVIEW_CONTRACT_VERSION}",
-            report.schema_version
-        )));
-    }
-    if report.attempt_id.trim().is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "{REVIEW_REPORT_ARTIFACT} must name the admitted attempt_id"
-        )));
-    }
     Ok(())
 }
 

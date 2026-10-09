@@ -61,9 +61,9 @@ fn last_event(fixture: &Fixture) -> String {
 }
 
 #[test]
-fn malformed_hold_does_not_fail_later_artifact_writes_or_review_admission() {
+fn refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission() {
     if !super::dispatch_admission::isolated(
-        "review_evidence_writers::malformed_hold_does_not_fail_later_artifact_writes_or_review_admission",
+        "review_evidence_writers::refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission",
     ) {
         return;
     }
@@ -86,7 +86,14 @@ fn malformed_hold_does_not_fail_later_artifact_writes_or_review_admission() {
                 "source_path": source,
             }),
         )
-        .expect("a malformed hold must not report failure after its artifact was stored");
+        .expect_err("an agent cannot write the system's evidence hold");
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .is_none()
+    );
 
     let later_artifact = fixture.repo.join(".orbit/tmp/later-evidence.json");
     std::fs::write(&later_artifact, "{\"result\":\"ready\"}").unwrap();
@@ -101,7 +108,7 @@ fn malformed_hold_does_not_fail_later_artifact_writes_or_review_admission() {
                 "source_path": later_artifact,
             }),
         )
-        .expect("a malformed hold must not make a later artifact write fail");
+        .expect("a refused hold must not make a later artifact write fail");
     assert_eq!(
         fixture
             .runtime

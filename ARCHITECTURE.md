@@ -57,6 +57,9 @@ in member manifests with `workspace = true`.
 ### Foundation and kernel
 
 - **orbit-types** holds shared serde contracts, pure constructors, and narrow domain errors, organized as domain modules (`identity`, `workspace`, `task`, `workflow`, …). It does no I/O of any kind. Its serde shapes are persisted contracts.
+  The review contract also owns the canonical `review-*` artifact namespace
+  classifier shared by Core's task update path, claimed-worker broker and
+  external-evidence guards, and the live-report validator used by tools and Core.
 - **orbit-common** holds `OrbitError` and the shared mechanisms: filesystem and path helpers, process support, storage, UTF-8-safe text bounds, protocol and YAML codecs, observability, and security. Security covers the release signing keys and verification used by `orbit update`, redaction, and `security::child_env`, the single allowlist builder for agent-subprocess environments. Operation registries live here so every surface can read them. The matching handlers live in `orbit-core`.
 - **orbit-policy** resolves `FsProfile` and evaluates `denyRead` and `denyModify` rules.
 - **orbit-exec** provides process, sandbox, and supervision primitives for commands run under an `FsProfile`.
