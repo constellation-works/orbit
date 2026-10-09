@@ -105,7 +105,6 @@ pub struct AuditGcArgs {
     /// Retention window in days, overriding `retention.audit_days` (default 60)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
-
 }
 
 impl Execute for AuditGcArgs {
@@ -160,7 +159,6 @@ pub struct RunGcArgs {
     /// Retention window in days, overriding `retention.runs_days` (default 60)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
-
 }
 
 impl Execute for RunGcArgs {
