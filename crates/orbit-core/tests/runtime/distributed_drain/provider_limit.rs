@@ -2,7 +2,7 @@
 //! usage limit leaves that provider's crews out of its pull drain's window
 //! until the reading lapses, then runs them again in the same drain.
 
-use chrono::Duration;
+use chrono::{Duration, SubsecRound};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 
 use super::*;
@@ -64,7 +64,8 @@ fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
     }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     let drain = pair.run_drain();
-    let resets_at = Utc::now() + Duration::hours(2);
+    // Whole seconds: the store keeps microseconds, but a Linux clock reads nanoseconds.
+    let resets_at = (Utc::now() + Duration::hours(2)).trunc_subsecs(0);
     pair.follower
         .record_provider_limit(&codex_reading(95.0, resets_at))
         .expect("seed the follower's reading");

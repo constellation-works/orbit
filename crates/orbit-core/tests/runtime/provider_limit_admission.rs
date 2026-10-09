@@ -6,7 +6,7 @@
 //! selection is read from a replay's admitted run input, the same admission
 //! every delivery submission runs.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SubsecRound, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -173,7 +173,8 @@ fn a_task_waits_on_an_exhausted_provider_until_the_reset() {
     }
     let fx = Fixture::new(&config(r#"["opus"]"#, ""));
     let task = fx.task(None);
-    let reset = Utc::now() + Duration::hours(2);
+    // Whole seconds: the store keeps microseconds, but a Linux clock reads nanoseconds.
+    let reset = (Utc::now() + Duration::hours(2)).trunc_subsecs(0);
     fx.read_claude(100.0, true, reset);
 
     let entry = fx.readiness(&task);
