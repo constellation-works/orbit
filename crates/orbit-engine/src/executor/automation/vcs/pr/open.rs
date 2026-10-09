@@ -102,27 +102,32 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             )
         });
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
-    match find_pr_by_head(host, &context.workspace_path, head) {
-        Ok(Some((pr_number, pr_url))) => Ok(pr_output(PrOutput {
-            decision: "reused",
-            pr_created: false,
-            pr_reused: true,
-            pr_number,
-            pr_url,
-            base,
-            head,
-            base_ref,
-            base_sha,
-            freshness: &freshness,
-        })),
-        Ok(None) => {
-            tracing::info!(
-                constructed_body_bytes = body.len(),
-                allowed_body_bytes = GITHUB_PR_BODY_BYTE_LIMIT,
-                "creating pull request with bounded body projection"
-            );
-            let created = host
-                .run_private_vcs_operation(
+    // A failed create may already have taken effect. Reconcile by head before
+    // every retry; the private create operation must remain single-shot.
+    let mut attempt = 1;
+    loop {
+        match find_pr_by_head(host, &context.workspace_path, head) {
+            Ok(Some((pr_number, pr_url))) => {
+                return Ok(pr_output(PrOutput {
+                    decision: "reused",
+                    pr_created: false,
+                    pr_reused: true,
+                    pr_number,
+                    pr_url,
+                    base,
+                    head,
+                    base_ref,
+                    base_sha,
+                    freshness: &freshness,
+                }));
+            }
+            Ok(None) => {
+                tracing::info!(
+                    constructed_body_bytes = body.len(),
+                    allowed_body_bytes = GITHUB_PR_BODY_BYTE_LIMIT,
+                    "creating pull request with bounded body projection"
+                );
+                let created = match host.run_private_vcs_operation(
                     operations::PR_CREATE,
                     json!({
                         "title": title,
@@ -131,38 +136,55 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                         "head": head,
                         "workspace_path": context.workspace_path,
                     }),
-                )
-                .map_err(|error| Box::new((FailedHandoffPhase::PrCreate, error)))?;
-            let pr_url = created
-                .get("url")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| {
-                    Box::new((
-                        FailedHandoffPhase::PrCreate,
-                        OrbitError::Execution(
-                            "private automation VCS PR create did not return a PR url".to_string(),
-                        ),
-                    ))
-                })?;
-            let (pr_number, viewed_url) = view_pr(host, &context.workspace_path, &pr_url)
-                .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
-            Ok(pr_output(PrOutput {
-                decision: "performed",
-                pr_created: true,
-                pr_reused: false,
-                pr_number,
-                pr_url: viewed_url.or(Some(pr_url)),
-                base,
-                head,
-                base_ref,
-                base_sha,
-                freshness: &freshness,
-            }))
+                ) {
+                    Ok(created) => created,
+                    Err(error)
+                        if attempt < operations::GITHUB_TRANSIENT_ATTEMPTS
+                            && operations::is_transient_github_failure(&error.to_string()) =>
+                    {
+                        tracing::warn!(
+                            attempt,
+                            head,
+                            "reconciling pull request creation after a transient GitHub failure"
+                        );
+                        std::thread::sleep(operations::GITHUB_TRANSIENT_RETRY_DELAY);
+                        attempt += 1;
+                        continue;
+                    }
+                    Err(error) => return Err(Box::new((FailedHandoffPhase::PrCreate, error))),
+                };
+                let pr_url = created
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        Box::new((
+                            FailedHandoffPhase::PrCreate,
+                            OrbitError::Execution(
+                                "private automation VCS PR create did not return a PR url"
+                                    .to_string(),
+                            ),
+                        ))
+                    })?;
+                let (pr_number, viewed_url) = view_pr(host, &context.workspace_path, &pr_url)
+                    .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
+                return Ok(pr_output(PrOutput {
+                    decision: "performed",
+                    pr_created: true,
+                    pr_reused: false,
+                    pr_number,
+                    pr_url: viewed_url.or(Some(pr_url)),
+                    base,
+                    head,
+                    base_ref,
+                    base_sha,
+                    freshness: &freshness,
+                }));
+            }
+            Err(error) => return Err(Box::new((FailedHandoffPhase::PrLookup, error))),
         }
-        Err(error) => Err(Box::new((FailedHandoffPhase::PrLookup, error))),
     }
 }
 

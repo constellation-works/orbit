@@ -481,6 +481,130 @@ fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
     );
 }
 
+#[test]
+fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
+    isolated(
+        "pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr",
+        |sandbox| {
+            for (outcome, expected_calls, reused) in [
+                (
+                    "gateway",
+                    vec!["pr list", "pr create", "pr list", "pr create", "pr view"],
+                    false,
+                ),
+                (
+                    "applied_gateway",
+                    vec!["pr list", "pr create", "pr list", "pr view"],
+                    true,
+                ),
+            ] {
+                let fx = Fixture::new(sandbox);
+                fx.script_creates(&[outcome, "success"]);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                let opened = action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .expect("a transient create must reconcile and recover");
+
+                assert_eq!(opened["pr_created"], !reused, "{outcome}");
+                assert_eq!(opened["pr_reused"], reused, "{outcome}");
+                assert_eq!(opened["pr_number"], PR_NUMBER);
+                assert_eq!(fx.forge_calls(), expected_calls, "{outcome}");
+                assert_eq!(
+                    fx.forge_lines("created-prs").len(),
+                    1,
+                    "an ambiguous create must never create a second PR: {outcome}"
+                );
+                assert_eq!(fx.forge_state("pr-head").as_deref(), Some(BRANCH));
+                assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE));
+                assert!(host.comments(TASK_ID).is_empty());
+            }
+        },
+    );
+}
+
+#[test]
+fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase() {
+    isolated(
+        "pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.script_creates(&["gateway"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let error = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect_err("persistent gateway failures must stop retrying");
+            assert_eq!(
+                fx.forge_calls(),
+                ["pr list", "pr create"].repeat(3),
+                "every create attempt must be preceded by reconciliation"
+            );
+            assert!(fx.forge_lines("created-prs").is_empty());
+            assert_create_failure(&host, &error, "HTTP 502: 502 Bad Gateway");
+        },
+    );
+}
+
+#[test]
+fn pr_open_permanent_create_failures_never_retry_or_look_up_again() {
+    isolated(
+        "pr_open_permanent_create_failures_never_retry_or_look_up_again",
+        |sandbox| {
+            for (outcome, diagnostic) in [
+                ("auth", "Resource not accessible by integration (HTTP 403)"),
+                ("unknown_head", "Head sha can't be blank"),
+                (
+                    "no_commits",
+                    "No commits between agent-main and orbit/landing-candidate",
+                ),
+                (
+                    "body_too_long",
+                    "Body is too long (maximum is 65536 characters)",
+                ),
+                ("rate_limit", "API rate limit exceeded (HTTP 403)"),
+            ] {
+                let fx = Fixture::new(sandbox);
+                fx.script_creates(&[outcome, "success"]);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                let error = action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .expect_err("a permanent create failure must fail immediately");
+
+                assert_eq!(fx.forge_calls(), ["pr list", "pr create"], "{outcome}");
+                assert!(fx.forge_lines("created-prs").is_empty(), "{outcome}");
+                assert_create_failure(&host, &error, diagnostic);
+            }
+        },
+    );
+}
+
+fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &str) {
+    let expected = format!("private automation VCS PR create failed: {diagnostic}");
+    assert!(
+        matches!(error, OrbitError::Execution(message) if message == &expected),
+        "create must preserve the underlying diagnostic: {error}"
+    );
+    let comments = host.comments(TASK_ID);
+    assert_eq!(comments.len(), 1);
+    assert!(
+        comments[0]
+            .message
+            .contains("[phase=automation.vcs.pr.create]"),
+        "create must preserve its failing phase: {}",
+        comments[0].message
+    );
+    assert!(comments[0].message.contains(&expected));
+    assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+}
+
 /// Pending checks are waited out, never merged early. Once they pass, the
 /// reviewed candidate is merged with a request conditional on its head SHA.
 /// The merge is read back from the forge, the landing is recorded for review
@@ -3331,6 +3455,15 @@ impl Fixture {
         .unwrap();
     }
 
+    /// Answers to successive creates; the final outcome repeats.
+    fn script_creates(&self, outcomes: &[&str]) {
+        fs::write(
+            self.forge.join("create-outcomes"),
+            format!("{}\n", outcomes.join("\n")),
+        )
+        .unwrap();
+    }
+
     /// Script PR metadata independently of the real remote PR head ref.
     fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
         fs::write(self.forge.join("heads"), format!("{}\n", heads.join("\n"))).unwrap();
@@ -4108,6 +4241,26 @@ status() {
 }
 
 create() {
+    attempt=$(awk '$0 == "pr create" { n++ } END { print n }' "$forge/calls")
+    outcome=success
+    if [ -f "$forge/create-outcomes" ]; then
+        outcome=$(sed -n "${attempt}p" "$forge/create-outcomes")
+        [ -n "$outcome" ] || outcome=$(tail -n 1 "$forge/create-outcomes")
+    fi
+    case "$outcome" in
+        gateway) echo 'HTTP 502: 502 Bad Gateway' >&2; exit 1 ;;
+        auth) echo 'Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+        unknown_head) echo "Head sha can't be blank" >&2; exit 1 ;;
+        no_commits) echo 'No commits between agent-main and orbit/landing-candidate' >&2; exit 1 ;;
+        body_too_long) echo 'Body is too long (maximum is 65536 characters)' >&2; exit 1 ;;
+        rate_limit) echo 'API rate limit exceeded (HTTP 403)' >&2; exit 1 ;;
+        success|applied_gateway) ;;
+        *) echo "fake gh: unknown create outcome '$outcome'" >&2; exit 2 ;;
+    esac
+    if [ -f "$forge/pr-head" ]; then
+        echo 'a pull request for this branch already exists' >&2
+        exit 1
+    fi
     shift 2
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -4117,6 +4270,11 @@ create() {
             *) shift ;;
         esac
     done
+    echo created >> "$forge/created-prs"
+    if [ "$outcome" = applied_gateway ]; then
+        echo 'HTTP 502: 502 Bad Gateway' >&2
+        exit 1
+    fi
     printf '%s\n' "$url"
 }
 
