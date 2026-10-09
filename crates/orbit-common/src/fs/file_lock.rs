@@ -143,7 +143,7 @@ pub fn acquire_exclusive_file_lock(
 /// A refusal carrying no holder record is exactly that case: the previous
 /// owner cleared its record when it dropped its guard, and a new owner writes
 /// one as soon as it acquires. Such a refusal is waited out for
-/// [`UNCLAIMED_LOCK_GRACE`] and reported as contention only if it outlives it.
+/// `UNCLAIMED_LOCK_GRACE` and reported as contention only if it outlives it.
 /// A refusal a holder does claim returns `Ok(None)` immediately, so a caller
 /// whose correct response to real contention is "exit" never queues behind a
 /// live pass.

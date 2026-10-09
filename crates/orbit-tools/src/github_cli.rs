@@ -12,7 +12,7 @@
 //! single owner of what a `gh` invocation looks like and of how its output is
 //! made safe to carry; callers here own the policy question of when to run it.
 //!
-//! Every request builder returns an [`ExecRequest`] with `current_dir: None`.
+//! Every request builder returns an [`ExecRequest`](orbit_exec::ExecRequest) with `current_dir: None`.
 //! Set it to the repository the query is about before executing — `gh`
 //! otherwise resolves the repository from the caller's working directory.
 

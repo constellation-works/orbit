@@ -311,7 +311,7 @@ impl TaskRegistryStore {
     /// id under a prefix this machine has never issued belongs to another
     /// host's registry, and no amount of local searching can resolve it.
     /// Bounded like the write-path check it shares —
-    /// [`task_prefix_is_registered`] — rather than materializing every prefix.
+    /// `task_prefix_is_registered` — rather than materializing every prefix.
     pub fn task_prefix_is_known(&self, prefix: &str) -> Result<bool, OrbitError> {
         let conn = self.read()?;
         if active_task_prefix(&conn)? == prefix {

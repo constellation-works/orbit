@@ -33,7 +33,7 @@ pub enum CrewExclusionSource {
     /// capacity failure excludes only the leaf's crew.
     ProviderUnavailable,
     /// A claimed leaf on this crew was released for a failure class that
-    /// [excludes its crew](ClaimFailureClass::excludes_crew) [ORB-14257].
+    /// [excludes its crew](crate::workflow::ClaimFailureClass::excludes_crew) [ORB-14257].
     LeafReleased,
 }
 

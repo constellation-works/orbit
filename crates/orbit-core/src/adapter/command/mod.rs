@@ -2,10 +2,10 @@
 //!
 //! Two independent concerns live behind this module and are re-exported here
 //! so `command::tool::*` remains the single import path for consumers:
-//! - [`dispatch`] — tool dispatch, audit correlation, agent-identity
+//! - `dispatch` — tool dispatch, audit correlation, agent-identity
 //!   resolution, the trusted MCP envelope boundary, and the calls a run's
 //!   plugin broker executes.
-//! - [`registry`] — registry CRUD (list/show/add/remove/enable/disable/doctor).
+//! - `registry` — registry CRUD (list/show/add/remove/enable/disable/doctor).
 
 mod dispatch;
 mod plugin;

@@ -76,7 +76,7 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
 /// single writer) plus a read-only connection pool so reads never queue
-/// behind writes. See [`crate::driver::sqlite::read_pool`] for the pool shape.
+/// behind writes. See `crate::driver::sqlite::read_pool` for the pool shape.
 #[derive(Clone)]
 pub struct Store {
     /// The single writer connection. Every mutating statement and every

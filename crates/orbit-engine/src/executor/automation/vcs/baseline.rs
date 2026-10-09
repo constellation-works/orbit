@@ -483,7 +483,7 @@ pub enum BaselineHoldStatus {
 /// that ref advances, run the command on the new tip (or use the shared
 /// result cache) and lift the hold only after it passes. A failed or
 /// inconclusive check keeps the task held. A remote-tracking ref is refreshed
-/// from `origin` at most every [`HOLD_FETCH_INTERVAL`] per repository and
+/// from `origin` at most every `HOLD_FETCH_INTERVAL` per repository and
 /// branch, so a held backlog does not wait on some other delivery to fetch.
 ///
 /// A cache miss runs the whole command, for up to the validation timeout, so
@@ -587,7 +587,7 @@ pub struct BaseFailureCheck {
     pub verdict: BaseFailureVerdict,
     /// The candidate run: exit status, timeout and captured output.
     pub candidate_log: Value,
-    /// The base run as [`BaselineCheck::log`] records it.
+    /// The base run as `BaselineCheck::log` records it.
     pub base_log: Value,
 }
 
@@ -595,12 +595,12 @@ pub struct BaseFailureCheck {
 /// the candidate checked out in `workspace_path` [ORB-14434].
 ///
 /// Settlement never takes the claim on trust. The command runs again on the
-/// candidate, then on the base through [`compare_with_base`], whose
+/// candidate, then on the base through `compare_with_base`, whose
 /// `(base, command)` result cache is the same one delivery validation fills,
 /// so a gate-step `baseline_red` run of the same command on the same base is
 /// reused rather than repeated. Beyond the exit status and timeout outcome
-/// [`BaselineCheck::reproduces`] compares, the failures each output names
-/// ([`failure_identities`]) must not grow on the candidate, and every failure
+/// `BaselineCheck::reproduces` compares, the failures each output names
+/// (`failure_identities`) must not grow on the candidate, and every failure
 /// the reviewer named must appear in the base's output.
 ///
 /// Only call this with a command the host itself trusts: it runs on the host,

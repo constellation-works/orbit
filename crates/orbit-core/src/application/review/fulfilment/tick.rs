@@ -90,7 +90,7 @@ impl OrbitRuntime {
     }
 
     /// One fulfilment tick: dispatch a run for each held task whose evidence
-    /// this host can produce, at most [`MAX_ACTIVE_EVIDENCE_FULFILMENTS`]
+    /// this host can produce, at most `MAX_ACTIVE_EVIDENCE_FULFILMENTS`
     /// live at once.
     pub fn run_review_evidence_fulfilment_tick(
         &self,

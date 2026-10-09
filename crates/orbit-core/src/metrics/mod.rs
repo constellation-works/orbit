@@ -3,7 +3,7 @@
 //! Migrated out of the decommissioned `orbit-knowledge` crate in ORB-00391.
 //! The persisted [`orbit_types::workflow::KnowledgeRunMetrics`] type and the
 //! `JobRun::knowledge_metrics` field stay in `orbit-common`; this module owns
-//! the pure computation over invocation traces ([`merge_invocation_trace`])
+//! the pure computation over invocation traces (`merge_invocation_trace`)
 //! and the cross-run aggregation rendered by the dashboard ([`aggregate`]).
 //!
 //! The v1 pack-compression path was dropped with the tool (ORB-00388).

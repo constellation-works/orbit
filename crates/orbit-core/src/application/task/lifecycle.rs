@@ -72,7 +72,7 @@ pub fn task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool 
 /// The companion field an otherwise-legal transition still needs from its
 /// caller, if the task does not already carry equivalent evidence.
 ///
-/// This is the read-side counterpart of [`ensure_status_change_allowed`]. UI
+/// This is the read-side counterpart of `ensure_status_change_allowed`. UI
 /// projections use it to collect evidence before submitting a mutation while
 /// the guarded update path remains the authority that accepts or refuses it.
 pub fn task_status_transition_required_field(

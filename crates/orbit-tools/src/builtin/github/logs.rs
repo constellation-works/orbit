@@ -208,7 +208,7 @@ pub struct RunLogRead {
 ///
 /// `cached_run_view` lets a caller that already holds a verified, freshly
 /// fetched `gh run view` payload for this exact run (projected the same way
-/// [`fallback_jobs`] would project its own) hand it in so the fallback never
+/// `fallback_jobs` would project its own) hand it in so the fallback never
 /// re-queries GitHub for metadata the caller already has.
 pub fn read_run_log(
     requests: &RunLogRequests,

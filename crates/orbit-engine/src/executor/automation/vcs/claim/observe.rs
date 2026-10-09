@@ -28,7 +28,7 @@ use super::{delivery, require_clean_checkout};
 /// `source` names the branch to read, or `None` for whatever is checked out.
 /// `fallback_repository` is used when the checkout has no remote to name.
 /// `base_sync` is the run's sync mode (`local` or `remote`): the base *ref*
-/// is resolved through [`resolve_worktree_start_point`], the same mapping
+/// is resolved through `resolve_worktree_start_point`, the same mapping
 /// every other step of the claimed pipeline uses, so a remote-sync claim
 /// still fetches `origin/<base>` rather than a lagging local
 /// `refs/heads/<base>`. The recorded base is then the merge-base of the

@@ -330,7 +330,7 @@ impl OrbitRuntime {
     /// owner (`Settling`), with when the oldest was recorded.
     ///
     /// Read-only: it reads through the same schema-free path as
-    /// [`Self::settle_pending_pulls`], so a workspace that never pulled
+    /// `Self::settle_pending_pulls`, so a workspace that never pulled
     /// reports nothing and keeps no pull tables. It contacts no owner.
     pub fn pending_pull_settlements(&self) -> Result<PendingPullSettlements, OrbitError> {
         let jobs = self.stores().jobs();

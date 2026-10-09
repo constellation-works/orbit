@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Builtin tool registry providing the standard Orbit toolset for agents and jobs.
 //!
 //! Implements and registers all built-in tools that agents can invoke during
@@ -24,7 +19,7 @@
 //! - [`Tool`] trait — implement this to add a custom tool
 //! - [`ToolContext`] — per-call context: cwd, allowed-tool allowlist, workspace root boundary
 //! - [`require_str`] — helper to extract and validate string fields from tool input JSON
-//! - [`check_exec_result`] — helper to turn a failed [`ExecutionResult`] into an `OrbitError`
+//! - [`check_exec_result`] — helper to turn a failed [`ExecutionResult`](orbit_types::tool::ExecutionResult) into an `OrbitError`
 //!
 //! # Registry contents
 //! The builtin registry wires together the standard Orbit tool families:

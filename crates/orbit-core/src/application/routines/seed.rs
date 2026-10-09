@@ -224,7 +224,7 @@ impl RoutineSeedIdentity {
         format!("{}-{}", file_stem.replace('_', "-"), self.name_suffix)
     }
 
-    /// Every name this identity would seed, in [`DEFAULT_ROUTINE_FILES`] order.
+    /// Every name this identity would seed, in `DEFAULT_ROUTINE_FILES` order.
     pub fn seeded_routine_names(&self) -> Vec<String> {
         DEFAULT_ROUTINE_FILES
             .iter()

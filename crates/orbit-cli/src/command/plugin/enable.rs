@@ -20,7 +20,7 @@ pub struct PluginEnableArgs {
     /// manifest's template language ({{workspace}}, {{plugin_state}},
     /// absolute, or relative to the plugin root); the sandbox then opens only
     /// where those roots and the manifest's request overlap. Write a bare
-    /// relative root after the first as ./<root>, so it is not read as a
+    /// relative root after the first as `./<root>`, so it is not read as a
     /// mistyped grant name. Plain fs grants every root the manifest requests.
     #[arg(long = "grant", value_delimiter = ',', conflicts_with = "scope")]
     pub grants: Vec<String>,

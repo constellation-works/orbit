@@ -158,7 +158,7 @@ impl TaskCommitBoundary {
         }))
     }
 
-    /// [ORB-14603] [`Self::candidate_offer`] for the owner's own run of
+    /// [ORB-14603] `Self::candidate_offer` for the owner's own run of
     /// `task_id` on `machine_id`: the task's last claim failed, and its run
     /// continues the candidate that claim kept rather than implementing anew.
     pub fn kept_claim_candidate(

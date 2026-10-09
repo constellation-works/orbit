@@ -2,11 +2,6 @@
 // Legacy domain-schema surfaces still need a focused documentation pass.
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Lowest internal Orbit contract crate.
 //!
 //! Domain-qualified modules only. `OrbitId` is the sole crate-root primitive.

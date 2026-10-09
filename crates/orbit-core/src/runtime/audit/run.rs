@@ -147,7 +147,7 @@ pub struct RunCliInvocationRecord {
     pub stdout: String,
     pub stderr: String,
     /// True when
-    /// [`read_blob_text_preview_best_effort`](super::run_projection::read_blob_text_preview_best_effort)
+    /// `read_blob_text_preview_best_effort`
     /// cut the blob before its end. Independent of the caller's own
     /// line-budget truncation check, which cannot see past whatever window
     /// was read here.
@@ -569,7 +569,7 @@ impl OrbitRuntime {
     /// [ORB-11625] The previous list path scanned each run's full v2 envelope
     /// (`limit: 50_000`) and opened the audit store once per row. This loads
     /// only `step_recovery_attempted` rows, capped per run at
-    /// [`RECOVERY_FETCH_PER_RUN`], and a presence set for `unavailable` vs
+    /// `RECOVERY_FETCH_PER_RUN`, and a presence set for `unavailable` vs
     /// `not_attempted`. A page-wide LIMIT is not used: it would starve later
     /// runs with shorter histories. Store-handle reuse is ORB-11632; this
     /// method must not add a per-run `Store::open`.

@@ -10,7 +10,7 @@ use super::steps::{
 use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
-/// Bump together with a new [`LAYOUT_MIGRATIONS`] entry — never without one.
+/// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
 pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
 
 /// One entry in the layout-migration registry.

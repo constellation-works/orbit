@@ -62,7 +62,7 @@ impl TaskRegistryStore {
 
     /// The relation edges `envelopes` name whose target is a task id under a
     /// locally known prefix that no registered bundle resolves — exactly the
-    /// edges [`validate_replacement_relations`] rejects when an index rebuild
+    /// edges `validate_replacement_relations` rejects when an index rebuild
     /// publishes these envelopes (ORB-10305).
     ///
     /// The envelopes are the authority, not the generated relation rows: an

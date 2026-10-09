@@ -37,7 +37,7 @@ pub struct ReviewFinding {
 }
 
 /// The structured report the reviewer persists as
-/// [`REVIEW_REPORT_ARTIFACT`]. The gate validates it against the candidate
+/// [`REVIEW_REPORT_ARTIFACT`](crate::workflow::REVIEW_REPORT_ARTIFACT). The gate validates it against the candidate
 /// and the repository state; it is a claim, not a certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewReport {

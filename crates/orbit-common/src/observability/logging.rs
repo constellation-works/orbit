@@ -29,7 +29,7 @@
 //! because their stdout/stderr are user-facing surfaces.
 //!
 //! Redaction integration: both the stderr formatter and global JSONL formatter
-//! use [`RedactingFields`], which applies [`super::redaction::redact_all`] to
+//! use [`RedactingFields`], which applies [`redact_all`](crate::security::redaction::redact_all) to
 //! string field values, `Error` chains, byte slices, `Debug`-formatted values,
 //! and unstructured `message` text before output is written.
 //! [`redact_event_text`] remains available for non-tracing surfaces that must

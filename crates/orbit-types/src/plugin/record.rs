@@ -34,7 +34,7 @@ pub struct InstalledPlugin {
     /// The Orbit version whose `orbit plugin test` run this plugin's goldens
     /// last passed on, recorded by that run (design §5). `None` until the
     /// conformance suite passes here; `orbit plugin show` prints it as
-    /// "certified for <version>".
+    /// "certified for `<version>`".
     #[serde(default)]
     pub certified_orbit_version: Option<String>,
     /// How this host built the installed outputs, when the plugin was built

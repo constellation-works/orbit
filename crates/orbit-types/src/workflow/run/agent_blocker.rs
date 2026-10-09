@@ -35,7 +35,7 @@ const MAX_EVIDENCE_BYTES: usize = 4 * 1024;
 pub struct AgentBlocker {
     /// Short token naming the blocker.
     pub kind: String,
-    /// Why the implementer stopped, bounded to [`MAX_EVIDENCE_BYTES`].
+    /// Why the implementer stopped, bounded to `MAX_EVIDENCE_BYTES`.
     pub evidence: String,
 }
 

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 /// Private wire name used by the federated mux to inspect every local checkout.
 ///
-/// This is deliberately absent from [`discovery_tool_definitions`]: direct v1
+/// This is deliberately absent from `discovery_tool_definitions`: direct v1
 /// clients continue to see and call only `orbit.workspace.list`, whose Active
 /// filter is part of that surface. The destination server recognizes this
 /// exact private request without adding it to the advertised tool surface.
