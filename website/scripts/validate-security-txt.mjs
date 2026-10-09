@@ -72,8 +72,13 @@ if (content !== undefined) {
   } else if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.test(expires[0])) {
     errors.push('Expires must be an RFC 3339 UTC timestamp');
   } else {
+    // Date.parse normalizes impossible dates (2027-02-30 becomes 2027-03-02), so
+    // the parsed value must round-trip to the supplied UTC timestamp.
     const expiresAt = Date.parse(expires[0]);
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    const canonicalUtc = expires[0].replace(/Z$/u, '.000Z');
+    if (!Number.isFinite(expiresAt) || new Date(expiresAt).toISOString() !== canonicalUtc) {
+      errors.push(`Expires must be an existing UTC calendar date and time: ${expires[0]}`);
+    } else if (expiresAt <= Date.now()) {
       errors.push(`Expires must be in the future: ${expires[0]}`);
     }
   }
