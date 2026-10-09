@@ -172,13 +172,16 @@ fn verify_covering_scope(
     covering: &str,
     head: &str,
 ) -> Result<(), OrbitError> {
+    let canonical_workspace = workspace
+        .canonicalize()
+        .map_err(|_| refused("workspace is unavailable"))?;
     for selector in &task.context_files {
         let anchor = anchor_path(selector).map_err(|error| refused(error.to_string()))?;
-        let resolved = workspace
+        let resolved = canonical_workspace
             .join(anchor)
             .canonicalize()
             .map_err(|_| refused("scope anchor is unavailable; reconcile the task selectors"))?;
-        if !resolved.starts_with(workspace) {
+        if !resolved.starts_with(&canonical_workspace) {
             return Err(refused("scope anchor is outside the tested workspace"));
         }
     }
