@@ -121,13 +121,13 @@ fn follow_logs(
             }
         }
         if step.is_some() || run.state.is_terminal() {
-            let records =
-                filter_cli_invocation_records(runtime.collect_run_cli_invocations(run_id)?, step);
+            // The step filter and the emitted-invocation set apply before any
+            // blob is read, so each capture is loaded once however long the
+            // run keeps polling.
+            let records = runtime.collect_new_run_cli_invocations(run_id, step, &completed)?;
             let mut captures = std::collections::BTreeMap::<(String, String), String>::new();
             for record in &records {
-                if !completed.insert(record.event_id.clone()) {
-                    continue;
-                }
+                completed.insert(record.event_id.clone());
                 let provider = record.provider.as_deref().unwrap_or("unknown");
                 for (stream, text) in [("stdout", &record.stdout), ("stderr", &record.stderr)] {
                     let capture = captures
