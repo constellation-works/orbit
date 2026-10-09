@@ -59,6 +59,10 @@ const NETWORK_RETRY_BACKOFF: [Duration; NETWORK_RETRIES as usize] =
 const BASE_LOCK_TIMEOUT: Duration = Duration::from_secs(50 * 60);
 /// How often one process may refresh a held base from `origin`.
 const HOLD_FETCH_INTERVAL: Duration = Duration::from_secs(120);
+/// An inconclusive hold check may retry after this delay, or immediately
+/// when its base moves. This marker is separate from conclusive results so
+/// candidate validation never treats it as a cached command result.
+const HOLD_INCONCLUSIVE_BACKOFF: chrono::Duration = chrono::Duration::minutes(15);
 /// Directory under the Git common directory holding base results.
 const CACHE_DIR: &str = "orbit-baseline";
 /// Version 2 moved the base checkout out of the common directory, so a
@@ -297,6 +301,7 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
 struct CachePaths {
     result: PathBuf,
     lock: PathBuf,
+    inconclusive_hold: PathBuf,
     worktree: PathBuf,
     legacy_worktrees: PathBuf,
 }
@@ -307,6 +312,7 @@ fn cache_paths(repo: &Path, base_sha: &str, command: &str) -> Result<CachePaths,
     Ok(CachePaths {
         result: dir.join(format!("{key}.json")),
         lock: dir.join(format!("{key}.lock")),
+        inconclusive_hold: dir.join(format!("{key}.hold-inconclusive.json")),
         worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}"))?,
         legacy_worktrees: dir.join(LEGACY_WORKTREES_DIR),
     })
@@ -482,7 +488,10 @@ pub enum BaselineHoldStatus {
 /// The hold stands while its base ref still points at the red commit. When
 /// that ref advances, run the command on the new tip (or use the shared
 /// result cache) and lift the hold only after it passes. A failed or
-/// inconclusive check keeps the task held. A remote-tracking ref is refreshed
+/// inconclusive check keeps the task held. An inconclusive attempt is recorded
+/// separately and suppresses further hold checks for 15 minutes on that tip
+/// and command; a conclusive cached result always takes precedence.
+/// A remote-tracking ref is refreshed
 /// from `origin` at most every `HOLD_FETCH_INTERVAL` per repository and
 /// branch, so a held backlog does not wait on some other delivery to fetch.
 ///
@@ -497,7 +506,13 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 ) -> BaselineHoldStatus {
     match moved_base_tip(repo, hold) {
         Ok(tip) => {
+            if let Some(status) = recorded_moved_base_status(repo, hold, &tip) {
+                return status;
+            }
             let check = compare_with_base(host, repo, &tip, &hold.command);
+            if let Err(reason) = &check.result {
+                record_inconclusive_hold(repo, &tip, &hold.command, reason);
+            }
             judge_moved_base(hold, &tip, check.result)
         }
         Err(status) => status,
@@ -505,8 +520,9 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 }
 
 /// [`baseline_hold_status`] from what is already recorded, never running the
-/// command: `None` when the base moved to a tip with no recorded result for
-/// the hold's command, so deciding needs a full run.
+/// command: `None` when the base moved to a tip with neither a conclusive
+/// result nor an inconclusive hold attempt within the 15-minute back-off,
+/// so deciding needs a full run.
 ///
 /// It still reads the base ref, refreshing it from `origin` as
 /// [`baseline_hold_status`] does, so it fits a short caller such as the clock
@@ -519,12 +535,59 @@ pub fn recorded_baseline_hold_status(
         Ok(tip) => tip,
         Err(status) => return Some(status),
     };
-    let result = match cache_paths(repo, &tip, &hold.command) {
-        Ok(cache) => Ok(read_cached(&cache.result)?),
+    recorded_moved_base_status(repo, hold, &tip)
+}
+
+/// A recent failed attempt to judge a hold, keyed by tip and command using
+/// the cache path. It never represents a conclusive validation result.
+#[derive(Serialize, Deserialize)]
+struct InconclusiveHoldAttempt {
+    recorded_at: chrono::DateTime<Utc>,
+    reason: String,
+}
+
+fn record_inconclusive_hold(repo: &Path, tip: &str, command: &str, reason: &str) {
+    let record = || -> Result<(), OrbitError> {
+        let cache = cache_paths(repo, tip, command)?;
+        let bytes = serde_json::to_vec(&InconclusiveHoldAttempt {
+            recorded_at: Utc::now(),
+            reason: reason.to_string(),
+        })
+        .map_err(|error| OrbitError::Execution(format!("encode inconclusive hold: {error}")))?;
+        atomic_write_bytes(&cache.inconclusive_hold, &bytes)?;
+        Ok(())
+    };
+    if let Err(error) = record() {
+        tracing::warn!(
+            tip,
+            command,
+            "could not record inconclusive hold attempt: {error}"
+        );
+    }
+}
+
+fn recorded_moved_base_status(
+    repo: &Path,
+    hold: &BaselineRedHold,
+    tip: &str,
+) -> Option<BaselineHoldStatus> {
+    let result = match cache_paths(repo, tip, &hold.command) {
+        Ok(cache) => match read_cached(&cache.result) {
+            Some(result) => Ok(result),
+            None => {
+                let bytes = std::fs::read(&cache.inconclusive_hold).ok()?;
+                let attempt: InconclusiveHoldAttempt = serde_json::from_slice(&bytes).ok()?;
+                let age = Utc::now().signed_duration_since(attempt.recorded_at);
+                if age >= HOLD_INCONCLUSIVE_BACKOFF {
+                    return None;
+                }
+                Err(attempt.reason)
+            }
+        },
         // A full run could not locate the cache either.
         Err(error) => Err(format!("locate the base result cache: {error}")),
     };
-    Some(judge_moved_base(hold, &tip, result))
+    Some(judge_moved_base(hold, tip, result))
 }
 
 /// The commit the hold's base ref now names, when it moved off the red

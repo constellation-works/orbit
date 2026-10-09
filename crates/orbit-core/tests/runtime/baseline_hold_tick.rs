@@ -346,3 +346,78 @@ fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
     assert_eq!(base_check_runs(&fixture), 1, "the tip ran once");
     assert_eq!(refresh_runs(&fixture), vec![run_id]);
 }
+
+/// An inconclusive attempt is distinct from an unattempted tip: repeated
+/// sweeps keep the hold without submitting jobs until back-off or a new tip.
+#[test]
+fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
+    if !super::dispatch_admission::isolated(
+        "baseline_hold_tick::an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh",
+    ) {
+        return;
+    }
+    let (fixture, _) = held_on_red_base();
+    install_refresh_job(&fixture);
+    move_base(&fixture, "exit 127\n");
+    let deadline = || Instant::now() + Duration::from_secs(60);
+
+    let first = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+    assert_eq!(first.unchecked, vec![fixture.task_id.clone()], "{first:?}");
+    let first_run = first.dispatched.expect("an unattempted tip gets a refresh");
+    let live = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+    assert_eq!(live.dispatched, None, "one refresh at a time: {live:?}");
+    execute(&fixture, &first_run);
+    assert_eq!(base_check_runs(&fixture), 1);
+    let recorded = verdicts(&fixture);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0]["lifted"], false, "inconclusive keeps the hold");
+
+    for _ in 0..3 {
+        let next = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+        assert!(
+            next.unchecked.is_empty(),
+            "attempt already recorded: {next:?}"
+        );
+        assert_eq!(next.dispatched, None, "inconclusive back-off: {next:?}");
+    }
+    // A refresh submitted for another hold must respect the same back-off.
+    fixture.runtime.refresh_baseline_holds(None).unwrap();
+    assert_eq!(base_check_runs(&fixture), 1);
+    assert_eq!(refresh_runs(&fixture), vec![first_run]);
+    assert_eq!(verdicts(&fixture), recorded);
+
+    // Age the persisted attempt instead of sleeping through the back-off.
+    let marker = std::fs::read_dir(common_dir(&fixture).join("orbit-baseline"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".hold-inconclusive.json"))
+        .expect("the inconclusive hold attempt is persisted");
+    let mut attempt: Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    attempt["recorded_at"] = serde_json::to_value(Utc::now() - chrono::Duration::days(1)).unwrap();
+    std::fs::write(&marker, serde_json::to_vec(&attempt).unwrap()).unwrap();
+    let expired = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+    assert_eq!(
+        expired.unchecked,
+        vec![fixture.task_id.clone()],
+        "{expired:?}"
+    );
+    let retry = expired
+        .dispatched
+        .expect("expired back-off permits a retry");
+    execute(&fixture, &retry);
+    assert_eq!(base_check_runs(&fixture), 2);
+    assert_eq!(verdicts(&fixture), recorded, "the verdict stays unchanged");
+    let after_retry = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+    assert_eq!(after_retry.dispatched, None, "retry renews back-off");
+    assert_eq!(refresh_runs(&fixture).len(), 2);
+
+    // A different tip bypasses the recent inconclusive marker immediately.
+    move_base(&fixture, "exit 0\n");
+    let moved = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
+    let new_tip = moved.dispatched.expect("a new tip is checked immediately");
+    execute(&fixture, &new_tip);
+    assert_eq!(base_check_runs(&fixture), 3);
+    assert_eq!(refresh_runs(&fixture).len(), 3);
+    let recorded = verdicts(&fixture);
+    assert_eq!(recorded.last().unwrap()["lifted"], true);
+}
