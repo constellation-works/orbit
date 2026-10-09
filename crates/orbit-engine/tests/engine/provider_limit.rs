@@ -34,6 +34,22 @@ fn antigravity_quota_stdout() -> String {
     )
 }
 
+/// [ORB-15102] What `agy` wrote on exit 0 for crew `gemini-flash` (run
+/// jrun-20261009-2155-c5): the terminal `event=result` frame, after progress.
+const ANTIGRAVITY_EXIT_ZERO_QUOTA: &str = "Individual quota reached. Please upgrade your \
+     subscription to increase your limits. Resets in 20h52m17s.";
+
+fn antigravity_result_frame(status: &str, error: &str) -> String {
+    format!(
+        "{}\n{}",
+        r#"{"event":"step","step":{"type":"thinking","text":"working"}}"#,
+        json!({
+            "event": "result",
+            "result": {"status": status, "response": "", "error": error, "usage": {}},
+        })
+    )
+}
+
 /// Gemini CLI's quota error (ORB-10814), on stderr.
 const GEMINI_QUOTA: &str = "TerminalQuotaError: You exceeded your current quota, please check \
      your plan and billing details.";
@@ -292,6 +308,62 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             ),
         }
     }
+}
+
+/// [ORB-15102] Antigravity's quota arrives as an in-band `ERROR` result frame
+/// with exit 0. It fails the turn as the typed limit, not as a missing
+/// envelope, and records the reset; another terminal error does not.
+#[test]
+fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
+    let before = Utc::now();
+    let (success, message, limits, _) = dispatch(
+        0,
+        &case(
+            "agy",
+            Provider::Antigravity,
+            antigravity_result_frame("ERROR", ANTIGRAVITY_EXIT_ZERO_QUOTA),
+            "",
+            0,
+            true,
+        ),
+    );
+    let after = Utc::now();
+    assert!(!success, "an exit-0 quota result fails the turn");
+    let message = message.expect("a failed step has a message");
+    assert!(
+        !message.contains("protocol violation") && !message.contains("no valid terminating"),
+        "not a missing envelope: {message}"
+    );
+    let limit = typed_limit(Some(&message), "antigravity");
+    let reset = Duration::hours(20) + Duration::minutes(52) + Duration::seconds(17);
+    let resets_at = limit.resets_at.expect("Antigravity said when it resets");
+    assert!(
+        resets_at >= before + reset - Duration::seconds(1) && resets_at <= after + reset,
+        "resets 20h52m17s after the failure: {resets_at}"
+    );
+    assert!(message.contains(ANTIGRAVITY_EXIT_ZERO_QUOTA), "{message}");
+    let [observation] = limits.as_slice() else {
+        panic!("one gating observation: {limits:?}");
+    };
+    assert_eq!(observation.provider, "antigravity");
+    assert!(observation.exhausted && observation.gating);
+    assert_eq!(observation.resets_at, limit.resets_at);
+
+    // Any other terminal error on exit 0 stays what it was.
+    let (success, message, limits, _) = dispatch(
+        1,
+        &case(
+            "agy",
+            Provider::Antigravity,
+            antigravity_result_frame("ERROR", "Model produced an invalid tool call."),
+            "",
+            0,
+            false,
+        ),
+    );
+    assert!(!success);
+    assert!(!is_provider_limit(None, message.as_deref()), "{message:?}");
+    assert!(limits.is_empty(), "{limits:?}");
 }
 
 /// Codex's same-day reset is the host's local time today; Claude's

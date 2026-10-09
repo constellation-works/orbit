@@ -5,7 +5,10 @@
 use std::path::Path;
 
 use chrono::{DateTime, Offset, Utc};
-use orbit_agent::{provider_usage_limit, provider_usage_limit_details, provider_usage_windows};
+use orbit_agent::{
+    antigravity_terminal_error_diagnostic, provider_usage_limit, provider_usage_limit_details,
+    provider_usage_windows,
+};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
 use serde_json::Value;
@@ -14,23 +17,26 @@ use crate::context::RuntimeHost;
 
 use super::completion::{provider_failure, stdout_frames};
 
-/// Claude's terminal error `result` frame saying the account hit a usage
-/// limit. Claude can write it with exit 0, so it fails the turn whatever the
-/// exit code, like an authentication error.
+/// A provider's terminal error frame saying the account hit a usage limit.
+/// Claude's error `result` frame and Antigravity's `event=result` frame with
+/// `status: ERROR` can both be written with exit 0, so they fail the turn
+/// whatever the exit code, like an authentication error. [ORB-15102]
 pub(super) fn structured_provider_limit(provider: &str, stdout: &[u8]) -> Option<String> {
-    if provider != "claude" {
-        return None;
+    match provider {
+        "claude" => stdout_frames(stdout)
+            .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("result"))
+            .filter_map(|frame| {
+                provider_failure(provider, &frame)?
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .filter(|text| provider_usage_limit(text))
+                    .map(str::to_string)
+            })
+            .last(),
+        "antigravity" | "agy" => antigravity_terminal_error_diagnostic(provider, stdout)
+            .filter(|text| provider_usage_limit(text)),
+        _ => None,
     }
-    stdout_frames(stdout)
-        .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("result"))
-        .filter_map(|frame| {
-            provider_failure(provider, &frame)?
-                .get("result")
-                .and_then(Value::as_str)
-                .filter(|text| provider_usage_limit(text))
-                .map(str::to_string)
-        })
-        .last()
 }
 
 /// The limit a provider's own `text` and control frames describe, read at
