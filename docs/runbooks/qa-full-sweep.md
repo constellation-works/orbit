@@ -155,7 +155,9 @@ identities, then runs `npm pack ./npm --ignore-scripts --offline --json
 --pack-destination <candidate>/.orbit/tmp/npm-package-<unique>`.
 Lifecycle scripts are disabled, so this builds the proxy archive without
 downloading a release binary or publishing. It inspects the actual tarball for
-`package.json`, `bin/orbit.js`, `scripts/install-binary.js`,
+`package.json`, `bin/orbit.js`, the packaged installer at
+`./scripts/install-binary.js` inside the tarball (source:
+`npm/scripts/install-binary.js` in the checkout),
 `release-signing.pub`, `README.md`, and `LICENSE`, checking nonempty files,
 candidate contents, identity and the npm-reported file inventory.
 The JSON output retains the pack command/output, input hashes, versions, packed

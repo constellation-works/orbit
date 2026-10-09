@@ -100,7 +100,9 @@ compiler cannot:
 - subcommand order matches the shipped `--help` order (assert the literal list);
 - MCP exposure matches `docs/design/mcp-bridge/references/conformance-v1.yaml`.
 
-See `crates/orbit-common/src/governance/friction/tests/mod.rs`.
+Use the registry in `crates/orbit-common/src/governance/friction/operations.rs`
+as the worked example. Exercise the derived public surface at the boundary;
+the original friction registry unit tests have been retired.
 
 ### Step 4. Collapse the action enum
 
@@ -123,8 +125,10 @@ loop over the registry through `register_operation`, and delete the noun's block
 from `register_builtins`.
 
 Then assert the derived schemas equal the shipped ones — name, description,
-parameter order, types, requiredness, and the exact description strings. See
-`crates/orbit-tools/src/builtin/orbit/friction/tests/derived_schema.rs`.
+parameter order, types, requiredness, and the exact description strings. Use
+`crates/orbit-tools/tests/tools/mcp_definitions.rs` for the public definition
+boundary and `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` for the
+shipped schema baseline; the original derived-schema unit tests have been retired.
 
 ### Step 6. Derive the CLI
 

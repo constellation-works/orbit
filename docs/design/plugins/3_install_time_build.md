@@ -414,8 +414,8 @@ deterministic, matching the archive-digest finding that already exists.
 
 | Decision | Where |
 |---|---|
-| `spec.build` schema and validation (§1) | `orbit-types` `plugin/build.rs`; `PluginSpec.build` |
-| Commit fetch and `HEAD` check (§3.1) | `orbit-tools` `plugin/source.rs` (`fetch_git_commit`) |
+| `spec.build` schema and validation (§1) | `crates/orbit-types/src/plugin/build.rs`; `PluginSpec.build` |
+| Commit fetch and `HEAD` check (§3.1) | `crates/orbit-tools/src/plugin/source.rs` (`fetch_git_commit`) |
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
 | Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
 | Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |

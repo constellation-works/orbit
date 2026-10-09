@@ -109,7 +109,7 @@ The `fsProfile:` field on an activity flows through `crates/orbit-engine/src/act
 - `job_executor.rs` reads `t.fs_profile.as_deref()` from the activity spec at the call site of every step type.
 - `agent_loop_driver.rs` invokes `host.tool_context_for_activity(fs_profile, audit_logger)` to construct the `ToolContext` the CLI path and remaining in-process tools read from.
 
-`crates/orbit-core/src/runtime/v2_host/mod.rs::tool_context_for_activity` is the single materialization point:
+`crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs::tool_context_for_activity` is the single materialization point:
 
 ```
 fs_profile: Some(fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE).to_string())
