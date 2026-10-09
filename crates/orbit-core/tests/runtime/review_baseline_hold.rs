@@ -33,7 +33,7 @@ const GREEN_ON_BASE: &str = "#!/bin/sh\n\
                              exit 0\n";
 const GREEN: &str = "#!/bin/sh\nexit 0\n";
 
-fn git(repo: &Path, args: &[&str]) -> String {
+pub(super) fn git(repo: &Path, args: &[&str]) -> String {
     let mut command = std::process::Command::new("git");
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -397,17 +397,9 @@ fn a_failure_the_base_does_not_explain_is_never_held() {
     }
 }
 
-/// [ORB-14739] A held task whose base tip moved to a commit where the check
-/// would run for minutes does not block the readiness explanation or the
-/// drain's backlog snapshot: both read the hold's recorded verdict and never
-/// run the command. Only the owner's clock tick re-checks the hold.
-#[test]
-fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
-    if !super::dispatch_admission::isolated(
-        "review_baseline_hold::a_moved_base_never_runs_the_check_inside_a_snapshot",
-    ) {
-        return;
-    }
+/// A task held for [`CHECK`] failing on `main`, recorded by the real failure
+/// handoff, and assessed so admission reaches the red-base check.
+pub(super) fn held_on_red_base() -> (Fixture, BaselineRedHold) {
     let fixture = fixture(RED, "after\n");
     let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
     let hold = BaselineRedHold {
@@ -448,6 +440,21 @@ fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
             None,
         )
         .unwrap();
+    (fixture, hold)
+}
+
+/// [ORB-14739] A held task whose base tip moved to a commit where the check
+/// would run for minutes does not block the readiness explanation or the
+/// drain's backlog snapshot: both read the hold's recorded verdict and never
+/// run the command. Only a refresh run the owner's clock dispatches does.
+#[test]
+fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_moved_base_never_runs_the_check_inside_a_snapshot",
+    ) {
+        return;
+    }
+    let (fixture, hold) = held_on_red_base();
 
     // The base moves to a check that marks it ran, then outlasts the test.
     let marker = fixture.repo.parent().unwrap().join("base-check-ran");
@@ -499,14 +506,15 @@ fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
         "{backlog}"
     );
 
-    // A tick whose budget is already spent starts no check either.
+    // A tick whose budget is already spent reads no hold, so it neither
+    // checks one nor dispatches a refresh run.
     let refresh = fixture
         .runtime
-        .refresh_baseline_holds(Some(std::time::Instant::now()))
+        .run_baseline_hold_tick(std::time::Instant::now())
         .unwrap();
-    assert!(
-        refresh.lifted.is_empty() && refresh.held.is_empty(),
-        "{refresh:?}"
+    assert_eq!(
+        refresh,
+        orbit_core::application::task::BaselineHoldRefresh::default()
     );
     assert!(!marker.exists(), "an expired tick ran the required command");
 }

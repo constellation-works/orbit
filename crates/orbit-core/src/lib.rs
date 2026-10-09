@@ -70,6 +70,29 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+
+    use crate::application::routines::{
+        RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
+    };
+
+    /// One clock tick against an explicit global root at `now`, so a test can
+    /// make a routine slot or an auto-task interval due.
+    pub fn run_sweep_at(
+        global_root: &std::path::Path,
+        options: SweepOptions,
+        local_machine: RoutineMachineIdentity,
+        workspace_provider: &dyn RoutineWorkspaceProvider,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<SweepOutcome, crate::OrbitError> {
+        crate::application::routines::sweep::run_sweep_at_with_providers_at(
+            global_root,
+            options,
+            local_machine,
+            workspace_provider,
+            crate::runtime::host_signal::default_host_signal_probe().as_ref(),
+            now,
+        )
+    }
 }
 
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.

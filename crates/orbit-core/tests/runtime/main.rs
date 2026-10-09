@@ -13,6 +13,7 @@
 
 mod actor_identity;
 mod artifact_tools;
+mod baseline_hold_tick;
 mod config_settings;
 mod dispatch_admission;
 mod distributed_drain;

@@ -487,16 +487,54 @@ pub enum BaselineHoldStatus {
 /// branch, so a held backlog does not wait on some other delivery to fetch.
 ///
 /// A cache miss runs the whole command, for up to the validation timeout, so
-/// only a background caller (the owner's clock tick) may ask; read and
-/// admission paths use the verdict it records [ORB-14739].
+/// only a background run may ask: the owner's clock tick reads
+/// [`recorded_baseline_hold_status`] and leaves a miss to a detached refresh
+/// run [ORB-14739, ORB-14823].
 pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
     host: &H,
     repo: &Path,
     hold: &BaselineRedHold,
 ) -> BaselineHoldStatus {
+    match moved_base_tip(repo, hold) {
+        Ok(tip) => {
+            let check = compare_with_base(host, repo, &tip, &hold.command);
+            judge_moved_base(hold, &tip, check.result)
+        }
+        Err(status) => status,
+    }
+}
+
+/// [`baseline_hold_status`] from what is already recorded, never running the
+/// command: `None` when the base moved to a tip with no recorded result for
+/// the hold's command, so deciding needs a full run.
+///
+/// It still reads the base ref, refreshing it from `origin` as
+/// [`baseline_hold_status`] does, so it fits a short caller such as the clock
+/// tick, which holds the host's sweep lock.
+pub fn recorded_baseline_hold_status(
+    repo: &Path,
+    hold: &BaselineRedHold,
+) -> Option<BaselineHoldStatus> {
+    let tip = match moved_base_tip(repo, hold) {
+        Ok(tip) => tip,
+        Err(status) => return Some(status),
+    };
+    let result = match cache_paths(repo, &tip, &hold.command) {
+        Ok(cache) => Ok(read_cached(&cache.result)?),
+        // A full run could not locate the cache either.
+        Err(error) => Err(format!("locate the base result cache: {error}")),
+    };
+    Some(judge_moved_base(hold, &tip, result))
+}
+
+/// The commit the hold's base ref now names, when it moved off the red
+/// commit; otherwise the status that keeps the hold.
+fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, BaselineHoldStatus> {
     let base_ref = hold.base_ref.trim();
     if base_ref.is_empty() {
-        return BaselineHoldStatus::Holding("the hold names no base ref".to_string());
+        return Err(BaselineHoldStatus::Holding(
+            "the hold names no base ref".to_string(),
+        ));
     }
     if let Some(branch) = base_ref.strip_prefix("origin/")
         && fetch_due(repo, branch)
@@ -504,7 +542,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
     {
         tracing::debug!(branch, "baseline hold could not refresh its base: {error}");
     }
-    let tip = match git_output(
+    let tip = git_output(
         repo,
         &[
             "rev-parse",
@@ -512,22 +550,30 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             "--end-of-options",
             &format!("{base_ref}^{{commit}}"),
         ],
-    ) {
-        Ok(tip) => tip,
-        Err(error) => {
-            return BaselineHoldStatus::Holding(format!(
-                "`{base_ref}` cannot be read, so the new base cannot be checked: {error}"
-            ));
-        }
-    };
+    )
+    .map_err(|error| {
+        BaselineHoldStatus::Holding(format!(
+            "`{base_ref}` cannot be read, so the new base cannot be checked: {error}"
+        ))
+    })?;
     if tip == hold.base_sha {
-        return BaselineHoldStatus::Holding(format!(
+        return Err(BaselineHoldStatus::Holding(format!(
             "`{base_ref}` is still at {tip}, where required validation `{}` fails",
             hold.command
-        ));
+        )));
     }
-    let check = compare_with_base(host, repo, &tip, &hold.command);
-    match check.result {
+    Ok(tip)
+}
+
+/// The hold's status once its base moved to `tip`, from the command's result
+/// there or why there is none.
+fn judge_moved_base(
+    hold: &BaselineRedHold,
+    tip: &str,
+    result: Result<BaseCommandResult, String>,
+) -> BaselineHoldStatus {
+    let base_ref = hold.base_ref.trim();
+    match result {
         Ok(result) if result.passed => BaselineHoldStatus::Lifted(format!(
             "`{base_ref}` moved from {} to {tip}, where required validation `{}` passes",
             hold.base_sha, hold.command

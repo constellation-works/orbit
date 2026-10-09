@@ -386,14 +386,19 @@ its candidate is kept. `orbit run readiness --json` reports the task with
 `reason: "baseline_red_hold"`. Its `detail` names the red base commit.
 
 Fix the base instead: land a repair of the failing command on the integration
-branch. After the ref advances, the owner's clock tick runs the held command
-on its new tip and records a `baseline_red_hold_verdict` history event; the
-hold lifts only when that check passes. A failing or inconclusive check keeps
-the task in the backlog. Admission and readiness only read that verdict, so a
-task stays held until a tick has checked the new tip; a stopped clock
-(`orbit clock status`) leaves it held. The next run then resumes the kept
-candidate. A claimed leaf on a follower releases its claim the same way, and
-the owner withholds the task from pulls until its own tick sees the base pass.
+branch. After the ref advances, the owner's clock tick dispatches one
+`baseline_hold_refresh_pipeline` run, which runs the held command on the new
+tip and records a `baseline_red_hold_verdict` history event; the hold lifts
+only when that check passes. The tick itself never runs the command, so a
+long check does not stall routines or auto-tasks. A failing or inconclusive
+check keeps the task in the backlog. Admission and readiness only read that
+verdict, so a task stays held until a refresh run has checked the new tip; a
+stopped clock (`orbit clock status`) leaves it held. Find the refresh runs
+with `orbit run history -j baseline_hold_refresh_pipeline`; only one runs per
+workspace at a time, and a tip whose check was inconclusive gets a new run
+after the last one ends. The next delivery then resumes the kept candidate. A
+claimed leaf on a follower releases its claim the same way, and the owner
+withholds the task from pulls until its own refresh run sees the base pass.
 Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
 `validation/<run>/<n>.baseline.json`. See
 [CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).

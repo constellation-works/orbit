@@ -62,6 +62,6 @@ pub use executor::automation::vcs::claim::{
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
     BaselineHoldStatus, WorktreeGcOptions, WorktreeGcResult, baseline_hold_status,
-    collect_worktrees, fetch_remote_base, run_worktree_has_build_output, run_worktree_paths,
-    validate_claim_new_paths,
+    collect_worktrees, fetch_remote_base, recorded_baseline_hold_status,
+    run_worktree_has_build_output, run_worktree_paths, validate_claim_new_paths,
 };

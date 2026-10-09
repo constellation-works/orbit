@@ -48,6 +48,7 @@ macro_rules! deterministic_action_catalog {
                 PromoteAgentMain => "promote_agent_main",
                 PullRefill => "pull_refill",
                 RecordProposedApprovals => "record_proposed_approvals",
+                RefreshBaselineHolds => "refresh_baseline_holds",
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
                 ResolveDeliveryJob => "resolve_delivery_job",
