@@ -39,9 +39,12 @@ this folder.
 - **Commit trailer.** While the session works a task (after **Work here**,
   **Rescue here**, or an `orbit_task_update` to in-progress), a Bash
   `git commit` gains `--trailer 'Task: <id>'`. Only a command that starts
-  with `git commit` counts (after `;`, `&&`, `|` or `(`): `git commit-tree`
-  and quoted text such as `--grep="git commit"` are left alone, as is a
-  commit that already has a trailer or uses `--amend`.
+  with `git commit` counts (after `;`, `&&`, `|`, `(` or a newline, including
+  a backslash continuation after a separator). Conditions such as `if`,
+  `elif`, `while` and `until`, and negation with `!`, also allow a commit.
+  Heredoc bodies, `git commit-tree` and quoted text such as
+  `--grep="git commit"` are left alone, as is a commit that already has a
+  trailer or uses `--amend`.
 
 Approve runs as soon as you press it. Accept, reject and ship ask for
 confirmation first. **Work here** and **Rescue here** submit a prompt to
