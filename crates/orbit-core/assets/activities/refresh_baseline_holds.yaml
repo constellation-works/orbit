@@ -1,0 +1,35 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: refresh_baseline_holds
+spec:
+  type: deterministic
+  description: >
+    Re-checks every backlog task held for a red base on the owner. A hold
+    whose base ref still names the red commit stays held. When the ref moved,
+    the hold's required command runs on the new tip in a detached checkout,
+    unless a result for that tip and command is already recorded, and the
+    verdict is recorded on the task: lifted when the command passes there,
+    held when it fails or cannot be judged. It changes no task status, and a
+    claimed worker or replica checkout stands down.
+  input_schema_json:
+    type: object
+  output_schema_json:
+    type: object
+    required: [lifted, held]
+    properties:
+      # Tasks whose hold this run lifted.
+      lifted:
+        type: array
+        items:
+          type: string
+      # Tasks still held, with a newly recorded verdict.
+      held:
+        type: array
+        items:
+          type: string
+      # Why the run checked nothing, when it stood down.
+      skipped:
+        type: [string, "null"]
+  action: refresh_baseline_holds
+  config: {}

@@ -118,6 +118,18 @@ worker.
 The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
 `[]`; this also turns off final recovery inside the delivery pipelines.
 
+## Built in: re-checking tasks held for a red base
+
+This needs no enablement either. A task whose required command fails on its
+base exactly as on the candidate waits in the backlog under a red-base hold.
+Every clock sweep on the owner judges those holds from cached base results
+only. When a held base ref has moved to a tip nobody has checked, the sweep
+dispatches one `baseline_hold_refresh_pipeline` run, at most one per workspace
+at a time. That run executes the held command on the new tip and records the
+verdict; the hold lifts only when the command passes. The sweep never runs the
+command itself, so a long check never makes later ticks report `lock_busy`.
+It never runs on a follower or inside a claimed worker.
+
 ## Built in: Linux CodeQL evidence for held reviews
 
 This also needs no enablement. On a Linux owner, every clock sweep looks for

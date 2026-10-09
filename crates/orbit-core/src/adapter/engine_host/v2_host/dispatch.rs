@@ -336,6 +336,12 @@ pub(crate) fn run_deterministic(
                 recovery_run_id(&tool_context),
             )
         }
+        // [ORB-14823] Re-check every standing baseline-red hold, running the
+        // required command on a base tip with no recorded result. Only a
+        // detached refresh run reaches this; the clock tick never does.
+        CoreDeterministicAction::RefreshBaselineHolds => {
+            crate::application::task::refresh_baseline_holds_step(runtime, action)
+        }
         // [ORB-11333] Reserve a fresh reviewer start for the committed,
         // base-synchronized candidate and hand it a pinned manifest; then
         // settle the reviewer's report into an honest verdict, reviewer-

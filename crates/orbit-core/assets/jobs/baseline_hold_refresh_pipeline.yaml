@@ -1,0 +1,29 @@
+# Owner check of standing baseline-red holds whose base moved to a tip with
+# no recorded result for the hold's required command.
+#
+# Trigger
+# - The owner's clock tick judges every standing hold from recorded base
+#   results only, because it holds the host's sweep lock. When a hold's base
+#   ref moved to a tip nobody has checked, the tick submits one run of this
+#   job, unless one is already live in the workspace. Followers and claimed
+#   workers never submit.
+#
+# Step
+# - `refresh` re-checks every standing hold. On a new base tip it runs the
+#   hold's required command in a detached checkout of that tip, sharing the
+#   per-(tip, command) result cache with delivery validation, and records the
+#   verdict on the task: lifted when the command passes there, held
+#   otherwise. It changes no task status. A command can run for up to the
+#   validation timeout, which is why it runs here and not in the tick.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: baseline_hold_refresh_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: refresh
+      target: activity:refresh_baseline_holds

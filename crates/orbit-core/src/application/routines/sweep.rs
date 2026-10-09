@@ -558,23 +558,29 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
-    // [ORB-14739] Standing baseline-red holds are re-checked here, never on a
-    // read or admission path: a moved base tip reruns the hold's required
-    // command there (once per tip and command), so this runs after
-    // everything the tick dispatches. Admission reads the recorded verdict.
+    // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked
+    // here, never on a read or admission path. The tick reads only recorded
+    // base results: a base tip nobody has checked gets one detached refresh
+    // run per workspace, so the required command never runs under the sweep
+    // lock. Admission reads the recorded verdict.
     if !options.dry_run {
         for (workspace, runtime) in &discovered.entries {
             if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
                 continue;
             }
-            match runtime.refresh_baseline_holds(Some(deadline)) {
+            match runtime.run_baseline_hold_tick(deadline) {
                 Ok(refresh) => {
-                    if !refresh.lifted.is_empty() || !refresh.held.is_empty() {
+                    if !refresh.lifted.is_empty()
+                        || !refresh.held.is_empty()
+                        || refresh.dispatched.is_some()
+                    {
                         tracing::info!(
                             target: "orbit.core.sweep",
                             workspace = %workspace.name,
                             lifted = refresh.lifted.len(),
                             held = refresh.held.len(),
+                            unchecked = refresh.unchecked.len(),
+                            dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
                             "sweep.baseline_holds"
                         );
                     }

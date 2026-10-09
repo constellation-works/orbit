@@ -194,6 +194,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/fulfil_review_evidence.yaml"),
     ),
     (
+        "refresh_baseline_holds",
+        include_str!("../../assets/activities/refresh_baseline_holds.yaml"),
+    ),
+    (
         "prepare_blocked_task_recovery",
         include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
@@ -264,6 +268,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "agent_invoke_pipeline",
         include_str!("../../assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
+        "baseline_hold_refresh_pipeline",
+        include_str!("../../assets/jobs/baseline_hold_refresh_pipeline.yaml"),
     ),
     (
         "blocked_task_recovery_pipeline",

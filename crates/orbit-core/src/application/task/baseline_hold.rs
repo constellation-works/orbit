@@ -13,28 +13,47 @@
 //! Whether it still stands is the engine's
 //! [`baseline_hold_status`](orbit_engine::baseline_hold_status), which may run
 //! the whole required command on a new base tip. That never happens on a read
-//! or admission path [ORB-14739]: the owner's clock tick
-//! ([`OrbitRuntime::refresh_baseline_holds`]) re-evaluates each standing hold
-//! and records the verdict as a `baseline_red_hold_verdict` history entry,
-//! which changes no status. Admission reads only the latest verdict after the
-//! hold. A hold with no verdict yet stays held until the tick records one.
+//! or admission path [ORB-14739], nor inside the clock tick, which holds the
+//! host's sweep lock [ORB-14823]. The tick
+//! ([`OrbitRuntime::run_baseline_hold_tick`]) judges each standing hold only
+//! from recorded base results. When a hold's base moved to a tip nobody has
+//! checked, it dispatches one detached [`BASELINE_HOLD_REFRESH_JOB`] run per
+//! workspace at a time, whose step ([`OrbitRuntime::refresh_baseline_holds`])
+//! runs the command. Either records the verdict as a
+//! `baseline_red_hold_verdict` history entry, which changes no status.
+//! Admission reads only the latest verdict after the hold. A hold with no
+//! verdict yet stays held until one is recorded.
 
 use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{BaselineHoldStatus, baseline_hold_status};
+use orbit_engine::{
+    BaselineHoldStatus, DispatchError, baseline_hold_status, recorded_baseline_hold_status,
+};
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
+use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRunState, JobRunTrigger};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
-use super::TaskRecordUpdateParams;
+use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 
-/// History event recording the clock tick's latest check of a standing hold.
+/// The job a clock tick dispatches to check holds whose base moved to a tip
+/// with no recorded result; at most one run per workspace is live.
+pub const BASELINE_HOLD_REFRESH_JOB: &str = "baseline_hold_refresh_pipeline";
+/// Trigger recorded on each refresh run the tick submits.
+const TRIGGER_NAME: &str = "baseline-hold-refresh";
+const TRIGGER_CONSUMER: &str = "clock-sweep";
+/// Recent refresh runs scanned for a live one.
+const RUN_SCAN_LIMIT: usize = 20;
+
+/// History event recording the latest check of a standing hold.
 const BASELINE_RED_HOLD_VERDICT_EVENT: &str = "baseline_red_hold_verdict";
 
-/// The clock tick's check of a standing [`BaselineRedHold`], persisted as the
+/// A check of a standing [`BaselineRedHold`], persisted as the
 /// note of a [`BASELINE_RED_HOLD_VERDICT_EVENT`] entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct BaselineHoldVerdict {
@@ -44,21 +63,26 @@ struct BaselineHoldVerdict {
     reason: String,
 }
 
-/// What one clock tick did about standing baseline-red holds.
+/// What one check of the standing baseline-red holds did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BaselineHoldRefresh {
-    /// Tasks whose hold the tick lifted.
+    /// Tasks whose hold the check lifted.
     pub lifted: Vec<String>,
     /// Tasks still held, with a newly recorded verdict.
     pub held: Vec<String>,
-    /// Why the tick did nothing, when it stood down.
+    /// Tasks whose base moved to a tip with no recorded result, left to a
+    /// refresh run. Only the clock tick leaves any.
+    pub unchecked: Vec<String>,
+    /// The refresh run the clock tick started for `unchecked`, if any.
+    pub dispatched: Option<String>,
+    /// Why the check did nothing, when it stood down.
     pub skipped: Option<String>,
 }
 
 impl OrbitRuntime {
     /// Why `task` is withheld from admission for a red base, or `None` when
     /// no hold stands. Reads only the task's history: the verdict is the
-    /// clock tick's, never computed here.
+    /// clock tick's or its refresh run's, never computed here.
     pub(crate) fn standing_baseline_hold(&self, task: &Task) -> Result<Option<String>, OrbitError> {
         if task.status != TaskStatus::Backlog {
             return Ok(None);
@@ -84,16 +108,64 @@ impl OrbitRuntime {
         })
     }
 
-    /// One clock tick: re-evaluate every backlog task's standing baseline-red
-    /// hold and record each changed verdict [ORB-14739].
+    /// One clock tick's check of the standing baseline-red holds
+    /// [ORB-14823]. It judges each hold only from recorded base results and
+    /// never runs a required command, so it stays short while the tick holds
+    /// the host's sweep lock. When some hold's base moved to a tip with no
+    /// recorded result, it dispatches one [`BASELINE_HOLD_REFRESH_JOB`] run to
+    /// check it, unless one is already live. No new hold is read after
+    /// `deadline`; the next tick resumes.
+    pub fn run_baseline_hold_tick(
+        &self,
+        deadline: Instant,
+    ) -> Result<BaselineHoldRefresh, OrbitError> {
+        let repo = &self.paths().repo_root;
+        let mut refresh = self.check_baseline_holds(Some(deadline), &|hold| {
+            recorded_baseline_hold_status(repo, hold)
+        })?;
+        if refresh.unchecked.is_empty() || self.baseline_hold_refresh_live()? {
+            return Ok(refresh);
+        }
+        let input = json!({
+            ROUTINE_DISPATCH_ORBIT_DIR_FIELD: self.shared_root().to_string_lossy(),
+        });
+        let submission = PipelineSubmission {
+            trigger: JobRunTrigger::state_routine(TRIGGER_NAME, TRIGGER_CONSUMER),
+            ..PipelineSubmission::catalog(
+                BASELINE_HOLD_REFRESH_JOB,
+                input,
+                Some(SYSTEM_ACTOR_LABEL),
+            )
+        };
+        let (result, _) = self.submit_keyed_pipeline_run(submission)?;
+        refresh.dispatched = Some(result.run_id);
+        Ok(refresh)
+    }
+
+    /// Re-evaluate every backlog task's standing baseline-red hold and record
+    /// each changed verdict: the step of a [`BASELINE_HOLD_REFRESH_JOB`] run.
     ///
     /// The check may run the hold's required command on a new base tip (once
-    /// per tip and command: the engine caches the result), so it stays off
-    /// read and admission paths. Holds sharing a base and command share that
-    /// run. No new hold is started after `deadline`; the next tick resumes.
+    /// per tip and command: the engine caches the result), so it runs only in
+    /// that detached run, never on a read or admission path or inside the
+    /// clock tick. Holds sharing a base and command share that run. No new
+    /// hold is started after `deadline`.
     pub fn refresh_baseline_holds(
         &self,
         deadline: Option<Instant>,
+    ) -> Result<BaselineHoldRefresh, OrbitError> {
+        let repo = &self.paths().repo_root;
+        self.check_baseline_holds(deadline, &|hold| {
+            Some(baseline_hold_status(self, repo, hold))
+        })
+    }
+
+    /// Judge every standing, unlifted hold with `status` and record each
+    /// changed verdict. A hold `status` cannot judge is listed `unchecked`.
+    fn check_baseline_holds(
+        &self,
+        deadline: Option<Instant>,
+        status: &dyn Fn(&BaselineRedHold) -> Option<BaselineHoldStatus>,
     ) -> Result<BaselineHoldRefresh, OrbitError> {
         let mut refresh = BaselineHoldRefresh::default();
         if self.worker_invocation().is_some() {
@@ -124,13 +196,16 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            let verdict = match baseline_hold_status(self, &self.paths().repo_root, &standing.hold)
-            {
-                BaselineHoldStatus::Holding(reason) => BaselineHoldVerdict {
+            let verdict = match status(&standing.hold) {
+                None => {
+                    refresh.unchecked.push(task.id.clone());
+                    continue;
+                }
+                Some(BaselineHoldStatus::Holding(reason)) => BaselineHoldVerdict {
                     lifted: false,
                     reason,
                 },
-                BaselineHoldStatus::Lifted(reason) => BaselineHoldVerdict {
+                Some(BaselineHoldStatus::Lifted(reason)) => BaselineHoldVerdict {
                     lifted: true,
                     reason,
                 },
@@ -154,8 +229,25 @@ impl OrbitRuntime {
         Ok(refresh)
     }
 
+    /// Whether a [`BASELINE_HOLD_REFRESH_JOB`] run is still live here.
+    fn baseline_hold_refresh_live(&self) -> Result<bool, OrbitError> {
+        Ok(self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(BASELINE_HOLD_REFRESH_JOB.to_string()),
+                limit: Some(RUN_SCAN_LIMIT),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .iter()
+            .any(|run| !run.state.is_terminal() && run.state != JobRunState::Skipped))
+    }
+
     /// Append `verdict` to `task_id`'s history if `hold` is still its standing
-    /// hold. `false` when a later status decision superseded it.
+    /// hold. `false` when a later status decision superseded it, or when the
+    /// latest verdict already says the same: the tick and a refresh run may
+    /// judge one hold at once.
     fn record_baseline_hold_verdict(
         &self,
         task_id: &str,
@@ -169,7 +261,9 @@ impl OrbitRuntime {
             .tasks()
             .with_task_write_lock(task_id, &mut || {
                 let current = StandingHold::latest(&self.get_task_history(task_id)?);
-                if current.is_none_or(|current| current.hold != *hold) {
+                if current.is_none_or(|current| {
+                    current.hold != *hold || current.verdict.as_ref() == Some(verdict)
+                }) {
                     return Ok(());
                 }
                 self.stores().task_records().update(
@@ -219,4 +313,24 @@ impl StandingHold {
             .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok());
         Some(Self { hold, verdict })
     }
+}
+
+/// `refresh_baseline_holds`: the only step of [`BASELINE_HOLD_REFRESH_JOB`].
+/// Re-checks every standing hold, running a required command where a base
+/// tip has no recorded result.
+pub(crate) fn refresh_baseline_holds_step(
+    runtime: &OrbitRuntime,
+    action: &str,
+) -> Result<Value, DispatchError> {
+    let refresh = runtime.refresh_baseline_holds(None).map_err(|error| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: error.to_string(),
+        }
+    })?;
+    Ok(json!({
+        "lifted": refresh.lifted,
+        "held": refresh.held,
+        "skipped": refresh.skipped,
+    }))
 }
