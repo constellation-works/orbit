@@ -31,8 +31,11 @@ relation in the same task update. Preserve all existing relations and append
 `{"type":"covered_by","target":"github-pr:https://github.com/OWNER/REPO/pull/NUMBER"}`.
 `github-pr:NUMBER` uses the checkout's GitHub repository. This is durable
 operator coverage of the exact failure key: later sweeps report `covered`
-with the archived owner and cover, and create no pilot candidate. A rejected
-finding can carry the same relation. A missing or unreadable cover remains
+with the archived owner and cover, and create no pilot candidate. A compiler
+error's key includes the checkout, so the hold also follows the same complete
+diagnostic set (paths and messages, ignoring line and column) to later
+checkouts; an owner filed before that set was recorded in its description
+holds only at its own checkout. A rejected finding can carry the same relation. A missing or unreadable cover remains
 withheld with `operator_cover_unavailable`; inspect that reason rather than
 assuming the PR is open. A closed, unmerged PR (or archived/rejected cover task)
 releases the key. After a merged cover's commit is in the failing checkout,
@@ -40,7 +43,8 @@ the sweep files a new repair and names that cover as a fix that did not hold;
 older checkouts stay covered while waiting for the fix.
 
 A plain archive or rejection without `covered_by` suppresses the exact key
-for `ci_failure.operator_suppression_hours` (default 6) from the operator's
+(and, for compiler errors, the same diagnostic set at later checkouts) for
+`ci_failure.operator_suppression_hours` (default 6) from the operator's
 status decision. Its report entry is `withheld`, reason `operator_archived`,
 with the owner and expiry. After expiry a current failure can file again.
 Matching normalized failing-test signatures across jobs share one task with

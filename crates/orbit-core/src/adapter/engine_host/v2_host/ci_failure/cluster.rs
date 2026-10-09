@@ -642,7 +642,7 @@ impl FailureCluster {
 /// Old descriptions carry only the exact-cause digest. Verify that their
 /// retained excerpt contains that entire cause before deriving a weaker set;
 /// a truncated subset must never claim coverage of another diagnostic set.
-fn task_open_compiler_identity(task: &Task) -> Option<String> {
+pub(super) fn task_open_compiler_identity(task: &Task) -> Option<String> {
     let identity_line = |prefix| {
         task.description
             .lines()
