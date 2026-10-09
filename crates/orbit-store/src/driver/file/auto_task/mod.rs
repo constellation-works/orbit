@@ -218,7 +218,7 @@ where
     F: FnOnce(&mut CursorSession) -> Result<T, OrbitError>,
 {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Io(format!(
                 "create auto-tasks state dir {}: {error}",
                 parent.display()

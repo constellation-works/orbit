@@ -342,7 +342,7 @@ pub(super) fn in_detached_worktree<T>(
 ) -> Result<T, OrbitError> {
     remove_worktree(workspace_path, worktree);
     if let Some(parent) = worktree.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Execution(format!("create '{}': {error}", parent.display()))
         })?;
     }

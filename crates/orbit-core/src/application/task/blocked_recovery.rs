@@ -804,7 +804,7 @@ impl OrbitRuntime {
         let path = recovery_checkout_path(&self.paths().state_dir, recovery_run_id)?;
         self.remove_recovery_checkout(recovery_run_id)?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
+            orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
                 OrbitError::Execution(format!(
                     "create recovery checkout directory {}: {error}",
                     parent.display()
@@ -828,7 +828,7 @@ impl OrbitRuntime {
         // and Seatbelt can deny the same subtree. Keep it empty here; the
         // launcher prepares scratch, but no task/runtime stores are copied.
         let denied_root = path.join(".orbit");
-        std::fs::create_dir(&denied_root).map_err(|error| {
+        orbit_common::fs::io::create_private_dir(&denied_root).map_err(|error| {
             OrbitError::Execution(format!(
                 "prepare recovery checkout deny root {}: {error}",
                 denied_root.display()

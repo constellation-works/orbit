@@ -95,7 +95,7 @@ pub fn bulk_write_temp_dir() -> std::path::PathBuf {
                 std::process::id(),
                 PROBES.fetch_add(1, Ordering::Relaxed)
             ));
-            let created = std::fs::create_dir(&probe).is_ok();
+            let created = crate::fs::io::create_private_dir(&probe).is_ok();
             created && std::fs::remove_dir(&probe).is_ok()
         };
         if !tmpfs(&default) {

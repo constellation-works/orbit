@@ -71,7 +71,7 @@ pub(super) struct StagedInstall {
 impl StagedInstall {
     pub(super) fn begin(global_root: &Path, name: &str, version: &str) -> Result<Self, OrbitError> {
         let namespace_dir = plugin_namespace_dir(global_root, name);
-        std::fs::create_dir_all(&namespace_dir).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(&namespace_dir).map_err(|error| {
             OrbitError::Io(format!("create {}: {error}", namespace_dir.display()))
         })?;
         Ok(Self {
@@ -307,7 +307,7 @@ pub(super) fn copy_tree(source: &Path, target: &Path) -> Result<(), OrbitError> 
 }
 
 fn copy_tree_inner(tree_root: &Path, source: &Path, target: &Path) -> Result<(), OrbitError> {
-    std::fs::create_dir_all(target)
+    orbit_common::fs::io::create_private_dir_all(target)
         .map_err(|error| OrbitError::Io(format!("create {}: {error}", target.display())))?;
     for entry in std::fs::read_dir(source)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", source.display())))?

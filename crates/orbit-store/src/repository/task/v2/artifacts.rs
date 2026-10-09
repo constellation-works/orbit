@@ -279,7 +279,8 @@ impl TaskV2Store {
             let files_dir = bundle_dir
                 .join(TASK_ARTIFACTS_DIR_NAME)
                 .join(TASK_ARTIFACT_FILES_DIR_NAME);
-            fs::create_dir_all(&files_dir).map_err(|err| OrbitError::Io(err.to_string()))?;
+            orbit_common::fs::io::create_private_dir_all(&files_dir)
+                .map_err(|err| OrbitError::Io(err.to_string()))?;
 
             let mut by_path = bundle
                 .artifact_manifest

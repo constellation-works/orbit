@@ -286,20 +286,22 @@ fn ensure_real_dir(dir: &Path) -> Result<(), OrbitError> {
     match fs::symlink_metadata(dir) {
         Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
         Ok(_) => refuse(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::create_dir(dir) {
-            Ok(()) => Ok(()),
-            // A concurrent creator wins the race; recheck what it made.
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                match fs::symlink_metadata(dir) {
-                    Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
-                    _ => refuse(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match orbit_common::fs::io::create_private_dir(dir) {
+                Ok(()) => Ok(()),
+                // A concurrent creator wins the race; recheck what it made.
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    match fs::symlink_metadata(dir) {
+                        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+                        _ => refuse(),
+                    }
                 }
+                Err(error) => Err(OrbitError::Io(format!(
+                    "create step-recovery slot directory '{}': {error}",
+                    dir.display()
+                ))),
             }
-            Err(error) => Err(OrbitError::Io(format!(
-                "create step-recovery slot directory '{}': {error}",
-                dir.display()
-            ))),
-        },
+        }
         Err(error) => Err(OrbitError::Io(format!(
             "inspect step-recovery slot directory '{}': {error}",
             dir.display()

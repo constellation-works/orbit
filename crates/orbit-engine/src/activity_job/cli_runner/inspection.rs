@@ -373,7 +373,7 @@ fn remove_checkout(root: &Path) -> io::Result<()> {
 
 fn directory(path: &Path) -> io::Result<()> {
     reject_symlink(path)?;
-    match fs::create_dir(path) {
+    match orbit_common::fs::io::create_private_dir(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
         Err(error) => Err(error),

@@ -175,7 +175,7 @@ async fn log_sink_check(log_path: Result<PathBuf, String>) -> CheckOutcome {
 /// without writing anything.
 fn probe_log_sink(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| error.to_string())?;
     }
     std::fs::OpenOptions::new()
         .append(true)

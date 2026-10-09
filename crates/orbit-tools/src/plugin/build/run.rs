@@ -167,7 +167,7 @@ fn phase_failure(end: BuildPhaseEnd, timeout_ms: u64) -> String {
 
 fn write_log(path: &Path, log: &BuildLog) -> Result<(), OrbitError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        orbit_common::fs::io::create_private_dir_all(parent)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
     }
     atomic_write_bytes(path, &log.render())

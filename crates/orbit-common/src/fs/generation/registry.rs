@@ -147,7 +147,7 @@ pub(super) fn register(root: &Path, record: &ParticipantRecord) -> Option<Regist
     if !dir.starts_with(&root) {
         return None;
     }
-    std::fs::create_dir_all(&dir).ok()?;
+    crate::fs::io::create_private_dir_all(&dir).ok()?;
     let _ = live_participants(&root, None, true);
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).ok()?;

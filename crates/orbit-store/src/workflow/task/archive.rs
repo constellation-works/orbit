@@ -25,6 +25,10 @@ pub(super) const MANIFEST_ENTRY: &str = "manifest.json";
 /// Pack `manifest_json` plus each `(task_id, canonical_dir)` bundle tree into a
 /// tar.zst archive at `out_path`. Replace the destination only after the staged
 /// archive is complete and synced; errors drop the staging file.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "task export creates user-selected backup directories, outside Orbit state"
+)]
 pub(super) fn write_archive(
     out_path: &Path,
     manifest_json: &[u8],

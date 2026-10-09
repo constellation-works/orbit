@@ -176,7 +176,7 @@ impl OrbitRuntime {
     ) -> Result<PathBuf, OrbitError> {
         self.remove_evidence_checkout(checkout_id)?;
         let path = recovery_checkout_path(&self.paths().state_dir, checkout_id)?;
-        std::fs::create_dir_all(&path).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(&path).map_err(|error| {
             OrbitError::Execution(format!(
                 "create evidence checkout {}: {error}",
                 path.display()
@@ -241,7 +241,7 @@ impl OrbitRuntime {
     ) -> EvidenceRun {
         let mut run = EvidenceRun::new(requirement);
         let scratch = checkout.join(".orbit/tmp");
-        if let Err(error) = std::fs::create_dir_all(&scratch) {
+        if let Err(error) = orbit_common::fs::io::create_private_dir_all(&scratch) {
             run.refusal = Some(FulfilmentRefusal::CommandFailed);
             run.detail = format!("prepare scratch {}: {error}", scratch.display());
             return run;

@@ -184,13 +184,18 @@ pub(super) fn write_launchd_unit(
             log_path.display()
         ))
     })?;
-    fs::create_dir_all(log_parent).map_err(|error| OrbitError::Io(error.to_string()))?;
+    orbit_common::fs::io::create_private_dir_all(log_parent)
+        .map_err(|error| OrbitError::Io(error.to_string()))?;
     let plist = LAUNCHD_PLIST_TEMPLATE
         .replace("{{ORBIT_BIN}}", &plist_string(orbit_bin))
         .replace("{{CADENCE_SECONDS}}", &settings.cadence_seconds.to_string())
         .replace("{{LOG_PATH}}", &plist_string(&log_path.to_string_lossy()));
 
     let agents_dir = home.join("Library/LaunchAgents");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "service-manager configuration directories are external to Orbit state"
+    )]
     fs::create_dir_all(&agents_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
     let plist_path = launchd_plist_path(home);
     atomic_write_text(&plist_path, &plist).map_err(|error| {
@@ -271,6 +276,10 @@ pub(super) fn write_systemd_units(
     home: &Path,
 ) -> Result<Vec<PathBuf>, OrbitError> {
     let unit_dir = systemd_user_unit_dir(home);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "service-manager configuration directories are external to Orbit state"
+    )]
     fs::create_dir_all(&unit_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
 
     let service_path = systemd_service_path(home);

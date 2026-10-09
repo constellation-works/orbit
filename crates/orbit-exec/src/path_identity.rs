@@ -184,7 +184,7 @@ pub fn create_write_root(root: &Path) -> Result<PathBuf, OrbitError> {
 /// Create one missing component, tolerating a concurrent creator only when
 /// what appeared is a real directory.
 fn create_directory_component(root: &Path, component: &Path) -> Result<(), OrbitError> {
-    match std::fs::create_dir(component) {
+    match orbit_common::fs::io::create_private_dir(component) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             let metadata = std::fs::symlink_metadata(component).map_err(|error| {

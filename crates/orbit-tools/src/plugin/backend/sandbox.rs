@@ -298,7 +298,7 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::create_dir(&current) {
+                match orbit_common::fs::io::create_private_dir(&current) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                         let metadata = std::fs::symlink_metadata(&current).map_err(|error| {

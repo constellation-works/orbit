@@ -46,7 +46,7 @@ pub fn install_plugin_build_outputs(
         }
         if let Some(parent) = to.parent() {
             refuse_linked_parent(staging, parent)?;
-            std::fs::create_dir_all(parent)
+            orbit_common::fs::io::create_private_dir_all(parent)
                 .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
         }
         let mut destination = std::fs::File::create_new(&to)

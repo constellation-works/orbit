@@ -25,6 +25,9 @@ Options:
       --fix-stale-task-locks
           Release only task reservations whose owner/task state is conclusively inactive
 
+      --fix-state-directory-permissions
+          Restrict writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only)
+
       --remove-graph
           Remove retired graph state from this worktree and the shared workspace
 

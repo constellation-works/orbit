@@ -170,7 +170,7 @@ pub fn test_plugin_dir(
     // The shared backend spawn creates state_dir before confinement, just as
     // it does for installed plugins. Keep this scratch root fresh until then.
     for dir in [&global_root, &workspace_root] {
-        std::fs::create_dir_all(dir)
+        orbit_common::fs::io::create_private_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
     let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(

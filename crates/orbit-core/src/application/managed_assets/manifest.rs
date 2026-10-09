@@ -268,7 +268,7 @@ pub(super) fn write_confined_asset(
 
 fn create_new_text(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        orbit_common::fs::io::create_private_dir_all(parent)?;
     }
     let mut file = fs::OpenOptions::new()
         .write(true)

@@ -49,6 +49,10 @@ pub struct ToolScaffoldArgs {
 }
 
 impl Execute for ToolScaffoldArgs {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tool scaffolding creates user-owned source directories, outside Orbit state"
+    )]
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
         eprintln!("{SCAFFOLD_DEPRECATION}");
         let script_path = PathBuf::from(&self.path);

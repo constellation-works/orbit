@@ -74,7 +74,7 @@ impl WorktreeBoundaryGuard {
             })?;
         let recovery_parent = common_dir.join("orbit").join("worktree-recovery");
         let run_root = recovery_parent.join(&self.run_id);
-        fs::create_dir_all(&run_root)
+        orbit_common::fs::io::create_private_dir_all(&run_root)
             .map_err(|error| recovery_io_error("create run recovery root", &run_root, error))?;
         // Each dirty failure keeps its own payload: a later failure in the
         // same run must not be answered with an earlier, staler snapshot.
@@ -89,7 +89,7 @@ impl WorktreeBoundaryGuard {
                 std::process::id(),
                 nanos_since_epoch()
             ));
-            fs::create_dir(&pending)
+            orbit_common::fs::io::create_private_dir(&pending)
                 .map_err(|error| recovery_io_error("create pending recovery", &pending, error))?;
             if let Err(error) = self.write_recovery_payload(&pending, assigned_after, attempt) {
                 // Best effort: never leave a half-written payload behind.
@@ -134,7 +134,7 @@ impl WorktreeBoundaryGuard {
         attempt: u32,
     ) -> Result<(), DispatchError> {
         let pending_payload = pending.join("untracked");
-        fs::create_dir(&pending_payload).map_err(|error| {
+        orbit_common::fs::io::create_private_dir(&pending_payload).map_err(|error| {
             recovery_io_error("create untracked recovery payload", &pending_payload, error)
         })?;
 
@@ -151,7 +151,7 @@ impl WorktreeBoundaryGuard {
             let source = self.assigned_root.join(&relative_path);
             let destination = pending_payload.join(&relative_path);
             if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
+                orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
                     recovery_io_error("create untracked payload directory", parent, error)
                 })?;
             }
@@ -293,7 +293,7 @@ fn copy_untracked_entry(source: &Path, destination: &Path) -> std::io::Result<()
         }
     }
     if file_type.is_dir() {
-        fs::create_dir(destination)?;
+        orbit_common::fs::io::create_private_dir(destination)?;
         for entry in fs::read_dir(source)? {
             let entry = entry?;
             copy_untracked_entry(&entry.path(), &destination.join(entry.file_name()))?;

@@ -877,12 +877,13 @@ pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), O
         ))
     })?;
     match inspect_catalog_entry(routines_dir, CatalogEntryKind::Directory)? {
-        CatalogEntry::Missing => fs::create_dir_all(routines_dir).map_err(|error| {
-            OrbitError::Io(format!(
-                "create routine catalog '{}': {error}",
-                routines_dir.display()
-            ))
-        })?,
+        CatalogEntry::Missing => orbit_common::fs::io::create_private_dir_all(routines_dir)
+            .map_err(|error| {
+                OrbitError::Io(format!(
+                    "create routine catalog '{}': {error}",
+                    routines_dir.display()
+                ))
+            })?,
         CatalogEntry::Present => {}
         CatalogEntry::Unsafe => {
             return Err(OrbitError::InvalidInput(unconfined_detail(routines_dir)));

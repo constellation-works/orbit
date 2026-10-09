@@ -2176,6 +2176,95 @@ fn text_artifact(path: &str, body: &str) -> TaskArtifact {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn validation_artifact_directories_are_private_under_shared_umask() {
+    if !isolated("validation_artifact_directories_are_private_under_shared_umask") {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: the fixture runs alone in an isolated child, so the process-wide
+    // umask cannot affect another test or the launching process.
+    unsafe { libc::umask(0o002) };
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let task = owner.create_task("private validation artifacts");
+    owner
+        .backends
+        .task
+        .artifact
+        .upsert_task_artifacts(
+            &task.id,
+            TaskArtifactUpdateParams {
+                origin: None,
+                actor: "codex".to_string(),
+                owner_run_id: None,
+                writer: None,
+                upsert_artifacts: vec![text_artifact("ordinary.json", "ordinary artifact")],
+            },
+        )
+        .expect("ordinary artifact writer");
+    let claim = owner
+        .pull(&owner_request("private-artifacts"))
+        .claim
+        .expect("claim");
+    let worker = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        None,
+    );
+    let artifact_path = format!("validation/{}/0.json", claim.claim_id);
+    let content = "{\"exit_code\":0,\"output\":\"passed\"}";
+    owner
+        .backends
+        .commit_boundary
+        .mutate_execution_claim(
+            Some(&worker),
+            "validation-log",
+            &ClaimMutation::Evidence(ClaimEvidence {
+                artifacts: vec![text_artifact(&artifact_path, content)],
+                ..Default::default()
+            }),
+        )
+        .expect("claim validation evidence writer");
+    let files = owner
+        .registry
+        .canonical_task_bundle_path(PARTITION_ID, &task.id)
+        .unwrap()
+        .join("artifacts/files");
+    for path in [
+        &files,
+        &files.join("validation"),
+        &files.join("validation").join(&claim.claim_id),
+    ] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "validation artifact directories must be owner-only under umask 0002: {}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        std::fs::read(files.join(&artifact_path)).unwrap(),
+        content.as_bytes()
+    );
+    let stored = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifacts(&task.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        stored.iter().any(
+            |artifact| artifact.path == artifact_path && artifact.content == content.as_bytes()
+        ),
+        "the validation log remains readable through the artifact-store boundary"
+    );
+}
+
 fn invalid_input(error: OrbitError) -> String {
     match error {
         OrbitError::InvalidInput(message) => message,

@@ -10,6 +10,10 @@ pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bo
 /// paths inside this sandbox's private tmpfs. Toolchain wrappers can rewrite
 /// absolute paths onto those mounts so compiler caches hit across worktrees
 /// without sharing a mutable Cargo target directory. [ORB-11259]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Cargo target is build output, outside Orbit state ownership"
+)]
 pub(super) fn append_stable_toolchain_mounts(
     out: &mut Vec<String>,
     cwd: &Path,
