@@ -787,13 +787,7 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     )
     .unwrap();
     let released = root.join("released");
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        "sh".to_string(),
-        "-c".to_string(),
-        "i=0; while [ ! -e \"$1\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done".to_string(),
-        "worker".to_string(),
-        released.to_string_lossy().into_owned(),
-    ]);
+    crate::worker_fixture::install(&released, "created");
     let tick = owner
         .run_review_evidence_fulfilment_tick(Utc::now())
         .unwrap();

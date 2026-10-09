@@ -290,19 +290,12 @@ impl Delivery {
         executor.command = Some(provider.to_string_lossy().to_string());
         executor.sandbox = Some(ExecutorSandboxKind::Off);
         owner.upsert_executor_def(&executor).unwrap();
-        // This test binary cannot be re-executed as a worker; each submitted
-        // run executes in-process through `Self::execute`. The substitute
-        // stands in for the detached worker until then, so the supervisor
+        // Each submitted run executes in-process through `Self::execute`.
+        // The substitute child test stands in for the detached worker until
+        // then, so the supervisor
         // never sees a worker that exited before its run started.
         let started = pair._root.path().join("started-{run_id}");
-        orbit_core::test_support::install_substitute_pipeline_worker([
-            "sh".to_string(),
-            "-c".to_string(),
-            "i=0; while [ ! -e \"$1\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
-                .to_string(),
-            "worker".to_string(),
-            started.to_string_lossy().into_owned(),
-        ]);
+        crate::worker_fixture::install(&started, "created");
 
         Self {
             claim_id: claim["claim_id"].as_str().unwrap().to_string(),

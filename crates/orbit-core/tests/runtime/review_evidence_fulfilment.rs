@@ -133,15 +133,10 @@ fn held(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHold) {
 /// A dispatched run's substitute worker stays alive until the test has run
 /// the step in process, so the supervisor never interrupts it as pending.
 fn install_substitute_worker(fixture: &Fixture) {
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        "sh".to_string(),
-        "-c".to_string(),
-        "i=0; while [ ! -e \"$1/ran-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
-            .to_string(),
-        "worker".to_string(),
-        fixture._root.path().to_string_lossy().into_owned(),
-        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
-    ]);
+    crate::worker_fixture::install(
+        fixture._root.path().join("ran-{run_id}").as_path(),
+        "created",
+    );
 }
 
 /// The shipped job, with the free space its tick and step require replaced.

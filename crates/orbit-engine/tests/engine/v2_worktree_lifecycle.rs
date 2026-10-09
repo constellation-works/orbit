@@ -2942,13 +2942,14 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
             let primary_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
             let ready = fixture.root.path().join("record-ready");
             let go = fixture.root.path().join("record-go");
+            orbit_common::test_env::create_fixture_fifo(&go).unwrap();
             let primary_record = fixture.repo.join(record);
 
             let provider = fixture.root.path().join("codex");
             write_executable(
                 &provider,
                 &format!(
-                    "#!/bin/sh\nset -eu\ncat > /dev/null\n: > '{}'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                    "#!/bin/sh\nset -eu\ncat > /dev/null\n: > '{}'\nread -r _ < '{}'\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
                     ready.display(),
                     go.display(),
                 ),
@@ -2964,7 +2965,11 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
                     thread::sleep(Duration::from_millis(20));
                 }
                 fs::write(&primary_record, "name: nightly\nenabled: true\n").unwrap();
-                fs::write(&go, "go\n").unwrap();
+                orbit_common::test_env::release_fixture_fifo(
+                    &go,
+                    Instant::now() + Duration::from_secs(20),
+                )
+                .unwrap();
             });
 
             let outcome =
