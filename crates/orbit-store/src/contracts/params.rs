@@ -448,9 +448,11 @@ pub struct WorkspaceClaimCheckResult {
 #[derive(Debug, Clone)]
 pub struct JobRunQuery {
     pub job_id: Option<String>,
-    /// Exact string membership in the run's submitted `input.task_ids` array.
-    /// Applied before ordering, limiting and row/step hydration. Missing or
-    /// non-array bindings do not match; other input fields confer no ownership.
+    /// Exact string membership in the run's submitted `input.task_ids` array,
+    /// or equality with a text top-level `input.task_id`. Applied before
+    /// ordering, limiting and row/step hydration. Missing or non-array
+    /// `task_ids`, non-text `task_id`, and nested fields do not match; other
+    /// input fields confer no ownership.
     pub task_id: Option<String>,
     /// Exact name of the routine recorded as the run's trigger
     /// (`pipeline state.trigger.routine`), whichever trigger kind fired it.
