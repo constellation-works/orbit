@@ -23,6 +23,8 @@ const PHASE: Record<OrbitShip['phase'], { label: string; color: string | undefin
   flying: { label: 'IN FLIGHT', color: 'cyan' },
   landed: { label: 'LANDED', color: 'green' },
   failed: { label: 'FAILED', color: 'red' },
+  held: { label: 'HELD', color: 'yellow' },
+  skipped: { label: 'SKIPPED', color: undefined },
 }
 
 export function shipView(kit: Kit, data: ShipData, act: Actions, Svg?: ElementConstructor<SvgProps>) {
@@ -101,7 +103,7 @@ function flightBlock(kit: Kit, ship: OrbitShip, columns: number, act: Actions, S
   const perRow = Math.max(1, Math.min(4, Math.floor(columns / 16)))
   const rows: number[][] = []
   for (let start = 0; start < PIPELINE.length; start += perRow) rows.push(PIPELINE.slice(start, start + perRow).map((_, offset) => start + offset))
-  const isOver = ship.phase === 'landed' || ship.phase === 'failed'
+  const isOver = ship.phase === 'landed' || ship.phase === 'failed' || ship.phase === 'held' || ship.phase === 'skipped'
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -136,6 +138,8 @@ function flightBlock(kit: Kit, ship: OrbitShip, columns: number, act: Actions, S
       </Box>
       {ship.message ? <Text color={ship.phase === 'failed' ? 'red' : undefined}>{ship.message}</Text> : null}
       {ship.phase === 'landed' ? <Text color="green">Landed. The task moves on to review; its PR is open against the base branch.</Text> : null}
+      {ship.phase === 'held' ? <Text color="yellow">Held. Delivery is waiting on external review evidence; the run is over and the task stays as it is.</Text> : null}
+      {ship.phase === 'skipped' ? <Text dimColor>Skipped. The run ended without doing any work.</Text> : null}
       <Box marginTop={1} columnGap={1}>
         {ship.phase === 'failed' ? <Button key="rescue" label="Rescue here" hotkey="r" variant="primary" onPress={() => void act.rescue(ship.taskId)} /> : null}
         <Button key="back" label="Back to board" hotkey="b" onPress={() => act.setView('board')} />

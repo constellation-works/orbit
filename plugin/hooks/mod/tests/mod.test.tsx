@@ -7,6 +7,7 @@ import type { On } from 'claude-code'
 import type { OrbitShip } from '../../../types'
 import { PIPELINE } from '../model'
 
+const SHIP_POLL_MS = 5000
 const SURFACES = ['terminal', 'desktop'] as const
 
 const TASKS = [
@@ -203,6 +204,35 @@ test('a coordinator failure before dispatch ends the ship with no completed step
   expect(await ui.find({ key: 'rescue' })).toBeDefined()
   await ui.unmount()
 })
+
+for (const state of ['held', 'skipped'] as const) {
+  test(`a tracked run that ends ${state} stops polling and is neither landed nor failed`, async ($, on) => {
+    const ship = observeShip(on)
+    const ran: Ran[] = []
+    fakeOrbit(on, ran, args => {
+      if (args[0] === 'task' && args[1] === 'list') return args.includes('done') ? [] : TASKS.map(task => task.id === 'ORB-1' ? { ...task, status: 'in-progress' } : task)
+      if (args[0] !== 'run') return undefined
+      if (args[1] === 'show') return { run: { job_id: 'task_pr_pipeline', state, error_message: null } }
+      if (args[1] === 'events') return { events: [{ event_type: 'step.finished', step_id: 'worktree' }] }
+      return undefined
+    })
+    const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+    await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+    await clock.advance(0)
+    const ui = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...PANE })
+    await ui.press({ key: 'card:ORB-1' })
+    await ui.press({ key: 'track' })
+    expect(ship()?.phase).toBe(state)
+    expect(ship()?.finishedAt).not.toBeNull()
+    expect(ship()?.steps.slice(0, 2)).toEqual(['done', 'pending'])
+    expect(await ui.find({ key: 'clear' })).toBeDefined()
+    expect(await ui.find({ key: 'rescue' })).toBeUndefined()
+    const polls = ran.length
+    await clock.advance(SHIP_POLL_MS * 3)
+    expect(ran.filter(run => run.args[0] === 'run').length).toBe(ran.slice(0, polls).filter(run => run.args[0] === 'run').length)
+    await ui.unmount()
+  })
+}
 
 test('Board tracking reads the leaf directly and marks its active step failed', async ($, on) => {
   const ship = observeShip(on)

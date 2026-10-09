@@ -34,7 +34,8 @@ export type OrbitCheck = { label: string; isOk: boolean; detail: string }
 /** A ship this session is preparing, flying or has landed. */
 export type OrbitShip = {
   taskId: string
-  phase: 'preflight' | 'launching' | 'flying' | 'landed' | 'failed'
+  /** `held` and `skipped` are terminal run states that neither landed nor failed. */
+  phase: 'preflight' | 'launching' | 'flying' | 'landed' | 'failed' | 'held' | 'skipped'
   runId: string | null
   checks: OrbitCheck[]
   steps: OrbitStepState[]
