@@ -55,7 +55,7 @@ fn run_pages_filter_in_sql_and_project_task_ids_without_task_reads() {
         (
             "singular",
             JobRunState::Success,
-            0,
+            2,
             json!({"task_id":task_id}),
         ),
         ("empty", JobRunState::Failed, 0, json!({"task_ids":[]})),
@@ -156,6 +156,24 @@ fn run_pages_filter_in_sql_and_project_task_ids_without_task_reads() {
             .map(|run| run.job_id.as_str())
             .collect::<Vec<_>>(),
         ["held", "failed"]
+    );
+    // Array and singular bindings both match, each run once; empty,
+    // malformed and unbound runs stay out.
+    let bound = runtime
+        .list_job_runs_observed(JobRunListParams {
+            task_id: Some(task_id.clone()),
+            since: Some(since),
+            limit: Some(200),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(bound.len(), 4);
+    assert_eq!(
+        bound
+            .iter()
+            .map(|run| run.job_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["failed", "held", "singular", "success"])
     );
     assert!(
         runtime

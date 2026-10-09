@@ -53,7 +53,8 @@ task still exists.
 
 Combine `--task <id>`, `--state failed,held`, and `--since 24h` to select a
 recent delivery history. `--task` matches exact IDs in the submitted `task_ids`
-array. `--state` accepts comma-separated run states; `--since` accepts a relative
+array or the singular `task_id` input, the same bindings the TASK column shows.
+`--state` accepts comma-separated run states; `--since` accepts a relative
 duration or RFC 3339 timestamp and compares creation time. All predicates run
 in the store before ordering and `--limit`, so unrelated newer runs cannot
 hide matching history. Existing `--job` and `--no-reconcile` options still apply.
