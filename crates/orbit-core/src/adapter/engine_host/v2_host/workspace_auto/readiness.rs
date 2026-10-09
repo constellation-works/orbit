@@ -87,9 +87,8 @@ pub fn explain_workspace_auto_readiness(
     // the submission time plus a browser's chosen duration.
     let ends_at = status_state.as_ref().and_then(|state| {
         state
-            .step_outputs
-            .values()
-            .find_map(|output| output.get("deadline").and_then(Value::as_str))
+            .step_output_entries()
+            .find_map(|(_, output)| output.get("deadline").and_then(Value::as_str))
     });
     let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
         let mut running = 0;

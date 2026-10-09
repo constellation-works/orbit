@@ -364,6 +364,9 @@ fn repeated_automation_admission_preserves_pending_running_and_terminal_state() 
             JobRunState::Success => {
                 jobs.finalize_job_run(&run.run_id, state, Utc::now(), None)
                     .unwrap();
+                // Finishing compacts the resume-only checkpoint; repeated
+                // admission must then preserve the compacted state.
+                expected.compact_for_terminal(state);
             }
             _ => {}
         }

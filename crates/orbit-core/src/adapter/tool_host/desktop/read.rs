@@ -239,7 +239,7 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         .unwrap_or_else(|_| RunExecutionProgress::unavailable());
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
-        state.as_ref().map(|state| &state.step_outputs),
+        state.as_ref(),
         progress.provider_processes.last(),
     ))
     .map_err(super::super::json::serialize_error(

@@ -17,7 +17,7 @@ use super::queries::{
     JOB_RUN_COLUMNS, get_job_run_for_workspace_conn, next_run_id_conn, read_steps_for_runs,
     row_to_job_run, upsert_job_run_for_workspace_conn,
 };
-use super::state::write_state_json_conn;
+use super::state::{compact_finished_state_conn, write_state_json_conn};
 use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunCompletion, JobRunFinalization,
@@ -62,6 +62,30 @@ impl SqliteJobRunStore {
                 update(&mut run)?;
                 upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
                 Ok(found)
+            })
+    }
+
+    /// [`Self::update_run`] for a terminal write: when `update` returns
+    /// `true` the run just finished, and the same transaction compacts its
+    /// pipeline state for that outcome, so no reader ever sees a finished
+    /// run that still carries resume-only state.
+    fn update_run_and_state(
+        &self,
+        run_id: &str,
+        update: impl FnOnce(&mut JobRun) -> Result<bool, OrbitError>,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let Some(mut run) =
+                    get_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, run_id)?
+                else {
+                    return Ok(false);
+                };
+                if update(&mut run)? {
+                    upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
+                    compact_finished_state_conn(&tx.tx, &self.workspace_id, run_id, run.state)?;
+                }
+                Ok(true)
             })
     }
 }
@@ -704,10 +728,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         duration_ms: Option<u64>,
     ) -> Result<JobRunFinalization, OrbitError> {
         let mut outcome = JobRunFinalization::Missing;
-        self.update_run(run_id, |run| {
+        self.update_run_and_state(run_id, |run| {
             if run.state.is_terminal() {
                 outcome = JobRunFinalization::AlreadyTerminal(run.state);
-                return Ok(());
+                return Ok(false);
             }
             let event = match state {
                 JobRunState::Success => RunEvent::Complete,
@@ -726,7 +750,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
             outcome = JobRunFinalization::Finalized;
-            Ok(())
+            Ok(true)
         })?;
         Ok(outcome)
     }

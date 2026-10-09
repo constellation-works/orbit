@@ -42,6 +42,7 @@ fn commit_worker_at_write(runtime: OrbitRuntime, run: JobRun, remaining: usize) 
                 Some(json!({"commit": "worker-commit"})),
                 Some(json!({"worker_progress": true})),
             );
+            state.record_pipeline_output("worker_commit", json!({"commit": "worker-commit"}));
             state.record_child_dispatch(detached_child("worker-child"));
             Ok(())
         };
@@ -143,12 +144,19 @@ fn cancellation_writes_preserve_interleaved_worker_checkpoints_and_lineage() {
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
         assert_eq!(state.initial_input, json!({"input": 7}), "{case}");
         assert_eq!(state.pipeline["cancelled"], true, "{case}");
-        assert!(!state.task_cancellation_policy.unwrap().block, "{case}");
+        assert!(
+            !state.task_cancellation_policy.as_ref().unwrap().block,
+            "{case}"
+        );
         if worker_write != 0 {
             assert_eq!(
-                state.step_outputs[&4],
-                json!({"commit": "worker-commit"}),
+                state.step_output(4),
+                Some(&json!({"commit": "worker-commit"})),
                 "{case}: cancellation must preserve the worker checkpoint"
+            );
+            assert!(
+                state.step_outputs.is_empty() && state.pipeline_patches.is_empty(),
+                "{case}: a cancelled run keeps no resume-only maps"
             );
             assert_eq!(state.step_states[&4], JobRunState::Success, "{case}");
             assert_eq!(state.pipeline["worker_progress"], true, "{case}");

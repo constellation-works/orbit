@@ -242,8 +242,7 @@ impl<'a> Assessor<'a> {
             .map_err(|_| "delivery_state_unavailable")?
             .ok_or("delivery_state_missing")?;
         let completion = state
-            .step_outputs
-            .get(&assessment.delivery_step_index)
+            .step_output(assessment.delivery_step_index)
             .ok_or("delivery_step_missing")?;
         let assigned = state.initial_input["task_ids"]
             .as_array()

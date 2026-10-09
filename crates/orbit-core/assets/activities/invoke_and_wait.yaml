@@ -6,7 +6,10 @@ spec:
   type: deterministic
   description: >
     Submit a named v2 Job and block until its Run reaches a terminal
-    state, then return the wait entry as data. Internally chains
+    state, then return a bounded summary of its wait entry as data:
+    `run_id`, `status`, `finished_at`, `duration_ms` and `error`. The
+    child's pipeline is not copied into the parent; read it from the child
+    Run by `run_id`. Internally chains
     `orbit.pipeline.invoke` (to submit the child Run) and
     `orbit.pipeline.wait` (to block on completion). Submission and waiting
     are separate observable phases: the child's exact run ID is persisted
@@ -73,8 +76,6 @@ spec:
       duration_ms:
         type: integer
         minimum: 0
-      pipeline:
-        type: object
       error:
         type: string
       skipped:

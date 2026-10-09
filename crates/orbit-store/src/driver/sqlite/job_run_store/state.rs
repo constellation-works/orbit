@@ -88,12 +88,20 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
-        let state_json = serde_json::to_string(state)
-            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        // A snapshot written after the run finished must not bring back what
+        // finalization compacted away.
+        let compacted = run_state_conn(&conn, workspace_id, run_id)?.and_then(|run_state| {
+            let mut compacted = state.clone();
+            compacted
+                .compact_for_terminal(run_state)
+                .then_some(compacted)
+        });
+        let state_json = serde_json::to_string(compacted.as_ref().unwrap_or(state))
+            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
         if !write_state_json_conn(&conn, workspace_id, run_id, &state_json)? {
             return Err(OrbitError::not_found(
                 NotFoundKind::JobRun,
@@ -148,7 +156,9 @@ impl Store {
     /// two callers serialize here instead of racing between their own read and
     /// write. An `Err` from `update` — the shape both a refused terminal run
     /// and a lost compare-and-set take — propagates before the commit, leaving
-    /// the stored state untouched.
+    /// the stored state untouched. A finished run's result stays compacted
+    /// (`PipelineState::compact_for_terminal`), so a late checkpoint cannot
+    /// restore its resume-only maps.
     pub fn update_job_run_state_for_workspace(
         &self,
         workspace_id: &str,
@@ -182,6 +192,7 @@ impl Store {
             let mut pipeline_state: PipelineState = serde_json::from_str(&raw_pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
             update(state, &mut pipeline_state)?;
+            pipeline_state.compact_for_terminal(state);
             let state_json = serde_json::to_string(&pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
             tx.tx
@@ -230,4 +241,56 @@ pub(super) fn write_state_json_conn(
     )
     .map(|changed| changed > 0)
     .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+/// The run's lifecycle state, or `None` when the run does not exist.
+fn run_state_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+) -> Result<Option<JobRunState>, OrbitError> {
+    conn.query_row(
+        "SELECT state FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![workspace_id, run_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .map(|raw| {
+        JobRunState::from_str(&raw)
+            .map_err(|error| OrbitError::Store(format!("invalid job run state: {error}")))
+    })
+    .transpose()
+}
+
+/// [ORB-14587] Drop the resume-only maps of a run that just finished
+/// `run_state`, inside the transaction that finished it. Best-effort: an
+/// unreadable checkpoint is left as it is rather than failing the terminal
+/// write.
+pub(super) fn compact_finished_state_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+    run_state: JobRunState,
+) -> Result<(), OrbitError> {
+    let Some(raw) = read_state_json_conn(conn, workspace_id, run_id)? else {
+        return Ok(());
+    };
+    let mut state = match serde_json::from_str::<PipelineState>(&raw) {
+        Ok(state) => state,
+        Err(error) => {
+            orbit_common::tracing::warn!(
+                run_id,
+                %error,
+                "finished run's pipeline state is unreadable; left uncompacted"
+            );
+            return Ok(());
+        }
+    };
+    if !state.compact_for_terminal(run_state) {
+        return Ok(());
+    }
+    let state_json = serde_json::to_string(&state)
+        .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+    write_state_json_conn(conn, workspace_id, run_id, &state_json).map(|_| ())
 }

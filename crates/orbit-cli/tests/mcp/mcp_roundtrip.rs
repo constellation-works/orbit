@@ -1868,7 +1868,7 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             );
         } else {
             assert!(
-                leaf_run["pipeline_state"]["step_outputs"]["0"].is_object(),
+                leaf_run["pipeline_state"]["step_states"]["0"] == "success",
                 "PR mode must complete worktree setup despite init files: {leaf_run}"
             );
         }

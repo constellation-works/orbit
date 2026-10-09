@@ -104,7 +104,7 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     // live progress, and the output reference a failed step never checkpoints.
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
-        state.as_ref().map(|state| &state.step_outputs),
+        state.as_ref(),
         progress.provider_processes.last(),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
@@ -341,9 +341,7 @@ fn run_json_enriched(
     // a bounded preview of the answer, and the durable reference to the full
     // captured output.
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
-        run,
-        state.map(|state| &state.step_outputs),
-        None,
+        run, state, None,
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:

@@ -10,6 +10,9 @@ mod gate_starvation;
 mod invoke;
 mod results;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) use bundles::validate_bundles;
 pub(super) use delivery::resolve_delivery_job;
 pub(super) use gate_starvation::gate_starvation_fail;
