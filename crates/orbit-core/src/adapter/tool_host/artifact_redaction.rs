@@ -223,16 +223,6 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate => ActionPolicy {
-            free_text_fields: &["title", "body"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
         OrbitBuiltinAction::TaskAdd => ActionPolicy {
             free_text_fields: &["title", "description", "plan", "comment"],
             free_text_arrays: &["acceptance_criteria"],
@@ -299,17 +289,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: AUTO_TASK_TEMPLATE,
         },
-        OrbitBuiltinAction::AdrSupersede => ActionPolicy {
-            free_text_fields: &[],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
-        OrbitBuiltinAction::AdrShow
-        | OrbitBuiltinAction::AdrList
-        | OrbitBuiltinAction::AutoTaskList
+        OrbitBuiltinAction::AutoTaskList
         | OrbitBuiltinAction::AutoTaskMint
         | OrbitBuiltinAction::AutoTaskShow
         | OrbitBuiltinAction::DesktopRead
@@ -368,11 +348,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
 fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
     matches!(
         action,
-        OrbitBuiltinAction::AdrAdd
-            | OrbitBuiltinAction::AdrRestore
-            | OrbitBuiltinAction::AdrUpdate
-            | OrbitBuiltinAction::AdrSupersede
-            | OrbitBuiltinAction::TaskAdd
+        OrbitBuiltinAction::TaskAdd
             | OrbitBuiltinAction::TaskUpdate
             | OrbitBuiltinAction::TaskReject
             | OrbitBuiltinAction::TaskReconcileReview
@@ -694,14 +670,6 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate
-        | OrbitBuiltinAction::AdrSupersede => Ok(ArtifactTarget {
-            artifact_type: "adr",
-            artifact_id: response_string(response, "id")?,
-            task_id: None,
-        }),
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskUpdate
         | OrbitBuiltinAction::TaskReject
@@ -744,10 +712,6 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::AdrAdd => "orbit.adr.add",
-        OrbitBuiltinAction::AdrRestore => "orbit.adr.restore",
-        OrbitBuiltinAction::AdrUpdate => "orbit.adr.update",
-        OrbitBuiltinAction::AdrSupersede => "orbit.adr.supersede",
         OrbitBuiltinAction::TaskAdd => "orbit.task.add",
         OrbitBuiltinAction::TaskUpdate => "orbit.task.update",
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",

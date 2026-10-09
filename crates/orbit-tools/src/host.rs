@@ -82,12 +82,6 @@ pub fn prepare_remote_task_artifact_put(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrbitBuiltinAction {
-    AdrAdd,
-    AdrShow,
-    AdrList,
-    AdrRestore,
-    AdrUpdate,
-    AdrSupersede,
     AutoTaskAdd,
     AutoTaskList,
     AutoTaskMint,

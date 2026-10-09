@@ -1451,10 +1451,8 @@ fn root_resolution_precedence() {
     );
 }
 
-/// ORB-10668: the operator path the tool surface could not serve — an ADR
-/// authored inside a job worktree, carried proposed -> accepted with `orbit adr`
-/// alone from that worktree, while the same command run from the hub still
-/// fails closed on the federation guard.
+/// Verify config reports the shared store and checkout-local roots without
+/// the retired root aliases.
 fn assert_root_fields(value: &Value, shared_root: &Path, local_root: &Path) {
     let shared = shared_root.to_string_lossy();
     let local = local_root.to_string_lossy();

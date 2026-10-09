@@ -113,7 +113,6 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::PluginBuildFetchUnsupported(m) => {
             OrbitError::PluginBuildFetchUnsupported(redact(&m))
         }
-        OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact(&m)),
         OrbitError::RemoteArtifactUnavailable {
             kind,
             id,
