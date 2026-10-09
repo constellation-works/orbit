@@ -599,7 +599,7 @@ fn is_non_repository_token(token: &str) -> bool {
     token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with('~')
 }
 
-fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+pub(super) fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
     }
