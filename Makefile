@@ -159,6 +159,7 @@ ci:
 # Format and shared guardrails plus the MSRV compile check: no Rust tests.
 # Full make ci runs on PRs.
 ci-fast:
+	./scripts/require-python.sh
 	$(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
 
@@ -173,6 +174,7 @@ ci-test-affected:
 # then rustdoc denies warnings (private intra-doc links turned agent-main red
 # twice on 2026-10-07 because no agent gate built docs).
 ci-lint:
+	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods

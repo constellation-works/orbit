@@ -948,5 +948,137 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self.assertIn("error", res.stderr.lower())
 
 
+class ErrorTranslationGuardTests(unittest.TestCase):
+    """Run check-error-translation.sh against a generated miniature crates tree."""
+
+    SCRIPT = SCRIPTS / "check-error-translation.sh"
+
+    def setUp(self):
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.script = self.root / "check-error-translation.sh"
+        self.write_script(self.SCRIPT.read_text())
+        text = self.SCRIPT.read_text()
+        crates = self.root / "crates"
+        for err_type, crate, translator in re.findall(r'^  "(\w+):([\w-]+):(\w+)"$', text, re.M):
+            self.write_source(crate, f"{translator}.rs", f"pub enum {err_type} {{}}\npub fn {translator}() {{}}\n")
+        for err_type, crate in re.findall(r'^  "(\w+):([\w-]+)"$', text, re.M):
+            self.write_source(crate, f"{err_type}.rs", f"pub enum {err_type} {{}}\n")
+            self.write_source("orbit-common", f"from_{err_type}.rs",
+                              f"impl From<{err_type}> for OrbitError {{}}\n")
+        self.assertTrue(crates.is_dir())
+
+    def write_script(self, text):
+        self.script.write_text(text)
+        self.script.chmod(0o755)
+
+    def write_source(self, crate, name, text):
+        path = self.root / "crates" / crate / "src" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def run_guard(self):
+        return subprocess.run(["/bin/bash", str(self.script), str(self.root)],
+                              text=True, capture_output=True)
+
+    def test_empty_allowlist_passes_a_clean_tree(self):
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertIn("error translation guard passed", result.stdout)
+
+    def test_unallowlisted_translator_outside_registry_fails(self):
+        self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("defines unregistered translator 'stray_error_to_orbit'", result.stdout)
+
+    def test_allowlisted_translator_outside_registry_passes(self):
+        self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
+        text = self.SCRIPT.read_text()
+        self.assertIn("allowlist=()", text)
+        self.write_script(text.replace("allowlist=()", "allowlist=(stray_error_to_orbit)"))
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class PythonPreflightTests(unittest.TestCase):
+    """Drive scripts/require-python.sh and the make gates with a stub python3."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.bin = Path(self.temporary.name)
+        self.log = self.bin / "cargo.log"
+
+    def stub(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def stub_python(self, version):
+        self.stub("python3", f"#!/bin/sh\necho {version}\n")
+
+    def env(self):
+        # The stub directory comes first; /usr/bin:/bin keep the shell tools.
+        return dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin", GUARD_TEST_LOG=str(self.log))
+
+    def run_command(self, *command):
+        return subprocess.run(list(command), env=self.env(), text=True, capture_output=True,
+                              cwd=SCRIPTS.parent)
+
+    def test_python_39_fails_naming_minimum_and_interpreter(self):
+        self.stub_python("3.9.6")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertIn("Python >= 3.11", result.stderr)
+        self.assertIn(f"python3 3.9.6 at {self.bin}/python3", result.stderr)
+
+    def test_python_311_and_newer_pass_silently(self):
+        for version in ("3.11.0", "3.12.4", "3.14.4", "4.0.0"):
+            with self.subTest(version=version):
+                self.stub_python(version)
+                result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout + result.stderr, "")
+
+    def test_unreadable_version_and_missing_python_fail(self):
+        self.stub("python3", "#!/bin/sh\nexit 1\n")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown version", result.stderr)
+        (self.bin / "python3").unlink()
+        if shutil.which("python3", path="/usr/bin:/bin"):
+            self.skipTest("a system python3 remains on the minimal PATH")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no python3 is on PATH", result.stderr)
+
+    def test_make_gates_stop_before_running_anything_else(self):
+        self.stub_python("3.9.6")
+        self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        for target in ("ci-fast", "ci-lint"):
+            with self.subTest(target=target):
+                result = self.run_command("make", target, f"CARGO={self.bin}/cargo")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("python3 3.9.6", result.stderr)
+                self.assertIn("Python >= 3.11", result.stderr)
+                self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
+
+    def test_ci_guardrails_runs_preflight_before_any_gate(self):
+        self.stub_python("3.9.6")
+        self.stub("rg", "#!/bin/sh\nexit 1\n")
+        self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        result = self.run_command("/bin/bash", str(SCRIPTS / "ci-guardrails.sh"), "--fast")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python >= 3.11", result.stderr)
+        self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
+
+
 if __name__ == "__main__":
     unittest.main()

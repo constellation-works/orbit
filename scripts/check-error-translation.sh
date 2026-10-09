@@ -88,7 +88,8 @@ allowlist=()
 
 is_allowlisted() {
   local name="$1"
-  for entry in "${allowlist[@]}"; do
+  # `${arr[@]+...}` keeps an empty array from tripping `set -u` on Bash 3.2.
+  for entry in ${allowlist[@]+"${allowlist[@]}"}; do
     if [[ "$entry" == "$name" ]]; then
       return 0
     fi

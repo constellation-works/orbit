@@ -46,6 +46,12 @@ reported as misplaced. It also flags `[workspace.dependencies]` entries no membe
 A dependency kept only to enable a feature goes in its `FEATURE_ONLY` allowlist with a reason.
 Its self-test is `python3 scripts/test-check-unused-dependencies.py`.
 
+Several guardrails import `tomllib`, which needs Python 3.11 or newer; stock macOS
+`/usr/bin/python3` is 3.9. [require-python.sh](../scripts/require-python.sh) runs first in
+`make ci-fast`, `make ci-lint` and `ci-guardrails.sh` and stops with one message naming the
+minimum version and the `python3` it found. It installs nothing: put a newer `python3` first
+on `PATH`.
+
 Hosted CI runs the full `make ci` for open PRs. Every PR-triggered workflow
 first reads the live PR state through the GitHub API in a checkout-free
 `Live PR state` job with only `pull-requests: read` permission. If the PR was
