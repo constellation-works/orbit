@@ -441,5 +441,5 @@ fn retention_job_runs_when_the_default_crew_is_disabled() {
         .args(["job", "run", "store_gc_pipeline", "--wait", "--json"])
         .assert()
         .failure()
-        .stdout(predicates::str::contains("missing"));
+        .stderr(predicates::str::contains("crew 'missing' is not defined"));
 }
