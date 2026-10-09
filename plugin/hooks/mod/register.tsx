@@ -41,8 +41,17 @@ const DEFAULT_COLUMNS = 100
 const SHIP_POLL_MS = 5000
 const TASK_UPDATE = /(^|__)orbit_task_update$/
 const TASK_ID = /^[A-Z][A-Z0-9]{1,11}-\d{1,9}$/
-const SUCCESS = new Set(['success', 'succeeded'])
-const FINISHED = new Set([...SUCCESS, 'failed', 'timeout', 'cancelled', 'interrupted'])
+// Every terminal run state (JobRunState in orbit-types) and the ship phase it ends in; a state not listed is still in flight.
+const OUTCOME: Record<string, OrbitShip['phase']> = {
+  success: 'landed',
+  succeeded: 'landed',
+  failed: 'failed',
+  timeout: 'failed',
+  cancelled: 'failed',
+  interrupted: 'failed',
+  held: 'held',
+  skipped: 'skipped',
+}
 const TITLES: Record<OrbitView, string> = { board: 'Orbit · Board', ship: 'Orbit · Ship' }
 
 const COMMANDS = [
@@ -318,8 +327,9 @@ async function pollShip($: EngineInterface): Promise<void> {
   try {
     const run = parseShipRun((await orbit($, ['run', 'show', runId, '--json'])).stdout)
     const runState = run.state
-    const isOver = FINISHED.has(runState)
-    const isFailed = isOver && !SUCCESS.has(runState)
+    const outcome = OUTCOME[runState]
+    const isOver = outcome !== undefined
+    const isFailed = outcome === 'failed'
     // A launch returns task_auto_pipeline; its own events contain no PR steps.
     // Dispatch records appear before the parent waits, and may arrive on a later poll.
     const leaf = run.job === 'task_auto_pipeline' || run.job === 'task_gate_pipeline'
@@ -327,7 +337,7 @@ async function pollShip($: EngineInterface): Promise<void> {
       : { runId, run }
     const steps = leaf === null
       ? flying.steps
-      : stepStates(parseRunEvents((await orbit($, ['run', 'events', leaf.runId, '--json'])).stdout), isFailed || (FINISHED.has(leaf.run.state) && !SUCCESS.has(leaf.run.state)))
+      : stepStates(parseRunEvents((await orbit($, ['run', 'events', leaf.runId, '--json'])).stdout), isFailed || OUTCOME[leaf.run.state] === 'failed')
     const now = await $.clock.now()
     const message = isFailed && run.error !== null ? (run.error.split('\n')[0] ?? '').slice(0, 240) : null
     await update($, shipAtom, (prior): OrbitShip | null =>
@@ -336,7 +346,7 @@ async function pollShip($: EngineInterface): Promise<void> {
             ...prior,
             steps,
             startedAt: run.startedAt ?? prior.startedAt,
-            phase: isOver ? (isFailed ? 'failed' : 'landed') : 'flying',
+            phase: outcome ?? 'flying',
             finishedAt: isOver ? now : null,
             message,
           }
@@ -345,7 +355,8 @@ async function pollShip($: EngineInterface): Promise<void> {
     if (isOver) {
       shipTimer?.cancel()
       shipTimer = null
-      $.ui.toast(isFailed ? `✗ ${flying.taskId} ship ${runState} · ${runId}` : `✓ ${flying.taskId} landed · ${runId}`, { timeoutMs: 8000 })
+      const verdict = outcome === 'landed' ? `✓ ${flying.taskId} landed` : isFailed ? `✗ ${flying.taskId} ship ${runState}` : `■ ${flying.taskId} ship ${runState}`
+      $.ui.toast(`${verdict} · ${runId}`, { timeoutMs: 8000 })
       void refresh($)
     }
   } catch (thrown) {

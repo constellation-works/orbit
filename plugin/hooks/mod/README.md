@@ -30,7 +30,8 @@ this folder.
     `orbit run ship` launches a coordinator. The view follows its recorded
     child dispatches to the task's `task_pr_pipeline` run for the 12-step
     track, retrying while delivery is waiting to start. The coordinator's
-    terminal state decides whether the ship landed or failed. On desktop
+    terminal state decides whether the ship landed, failed, was held awaiting
+    review evidence, or was skipped; each ends tracking. On desktop
     and VS Code the trajectory is drawn as an SVG.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
