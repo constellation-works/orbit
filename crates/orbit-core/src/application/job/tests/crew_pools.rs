@@ -183,7 +183,7 @@ fn empty_final_recovery_pool_refuses_to_draw() {
 fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
     use std::collections::BTreeMap;
 
-    use chrono::Duration;
+    use chrono::{Duration, SubsecRound};
     use orbit_types::task::{TaskComplexity, TaskStatus};
     use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 
@@ -263,7 +263,8 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         (drawn, sources)
     };
 
-    let resets_at = Utc::now() + Duration::hours(1);
+    // The store keeps microseconds, so the expected reset must too.
+    let resets_at = (Utc::now() + Duration::hours(1)).trunc_subsecs(6);
     runtime
         .record_provider_limit(&reading(93.0, resets_at))
         .expect("seed the reading");
