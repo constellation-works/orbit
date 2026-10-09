@@ -16,6 +16,8 @@
 //! rename.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::path::Path;

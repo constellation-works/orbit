@@ -4,6 +4,8 @@
 #![cfg(unix)]
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

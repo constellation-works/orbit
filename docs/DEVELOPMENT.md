@@ -87,11 +87,23 @@ so every in-process fixture that opens a runtime would fail with `managed
 worker runtime binding unavailable`. The rest of the run envelope is passed
 through, and tests of the refusal set the marker on their own child.
 
-A focused `cargo test` needs no such flag in `orbit-common` or `orbit-core`:
-their test binaries call `orbit_common::isolate_test_process!()`, which clears
-the inherited managed-run authority (`INHERITED_AUTHORITY_ENV`) before `main`.
+A focused `cargo test` needs no such flag for the test binaries of
+`orbit-common` and `orbit-core`. Each one calls
+`orbit_common::isolate_test_process!()`, which clears the inherited managed-run
+authority (`INHERITED_AUTHORITY_ENV`) before `main`:
+
+- `orbit-common`: the lib tests and the `tests/` targets `audit_blob_sweep`,
+  `build_budget`, `directory_lock`, `error_classification`,
+  `generation_admission`, `git_argv`, `git_deadline`, `jsonl_exit_flush`,
+  `pricing`, `task_artifacts_v2` and `test_env`.
+- `orbit-core`: the lib tests and the `tests/` targets
+  `auto_task_required_tools`, `ci_failure_goldens`, `provider`, `runtime` and
+  `sandbox_profile_goldens`.
+
 A child a test re-executes keeps the variables its parent set for it. Add the
-macro under `#[cfg(test)]` to any other crate whose lib tests build a runtime.
+macro under `#[cfg(test)]` to the lib and at the top of each integration target
+of any other crate whose tests build a runtime; the list above is the complete
+set for these two crates.
 
 Tests that launch real Seatbelt-confined children use
 `orbit_exec::macos_sandbox_test_guard(test_name)`. Its process-cached probe

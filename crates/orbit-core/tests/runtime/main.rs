@@ -11,6 +11,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 mod actor_identity;
 mod artifact_tools;
 mod baseline_hold_tick;
@@ -53,6 +55,7 @@ mod job_finalization;
 mod local_route_before_pr;
 mod plugin_inspection;
 mod pr_forge_admission;
+mod process_isolation;
 mod provider_failure_hold;
 mod provider_limit_admission;
 mod provider_limit_budget;

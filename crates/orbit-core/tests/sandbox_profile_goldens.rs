@@ -28,6 +28,8 @@
 #![allow(clippy::expect_used, clippy::print_stderr, clippy::unwrap_used)]
 #![cfg(target_os = "linux")]
 
+orbit_common::isolate_test_process!();
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

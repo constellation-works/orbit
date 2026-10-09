@@ -6,6 +6,8 @@
 //! subscriber, logs one warning, and exits through `std::process::exit`.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::process::Command;
 
 use orbit_common::observability::logging;
