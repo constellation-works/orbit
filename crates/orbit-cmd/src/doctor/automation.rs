@@ -739,6 +739,7 @@ pub(super) fn doctor_check_definition_artifacts(
                 ArtifactCondition::Faulty,
                 ArtifactCondition::Residual,
                 ArtifactCondition::Deprecated,
+                ArtifactCondition::DanglingLink,
             ]
             .into_iter()
             .filter_map(|condition| {

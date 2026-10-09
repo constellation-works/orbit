@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-10-08
+last_validated: 2026-10-09
 ---
 
 # Check Orbit Health
@@ -47,7 +47,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `plugin-builds` | Host source-built plugin provenance and build drift | `skipped` when no plugin was built from source; `ok` for healthy or intentional findings; `warning` for actionable drift or inspection failure. Follow the plugin row's step and rerun `orbit plugin doctor`. |
 | `empty-task-stubs` | Empty task-bundle directories, or ones holding only `.task.yaml.lock`, that never received `task.yaml` | `warning` for stubs or scan failure; otherwise `ok`. `orbit task reindex` clears stubs. Data-bearing directories are handled by the next row. |
 | `unresolved-task-bundles` | Directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …) | `warning` for retained unresolved data or scan failure; otherwise `ok`. Restore `task.yaml` or move the directory aside; reindex will not delete it. |
-| `artifacts-skills`, `artifacts-jobs`, `artifacts-activities`, `artifacts-auto-tasks`, `artifacts-routines` | One row per definition kind: missing shipped defaults, stale, deprecated, residual, or faulty catalog content | `skipped` for no files/findings, `ok` for healthy content, `error` only for an unloadable/missing shipped default, `warning` for other findings. Each finding names its remedy; use `orbit workspace sync` for shipped-default convergence and the scoped repair/manual edit when advised. |
+| `artifacts-skills`, `artifacts-jobs`, `artifacts-activities`, `artifacts-auto-tasks`, `artifacts-routines` | One row per definition kind: missing shipped defaults, stale, deprecated, residual, or faulty catalog content; the skills row also inspects provider discovery links | `skipped` for no files/findings, `ok` for healthy content, `error` only for an unloadable/missing shipped default, `warning` for other findings. Each finding names its remedy; use `orbit workspace sync` for shipped-default convergence and the scoped repair/manual edit when advised. |
 | `artifacts` | Fallback when the definition-artifact inspection itself fails | One `warning` replaces the per-kind rows. Resolve the runtime/store error and rerun doctor. |
 | `state-directory-permissions` | Unix group/world write bits on Orbit-owned state directories | `warning` for writable directories (`orbit doctor --fix-state-directory-permissions`); `error` for resolution/inspection failure; otherwise `ok`. `skipped` on non-Unix platforms. See scan and repair scope below. |
 | `provider:<crew>` | One row per enabled crew selected by default/system/positive-weight complexity routing: executor definition and CLI lookup | `ok` when the CLI resolves (authentication is **not** checked); `skipped` for an executor without a CLI command; `error` for missing crew/executor/CLI or inspection failure. Restore the named dependency or change routing. Disabled crews are omitted. |
@@ -56,6 +56,14 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `mcp-callers` | Retired destination-side caller-authorization files under the user's `~/.orbit` | `warning` when inert files remain; otherwise `ok`. Remove the obsolete files; SSH keys govern remote access. The row is omitted when the home directory cannot be resolved. |
 | `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, and `--version` | `skipped` when no unit is installed; `ok` when matching; `warning` for a different path, stale invocation, unrunnable program, or inspection failure; `error` for version mismatch. Follow the unit-file/access remedy or `orbit clock repair`; this row does not establish native timer readiness. |
 | `store-retention` | Reclaimable audit rows, terminal-run pipeline state, candidate audit blobs, and SQLite file/free-list space under configured retention windows | `ok` when measured; `warning` if inspection fails. This is a read-only estimate. Plan audit and run cleanup with `orbit gc audit` and `orbit gc runs`, then pass `--apply` to delete. The blob amount is an upper bound until the audit reference scan. |
+
+The skills check also scans symlinks directly under `.agents/skills` and `.claude/skills`
+beside the selected global root (`~/.orbit` by default, or the root selected with
+`--root` / `ORBIT_ROOT`). A missing link target produces a warning naming the link
+path and advising you to restore the target or manually remove that dangling symlink.
+`orbit skill doctor` reports the same warning; `orbit doctor --json` and the dashboard
+Health tab carry it in the skills row. Diagnosis leaves discovery entries and targets
+untouched, and `--fix-stale-artifacts` does not remove these links.
 
 The state-permission probe checks the global and workspace Orbit roots themselves, then
 recurses through global `state/`, `tasks/`, `cache/`, `frictions/` and workspace `state/`,

@@ -44,6 +44,159 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .expect("diagnostic row")
 }
 
+#[cfg(unix)]
+#[test]
+fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entries() {
+    use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
+
+    let fixture = WorkCheckout::new();
+    let base = fixture.temp.path().join("selected");
+    let global = base.join(".orbit");
+    let live_target = base.join("live-skill");
+    fs::create_dir_all(&live_target).expect("live skill target");
+    fs::write(live_target.join("SKILL.md"), "live skill bytes").expect("live content");
+    let roots = [base.join(".agents/skills"), base.join(".claude/skills")];
+    for root in &roots {
+        fs::create_dir_all(root.join("regular-skill")).expect("discovery directory");
+        fs::write(root.join("regular-skill/notes.txt"), "operator bytes")
+            .expect("operator content");
+        symlink(&live_target, root.join("live-skill")).expect("live skill link");
+        // Only immediate discovery links are in scope; nested content is operator-owned.
+        symlink(
+            base.join("missing-nested"),
+            root.join("regular-skill/nested"),
+        )
+        .expect("nested dangling link");
+    }
+    let home_discovery = fixture.home.join(".claude/skills");
+    fs::create_dir_all(&home_discovery).expect("other discovery root");
+    let home_link = home_discovery.join("unselected-skill");
+    let home_target = fixture.home.join("missing-skill");
+    symlink(&home_target, &home_link).expect("unselected dangling link");
+
+    let invoke = |args: &[&str]| {
+        command(&fixture)
+            .arg("--root")
+            .arg(&global)
+            .args(args)
+            .output()
+            .expect("selected-root doctor")
+    };
+    command(&fixture)
+        .arg("--root")
+        .arg(&global)
+        .args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "doctor-fixture",
+            "--task-prefix",
+            "DF",
+        ])
+        .assert()
+        .success();
+    let initial = rows(&invoke(&["doctor", "--json"]));
+    assert_eq!(row(&initial, "artifacts-skills")["status"], "ok");
+
+    let links = [roots[0].join("leaked-skill"), roots[1].join("leaked-skill")];
+    let targets = [
+        base.join("missing-skill"),
+        PathBuf::from("../../missing-skill"),
+    ];
+    for (link, target) in links.iter().zip(&targets) {
+        symlink(target, link).expect("dangling discovery link");
+    }
+    let plain = invoke(&["doctor", "--format", "plain"]);
+    let stdout = String::from_utf8(plain.stdout).expect("plain UTF-8");
+    let skills_line = stdout
+        .lines()
+        .find(|line| line.starts_with("artifacts-skills\t"))
+        .expect("plain skills row");
+    assert_eq!(skills_line.split('\t').nth(1), Some("warning"));
+    for (link, target) in links.iter().zip(&targets) {
+        assert!(
+            skills_line.contains(&link.display().to_string()),
+            "{skills_line}"
+        );
+        assert!(
+            fs::symlink_metadata(link)
+                .expect("plain doctor retains link")
+                .file_type()
+                .is_symlink(),
+            "plain diagnosis must preserve dangling discovery symlinks",
+        );
+        assert_eq!(fs::read_link(link).unwrap(), *target);
+    }
+
+    let diagnostics = rows(&invoke(&["doctor", "--json"]));
+    let warning = row(&diagnostics, "artifacts-skills");
+    assert_eq!(warning["status"], "warning");
+    let message = warning["message"].as_str().expect("skills warning message");
+    let remediation = warning["remediation"].as_str().expect("manual fix-it");
+    assert!(!remediation.is_empty());
+    assert_eq!(remediation.lines().count(), 1);
+    assert!(
+        skills_line.contains(message),
+        "plain and JSON carry the same warning"
+    );
+    assert!(
+        skills_line.contains(remediation),
+        "plain and JSON carry the same fix-it"
+    );
+    for link in &links {
+        assert!(message.contains(&link.display().to_string()), "{message}");
+        assert!(
+            remediation.contains(&link.display().to_string()),
+            "{remediation}"
+        );
+    }
+    let skill_diagnostics = rows(&invoke(&["skill", "doctor", "--json"]));
+    for (link, target) in links.iter().zip(&targets) {
+        let finding = skill_diagnostics
+            .iter()
+            .find(|row| {
+                row["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&link.display().to_string())
+            })
+            .expect("skill doctor link diagnostic");
+        assert_eq!(finding["status"], "warning");
+        assert_eq!(fs::read_link(link).unwrap(), *target);
+    }
+    for root in &roots {
+        assert_eq!(fs::read_link(root.join("live-skill")).unwrap(), live_target);
+        assert!(root.join("regular-skill").is_dir());
+        assert_eq!(
+            fs::read_to_string(root.join("regular-skill/notes.txt")).unwrap(),
+            "operator bytes"
+        );
+        assert_eq!(
+            fs::read_link(root.join("regular-skill/nested")).unwrap(),
+            base.join("missing-nested")
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(live_target.join("SKILL.md")).unwrap(),
+        "live skill bytes"
+    );
+    assert_eq!(fs::read_link(home_link).unwrap(), home_target);
+
+    for link in &links {
+        fs::remove_file(link).expect("operator removes fixture's dangling link");
+    }
+    let healthy = rows(&invoke(&["doctor", "--json"]));
+    assert_eq!(row(&healthy, "artifacts-skills")["status"], "ok");
+    let healthy_plain = invoke(&["doctor", "--format", "plain"]);
+    assert!(
+        String::from_utf8(healthy_plain.stdout)
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("artifacts-skills\tok\t"))
+    );
+}
+
 /// Corrupt an unrelated B-tree page, leaving the header/schema ledger readable.
 fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
     let database = fixture.home.join(".orbit/orbit.db");
