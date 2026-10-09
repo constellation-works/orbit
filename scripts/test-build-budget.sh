@@ -519,7 +519,18 @@ case "$cmd" in
     printf '%s\n' "$@" >>"${FAKE_BUILD_ARGS}"
     case "${FAKE_ARTIFACT_MODE:-ok}" in
       ok)
-        python3 -c 'import json, os; print(json.dumps({"reason":"compiler-artifact","executable":os.environ["FAKE_APP"],"target":{"name":"orbit"}}))'
+        app="${FAKE_APP:-}"
+        if [[ -z "$app" && -n "${CARGO_TARGET_DIR:-}" ]]; then
+          profile="debug"
+          for arg in "$@"; do
+            if [[ "$arg" == "--release" ]]; then
+              profile="release"
+              break
+            fi
+          done
+          app="${CARGO_TARGET_DIR}/${profile}/orbit"
+        fi
+        python3 -c 'import json, sys; print(json.dumps({"reason":"compiler-artifact","executable":sys.argv[1],"target":{"name":"orbit"}}))' "$app"
         ;;
       none)
         python3 -c 'import json; print(json.dumps({"reason":"compiler-artifact","executable":None,"target":{"name":"orbit"}}))'
@@ -744,6 +755,193 @@ fi
 kill "$WATCH_MAKE_PID" 2>/dev/null || true
 wait "$WATCH_MAKE_PID" 2>/dev/null || true
 forget_pid "$WATCH_MAKE_PID"
+
+# Makefile binary consumers (install, dev, web-memory-soak) honor redirected
+# Cargo output, use the admitted build's reported artifact, and do not fall back
+# to stale binaries in default target directories [ORB-15053].
+REDIRECTED_TARGET="$TMP/custom-target"
+REDIRECTED_RELEASE="$REDIRECTED_TARGET/release"
+REDIRECTED_DEBUG="$REDIRECTED_TARGET/debug"
+FAKE_INSTALL_BIN_DIR="$TMP/installed-bin"
+FAKE_HOME="$TMP/fake-home"
+mkdir -p "$REDIRECTED_RELEASE" "$REDIRECTED_DEBUG" "$FAKE_INSTALL_BIN_DIR" "$FAKE_HOME"
+# Run the consumers from a scratch copy of the Makefile so the stale default-target
+# binaries live in the scratch tree and never touch the checkout's real target/.
+CONSUMER_ROOT="$TMP/consumer-root"
+mkdir -p "$CONSUMER_ROOT/target/release" "$CONSUMER_ROOT/target/debug"
+cp "$ROOT/Makefile" "$CONSUMER_ROOT/Makefile"
+
+# Populate default targets with stale binaries.
+cat >"$CONSUMER_ROOT/target/release/orbit" <<'SH'
+#!/usr/bin/env bash
+printf 'stale-default-release-target\n'
+SH
+chmod +x "$CONSUMER_ROOT/target/release/orbit"
+
+cat >"$CONSUMER_ROOT/target/debug/orbit" <<'SH'
+#!/usr/bin/env bash
+printf 'stale-default-debug-target\n'
+SH
+chmod +x "$CONSUMER_ROOT/target/debug/orbit"
+
+# Populate redirected targets with fresh binaries.
+cat >"$REDIRECTED_RELEASE/orbit" <<'SH'
+#!/usr/bin/env bash
+printf 'fresh-custom-release-target\n'
+SH
+chmod +x "$REDIRECTED_RELEASE/orbit"
+
+cat >"$REDIRECTED_DEBUG/orbit" <<'SH'
+#!/usr/bin/env bash
+printf 'fresh-custom-debug-target\n'
+SH
+chmod +x "$REDIRECTED_DEBUG/orbit"
+
+# Ensure FAKE_APP is unset so fake-make-cargo resolves the binary under CARGO_TARGET_DIR.
+unset FAKE_APP
+FAKE_ARTIFACT_MODE=ok
+FAKE_BUILD_EXIT=0
+export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
+
+# 1. make install with redirected CARGO_TARGET_DIR installs the fresh release binary.
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install" ORBIT_BUILD_SLOTS=1 \
+  CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
+  HOME="$FAKE_HOME" timeout 5 \
+  make -s -C "$CONSUMER_ROOT" install CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
+grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "make install build was not admitted"
+grep -Fxq -- '-p' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit-cli' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--bin' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--release' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--message-format=json-render-diagnostics' "$FAKE_BUILD_ARGS" \
+  || fail "make install lost package, binary, release, or artifact-format arguments"
+[[ -x "$FAKE_INSTALL_BIN_DIR/orbit" ]] || fail "make install did not create installed binary"
+installed_out="$("$FAKE_INSTALL_BIN_DIR/orbit")"
+[[ "$installed_out" == "fresh-custom-release-target" ]] \
+  || fail "make install installed stale or wrong binary: got '$installed_out'"
+
+# 1b. make install with INSTALL_PROFILE=debug installs the fresh debug binary.
+rm -f "$FAKE_INSTALL_BIN_DIR/orbit"
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install-dbg" ORBIT_BUILD_SLOTS=1 \
+  CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
+  HOME="$FAKE_HOME" timeout 5 \
+  make -s -C "$CONSUMER_ROOT" install INSTALL_PROFILE=debug CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
+grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "make install debug build was not admitted"
+[[ -x "$FAKE_INSTALL_BIN_DIR/orbit" ]] || fail "make install debug did not create installed binary"
+installed_dbg_out="$("$FAKE_INSTALL_BIN_DIR/orbit")"
+[[ "$installed_dbg_out" == "fresh-custom-debug-target" ]] \
+  || fail "make install debug installed stale or wrong binary: got '$installed_dbg_out'"
+
+# 2. make dev executes the redirected debug binary directly and releases build admission before running.
+FAKE_DEV_ARGS="$TMP/make-dev-app-args"
+FAKE_DEV_STARTED="$TMP/make-dev-app-started"
+FAKE_DEV_RELEASE="$TMP/make-dev-app-release"
+rm -f "$FAKE_DEV_STARTED" "$FAKE_DEV_RELEASE"
+cat >"$REDIRECTED_DEBUG/orbit" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${FAKE_DEV_ARGS}"
+touch "${FAKE_DEV_STARTED}"
+while [[ ! -e "${FAKE_DEV_RELEASE}" ]]; do
+  sleep 0.02
+done
+printf 'fresh-custom-dev-out\n'
+SH
+chmod +x "$REDIRECTED_DEBUG/orbit"
+
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+export FAKE_DEV_ARGS FAKE_DEV_STARTED FAKE_DEV_RELEASE
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-dev" ORBIT_BUILD_SLOTS=1 \
+  CARGO_TARGET_DIR="$REDIRECTED_TARGET" \
+  make -s -C "$CONSUMER_ROOT" dev CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  ARGS='dev-arg1 dev-arg2' >"$TMP/make-dev.out" 2>"$TMP/make-dev.err" &
+DEV_PID=$!
+BACKGROUND_PIDS+=("$DEV_PID")
+wait_for "$FAKE_DEV_STARTED"
+grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "make dev build was not admitted"
+grep -Fxq -- '-p' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit-cli' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--bin' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--message-format=json-render-diagnostics' "$FAKE_BUILD_ARGS" \
+  || fail "make dev lost package, binary, or artifact-format arguments"
+printf 'dev-arg1\ndev-arg2\n' >"$TMP/expected-dev-args"
+diff -q "$FAKE_DEV_ARGS" "$TMP/expected-dev-args" >/dev/null \
+  || fail "make dev did not preserve application arguments"
+# Build slot must be released before application runtime.
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-dev" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- true \
+  || fail "make dev application runtime retained the build slot"
+touch "$FAKE_DEV_RELEASE"
+wait "$DEV_PID"
+forget_pid "$DEV_PID"
+grep -Fxq 'fresh-custom-dev-out' "$TMP/make-dev.out" \
+  || fail "make dev did not execute fresh custom binary"
+
+# 3. make web-memory-soak consumes the emitted binary rather than assuming target/release.
+FAKE_SOAK_LOG="$TMP/soak-invoked.log"
+FAKE_BIN_DIR="$TMP/fake-bin"
+mkdir -p "$FAKE_BIN_DIR"
+cat >"$FAKE_BIN_DIR/python3" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+  exec /usr/bin/python3 "$@"
+fi
+for arg in "$@"; do
+  if [[ "$arg" == *"web-memory-soak"* ]]; then
+    printf '%s\n' "$@" >"${FAKE_SOAK_LOG}"
+    exit 0
+  fi
+done
+exec /usr/bin/python3 "$@"
+SH
+chmod +x "$FAKE_BIN_DIR/python3"
+
+# Restore standard release binary in redirected target.
+cat >"$REDIRECTED_RELEASE/orbit" <<'SH'
+#!/usr/bin/env bash
+printf 'fresh-custom-release-target\n'
+SH
+chmod +x "$REDIRECTED_RELEASE/orbit"
+
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+: >"$FAKE_SOAK_LOG"
+export FAKE_SOAK_LOG
+PATH="$FAKE_BIN_DIR:$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-soak" ORBIT_BUILD_SLOTS=1 \
+  CARGO_TARGET_DIR="$REDIRECTED_TARGET" \
+  make -s -C "$CONSUMER_ROOT" web-memory-soak CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  SOAK_FLAGS='--rounds 3'
+grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "web-memory-soak build was not admitted"
+grep -Fxq -- '--bin' "$FAKE_SOAK_LOG" || fail "web-memory-soak did not pass --bin argument"
+grep -Fxq -- "$REDIRECTED_RELEASE/orbit" "$FAKE_SOAK_LOG" \
+  || fail "web-memory-soak consumed stale or incorrect binary"
+if grep -Fxq -- 'target/release/orbit' "$FAKE_SOAK_LOG"; then
+  fail "web-memory-soak assumed default target/release/orbit"
+fi
+grep -Fxq -- '--rounds' "$FAKE_SOAK_LOG" && grep -Fxq -- '3' "$FAKE_SOAK_LOG" \
+  || fail "web-memory-soak did not propagate SOAK_FLAGS"
+
+# 4. Error reporting when cargo does not report an executable names the invoking make target.
+for target_name in install dev web-memory-soak; do
+  FAKE_ARTIFACT_MODE=none
+  set +e
+  CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
+    HOME="$FAKE_HOME" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-err" ORBIT_BUILD_SLOTS=1 \
+    PATH="$FAKE_BIN_DIR:$PATH" \
+    make -s -C "$CONSUMER_ROOT" "$target_name" CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+    >"$TMP/make-$target_name-err.out" 2>"$TMP/make-$target_name-err.err"
+  status=$?
+  set -e
+  [[ "$status" != 0 ]] || fail "make $target_name unexpectedly succeeded with missing executable"
+  grep -Fq "make $target_name: cargo did not report an executable" "$TMP/make-$target_name-err.err" \
+    || fail "make $target_name did not report target-specific missing executable error"
+done
 
 TEST_COMPLETE=1
 printf 'test-build-budget: ok\n'
