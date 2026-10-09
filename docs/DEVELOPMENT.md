@@ -586,10 +586,13 @@ commands against ambient authority in a managed worker. See
 [`crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs`](../crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs)
 for the regression coverage.
 
-Apply the same shared scrub to fixture Git setup commands. `GIT_DIR`,
-`GIT_WORK_TREE`, and `GIT_COMMON_DIR` override cwd independently of Orbit's
-environment. Leaving them inherited can make `git init` initialize the parent
-repository and route a workflow's Git fetch lock into the parent checkout.
+Build fixture Git commands with `git_repo::command()` from
+`crates/orbit-cli/tests/support/git_repo.rs`, which applies the shared authority
+scrub before deliberate fixture environment settings. Use it for reads as well
+as setup, commits, clones and pushes. `GIT_DIR`, `GIT_WORK_TREE`, and
+`GIT_COMMON_DIR` override cwd independently of Orbit's environment; index and
+object-directory variables can redirect writes too. Leaving them inherited can
+initialize or amend the parent repository and even force-push to its origin.
 
 Workflow-dispatch fixtures must also observe their detached workers reaching a
 terminal state in the fixture's run history before dropping its temporary home

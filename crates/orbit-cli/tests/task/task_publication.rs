@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -703,7 +702,7 @@ fn configure_git(repo: &Path) {
 }
 
 fn branch_tip(bare: &Path) -> Option<String> {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(bare)
         .args(["rev-parse", "--verify", "refs/heads/main"])
@@ -788,7 +787,7 @@ fn assert_output_excludes(assert: &assert_cmd::assert::Assert, forbidden: &str) 
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -805,7 +804,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> String {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)
