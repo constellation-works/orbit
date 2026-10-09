@@ -16,8 +16,8 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
-    execute_job_with_resume,
+    FinalRecoveryApplied, JobOutcome, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
+    V2SqliteSink, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
@@ -26,6 +26,9 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 const RUN_ID: &str = "jrun-final-recovery";
+
+#[cfg(unix)]
+mod prompt;
 
 /// How a scripted deterministic call ends.
 #[derive(Clone)]
@@ -42,7 +45,11 @@ struct RecoveryHost {
     admission: FinalRecoveryAdmission,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     applications: Mutex<Vec<FinalRecoveryApplication>>,
+    updates: Mutex<Vec<(String, TaskAutomationUpdate)>>,
     logs: HashMap<String, String>,
+    workspace_path: String,
+    primary_root: Option<std::path::PathBuf>,
+    cli: Option<orbit_engine::ResolvedCliExecutor>,
 }
 
 impl RecoveryHost {
@@ -58,7 +65,11 @@ impl RecoveryHost {
             admission: FinalRecoveryAdmission::Admitted,
             admissions: Mutex::new(Vec::new()),
             applications: Mutex::new(Vec::new()),
+            updates: Mutex::new(Vec::new()),
             logs: HashMap::from([(RUN_ID.to_string(), "this run's failure log".to_string())]),
+            workspace_path: "/worktrees/run".to_string(),
+            primary_root: None,
+            cli: None,
         }
     }
 
@@ -131,7 +142,7 @@ impl RuntimeHost for RecoveryHost {
                 "{action}: sandbox unavailable"
             ))),
             None if action == "setup" => Ok(json!({
-                "workspace_path": "/worktrees/run",
+                "workspace_path": self.workspace_path,
                 "base_ref": "main",
                 "base_sha": "0123456789abcdef0123456789abcdef01234567",
             })),
@@ -141,6 +152,40 @@ impl RuntimeHost for RecoveryHost {
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(self.logs.get(run_id).cloned())
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        task_id: &str,
+        update: TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.updates
+            .lock()
+            .unwrap()
+            .push((task_id.to_string(), update));
+        Ok(())
+    }
+
+    fn resolve_cli_executor(
+        &self,
+        _provider: &str,
+    ) -> Result<orbit_engine::ResolvedCliExecutor, DispatchError> {
+        self.cli.clone().ok_or_else(|| {
+            DispatchError::JobExecution("this fixture has no provider CLI".to_string())
+        })
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: self.primary_root.clone(),
+            ..Default::default()
+        }
     }
 
     fn admit_final_recovery(
@@ -368,6 +413,7 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     assert_eq!(input["base_ref"], "main");
     assert_eq!(input["crew_config_key"], "workflow.final_recovery_crews");
     assert_eq!(input["step_ids"], json!(["setup", "work", "deliver"]));
+    assert_eq!(input["allowed_resume_step_ids"], json!(["work"]));
     assert_eq!(input["step_recovery_attempts"], json!([]));
     assert_eq!(input["log_tail"], "this run's failure log");
     // The in-pipeline lane applies every decision, `resume` included, so its
@@ -482,7 +528,7 @@ fn final_recovery_runs_at_most_once_per_run() {
     // the run falls through to its failure handoff.
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail, Reply::Fail]),
-        ("decide", vec![resume_to("work"), resume_to("work")]),
+        ("decide", vec![resume_to("deliver"), resume_to("work")]),
     ]);
     let run = run(&pipeline(false), &host, None);
 
@@ -627,10 +673,72 @@ fn an_empty_crew_pool_skips_final_recovery() {
 }
 
 #[test]
-fn a_resume_outside_the_failed_phase_is_escalated() {
-    // `deliver` is after the failure and `setup` is the job's own first phase;
-    // neither is a step the failed one may resume from.
-    for target in ["deliver", "setup", "no_such_step"] {
+fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade() {
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail, Reply::Ok(json!({"built": true}))]),
+        ("decide", vec![resume_to("deliver")]),
+    ]);
+    let run = run(&pipeline(false), &host, None);
+
+    assert!(run.result.unwrap().success);
+    assert_eq!(
+        host.actions(),
+        ["setup", "work", "decide", "work", "deliver"]
+    );
+    let applications = host.applications();
+    assert_eq!(applications[0].resume_step_index, Some(1));
+    assert_eq!(
+        applications[0].decision,
+        FinalRecoveryDecision::Resume {
+            step_id: "work".to_string(),
+            rationale: "repaired the worktree".to_string(),
+        }
+    );
+    assert_eq!(run.attempts, [attempt("resume", Some("resume"))]);
+    let detail = run.details[0].as_ref().unwrap();
+    assert!(
+        detail.contains("downgraded resume from `deliver` to failed step `work`"),
+        "{detail}"
+    );
+    let updates = host.updates.lock().unwrap();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].0, "T-1");
+    let update = &updates[0].1;
+    assert_eq!(update.status, None, "a downgrade only records a comment");
+    assert_eq!(
+        update.job_run_id, None,
+        "a comment must preserve the task's run binding"
+    );
+    assert_eq!(update.append_comments.len(), 1);
+    assert!(update.append_comments[0].message.contains(detail));
+}
+
+#[test]
+fn a_resume_to_an_earlier_step_keeps_the_named_target() {
+    let host = RecoveryHost::new([
+        (
+            "deliver",
+            vec![Reply::Fail, Reply::Ok(json!({"delivered": true}))],
+        ),
+        ("decide", vec![resume_to("work")]),
+    ]);
+    let run = run(&pipeline(false), &host, None);
+    assert!(run.result.unwrap().success);
+    assert_eq!(
+        host.actions(),
+        ["setup", "work", "deliver", "decide", "work", "deliver"]
+    );
+    assert_eq!(host.applications()[0].resume_step_index, Some(1));
+    assert_eq!(
+        host.inputs("decide")[0]["allowed_resume_step_ids"],
+        json!(["work", "deliver"])
+    );
+    assert!(host.updates.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
+    for target in ["setup", "no_such_step"] {
         let host = RecoveryHost::new([
             ("work", vec![Reply::Fail]),
             ("decide", vec![resume_to(target)]),
@@ -639,12 +747,15 @@ fn a_resume_outside_the_failed_phase_is_escalated() {
 
         assert!(run.result.is_err(), "{target}");
         let applications = host.applications();
-        assert!(
-            matches!(
-                applications[0].decision,
-                FinalRecoveryDecision::Escalate { .. }
-            ),
-            "resume to `{target}` must reach the host as escalate"
+        let FinalRecoveryDecision::Escalate { diagnosis, .. } = &applications[0].decision else {
+            panic!("resume to `{target}` must reach the host as escalate");
+        };
+        assert_eq!(
+            diagnosis,
+            &format!(
+                "final recovery asked to resume from `{target}`, which is neither the failed step \
+             `work` nor an earlier step of its phase"
+            )
         );
         assert_eq!(applications[0].resume_step_index, None);
         assert_eq!(host.count("deliver"), 0, "{target}");
