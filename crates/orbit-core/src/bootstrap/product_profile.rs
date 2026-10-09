@@ -61,19 +61,18 @@ impl ProductProfile {
                     break;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(OrbitError::Io(error.to_string())),
+                Err(error) => return Err(error.into()),
             }
         }
         // Existing Orbit roots predate product identity. Only Orbit may
         // adopt them. An alternate product must start empty or already
         // carry its own marker; it must never guess from filenames.
         if !self.validate_marker(root)? && self != Self::Orbit && root.exists() {
-            let mut entries =
-                fs::read_dir(root).map_err(|error| OrbitError::Io(error.to_string()))?;
+            let mut entries = fs::read_dir(root).map_err(OrbitError::from)?;
             if entries
                 .next()
                 .transpose()
-                .map_err(|error| OrbitError::Io(error.to_string()))?
+                .map_err(OrbitError::from)?
                 .is_some()
             {
                 return Err(OrbitError::InvalidInput(format!(
@@ -95,8 +94,7 @@ impl ProductProfile {
                         marker.display()
                     )));
                 }
-                let identity = fs::read_to_string(&marker)
-                    .map_err(|error| OrbitError::Io(error.to_string()))?;
+                let identity = fs::read_to_string(&marker).map_err(OrbitError::from)?;
                 if identity != self.identity() {
                     return Err(OrbitError::InvalidInput(format!(
                         "product ownership mismatch at {}: expected {}",
@@ -106,7 +104,7 @@ impl ProductProfile {
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(OrbitError::Io(error.to_string())),
+            Err(error) => return Err(error.into()),
         }
         Ok(true)
     }
@@ -118,8 +116,7 @@ impl ProductProfile {
     /// bootstrap initialization records ownership when the root is writable.
     pub(crate) fn claim_root(self, root: &Path) -> Result<(), OrbitError> {
         self.validate_root(root)?;
-        orbit_common::fs::io::create_private_dir_all(root)
-            .map_err(|error| OrbitError::Io(error.to_string()))?;
+        orbit_common::fs::io::create_private_dir_all(root).map_err(OrbitError::from)?;
         // A peer may have published a complete marker while this root was
         // being created. Accept that identity; do not stage a replacement.
         if self.validate_marker(root)? {
@@ -129,7 +126,7 @@ impl ProductProfile {
         match publish_complete_marker(&marker, self.identity()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => self.validate_root(root),
-            Err(error) => Err(OrbitError::Io(error.to_string())),
+            Err(error) => Err(error.into()),
         }
     }
 }

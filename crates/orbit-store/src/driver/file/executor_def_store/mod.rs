@@ -62,7 +62,7 @@ impl ExecutorDefFileStore {
     pub fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         let path = self.executor_path(&def.name)?;
         let dir = self.executors_dir();
-        fs::create_dir_all(&dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::create_dir_all(&dir)?;
         write_yaml_atomic_with(
             &path,
             &ExecutorResource {

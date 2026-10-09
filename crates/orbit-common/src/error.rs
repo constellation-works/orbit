@@ -131,6 +131,88 @@ pub struct SqliteContention {
     pub detail: String,
 }
 
+/// The error family an [`OrbitError::StorageAccessDenied`] reports as.
+///
+/// A read-only or access-denied failure keeps the message prefix and the
+/// stable error code of the variant it would otherwise have been built as, so
+/// carrying the class changes no user-visible text and no wire code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageLayer {
+    /// Reported as [`OrbitError::Io`].
+    Io,
+    /// Reported as [`OrbitError::Store`].
+    Store,
+    /// Reported as [`OrbitError::Migration`].
+    Migration,
+}
+
+impl StorageLayer {
+    /// The stable error code the CLI and MCP surfaces report for this layer.
+    pub fn error_code(self) -> &'static str {
+        match self {
+            Self::Io => "io_error",
+            Self::Store => "store_error",
+            Self::Migration => "migration_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for StorageLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Io => "io error",
+            Self::Store => "store error",
+            Self::Migration => "schema migration failed",
+        })
+    }
+}
+
+/// Why the owner refused a distributed-execution claim or handoff mutation.
+///
+/// Every kind is reported as the invalid-input refusal it has always been;
+/// the kind lets callers decide how to answer it without reading its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimRefusalKind {
+    /// The claim acted under is not the owner's current claim, or no longer
+    /// is in the phase the action was prepared against.
+    StaleClaim,
+    /// No claim or accepted handoff with this id is current on the owner.
+    NotCurrent,
+    /// The candidate offered does not match the one the handoff recorded.
+    HandoffCandidateMismatch,
+    /// The handoff identity does not match the accepted record.
+    HandoffIdentityMismatch,
+    /// The repository's validation requirements changed since the handoff.
+    ValidationRequirementsChanged,
+    /// The landing authority recorded at approval was revoked.
+    LandingAuthorityRevoked,
+    /// The handoff has already landed.
+    HandoffAlreadyLanded,
+    /// A merge intent was recorded externally and has not been reconciled.
+    UnresolvedMergeIntent,
+    /// A merge-intent replay needs reconciliation before it can proceed.
+    MergeIntentReplayUnreconciled,
+}
+
+impl ClaimRefusalKind {
+    /// The refusal text the store has always reported for this kind.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::StaleClaim => "stale_claim",
+            Self::NotCurrent => "claim or handoff is not current on this owner",
+            Self::HandoffCandidateMismatch => "handoff candidate mismatch",
+            Self::HandoffIdentityMismatch => "handoff identity mismatch",
+            Self::ValidationRequirementsChanged => "validation requirements changed",
+            Self::LandingAuthorityRevoked => "landing authority revoked",
+            Self::HandoffAlreadyLanded => "handoff has already landed",
+            Self::UnresolvedMergeIntent => "unresolved external merge intent",
+            Self::MergeIntentReplayUnreconciled => "merge intent replay requires reconciliation",
+        }
+    }
+}
+
 /// Stable refusal codes of the operator host registry (`orbit host`, the
 /// host file and its consumers). The serialized name is the code callers
 /// match on, so each variant is protocol.
@@ -303,6 +385,14 @@ pub enum OrbitError {
     FrictionNotLocal(Box<FrictionNotLocal>),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    /// A distributed-execution claim or handoff mutation the owner refused.
+    /// Displays and reports exactly as [`Self::InvalidInput`]; `kind` is what
+    /// callers branch on, never `message`.
+    #[error("invalid input: {message}")]
+    ClaimRefused {
+        kind: ClaimRefusalKind,
+        message: String,
+    },
     #[error("sensitive input rejected for `{field}`: {reason}")]
     SensitiveInput { field: String, reason: String },
     #[error("invalid input: {message}")]
@@ -335,6 +425,11 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// An execution step failed because an operation it supervised hit its
+    /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
+    /// carries the timeout class so callers never read it from the text.
+    #[error("execution failed: {message}")]
+    ExecutionTimeout { timeout_ms: u64, message: String },
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -482,6 +577,16 @@ pub enum OrbitError {
     Io(String),
     #[error("schema migration failed: {0}")]
     Migration(String),
+    /// A filesystem or SQLite operation failed because its target is mounted
+    /// read-only or denies access. Classified from the native error (the
+    /// `io::ErrorKind` or errno, or SQLite's result code) where it is
+    /// translated, so passive callers that fail open never read message text.
+    /// Displays and reports exactly as the `layer` variant it stands in for.
+    #[error("{layer}: {message}")]
+    StorageAccessDenied {
+        layer: StorageLayer,
+        message: String,
+    },
 }
 
 const _: () = assert!(
@@ -663,28 +768,97 @@ impl OrbitError {
     /// to `linux_bwrap_write_grant_diagnostic`. Other I/O stays a bare
     /// [`Self::Io`] so read and capacity failures keep their existing text.
     pub fn from_write_io(path: &Path, err: std::io::Error) -> Self {
-        Self::Io(
-            crate::fs::io::write_access_error_message(path, &err)
-                .unwrap_or_else(|| err.to_string()),
+        match crate::fs::io::write_access_error_message(path, &err) {
+            Some(message) => Self::StorageAccessDenied {
+                layer: StorageLayer::Io,
+                message,
+            },
+            None => Self::Io(err.to_string()),
+        }
+    }
+
+    /// An I/O failure described by `message`, keeping whether `err` was a
+    /// read-only or access denial. Use it wherever an `io::Error` is wrapped
+    /// with context instead of converted with `?`.
+    pub fn io_with_context(err: &std::io::Error, message: impl Into<String>) -> Self {
+        Self::storage_io(StorageLayer::Io, err, message)
+    }
+
+    /// A `layer` failure described by `message` and caused by `err`, keeping
+    /// whether `err` was a read-only or access denial.
+    pub fn storage_io(
+        layer: StorageLayer,
+        err: &std::io::Error,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::storage(
+            layer,
+            crate::fs::io::is_readonly_or_access_error(err),
+            message,
         )
+    }
+
+    /// A `layer` failure described by `message`, carried as
+    /// [`Self::StorageAccessDenied`] when the native error that caused it was
+    /// a read-only or access denial.
+    pub fn storage(layer: StorageLayer, access_denied: bool, message: impl Into<String>) -> Self {
+        let message = message.into();
+        if access_denied {
+            return Self::StorageAccessDenied { layer, message };
+        }
+        match layer {
+            StorageLayer::Io => Self::Io(message),
+            StorageLayer::Store => Self::Store(message),
+            StorageLayer::Migration => Self::Migration(message),
+        }
+    }
+
+    /// The storage family this error reports as — [`Self::Io`],
+    /// [`Self::Store`] or [`Self::Migration`], whether or not it carries a
+    /// read-only or access class — or `None` for any other error.
+    pub fn storage_layer(&self) -> Option<StorageLayer> {
+        match self {
+            Self::Io(_) => Some(StorageLayer::Io),
+            Self::Store(_) => Some(StorageLayer::Store),
+            Self::Migration(_) => Some(StorageLayer::Migration),
+            Self::StorageAccessDenied { layer, .. } => Some(*layer),
+            _ => None,
+        }
     }
 
     /// Whether an operation failed because its persistence target is mounted
     /// read-only or denies writes.
     ///
-    /// Filesystem and SQLite adapters currently translate their native errors
-    /// at different crate boundaries. Keep the recognition here so passive
-    /// bootstrap, cache, and telemetry callers do not each grow a partial list
-    /// of platform and SQLite spellings.
+    /// Answered from the variant alone: the class is decided where the native
+    /// I/O or SQLite error is translated, so an error that merely quotes such
+    /// text (a child's stderr, a remote message) never counts.
     pub fn is_readonly_or_access_failure(&self) -> bool {
-        let message = self.to_string().to_ascii_lowercase();
-        message.contains("read-only file system")
-            || message.contains("readonly filesystem")
-            || message.contains("permission denied")
-            || message.contains("attempt to write a readonly database")
-            || message.contains("database is read-only")
-            || message.contains("database is readonly")
-            || message.contains(" is not writable:")
+        matches!(self, Self::StorageAccessDenied { .. })
+    }
+
+    /// A claim refusal reported with the store's text for `kind`.
+    pub fn claim_refused(kind: ClaimRefusalKind) -> Self {
+        Self::ClaimRefused {
+            kind,
+            message: kind.message().to_string(),
+        }
+    }
+
+    /// The kind of an owner claim or handoff refusal, if this is one.
+    pub fn claim_refusal(&self) -> Option<ClaimRefusalKind> {
+        match self {
+            Self::ClaimRefused { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    /// Whether a supervised operation exceeded its deadline: a process
+    /// timeout, or an execution failure raised for one.
+    pub fn is_timeout(&self) -> bool {
+        matches!(
+            self,
+            Self::ProcessTimeout { .. } | Self::ExecutionTimeout { .. }
+        )
     }
 }
 
@@ -696,7 +870,7 @@ impl From<std::io::Error> for OrbitError {
         {
             return OrbitError::FileLockTimeout(Box::new(timeout.clone()));
         }
-        OrbitError::Io(err.to_string())
+        OrbitError::io_with_context(&err, err.to_string())
     }
 }
 

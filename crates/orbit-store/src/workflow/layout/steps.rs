@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::Path;
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_types::task::is_valid_orb_task_id;
 
 /// v1 baseline: the current `.orbit/` shape. Intentionally a no-op — running
@@ -283,5 +283,9 @@ fn replace_json_string_field(
 }
 
 fn layout_io_error(operation: &str, path: &Path, error: std::io::Error) -> OrbitError {
-    OrbitError::Migration(format!("{operation} '{}': {error}", path.display()))
+    OrbitError::storage_io(
+        StorageLayer::Migration,
+        &error,
+        format!("{operation} '{}': {error}", path.display()),
+    )
 }

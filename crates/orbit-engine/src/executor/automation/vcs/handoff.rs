@@ -220,7 +220,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     let base_ref = input_string_field(input, "base_ref")
         .map(|value| format!("Base checkpoint: {value}\n"))
         .unwrap_or_default();
-    let timed_out = error.to_string().contains("timed out");
+    let timed_out = error.is_timeout();
     let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
         && rebase_in_progress(&context.workspace_path).unwrap_or(false)
     {

@@ -859,6 +859,7 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
                 | "protocol_skew"
         ),
         OrbitError::InvalidInput(_)
+        | OrbitError::ClaimRefused { .. }
         | OrbitError::ProtocolSkew(_)
         | OrbitError::CapabilityRefused(_)
         | OrbitError::CapabilityDenied(_)

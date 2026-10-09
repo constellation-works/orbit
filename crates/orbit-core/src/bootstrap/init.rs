@@ -415,16 +415,16 @@ pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
 
 fn seed_scoreboard_templates(orbit_root: &Path) -> Result<(), OrbitError> {
     let scoreboard_dir = orbit_layout_paths(orbit_root).scoreboard_dir;
-    create_private_dir_all(&scoreboard_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(&scoreboard_dir).map_err(OrbitError::from)?;
 
     let pr_path = scoreboard_dir.join("pr.json");
     if !pr_path.exists() {
-        atomic_write_text(&pr_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
+        atomic_write_text(&pr_path, "{}\n").map_err(OrbitError::from)?;
     }
 
     let task_review_path = scoreboard_dir.join("task_review.json");
     if !task_review_path.exists() {
-        atomic_write_text(&task_review_path, "{}\n").map_err(|e| OrbitError::Io(e.to_string()))?;
+        atomic_write_text(&task_review_path, "{}\n").map_err(OrbitError::from)?;
     }
 
     Ok(())
@@ -434,7 +434,7 @@ fn prepare_workspace_root_layout(
     orbit_root: &Path,
     global_root: &Path,
 ) -> Result<WorkspacePaths, OrbitError> {
-    create_private_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(orbit_root).map_err(OrbitError::from)?;
     let layout = orbit_layout_paths(orbit_root);
     ensure_workspace_dirs(&layout)?;
     remove_workspace_seeded_default_skills(orbit_root, &layout, global_root)?;
@@ -453,7 +453,7 @@ pub(super) fn orbit_layout_paths(orbit_root: &Path) -> WorkspacePaths {
 }
 
 fn prepare_global_root_layout(orbit_root: &Path) -> Result<WorkspacePaths, OrbitError> {
-    create_private_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(orbit_root).map_err(OrbitError::from)?;
     let layout = orbit_layout_paths(orbit_root);
     ensure_global_dirs(&layout)?;
     Ok(layout)
@@ -469,7 +469,7 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.scoreboard_dir,
         &paths.worktrees_dir,
     ] {
-        create_private_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        create_private_dir_all(dir).map_err(OrbitError::from)?;
     }
     Ok(())
 }
@@ -535,11 +535,11 @@ fn directory_holds_only(dir: &Path, file_name: &str) -> Result<bool, OrbitError>
     if !dir.is_dir() {
         return Ok(false);
     }
-    let mut entries = fs::read_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let mut entries = fs::read_dir(dir).map_err(OrbitError::from)?;
     let Some(first) = entries.next() else {
         return Ok(false);
     };
-    let first = first.map_err(|e| OrbitError::Io(e.to_string()))?;
+    let first = first.map_err(OrbitError::from)?;
     Ok(first.file_name() == file_name && entries.next().is_none())
 }
 
@@ -547,9 +547,9 @@ fn remove_empty_dir(dir: &Path) -> Result<(), OrbitError> {
     if !dir.is_dir() {
         return Ok(());
     }
-    let mut entries = fs::read_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let mut entries = fs::read_dir(dir).map_err(OrbitError::from)?;
     if entries.next().is_none() {
-        fs::remove_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::remove_dir(dir).map_err(OrbitError::from)?;
     }
     Ok(())
 }
@@ -563,7 +563,7 @@ fn ensure_global_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.policies_dir,
         &global_skills_dir(&paths.orbit_dir),
     ] {
-        create_private_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        create_private_dir_all(dir).map_err(OrbitError::from)?;
     }
     Ok(())
 }
@@ -579,7 +579,7 @@ fn ensure_skill_links(
     force: bool,
 ) -> Result<bool, OrbitError> {
     if let Some(parent) = skills_links_dir.parent() {
-        fs::create_dir_all(parent).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(OrbitError::from)?;
     }
 
     if let Ok(metadata) = fs::symlink_metadata(skills_links_dir)
@@ -596,11 +596,11 @@ fn ensure_skill_links(
     }
 
     if !skills_links_dir.exists() {
-        fs::create_dir_all(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::create_dir_all(skills_links_dir).map_err(OrbitError::from)?;
     } else if !skills_links_dir.is_dir() {
         if force {
             remove_path_if_exists(skills_links_dir)?;
-            fs::create_dir_all(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+            fs::create_dir_all(skills_links_dir).map_err(OrbitError::from)?;
         } else {
             return Err(OrbitError::InvalidInput(format!(
                 "expected '{}' to be a directory for skill links; found non-directory path",
@@ -608,9 +608,7 @@ fn ensure_skill_links(
             )));
         }
     }
-    let canonical_skills_root = skills_root
-        .canonicalize()
-        .map_err(|e| OrbitError::Io(e.to_string()))?;
+    let canonical_skills_root = skills_root.canonicalize().map_err(OrbitError::from)?;
 
     let mut changed = false;
     for skill_id in skill_ids {
@@ -632,7 +630,7 @@ fn ensure_skill_links(
                 {
                     continue;
                 }
-                fs::remove_file(&link_path).map_err(|e| OrbitError::Io(e.to_string()))?;
+                fs::remove_file(&link_path).map_err(OrbitError::from)?;
                 create_dir_symlink(&target, &link_path)?;
                 changed = true;
                 continue;
@@ -666,7 +664,7 @@ fn ensure_skill_links(
 
 /// Resolve a symlink to the path it names without requiring the target to exist.
 fn resolve_symlink_target(link_path: &Path) -> Result<PathBuf, OrbitError> {
-    let target_path = fs::read_link(link_path).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let target_path = fs::read_link(link_path).map_err(OrbitError::from)?;
     if target_path.is_absolute() {
         Ok(target_path)
     } else {
@@ -706,9 +704,9 @@ fn reap_stale_skill_links(
 
     let current: BTreeSet<&str> = skill_ids.iter().copied().collect();
     let mut changed = false;
-    let entries = fs::read_dir(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let entries = fs::read_dir(skills_links_dir).map_err(OrbitError::from)?;
     for entry in entries {
-        let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
+        let entry = entry.map_err(OrbitError::from)?;
         let path = entry.path();
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
@@ -716,7 +714,7 @@ fn reap_stale_skill_links(
         if current.contains(name.as_str()) {
             continue;
         }
-        let meta = fs::symlink_metadata(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let meta = fs::symlink_metadata(&path).map_err(OrbitError::from)?;
         if !meta.file_type().is_symlink() {
             continue;
         }
@@ -727,7 +725,7 @@ fn reap_stale_skill_links(
         if path.exists() {
             continue;
         }
-        fs::remove_file(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        fs::remove_file(&path).map_err(OrbitError::from)?;
         changed = true;
     }
     Ok(changed)
@@ -822,11 +820,11 @@ pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
             continue;
         }
 
-        let entries = fs::read_dir(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let entries = fs::read_dir(skills_links_dir).map_err(OrbitError::from)?;
         for entry in entries {
-            let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
+            let entry = entry.map_err(OrbitError::from)?;
             let path = entry.path();
-            let meta = fs::symlink_metadata(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+            let meta = fs::symlink_metadata(&path).map_err(OrbitError::from)?;
             if !meta.file_type().is_symlink() {
                 continue;
             }
@@ -841,20 +839,20 @@ pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
             if !is_orbit_skill_link_target(&resolved, &skills_root, &canonical_skills_root, name) {
                 continue;
             }
-            fs::remove_file(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+            fs::remove_file(&path).map_err(OrbitError::from)?;
             removed_count += 1;
         }
 
         // Clean up an empty skills dir, then an empty real parent (.agents/ or .claude/).
         // Both checks use symlink metadata so a symlinked directory is never removed.
         if real_empty_dir(skills_links_dir)? {
-            fs::remove_dir(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+            fs::remove_dir(skills_links_dir).map_err(OrbitError::from)?;
             cleaned_dirs.push(skills_links_dir.clone());
 
             if let Some(parent) = skills_links_dir.parent()
                 && real_empty_dir(parent)?
             {
-                fs::remove_dir(parent).map_err(|e| OrbitError::Io(e.to_string()))?;
+                fs::remove_dir(parent).map_err(OrbitError::from)?;
                 cleaned_dirs.push(parent.to_path_buf());
             }
         }
@@ -881,7 +879,7 @@ fn owned_discovery_dir(path: &Path) -> Result<bool, OrbitError> {
             path.display()
         ))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(OrbitError::Io(error.to_string())),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -894,11 +892,11 @@ fn real_empty_dir(path: &Path) -> Result<bool, OrbitError> {
         Ok(metadata) if metadata.file_type().is_dir() => dir_is_empty(path),
         Ok(_) => Ok(false),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(OrbitError::Io(error.to_string())),
+        Err(error) => Err(error.into()),
     }
 }
 
 fn dir_is_empty(path: &Path) -> Result<bool, OrbitError> {
-    let mut entries = fs::read_dir(path).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let mut entries = fs::read_dir(path).map_err(OrbitError::from)?;
     Ok(entries.next().is_none())
 }

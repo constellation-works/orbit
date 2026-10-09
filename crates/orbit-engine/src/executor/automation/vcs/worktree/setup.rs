@@ -10,7 +10,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::git::{
     GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    normalize_base_branch, resolve_worktree_start_point,
+    normalize_base_branch, resolve_worktree_start_point, timeout_recovery_error,
 };
 use super::cleanup::remove_worktree;
 use super::dependency_delivery::{
@@ -501,9 +501,12 @@ fn recover_worktree_add_timeout(
     let timeout = git_timeout_error(repo_root, args, outcome.timeout_ms, &outcome.stderr);
     let registered = is_registered_worktree(repo_root, worktree_path).unwrap_or(false);
     if !registered && !worktree_path.exists() {
-        return OrbitError::Execution(format!(
-            "{timeout}; worktree add timed out before registration. This is timeout recovery, not conflict or failure-handoff recovery."
-        ));
+        return timeout_recovery_error(
+            outcome.timeout_ms,
+            format!(
+                "{timeout}; worktree add timed out before registration. This is timeout recovery, not conflict or failure-handoff recovery."
+            ),
+        );
     }
 
     let inspection = if registered {
@@ -521,15 +524,21 @@ fn recover_worktree_add_timeout(
 
     if registered && can_remove {
         if let Err(error) = remove_owned_incomplete_worktree(repo_root, worktree_path) {
-            return OrbitError::Execution(format!(
-                "{timeout}; failed to remove incomplete owned worktree '{}': {error}. Leave it in place and inspect before retrying. This is timeout recovery, not conflict or failure-handoff recovery.",
-                worktree_path.display()
-            ));
+            return timeout_recovery_error(
+                outcome.timeout_ms,
+                format!(
+                    "{timeout}; failed to remove incomplete owned worktree '{}': {error}. Leave it in place and inspect before retrying. This is timeout recovery, not conflict or failure-handoff recovery.",
+                    worktree_path.display()
+                ),
+            );
         }
-        return OrbitError::Execution(format!(
-            "{timeout}; removed incomplete owned worktree '{}'. Retry must create a complete checkout; this is timeout recovery, not conflict or failure-handoff recovery.",
-            worktree_path.display()
-        ));
+        return timeout_recovery_error(
+            outcome.timeout_ms,
+            format!(
+                "{timeout}; removed incomplete owned worktree '{}'. Retry must create a complete checkout; this is timeout recovery, not conflict or failure-handoff recovery.",
+                worktree_path.display()
+            ),
+        );
     }
 
     let evidence = match &inspection {
@@ -539,10 +548,13 @@ fn recover_worktree_add_timeout(
         }
         None => format!("registered={registered}, path={}", worktree_path.display()),
     };
-    OrbitError::Execution(format!(
-        "{timeout}; leaving checkout '{}' in place ({evidence}). Retry will not admit an incomplete checkout. This is timeout recovery, not conflict or failure-handoff recovery.",
-        worktree_path.display()
-    ))
+    timeout_recovery_error(
+        outcome.timeout_ms,
+        format!(
+            "{timeout}; leaving checkout '{}' in place ({evidence}). Retry will not admit an incomplete checkout. This is timeout recovery, not conflict or failure-handoff recovery.",
+            worktree_path.display()
+        ),
+    )
 }
 
 fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {

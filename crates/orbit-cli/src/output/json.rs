@@ -114,7 +114,9 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
         OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
@@ -126,7 +128,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_) => "execution_failed",
+        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
@@ -142,6 +144,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
         OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",

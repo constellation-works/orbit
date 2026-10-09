@@ -393,7 +393,7 @@ where
             Json(json!({ "ok": true, "result": value })).into_response()
         }
         Ok(Err(error)) => {
-            let response = refusal_response(&error);
+            let response = refusal_response(&runtime, &error);
             record_operation_audit(
                 &runtime,
                 &workspace,
@@ -422,9 +422,9 @@ where
 /// differs: refresh the view, reconcile the merge, or act on the owner machine.
 /// Collapsing them into one 500 would hide exactly the state this surface
 /// exists to show.
-fn refusal_response(error: &OrbitError) -> Response {
+fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
     let message = error.to_string();
-    match HandoffConsoleRefusal::classify(error) {
+    match runtime.handoff_console_refusal(error) {
         Some(refusal @ HandoffConsoleRefusal::ReplicaCheckout) => (
             StatusCode::FORBIDDEN,
             Json(json!({"error": message, "code": refusal.code()})),
@@ -440,24 +440,24 @@ fn refusal_response(error: &OrbitError) -> Response {
             })),
         )
             .into_response(),
-        Some(refusal) => (
+        // A handoff the owner no longer holds reads as stale too: the operator's
+        // remedy is the same refresh, and a 404 would invite a client retry loop.
+        Some(refusal @ HandoffConsoleRefusal::NotCurrent) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": message,
+                "code": refusal.code(),
+                "remedy": "refresh the view: this handoff or claim is no longer current",
+            })),
+        )
+            .into_response(),
+        Some(refusal @ HandoffConsoleRefusal::Stale) => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
                 "code": refusal.code(),
                 "remedy": "refresh the view: the owner's claim or handoff state changed since \
                            this action was prepared",
-            })),
-        )
-            .into_response(),
-        // A handoff the owner no longer holds reads as stale too: the operator's
-        // remedy is the same refresh, and a 404 would invite a client retry loop.
-        None if message.contains("is current on this owner") => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": message,
-                "code": HandoffConsoleRefusal::NotCurrent.code(),
-                "remedy": "refresh the view: this handoff or claim is no longer current",
             })),
         )
             .into_response(),

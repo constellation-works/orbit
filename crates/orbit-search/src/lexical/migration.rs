@@ -187,5 +187,5 @@ fn legacy_task_fts_table() -> &'static str {
 }
 
 fn store_error(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
+    orbit_common::storage::sqlite::sqlite_store_error(error)
 }

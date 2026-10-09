@@ -38,6 +38,32 @@ The principle: internal code propagates the rich typed error so callers can matc
 - **You don't have a typed error yet.** A thin wrapper crate producing `OrbitError` directly is fine; introduce a typed error only when you have enough variants that matching on them adds value.
 - **The "translation" is `OrbitError::from(other_err.to_string())`.** Stringifying loses the kind. If that's all your translator does, you don't need one — write the one-line `.map_err` at the boundary.
 
+## Classify at translation, never from text
+
+When callers must branch on *why* something failed, decide the class where the
+native error is still in hand and carry it in the `OrbitError` variant. A
+caller never re-derives it with `error.to_string().contains(...)`: any message
+can quote such text (a child's stderr, a remote reply), and rewording a message
+would silently change behaviour.
+
+When a class must not change the wire contract, give it a variant that displays
+and codes exactly like the variant it refines:
+
+- `StorageAccessDenied { layer, message }`: a read-only or access-denied
+  failure from `io::Error` kinds (`From<io::Error>`, `OrbitError::storage_io`)
+  or SQLite codes (`storage::sqlite::sqlite_error`). It reads and codes as the
+  `Io`, `Store` or `Migration` error named by `layer`. Query it with
+  `is_readonly_or_access_failure()` and `storage_layer()`.
+- `ClaimRefused { kind, message }`: an owner claim or handoff refusal. It reads
+  and codes as `InvalidInput`. Query it with `claim_refusal()`.
+- `ExecutionTimeout { timeout_ms, message }`: an execution failure caused by a
+  deadline. It reads and codes as `Execution`. Query it with `is_timeout()`,
+  which also covers `ProcessTimeout`.
+
+Each wildcard match in another crate must name the new variant wherever it
+names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed
+variant falls into the generic arm.
+
 ## Reference: `DispatchError` → `OrbitError`
 
 An enum error whose variants act as the discriminator, with a translator that

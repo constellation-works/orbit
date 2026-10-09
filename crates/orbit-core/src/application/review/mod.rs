@@ -32,6 +32,8 @@ mod landing;
 mod projection;
 pub(crate) mod reconciliation;
 mod switches;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use admission::{
     install_review_admission, local_route_before_pr_conflict, run_review_admission,

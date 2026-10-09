@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::baseline::{compare_with_base, run_validation_command};
-use super::super::git::{git_command_success, git_output, git_run, git_success};
+use super::super::git::{
+    git_command_success, git_output, git_run, git_success, timeout_recovery_error,
+};
 use super::{
     COMPLETED_IMPLEMENTATION_STEPS, Candidate, Fresh, MAX_REPAIR_OUTPUT_BYTES, Outcome,
     REVIEW_VERDICT_STEP,
@@ -63,10 +65,13 @@ pub(super) fn apply(
         &["merge", "--squash", "--no-commit", &candidate.head_sha],
     )?;
     if merge.timed_out {
-        return Err(OrbitError::Execution(format!(
-            "candidate_resume: squash merge of {} timed out after {}ms",
-            candidate.head_sha, merge.timeout_ms
-        )));
+        return Err(timeout_recovery_error(
+            merge.timeout_ms,
+            format!(
+                "candidate_resume: squash merge of {} timed out after {}ms",
+                candidate.head_sha, merge.timeout_ms
+            ),
+        ));
     }
     let conflicting_paths =
         git_output(workspace_path, &["diff", "--name-only", "--diff-filter=U"])?

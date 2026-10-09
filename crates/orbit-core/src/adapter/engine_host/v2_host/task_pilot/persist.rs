@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskComplexity, TaskStatus};
@@ -428,7 +428,10 @@ fn apply_atomic_with_retries(
             .apply_atomic_task_mutation(task_id, params)
         {
             Ok(outcome) => return Ok(outcome),
-            Err(error @ OrbitError::Io(_)) if attempt + 1 < STORAGE_APPLY_ATTEMPTS => {
+            Err(error)
+                if error.storage_layer() == Some(StorageLayer::Io)
+                    && attempt + 1 < STORAGE_APPLY_ATTEMPTS =>
+            {
                 last_error = Some(error);
             }
             Err(error) => return Err(error),

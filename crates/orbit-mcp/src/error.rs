@@ -103,7 +103,9 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
         OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
@@ -131,13 +133,14 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_) => "execution_failed",
+        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
         // OrbitError is non-exhaustive so newly added errors can cross this
         // crate boundary without forcing an MCP release. Unknown variants are
         // intentionally classified conservatively until given a stable code.

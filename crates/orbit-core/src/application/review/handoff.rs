@@ -4,7 +4,7 @@
 //! must never manufacture observations by copying the worker's handoff payload.
 use std::collections::HashMap;
 
-use orbit_common::OrbitError;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationResult, ExecutionClaimPhase,
     HandoffObservation,
@@ -170,32 +170,43 @@ impl HandoffConsoleRefusal {
         }
     }
 
-    /// Classify a store refusal the console surfaces verbatim to an operator.
+    /// The console refusal for an owner claim refusal of `kind`.
     ///
-    /// The store speaks one vocabulary for every fencing failure (`stale_claim`)
-    /// and names an unreconciled external send separately, because the two need
-    /// different operator responses: refresh, versus reconcile the merge first.
-    pub fn classify(error: &OrbitError) -> Option<Self> {
-        let message = error.to_string();
-        if message.contains("unresolved external merge intent")
-            || message.contains("merge intent replay requires reconciliation")
-        {
-            return Some(Self::UncertainMerge);
+    /// Every fencing failure reads as stale, and an unreconciled external send
+    /// is named separately, because the two need different operator responses:
+    /// refresh, versus reconcile the merge first.
+    pub fn for_claim_refusal(kind: ClaimRefusalKind) -> Self {
+        match kind {
+            ClaimRefusalKind::StaleClaim
+            | ClaimRefusalKind::HandoffCandidateMismatch
+            | ClaimRefusalKind::HandoffIdentityMismatch
+            | ClaimRefusalKind::ValidationRequirementsChanged
+            | ClaimRefusalKind::LandingAuthorityRevoked
+            | ClaimRefusalKind::HandoffAlreadyLanded => Self::Stale,
+            ClaimRefusalKind::NotCurrent => Self::NotCurrent,
+            ClaimRefusalKind::UnresolvedMergeIntent
+            | ClaimRefusalKind::MergeIntentReplayUnreconciled => Self::UncertainMerge,
         }
-        if matches!(error, OrbitError::CapabilityRefused(_)) && message.contains("replica checkout")
+    }
+}
+
+impl OrbitRuntime {
+    /// Classify a refusal one of this runtime's console reads or actions
+    /// returned, for the console to surface verbatim to an operator.
+    ///
+    /// Decided from the error's variant and this runtime's role, never from
+    /// its text: a capability refusal here is the replica-checkout refusal
+    /// exactly when this runtime is a replica, and an owner claim refusal maps
+    /// by its kind.
+    pub fn handoff_console_refusal(&self, error: &OrbitError) -> Option<HandoffConsoleRefusal> {
+        if matches!(error, OrbitError::CapabilityRefused(_))
+            && self.replica_owner_machine().is_some()
         {
-            return Some(Self::ReplicaCheckout);
+            return Some(HandoffConsoleRefusal::ReplicaCheckout);
         }
-        if message.contains("stale_claim")
-            || message.contains("handoff candidate mismatch")
-            || message.contains("handoff identity mismatch")
-            || message.contains("validation requirements changed")
-            || message.contains("landing authority revoked")
-            || message.contains("handoff has already landed")
-        {
-            return Some(Self::Stale);
-        }
-        None
+        error
+            .claim_refusal()
+            .map(HandoffConsoleRefusal::for_claim_refusal)
     }
 }
 
@@ -444,17 +455,19 @@ impl OrbitRuntime {
             .resolve_execution_claims()?
             .into_iter()
             .find(|claim| claim.claim.claim_id == claim_id)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "no claim '{claim_id}' is current on this owner (stale_claim)"
-                ))
+            .ok_or_else(|| OrbitError::ClaimRefused {
+                kind: ClaimRefusalKind::StaleClaim,
+                message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
         let observed = phase_label(claim.claim.phase);
         if observed != expected_phase {
-            return Err(OrbitError::InvalidInput(format!(
-                "claim '{claim_id}' is now '{observed}', not the '{expected_phase}' this action \
-                 was prepared against (stale_claim)"
-            )));
+            return Err(OrbitError::ClaimRefused {
+                kind: ClaimRefusalKind::StaleClaim,
+                message: format!(
+                    "claim '{claim_id}' is now '{observed}', not the '{expected_phase}' this \
+                     action was prepared against (stale_claim)"
+                ),
+            });
         }
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
@@ -500,9 +513,10 @@ impl OrbitRuntime {
                 return Ok((claim, accepted));
             }
         }
-        Err(OrbitError::InvalidInput(format!(
-            "no accepted handoff '{handoff_id}' is current on this owner"
-        )))
+        Err(OrbitError::ClaimRefused {
+            kind: ClaimRefusalKind::NotCurrent,
+            message: format!("no accepted handoff '{handoff_id}' is current on this owner"),
+        })
     }
 }
 
@@ -525,14 +539,17 @@ impl ExpectedCandidate {
         {
             return Ok(());
         }
-        Err(OrbitError::InvalidInput(format!(
-            "this action was prepared against candidate {} on base {}; the owner now holds \
-             candidate {} on base {} (stale_claim)",
-            self.candidate_commit,
-            self.base_commit,
-            candidate.candidate.commit,
-            candidate.base.commit,
-        )))
+        Err(OrbitError::ClaimRefused {
+            kind: ClaimRefusalKind::StaleClaim,
+            message: format!(
+                "this action was prepared against candidate {} on base {}; the owner now holds \
+                 candidate {} on base {} (stale_claim)",
+                self.candidate_commit,
+                self.base_commit,
+                candidate.candidate.commit,
+                candidate.base.commit,
+            ),
+        })
     }
 }
 

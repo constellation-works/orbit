@@ -26,19 +26,18 @@ pub(super) fn apply_invocation_telemetry_columns(conn: &Connection) -> Result<()
     {
         return Ok(());
     }
+    add_column_if_missing(conn, "invocations", "provider_cost_usd", "REAL")?;
     add_column_if_missing(
         conn,
-        "ALTER TABLE invocations ADD COLUMN provider_cost_usd REAL",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE invocations ADD COLUMN cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0",
+        "invocations",
+        "cache_create_1h_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_invocation_schema_v1(conn)
 }
 
 pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
-    add_column_if_missing(conn, "ALTER TABLE invocations ADD COLUMN slot TEXT")?;
+    add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
     conn.execute_batch(
         r#"
             CREATE INDEX IF NOT EXISTS idx_invocations_job_run_id
@@ -91,7 +90,7 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
     if !table_exists(conn, "invocations")? {
         return Ok(());
     }
-    add_column_if_missing(conn, "ALTER TABLE invocations ADD COLUMN workspace_id TEXT")?;
+    add_column_if_missing(conn, "invocations", "workspace_id", "TEXT")?;
 
     let mut owners = Vec::new();
     if table_has_column(conn, "job_run_id_allocations", "workspace_id")? {

@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
+use orbit_common::{OrbitError, StorageLayer};
 
 use super::registry::LayoutMigration;
 use crate::contracts::{CompatibilityRecord, CompatibilityRefusal};
@@ -47,10 +47,14 @@ pub(super) fn read_compat_record(
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Ok(None)),
         Err(error) => {
-            return Err(OrbitError::Migration(format!(
-                "cannot read layout compatibility record '{}': {error}",
-                path.display()
-            )));
+            return Err(OrbitError::storage_io(
+                StorageLayer::Migration,
+                &error,
+                format!(
+                    "cannot read layout compatibility record '{}': {error}",
+                    path.display()
+                ),
+            ));
         }
     };
     Ok(CompatibilityRecord::decode(raw.trim()).map(Some))
@@ -73,10 +77,14 @@ pub(super) fn write_compat_record(
     );
     let path = compat_path(orbit_dir);
     atomic_write_text(&path, &format!("{}\n", record.encode()?)).map_err(|error| {
-        OrbitError::Migration(format!(
-            "cannot write layout compatibility record '{}': {error}",
-            path.display()
-        ))
+        OrbitError::storage_io(
+            StorageLayer::Migration,
+            &error,
+            format!(
+                "cannot write layout compatibility record '{}': {error}",
+                path.display()
+            ),
+        )
     })
 }
 
@@ -86,10 +94,14 @@ pub(super) fn read_marker(orbit_dir: &Path) -> Result<u32, OrbitError> {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(error) => {
-            return Err(OrbitError::Migration(format!(
-                "cannot read layout version marker '{}': {error}",
-                path.display()
-            )));
+            return Err(OrbitError::storage_io(
+                StorageLayer::Migration,
+                &error,
+                format!(
+                    "cannot read layout version marker '{}': {error}",
+                    path.display()
+                ),
+            ));
         }
     };
     raw.trim().parse::<u32>().map_err(|_| {
@@ -107,9 +119,13 @@ pub(super) fn read_marker(orbit_dir: &Path) -> Result<u32, OrbitError> {
 pub(super) fn write_marker(orbit_dir: &Path, version: u32) -> Result<(), OrbitError> {
     let path = marker_path(orbit_dir);
     atomic_write_text(&path, &format!("{version}\n")).map_err(|error| {
-        OrbitError::Migration(format!(
-            "cannot write layout version marker '{}': {error}",
-            path.display()
-        ))
+        OrbitError::storage_io(
+            StorageLayer::Migration,
+            &error,
+            format!(
+                "cannot write layout version marker '{}': {error}",
+                path.display()
+            ),
+        )
     })
 }

@@ -2,8 +2,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
 use orbit_types::workflow::{
     ReviewCertificate, ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome,
@@ -739,11 +739,15 @@ impl TaskCommitBoundary {
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         if accepted.handoff_id != handoff_id || accepted.handoff.candidate != *candidate {
-            return Err(invalid("handoff candidate mismatch"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffCandidateMismatch,
+            ));
         }
         let observed = self.observe_handoff(auth, candidate)?;
         if observed.required_commands != accepted.required_commands {
-            return Err(invalid("validation requirements changed"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::ValidationRequirementsChanged,
+            ));
         }
         self.validate_handoff_review(
             &accepted.handoff,
@@ -783,7 +787,9 @@ impl TaskCommitBoundary {
         match start.state {
             LandingStartState::Revoked => return Ok(()),
             LandingStartState::Completed => {
-                return Err(invalid("handoff has already landed"));
+                return Err(OrbitError::claim_refused(
+                    ClaimRefusalKind::HandoffAlreadyLanded,
+                ));
             }
             LandingStartState::Pending => {}
         }
@@ -820,7 +826,9 @@ impl TaskCommitBoundary {
             .iter()
             .any(|r| r.row_id == accepted.handoff_id)
         {
-            return Err(invalid("landing authority revoked"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::LandingAuthorityRevoked,
+            ));
         }
         Ok(authorization)
     }
@@ -856,12 +864,16 @@ impl TaskCommitBoundary {
         state: &ClaimInspection,
     ) -> Result<(), OrbitError> {
         if !auth.operator || state.landing_invalidated {
-            return Err(invalid("landing authority revoked"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::LandingAuthorityRevoked,
+            ));
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         let observation = self.observe_handoff(auth, &accepted.handoff.candidate)?;
         if observation.required_commands != accepted.required_commands {
-            return Err(invalid("validation requirements changed"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::ValidationRequirementsChanged,
+            ));
         }
         // The landing merges exactly the accepted candidate, which acceptance
         // proved is the reviewed head; recheck the pinned review evidence too.
