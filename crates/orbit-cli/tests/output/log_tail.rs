@@ -287,3 +287,38 @@ fn tail_merges_agent_history_and_follows_both_feeds() {
     );
     follower.expect_record("operational-sentinel", true);
 }
+
+#[test]
+fn one_shot_tail_renders_supervisor_agent_output_with_provider_source() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    // The target and fields the supervisor emits per agent output line
+    // (`orbit-engine`'s `cli_runner/supervisor/output.rs`).
+    let record = json!({
+        "timestamp": "2026-10-07T07:00:00Z",
+        "level": "INFO",
+        "target": "orbit_engine::activity_job::cli_runner::supervisor",
+        "fields": {
+            "agent_output": true,
+            "provider": "claude",
+            "stream": "stdout",
+            "job_run_id": "jrun-1",
+            "line": "hello from the agent",
+        },
+    });
+    fs::write(&path, format!("{record}\n")).unwrap();
+    let mut command = tail_command(&fixture, &path);
+    let output = command.output().expect("log tail output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let words: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(
+        &words[1..],
+        ["claude", "INF", "[stdout]", "hello", "from", "the", "agent"],
+        "agent output must render as `provider  INF  [stream] line`: {stdout}"
+    );
+}

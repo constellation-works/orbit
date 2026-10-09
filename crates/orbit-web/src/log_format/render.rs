@@ -51,6 +51,11 @@ fn normalize_level(level: &str) -> &'static str {
     }
 }
 
+/// Target of the supervisor's per-line agent output events
+/// (`orbit-engine`'s `cli_runner/supervisor/output.rs`), the only producer of
+/// `provider`/`stream`/`line` fields.
+const AGENT_OUTPUT_TARGET: &str = "orbit_engine::activity_job::cli_runner::supervisor";
+
 pub(crate) fn format_source(target: &str, fields: &Value) -> String {
     if let Some(label) = match target {
         "orbit.policy.deny" => Some("policy"),
@@ -61,7 +66,7 @@ pub(crate) fn format_source(target: &str, fields: &Value) -> String {
         return label.to_string();
     }
 
-    if target == "orbit_engine::activity_job::cli_runner"
+    if target == AGENT_OUTPUT_TARGET
         && let Some(provider) = fields.get("provider").and_then(Value::as_str)
     {
         return provider.to_string();
@@ -213,11 +218,7 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
 }
 
 fn is_agent_relay(target: &str, fields: &Value) -> bool {
-    matches!(
-        target,
-        "orbit_engine::activity_job::cli_runner"
-            | "orbit_engine::activity_job::cli_runner::supervisor"
-    ) && fields.get("line").and_then(Value::as_str).is_some()
+    target == AGENT_OUTPUT_TARGET && fields.get("line").and_then(Value::as_str).is_some()
 }
 
 fn format_agent_message(fields: &Value) -> String {

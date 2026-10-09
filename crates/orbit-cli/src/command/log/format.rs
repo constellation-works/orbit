@@ -152,6 +152,11 @@ fn format_timestamp(raw: &str) -> String {
     raw.chars().take(8).collect()
 }
 
+/// Target of the supervisor's per-line agent output events
+/// (`orbit-engine`'s `cli_runner/supervisor/output.rs`), the only producer of
+/// `provider`/`stream`/`line` fields.
+const AGENT_OUTPUT_TARGET: &str = "orbit_engine::activity_job::cli_runner::supervisor";
+
 pub(crate) fn format_source(target: &str, fields: &Value) -> String {
     // High-value targets get short, fixed labels for the source column.
     if let Some(label) = match target {
@@ -163,9 +168,9 @@ pub(crate) fn format_source(target: &str, fields: &Value) -> String {
         return label.to_string();
     }
 
-    // cli_runner subprocess events: prefer the `provider` field as the source
+    // Agent output events: prefer the `provider` field as the source
     // so the reader sees `claude-4.5` / `codex` / etc. directly.
-    if target == "orbit_engine::activity_job::cli_runner"
+    if target == AGENT_OUTPUT_TARGET
         && let Some(provider) = fields.get("provider").and_then(Value::as_str)
     {
         return provider.to_string();
@@ -309,7 +314,7 @@ fn format_message(target: &str, fields: &Value) -> String {
             getf("step_id"),
             getn("max_iterations"),
         ),
-        "orbit_engine::activity_job::cli_runner" => {
+        AGENT_OUTPUT_TARGET => {
             let stream = getf("stream");
             let line = getf("line");
             if !stream.is_empty() {
@@ -348,7 +353,7 @@ fn colorize_source(target: &str, label: &str) -> ColoredString {
         "orbit.policy.deny" => label.red().bold(),
         "orbit.friction.reported" => label.yellow(),
         t if t.starts_with("orbit.job.") => label.cyan(),
-        "orbit_engine::activity_job::cli_runner" => label.magenta(),
+        AGENT_OUTPUT_TARGET => label.magenta(),
         _ => label.normal(),
     }
 }
