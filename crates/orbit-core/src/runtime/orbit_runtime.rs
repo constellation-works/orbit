@@ -58,6 +58,7 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    pub(crate) ci_failure_time: Option<chrono::DateTime<chrono::Utc>>,
     /// Supplied by the same registry-owning composition layer, for reads that
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
@@ -103,6 +104,13 @@ pub enum HostLifetime {
 }
 
 impl OrbitRuntime {
+    /// Set the observation clock for deterministic CI-failure filing.
+    /// Without an override, filing uses the current UTC time.
+    pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
+        self.ci_failure_time = Some(now);
+        self
+    }
+
     /// Only the accepting transport's authenticated facts may label artifact bytes.
     pub(crate) fn artifact_origin(
         &self,
@@ -222,6 +230,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            ci_failure_time: None,
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
@@ -280,6 +289,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            ci_failure_time: None,
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),

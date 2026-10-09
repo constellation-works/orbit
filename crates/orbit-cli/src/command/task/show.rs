@@ -310,6 +310,7 @@ fn relation_type_label(relation_type: TaskRelationType) -> &'static str {
         TaskRelationType::RegressionFrom => "regression_from",
         TaskRelationType::Supersedes => "supersedes",
         TaskRelationType::RelatedTo => "related_to",
+        TaskRelationType::CoveredBy => "covered_by",
         TaskRelationType::Produces => "produces",
         TaskRelationType::Resolves => "resolves",
     }

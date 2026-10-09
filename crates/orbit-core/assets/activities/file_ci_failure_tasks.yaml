@@ -15,8 +15,8 @@ spec:
     excluded_branch_failures. The guard also applies to older snapshots that
     included task PR failures in current_failures.
     Clusters the snapshot's current, non-stale landing failures by root cause
-    (workflow, failing job, failing step, normalized error signature, and the
-    commit the runner actually tested) so one regression repeated across a push
+    (workflow, normalized failing-test identity/signature and tested commit
+    across jobs and steps, or workflow/step/signature/commit without a test identity) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
     several. The normalized signature prefers a concrete test/panic diagnostic
     over ANSI styling, generic cancellation/process/cargo trailers, and
@@ -34,7 +34,16 @@ spec:
     the task can later ship through the ordinary pull-request route only after
     task-pilot validation and explicit CI-sweep admission. Filing itself never
     promotes or dispatches implementation. It is deduped
-    against still-open tasks first by a commit-independent failure key carried
+    against exact-key operator coverage first: archived or rejected sweep tasks
+    with covered_by hold their key while the task or GitHub PR cover is open.
+    Landed covers hold older checkouts; a failure containing the landed commit
+    files a new task naming the cover as a fix that did not hold. Unavailable
+    cover evidence stays explicitly withheld, and a closed unmerged cover
+    releases its key. Plain archive/rejection holds for
+    ci_failure.operator_suppression_hours (default 6) from the status event.
+    Every operator hold appears in withheld and audit.withheld with outcome,
+    reason, failure key, owner and cover or expiry; it produces no pilot.
+    Otherwise it checks still-open tasks first by a commit-independent failure key carried
     as a `ci-failure:<key>` tag, then by rejected exact-key tasks whose comments
     name one still-open covering owner, then by a shared high-confidence
     material coverage assessment over untagged tasks. Coverage matches a
@@ -189,6 +198,11 @@ spec:
         items:
           type: object
           required: [task_id, failure_key, workflow, job, step, tested_commit, run_ids, run_urls, ref_kinds, head_branches]
+      withheld:
+        type: array
+        description: Exact-key operator holds with outcome, reason, owner, and cover or expiry.
+        items:
+          type: object
       skipped_existing:
         type: array
         items:

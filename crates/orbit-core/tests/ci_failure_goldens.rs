@@ -68,6 +68,282 @@ fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
     }}), ToolContext::default()).expect("file CI failure")
 }
 
+fn operator_fixture(config: &str) -> (TempDir, OrbitRuntime, Vec<String>) {
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
+    let commits = commit_chain(&repo, 3);
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    (root, runtime, commits)
+}
+
+fn archive_owner(
+    runtime: &OrbitRuntime,
+    id: &str,
+    status: orbit_types::task::TaskStatus,
+    cover: Option<&str>,
+) {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::task::{TaskRelation, TaskRelationType};
+    runtime
+        .update_task_as_human(
+            id,
+            TaskUpdateParams {
+                status: Some(status),
+                relations: cover.map(|target| {
+                    vec![TaskRelation {
+                        relation_type: TaskRelationType::CoveredBy,
+                        target: target.into(),
+                    }]
+                }),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn ci_operator_archive_and_reject_suppress_until_the_clock_boundary() {
+    if !isolated("ci_operator_archive_and_reject_suppress_until_the_clock_boundary") {
+        return;
+    }
+    use chrono::Duration;
+    use orbit_types::task::TaskStatus;
+    for (status, config, hours) in [
+        (TaskStatus::Archived, "", 6),
+        (
+            TaskStatus::Rejected,
+            "[ci_failure]\noperator_suppression_hours = 2\n",
+            2,
+        ),
+    ] {
+        let (_root, runtime, commits) = operator_fixture(config);
+        let first = file(
+            &runtime,
+            vec![failure("error: store GC invariant broken", 0, &commits[0])],
+        );
+        let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        archive_owner(&runtime, owner, status, None);
+        let decision_at = runtime
+            .get_task_history(owner)
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| entry.to_status == Some(status))
+            .unwrap()
+            .at;
+        let before = runtime
+            .clone()
+            .with_ci_failure_time(decision_at + Duration::hours(hours) - Duration::nanoseconds(1));
+        let withheld = file(
+            &before,
+            vec![failure("error: store GC invariant broken", 1, &commits[2])],
+        );
+        assert_eq!(withheld["filed_count"], 0, "{withheld}");
+        assert_eq!(withheld["pilot_candidate_count"], 0);
+        assert_eq!(withheld["withheld"][0]["outcome"], "withheld");
+        assert_eq!(withheld["withheld"][0]["reason"], "operator_archived");
+        assert_eq!(withheld["withheld"][0]["owner"], owner);
+        assert_eq!(
+            withheld["withheld"][0]["failure_key"],
+            first["filed"][0]["failure_key"]
+        );
+        assert_eq!(withheld["audit"]["withheld"], withheld["withheld"]);
+        let at_boundary = runtime.with_ci_failure_time(decision_at + Duration::hours(hours));
+        let released = file(
+            &at_boundary,
+            vec![failure("error: store GC invariant broken", 2, &commits[2])],
+        );
+        assert_eq!(released["filed_count"], 1, "{released}");
+        assert_eq!(released["withheld"], json!([]));
+    }
+}
+
+#[test]
+fn ci_operator_task_cover_holds_until_a_checkout_contains_the_landing() {
+    if !isolated("ci_operator_task_cover_holds_until_a_checkout_contains_the_landing") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_types::task::TaskStatus;
+    let (_root, runtime, commits) = operator_fixture("");
+    let log = "error: store GC invariant broken";
+    let original = file(&runtime, vec![failure(log, 0, &commits[0])]);
+    let owner = original["filed"][0]["task_id"].as_str().unwrap();
+    let cover = runtime
+        .add_task(TaskAddParams {
+            title: "Hand fix".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    archive_owner(&runtime, owner, TaskStatus::Archived, Some(&cover.id));
+    let held = file(&runtime, vec![failure(log, 1, &commits[0])]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["withheld"][0]["outcome"], "covered");
+    assert_eq!(held["withheld"][0]["owner"], owner);
+    assert_eq!(held["withheld"][0]["cover"], cover.id);
+    runtime
+        .apply_task_automation_update(
+            &cover.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    record_landing(&runtime, &cover.id, &commits[0], &commits[1]);
+    let old = file(&runtime, vec![failure(log, 2, &commits[0])]);
+    assert_eq!(old["filed_count"], 0, "{old}");
+    assert_eq!(old["withheld"][0]["reason"], "awaiting_cover_commit");
+    let reproduced = file(&runtime, vec![failure(log, 3, &commits[2])]);
+    assert_eq!(reproduced["filed_count"], 1, "{reproduced}");
+    let entry = &reproduced["filed"][0];
+    assert_eq!(entry["failed_covers"][0]["cover"], cover.id);
+    assert_eq!(entry["failed_covers"][0]["reason"], "cover_did_not_hold");
+    let task = runtime
+        .get_task(entry["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(task.description.contains(&cover.id));
+    assert!(task.description.contains(&commits[1]));
+}
+
+#[cfg(unix)]
+#[test]
+fn ci_operator_pr_cover_reports_open_landed_closed_and_unavailable_states() {
+    if !isolated("ci_operator_pr_cover_reports_open_landed_closed_and_unavailable_states") {
+        return;
+    }
+    use orbit_types::task::TaskStatus;
+    use std::os::unix::fs::PermissionsExt;
+    let (root, runtime, commits) = operator_fixture("");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let response = bin.join("response.json");
+    let gh = bin.join("gh");
+    std::fs::write(&gh, format!("#!/bin/sh\ncat '{}'\n", response.display())).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // This entire fixture is an isolated child; no other runtime sees this PATH.
+    unsafe {
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        );
+    }
+    let log = "error: store GC invariant broken";
+    let first = file(&runtime, vec![failure(log, 0, &commits[0])]);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    let cover = "github-pr:https://github.com/acme/orbit/pull/3854";
+    archive_owner(&runtime, owner, TaskStatus::Rejected, Some(cover));
+    for (state, checkout, reason, count) in [
+        ("OPEN", &commits[2], "operator_cover_open", 0),
+        ("UNKNOWN", &commits[2], "operator_cover_unavailable", 0),
+        ("MERGED", &commits[0], "awaiting_cover_commit", 0),
+        ("MERGED", &commits[2], "cover_did_not_hold", 1),
+    ] {
+        std::fs::write(
+            &response,
+            json!({"state": state, "mergeCommit": {"oid": commits[1]}}).to_string(),
+        )
+        .unwrap();
+        let output = file(&runtime, vec![failure(log, 1, checkout)]);
+        assert_eq!(output["filed_count"], count, "{output}");
+        if count == 0 {
+            assert_eq!(output["withheld"][0]["outcome"], "covered");
+            assert_eq!(output["withheld"][0]["reason"], reason);
+            assert_eq!(output["withheld"][0]["owner"], owner);
+            assert_eq!(output["withheld"][0]["cover"], cover);
+        } else {
+            assert_eq!(output["filed"][0]["failed_covers"][0]["reason"], reason);
+        }
+    }
+    // A closed, unmerged cover has no fix to wait for and does not suppress.
+    let other = file(
+        &runtime,
+        vec![failure("error: different invariant broken", 2, &commits[0])],
+    );
+    let other_owner = other["filed"][0]["task_id"].as_str().unwrap();
+    archive_owner(
+        &runtime,
+        other_owner,
+        TaskStatus::Archived,
+        Some("github-pr:3855"),
+    );
+    std::fs::write(&response, json!({"state": "CLOSED"}).to_string()).unwrap();
+    let closed = file(
+        &runtime,
+        vec![failure("error: different invariant broken", 3, &commits[2])],
+    );
+    assert_eq!(closed["filed_count"], 1, "{closed}");
+}
+
+#[test]
+fn ci_equal_test_signatures_share_one_task_across_job_and_step_wrappers() {
+    if !isolated("ci_equal_test_signatures_share_one_task_across_job_and_step_wrappers") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_fixture("");
+    let log = "thread 'store_gc' panicked at tests/store_gc.rs:42:3:\nassertion failed: live store is retained\ntest store_gc ... FAILED";
+    let first = failure(log, 0, &commits[0]);
+    let mut coverage = failure(log, 1, &commits[0]);
+    coverage["run_id"] = first["run_id"].clone();
+    coverage["url"] = first["url"].clone();
+    coverage["failed_jobs"][0]["name"] = json!("Coverage");
+    coverage["failed_jobs"][0]["failed_steps"][0]["name"] = json!("Collect coverage");
+    let filed = file(&runtime, vec![first.clone(), coverage.clone()]);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    assert_eq!(filed["filed"][0]["jobs"], json!(["Coverage", "build"]));
+    assert_eq!(filed["filed"][0]["sources"].as_array().unwrap().len(), 2);
+    let task = runtime
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(task.description.contains("Coverage") && task.description.contains("build"));
+    let repeat = file(&runtime, vec![coverage, first]);
+    assert_eq!(repeat["filed_count"], 0, "{repeat}");
+    assert_eq!(
+        repeat["skipped_existing"][0]["failure_key"],
+        filed["filed"][0]["failure_key"]
+    );
+    let distinct = file(
+        &runtime,
+        vec![failure(
+            "thread 'another_test' panicked at tests/other.rs:1:1:\nassertion failed: another invariant\ntest another_test ... FAILED",
+            2,
+            &commits[0],
+        )],
+    );
+    assert_eq!(distinct["filed_count"], 1, "{distinct}");
+
+    // A persisted pre-migration per-job tag still owns the new test key.
+    // This is the shipped key for CI/build/Run CI and this fixture diagnostic.
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, TaskStatus};
+    let (_legacy_root, legacy_runtime, legacy_commits) = operator_fixture("");
+    let legacy = legacy_runtime
+        .add_task(TaskAddParams {
+            title: "Persisted sweep finding".into(),
+            tags: vec![
+                "ci-failure-sweep".into(),
+                format!("{CI_FAILURE_KEY_TAG_PREFIX}5e1a7df48e870766"),
+            ],
+            system_created: true,
+            ..Default::default()
+        })
+        .unwrap();
+    archive_owner(&legacy_runtime, &legacy.id, TaskStatus::Archived, None);
+    let legacy_hold = file(&legacy_runtime, vec![failure(log, 3, &legacy_commits[2])]);
+    assert_eq!(legacy_hold["filed_count"], 0, "{legacy_hold}");
+    assert_eq!(legacy_hold["withheld"][0]["owner"], legacy.id);
+    assert_eq!(
+        legacy_hold["withheld"][0]["failure_key"],
+        filed["filed"][0]["failure_key"]
+    );
+}
+
 #[test]
 fn ci_failure_fixture_goldens() {
     if !isolated("ci_failure_fixture_goldens") {

@@ -115,7 +115,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "44fbb4d39838a694",
+          "failure_key": "c905ad467b13d4f5",
           "signature": "thread 'a_forced_command_ignores_the_command_the_caller_asked_for' (<n>) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:<n>:<n>:",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test --workspace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ---- a_forced_command_ignores_the_command_the_caller_asked_for stdout ----\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z thread 'a_forced_command_ignores_the_command_the_caller_asked_for' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test failed, to rerun pass `-p orbit-exec --lib`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     a_forced_command_ignores_the_command_the_caller_asked_for\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test result: FAILED. 46 passed; 1 failed; 0 ignored; finished in 81.42s\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: process didn't exit successfully: `cargo test --tests` (exit status: 101)\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.",
@@ -130,14 +130,14 @@
       "filed_count": 2,
       "tasks": [
         {
-          "failure_key": "44fbb4d39838a694",
+          "failure_key": "c905ad467b13d4f5",
           "signature": "thread 'a_forced_command_ignores_the_command_the_caller_asked_for' (<n>) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:<n>:<n>:",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test --workspace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ---- a_forced_command_ignores_the_command_the_caller_asked_for stdout ----\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z thread 'a_forced_command_ignores_the_command_the_caller_asked_for' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test failed, to rerun pass `-p orbit-exec --lib`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     a_forced_command_ignores_the_command_the_caller_asked_for\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test result: FAILED. 46 passed; 1 failed; 0 ignored; finished in 81.42s\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: process didn't exit successfully: `cargo test --tests` (exit status: 101)\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.",
           "excerpt_has_note": false
         },
         {
-          "failure_key": "e79e5bcaadd7ff1a",
+          "failure_key": "8f0d6f8e05074471",
           "signature": "thread 'another_forced_command_ignores_the_command_the_caller_asked_for' (<n>) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:<n>:<n>:",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test --workspace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ---- another_forced_command_ignores_the_command_the_caller_asked_for stdout ----\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z thread 'another_forced_command_ignores_the_command_the_caller_asked_for' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test failed, to rerun pass `-p orbit-exec --lib`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     another_forced_command_ignores_the_command_the_caller_asked_for\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test result: FAILED. 46 passed; 1 failed; 0 ignored; finished in 81.42s\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: process didn't exit successfully: `cargo test --tests` (exit status: 101)\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.",
@@ -150,7 +150,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "44fbb4d39838a694"
+        "c905ad467b13d4f5"
       ]
     }
   ],
@@ -159,7 +159,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "ce416111a175500f",
+          "failure_key": "33bc5ff297999793",
           "signature": "fail [ <n>.<n>s] (<n>/<n>) orbit-cli::output_goldens plain_and_json_forms_match_their_goldens",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo nextest run\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m  Cancelling\u001b[0m due to \u001b[31;1mtest failure\u001b[0m:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ────────────\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m     Summary\u001b[0m [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m        FAIL\u001b[0m [   1.399s] (2786/4410) \u001b[31;1morbit-cli::output_goldens\u001b[0m \u001b[31;1mplain_and_json_forms_match_their_goldens\u001b[0m\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z warning: 1624/4410 tests were not run due to test failure\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test run failed\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 100.",
@@ -172,7 +172,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "ce416111a175500f"
+        "33bc5ff297999793"
       ]
     }
   ],
@@ -181,7 +181,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "7d0d65768b98f0d6",
+          "failure_key": "a7a31c90509fc265",
           "signature": "fail [ <n>.<n>s] orbit-core truncated_escape_case",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo nextest run\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b────────────\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     FAIL [   1.399s] orbit-core truncated_escape_case",
@@ -196,7 +196,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "ce416111a175500f",
+          "failure_key": "33bc5ff297999793",
           "signature": "fail [ <n>.<n>s] (<n>/<n>) orbit-cli::output_goldens plain_and_json_forms_match_their_goldens",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo nextest run\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m  Cancelling\u001b[0m due to \u001b[31;1mtest failure\u001b[0m:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ────────────\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m     Summary\u001b[0m [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m        FAIL\u001b[0m [   1.399s] (2786/4410) \u001b[31;1morbit-cli::output_goldens\u001b[0m \u001b[31;1mplain_and_json_forms_match_their_goldens\u001b[0m\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z warning: 1624/4410 tests were not run due to test failure\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test run failed\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 100.",
@@ -209,7 +209,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "ce416111a175500f"
+        "33bc5ff297999793"
       ]
     }
   ],
@@ -218,14 +218,14 @@
       "filed_count": 2,
       "tasks": [
         {
-          "failure_key": "ce416111a175500f",
+          "failure_key": "33bc5ff297999793",
           "signature": "fail [ <n>.<n>s] (<n>/<n>) orbit-cli::output_goldens plain_and_json_forms_match_their_goldens",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo nextest run\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m  Cancelling\u001b[0m due to \u001b[31;1mtest failure\u001b[0m:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ────────────\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m     Summary\u001b[0m [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1m        FAIL\u001b[0m [   1.399s] (2786/4410) \u001b[31;1morbit-cli::output_goldens\u001b[0m \u001b[31;1mplain_and_json_forms_match_their_goldens\u001b[0m\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z warning: 1624/4410 tests were not run due to test failure\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test run failed\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 100.",
           "excerpt_has_note": false
         },
         {
-          "failure_key": "cd2edef2d5343fb9",
+          "failure_key": "53ff9a627176aa25",
           "signature": "fail [ <n>.<n>s] (<n>/<n>) orbit-cli::output_goldens another_golden_does_not_match",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo nextest run\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z   Cancelling due to test failure:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ────────────\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z      Summary [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z         FAIL [   2.004s] (2786/4410) orbit-cli::output_goldens another_golden_does_not_match\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z warning: 1624/4410 tests were not run due to test failure\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: test run failed\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 100.",
@@ -240,7 +240,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "50e71fe85c2cabbc",
+          "failure_key": "d70a4eb1db0040f7",
           "signature": "thread 'macos_sandbox::compiled_profile_reads_public_ca_material' (<n>) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:<n>:<n>:",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test --workspace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ---- macos_sandbox::compiled_profile_reads_public_ca_material stdout ----\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z \u001b[31;1merror\u001b[0m: test failed, to rerun pass `-p orbit-exec --lib`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z thread 'macos_sandbox::compiled_profile_reads_public_ca_material' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     macos_sandbox::compiled_profile_reads_public_ca_material\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test result: FAILED. 46 passed; 1 failed; 0 ignored; finished in 81.42s\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: process didn't exit successfully: `cargo test --tests` (exit status: 101)\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.",
@@ -253,7 +253,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "50e71fe85c2cabbc"
+        "d70a4eb1db0040f7"
       ]
     }
   ],
@@ -262,7 +262,7 @@
       "filed_count": 1,
       "tasks": [
         {
-          "failure_key": "6d6239e0f71b2491",
+          "failure_key": "61988c4e80945201",
           "signature": "plain_and_json_forms_match_their_goldens",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo llvm-cov --workspace --locked --no-report\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test no_ansi_escapes_under_any_color_configuration ... ok\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z         \"description\": \"Read a bounded excerpt — failed steps by default\"\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z   right: \"Read a bounded excerpt — failed steps by default\"\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     plain_and_json_forms_match_their_goldens\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z test result: FAILED. 2 passed; 1 failed; finished in 9.64s\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z error: test failed, to rerun pass `-p orbit-cli --test output_goldens`\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 101.",
@@ -275,7 +275,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "6d6239e0f71b2491"
+        "61988c4e80945201"
       ]
     }
   ],
@@ -393,7 +393,7 @@
       "filed_count": 2,
       "tasks": [
         {
-          "failure_key": "50420a63ae5db53b",
+          "failure_key": "46a98d26d58a6a2b",
           "signature": "✗",
           "step_fallback": false,
           "excerpt": "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.",
@@ -413,7 +413,7 @@
       "filed_count": 0,
       "tasks": [],
       "skipped_keys": [
-        "50420a63ae5db53b"
+        "46a98d26d58a6a2b"
       ]
     }
   ]

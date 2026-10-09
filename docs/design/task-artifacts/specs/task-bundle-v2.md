@@ -216,7 +216,7 @@ The initial registry projections are:
 
 - `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
-- `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`.
+- `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`, and `covered_by` may store a GitHub PR external key.
 
 Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, or `updated_at` mismatch as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist.
 
@@ -408,3 +408,13 @@ used unoptimized test binaries with debug information disabled and temporary
 corpora on Linux tmpfs. These are warm-cache measurements, not controlled
 cold-cache or production-release latency claims. Small-corpus pool/metadata
 overhead and concurrent-request RSS must be reported alongside improvements.
+
+### Operator coverage relations
+
+`covered_by` is associative metadata targeting a task ID or a GitHub PR
+external reference (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`).
+It does not create a dependency or enter cycle reachability. Numeric PR
+references resolve in the checkout's repository. The CI-failure filer uses it
+on archived/rejected exact-key sweep tasks to retain operator coverage;
+[CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery.md)
+describes open, landed, unavailable and abandoned cover handling.

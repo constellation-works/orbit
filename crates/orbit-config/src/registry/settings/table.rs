@@ -123,6 +123,17 @@ macro_rules! define_config_settings {
 }
 
 define_config_settings! {
+    ci_failure_operator_suppression_hours: u32 => u32 {
+        key: "ci_failure.operator_suppression_hours", value_type: "integer",
+        description: "Hours an archived or rejected exact-key CI sweep task without covered_by suppresses re-filing (0..=720, default 6).",
+        section: ConfigSection::Housekeeping, order: 21,
+        resolve: |raw: Option<u32>| {
+            let hours = raw.unwrap_or(6);
+            if hours > 720 {
+                Err(OrbitError::InvalidInput("ci_failure.operator_suppression_hours must be 0..=720".into()))
+            } else { Ok(hours) }
+        },
+    },
     automation_stall_window_minutes: u32 => u32 {
         key: "automation.stall_window_minutes", value_type: "integer",
         description: "Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).",
