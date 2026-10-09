@@ -742,6 +742,94 @@ fn an_unregistered_root_reports_the_root_and_registered_candidates() {
     );
 }
 
+/// A home-scope client config symlinked from a dotfiles repository keeps its
+/// link: init and remove update the file the link points at.
+#[cfg(unix)]
+fn assert_home_scope_config_symlink_survives(
+    client_flag: &str,
+    config_relative: &str,
+    seed: &str,
+    other_entry: &str,
+) {
+    let fixture = ExternalRootFixture::init();
+    let config = fixture.home.join(config_relative);
+    let config_dir = config.parent().expect("config parent");
+    let dotfiles = fixture.home.join("dotfiles");
+    let dotfile = dotfiles.join("client-config");
+    fs::create_dir_all(&dotfiles).expect("create dotfiles directory");
+    fs::create_dir_all(config_dir).expect("create client directory");
+    fs::write(&dotfile, seed).expect("seed dotfiles config");
+    std::os::unix::fs::symlink(&dotfile, &config).expect("link client config into dotfiles");
+    let assert_still_linked = |step: &str| {
+        let metadata = fs::symlink_metadata(&config).expect("inspect client config");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "{step} replaced the symlinked config with a regular file"
+        );
+        assert_eq!(
+            fs::read_link(&config).expect("read config link"),
+            dotfile,
+            "{step} retargeted the config symlink"
+        );
+        for directory in [config_dir, dotfiles.as_path()] {
+            assert_eq!(
+                fs::read_dir(directory).expect("read directory").count(),
+                1,
+                "{step} left staging files in {}",
+                directory.display()
+            );
+        }
+    };
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_still_linked("init");
+    let initialized = fs::read_to_string(&dotfile).expect("read dotfiles config");
+    assert!(
+        initialized.contains("orbit") && initialized.contains(other_entry),
+        "init must write Orbit's entry into the link target and keep the user's: {initialized}"
+    );
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_still_linked("remove");
+    let removed = fs::read_to_string(&dotfile).expect("read dotfiles config");
+    assert!(
+        removed.contains(other_entry) && !removed.contains("orbit"),
+        "remove must drop Orbit's entry from the link target and keep the user's: {removed}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn json_client_home_config_symlink_survives_init_and_remove() {
+    assert_home_scope_config_symlink_survives(
+        "--cursor",
+        ".cursor/mcp.json",
+        r#"{"mcpServers":{"other":{"command":"other-client"}}}"#,
+        "other-client",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn toml_client_home_config_symlink_survives_init_and_remove() {
+    assert_home_scope_config_symlink_survives(
+        "--codex",
+        ".codex/config.toml",
+        "model = \"keep-me\"\n\n[mcp_servers.other]\ncommand = \"other-client\"\n",
+        "other-client",
+    );
+}
+
 struct SharedRootCheckoutPairFixture {
     _temp: TempDir,
     home: PathBuf,

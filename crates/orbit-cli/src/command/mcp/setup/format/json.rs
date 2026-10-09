@@ -5,6 +5,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
+use super::target::resolve_config_target;
+
 pub(in crate::command::mcp::setup) fn merge_unique_strings(
     existing: &mut Vec<JsonValue>,
     values: Vec<String>,
@@ -67,7 +69,8 @@ pub(in crate::command::mcp::setup) fn write_json_object(
             OrbitError::Execution(format!("serialize JSON '{}': {err}", path.display()))
         })?;
     rendered.push('\n');
-    atomic_write_text(path, &rendered).map_err(|err| {
+    let target = resolve_config_target(path)?;
+    atomic_write_text(&target, &rendered).map_err(|err| {
         OrbitError::Io(format!(
             "failed to atomically write '{}': {err}",
             path.display()
