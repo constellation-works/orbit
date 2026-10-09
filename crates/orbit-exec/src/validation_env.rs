@@ -706,3 +706,7 @@ fn account_home() -> Option<PathBuf> {
         .map(|(_, home)| home)
         .filter(|home| home.is_absolute())
 }
+
+#[cfg(all(test, unix))]
+#[path = "tests/validation_env.rs"]
+mod tests;
