@@ -18,6 +18,8 @@ mod git_repo;
 
 mod ambient_authority_isolation;
 mod config_set_root;
+#[cfg(unix)]
+mod doctor_confirm;
 mod generation_root;
 #[cfg(unix)]
 mod host_dashboard;
