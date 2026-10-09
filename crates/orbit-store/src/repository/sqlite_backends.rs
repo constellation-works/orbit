@@ -248,6 +248,7 @@ pub(crate) struct SqliteTaskReservationStoreBackend {
 }
 
 impl SqliteTaskReservationStoreBackend {
+    #[track_caller]
     fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,

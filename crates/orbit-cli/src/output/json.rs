@@ -1,3 +1,4 @@
+use orbit_common::LOCK_BUSY_ERROR_CODE;
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
@@ -129,6 +130,8 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
+        // The same retryable code MCP reports [ORB-15088].
+        OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
         OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",

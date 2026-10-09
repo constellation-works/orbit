@@ -591,6 +591,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- An owner that times out waiting on its task commit lock or its database
+  answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
+  a step it still fails releases the claim as `transient`. When these recur,
+  read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
+  warning names each holder of the lock by pid, section and call site, and
+  `advisory file lock held past its threshold` names a section that held it
+  for 2 s or more.
 - Each leaf settles itself when it ends ([ORB-13663]): its worker records
   the handoff (success) or a failure, then delivers it to the owner, retrying
   for a few minutes if the owner is unreachable and no live drain carries the

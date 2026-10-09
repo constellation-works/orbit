@@ -164,6 +164,7 @@ impl HostResourceMonitor {
                 FileLockOptions {
                     timeout: Duration::from_millis(100),
                     warn_after: Duration::from_millis(100),
+                    ..FileLockOptions::default()
                 },
                 || -> io::Result<HostResourceStatus> {
                     match read_history(path) {

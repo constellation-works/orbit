@@ -306,6 +306,7 @@ impl TaskCommitBoundary {
                     partition_dir: self
                         .registry
                         .workspace_partition_dir(&binding.partition_id)?,
+                    lock_options: self.lock_options,
                 };
                 owner.verify_journal_binding()?;
                 owner.recover_if_pending()?;

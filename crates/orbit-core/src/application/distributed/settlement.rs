@@ -963,9 +963,12 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
 /// that is unavailable, or an owner-side failure that is not a refusal.
 ///
 /// Only these mean the next call to the same owner is likely to fail or hang
-/// the same way, so a pass stops calling that owner after the first one. A
-/// refusal is an answer, and a local error (a store read, a missing binding)
-/// says nothing about the owner at all.
+/// the same way, so a pass stops calling that owner after the first one. That
+/// includes an owner that lost to its own lock-wait deadline (`lock_busy`):
+/// it decided nothing, and the next call would queue behind the same holder,
+/// so backing off until the next pass also eases the contention [ORB-15088].
+/// A refusal is an answer, and a local error (a store read, a missing
+/// binding) says nothing about the owner at all.
 pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
     match error {
         OrbitError::RemoteTool { .. } => !is_owner_refusal(error),

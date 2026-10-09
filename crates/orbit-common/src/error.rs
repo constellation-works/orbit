@@ -848,6 +848,19 @@ impl OrbitError {
         }
     }
 
+    /// Whether this failed only because a lock stayed held past its
+    /// acquisition deadline: an advisory file lock or a SQLite database here,
+    /// or either on a remote owner, which reports it as
+    /// [`LOCK_BUSY_ERROR_CODE`]. Nothing was decided under the lock, so the
+    /// same call can succeed once its holder lets go.
+    pub fn is_lock_busy(&self) -> bool {
+        match self {
+            Self::FileLockTimeout(_) | Self::SqliteContention(_) => true,
+            Self::RemoteTool { code, .. } => code == LOCK_BUSY_ERROR_CODE,
+            _ => false,
+        }
+    }
+
     /// Whether a supervised operation exceeded its deadline: a process
     /// timeout, or an execution failure raised for one.
     pub fn is_timeout(&self) -> bool {
@@ -857,6 +870,11 @@ impl OrbitError {
         )
     }
 }
+
+/// The stable tool error code for a call that lost only to a lock-wait
+/// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
+/// `internal_error`, it says the call can succeed unchanged later.
+pub const LOCK_BUSY_ERROR_CODE: &str = "lock_busy";
 
 impl From<std::io::Error> for OrbitError {
     fn from(err: std::io::Error) -> Self {

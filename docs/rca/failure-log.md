@@ -31,24 +31,6 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
-## 2026-10-09: An owner task-lock timeout fails a follower's final recovery
-
-- **Where:** Mac pull follower, `final_recovery` after `landing_review_gate_settle`.
-- **Symptom:** `remote tool failed (internal_error): ... timed out after 30000ms
-  acquiring task commit boundary lock`. On the box, `orbit-sweep.service` failed on
-  the same lock at the same instant (18:37:24Z).
-- **Cause:** under drain load the workspace partition lock
-  (`tasks/workspaces/<ws>/.task-commit.lock`) is held for more than 30 s. Its
-  holder is never recorded (`holder=unknown`), and a follower's owner call reports
-  the timeout as `internal_error` with no retry.
-- **Fix:** ORB-15088 (open): record the holder and how long it held the lock, find
-  and bound the slow sections, and return a typed retryable error that final
-  recovery retries.
-- **Tasks:** ORB-15029 (`jrun-20261009-1653-c1`). The operator pushed the reviewer's
-  fix commit to PR #3963, ran the SIGTERM test on the box (Linux runs the path the
-  macOS guard skips), and landed it.
-- **Final recovery:** none applied (the invocation failed to load the task).
-
 ## 2026-10-09: Before-landing review holds correct candidates on report-shape or base-state claims
 
 - **Where:** `landing_review_gate_settle` (`review.before_landing`, trial ORB-14849).

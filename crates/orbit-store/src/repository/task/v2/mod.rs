@@ -120,6 +120,7 @@ impl TaskV2Store {
 
     /// Run an ordinary mutation inside the boundary. Legacy stores acquire
     /// the same locks and refuse partitions requiring coordinated backends.
+    #[track_caller]
     pub(crate) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
@@ -132,6 +133,7 @@ impl TaskV2Store {
 
     /// Settle an interrupted commit before a read exposes task state. One
     /// existence check when nothing is pending.
+    #[track_caller]
     pub(super) fn ensure_recovered(&self) -> Result<(), OrbitError> {
         match &self.coordination {
             Some(boundary) => boundary.recover_if_pending(),

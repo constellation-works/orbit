@@ -2,6 +2,8 @@
 //! class, and the owner blocks the task only for the candidate's own failure
 //! or the task's; every other class releases it, within a per-task budget.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use orbit_core::application::distributed::PullCrewWindow;
 use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::workflow::{
@@ -1096,6 +1098,117 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
     settle_only(&pair, &drain);
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "owner_route", "{failure}");
+    assert_eq!(pair.owner_status(&claim.task_id), "backlog");
+}
+
+/// [ORB-15088] An owner that times out waiting on a task lock answers
+/// `lock_busy`. A bound worker's owner read — the task load behind every agent
+/// envelope, a final recovery's included — retries it a bounded number of
+/// times before failing; a step it still fails settles as `transient`, never
+/// as a base conflict, even when the leaf stopped synchronizing its committed
+/// candidate onto the base.
+#[test]
+fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
+    if !isolated(
+        module_path!(),
+        "an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict",
+    ) {
+        return;
+    }
+    /// Answers `busy` calls with the owner's lock timeout, then forwards.
+    struct BusyOwner {
+        owner: super::claimed_review::ToOwner,
+        busy: AtomicUsize,
+        calls: AtomicUsize,
+    }
+    impl orbit_tools::OwnerCoordinator for BusyOwner {
+        fn call(
+            &self,
+            name: &str,
+            input: Value,
+            session: orbit_types::tool::ToolSessionContext,
+        ) -> Result<Value, OrbitError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let busy = self.busy.load(Ordering::SeqCst);
+            if busy > 0 {
+                self.busy.store(busy - 1, Ordering::SeqCst);
+                let message = "owner: timed out after 30000ms acquiring task commit boundary: \
+                               recovery at crates/orbit-store/src/task.rs:1 lock \
+                               '/state/tasks/workspaces/ws/.task-commit.lock'";
+                return Err(OrbitError::RemoteTool {
+                    code: orbit_common::LOCK_BUSY_ERROR_CODE.into(),
+                    message: message.into(),
+                    payload: json!({"code": orbit_common::LOCK_BUSY_ERROR_CODE, "message": message}),
+                });
+            }
+            self.owner.call(name, input, session)
+        }
+    }
+
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+    let owner = Arc::new(BusyOwner {
+        owner: super::claimed_review::ToOwner(pair.wire.owner.clone()),
+        busy: AtomicUsize::new(2),
+        calls: AtomicUsize::new(0),
+    });
+    let bound = pair
+        .follower
+        .clone()
+        .with_worker_invocation(
+            orbit_types::tool::WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                owner_destination: record.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf.clone(),
+            },
+            owner.clone(),
+        )
+        .unwrap();
+
+    // Two busy answers are retried through: the envelope's task load succeeds.
+    let task = bound
+        .get_task(&claim.task_id)
+        .expect("retried past the busy owner");
+    assert_eq!(task.id, claim.task_id);
+    assert_eq!(
+        owner.calls.load(Ordering::SeqCst),
+        3,
+        "two retries, then the read"
+    );
+
+    // A lock that stays held exhausts the bounded retries.
+    owner.calls.store(0, Ordering::SeqCst);
+    owner.busy.store(usize::MAX, Ordering::SeqCst);
+    let error = bound
+        .get_task(&claim.task_id)
+        .expect_err("the owner stays busy");
+    assert_eq!(
+        owner.calls.load(Ordering::SeqCst),
+        3,
+        "the retries are bounded"
+    );
+    assert!(error.is_lock_busy(), "the code is kept: {error:?}");
+    let message = error.to_string();
+    assert_eq!(
+        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        Some(ClaimFailureClass::Transient),
+        "{message}"
+    );
+
+    // The leaf stopped at synchronizing its committed candidate, where an
+    // untyped failure settles as a base conflict.
+    leaf_completed(&pair, &leaf, prepared());
+    pair.leaf_fails_with(&leaf, &message);
+    settle_only(&pair, &drain);
+    let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
+    assert_eq!(failure["class"], "transient", "{failure}");
     assert_eq!(pair.owner_status(&claim.task_id), "backlog");
 }
 

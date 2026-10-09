@@ -9,9 +9,74 @@ use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    atomic_write_text, create_private_dir_all, with_exclusive_file_lock, with_shared_file_lock,
+    FileLockOptions, atomic_write_text, create_private_dir_all, with_exclusive_file_lock_options,
+    with_shared_file_lock_options,
 };
+use std::panic::Location;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// A boundary section held this long logs its label and duration on release:
+/// long enough to stay quiet for a healthy section, short enough to name one
+/// that keeps waiters queued toward the 3 s contention warning and the 30 s
+/// acquisition deadline.
+const SECTION_HOLD_WARN_AFTER: Duration = Duration::from_secs(2);
+
+/// Diagnostic policy for the host and partition locks. Shared holders record
+/// themselves, so a waiter blocked by ordinary sections can name them.
+fn boundary_lock_options() -> FileLockOptions {
+    FileLockOptions {
+        record_shared_holders: true,
+        warn_held_after: Some(SECTION_HOLD_WARN_AFTER),
+        ..FileLockOptions::default()
+    }
+}
+
+/// The boundary section taking a lock: its kind and the call site that
+/// entered it. Its label is what the lock's holder record, a waiter's
+/// contention warning and a long hold's release report name.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Section {
+    kind: &'static str,
+    caller: &'static Location<'static>,
+}
+
+impl Section {
+    #[track_caller]
+    pub(super) fn here(kind: &'static str) -> Self {
+        Self {
+            kind,
+            caller: Location::caller(),
+        }
+    }
+
+    fn label(self) -> String {
+        format!(
+            "{COORDINATION_LOCK_LABEL}: {} at {}:{}",
+            self.kind,
+            self.caller.file(),
+            self.caller.line()
+        )
+    }
+}
+
+fn shared_section<T>(
+    target: &Path,
+    section: Section,
+    options: FileLockOptions,
+    op: impl FnOnce() -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    with_shared_file_lock_options(target, &section.label(), options, op)
+}
+
+fn exclusive_section<T>(
+    target: &Path,
+    section: Section,
+    options: FileLockOptions,
+    op: impl FnOnce() -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    with_exclusive_file_lock_options(target, &section.label(), options, op)
+}
 
 thread_local! {
     /// Depth of boundary sections this thread is inside. Recovery must never
@@ -66,10 +131,24 @@ impl TaskCommitBoundary {
             registry,
             workspace_id,
             partition_dir,
+            lock_options: boundary_lock_options(),
         };
-        with_exclusive_file_lock(
+        // Activation writes the marker once and nothing removes it, so a
+        // bound partition is verified without the lock. Every runtime open
+        // used to take the partition lock exclusively here, queueing behind
+        // every ordinary section in the partition until a sweep or CLI open
+        // timed out under drain load (ORB-15088).
+        if boundary
+            .partition_dir
+            .join(REQUIRED_MARKER_FILE)
+            .try_exists()?
+        {
+            boundary.verify_journal_binding()?;
+            return Ok(boundary);
+        }
+        boundary.exclusive(
             &boundary.lock_target(),
-            COORDINATION_LOCK_LABEL,
+            Section::here("activation"),
             || -> Result<(), OrbitError> {
                 let marker = boundary.partition_dir.join(REQUIRED_MARKER_FILE);
                 if marker.try_exists()? {
@@ -101,6 +180,7 @@ impl TaskCommitBoundary {
             registry,
             workspace_id,
             partition_dir,
+            lock_options: boundary_lock_options(),
         };
         boundary.verify_journal_binding()?;
         Ok(boundary)
@@ -122,17 +202,21 @@ impl TaskCommitBoundary {
 
     /// Legacy compositions may serve an uncoordinated partition, but cannot
     /// race or overwrite one that has opted into durable coordination.
+    #[track_caller]
     pub(crate) fn enter_uncoordinated<T>(
         registry: &TaskRegistryStore,
         workspace_id: &str,
         op: impl FnOnce() -> Result<T, OrbitError>,
     ) -> Result<T, OrbitError> {
+        let section = Section::here("uncoordinated");
+        let options = boundary_lock_options();
         let partition = registry.workspace_partition_dir(workspace_id)?;
         let host_lock = host_lock_for_partition(&partition);
-        with_shared_file_lock(&host_lock, COORDINATION_LOCK_LABEL, || {
-            with_shared_file_lock(
+        shared_section(&host_lock, section, options, || {
+            shared_section(
                 &partition.join(COORDINATION_LOCK_FILE),
-                COORDINATION_LOCK_LABEL,
+                section,
+                options,
                 || {
                     if partition.join(REQUIRED_MARKER_FILE).try_exists()? {
                         return Err(OrbitError::Store(
@@ -155,37 +239,39 @@ impl TaskCommitBoundary {
     /// Shared with every other ordinary participant and excluded by an
     /// admission section. Reads take it too, so a caller cannot observe a
     /// reservation whose task transition is still being applied.
+    #[track_caller]
     pub fn enter_ordinary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        with_shared_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
-            self.enter_ordinary_locked(op)
+        let section = Section::here("ordinary");
+        self.shared(&self.host_lock_target(), section, || {
+            self.enter_ordinary_locked(section, op)
         })
     }
 
     fn enter_ordinary_locked<T>(
         &self,
+        section: Section,
         op: impl FnOnce() -> Result<T, OrbitError>,
     ) -> Result<T, OrbitError> {
         let mut op = Some(op);
         loop {
-            self.recover_if_pending()?;
-            let result =
-                with_shared_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
-                    // A commit may have crashed while we waited for this lock.
-                    // Drop the shared acquisition before taking recovery exclusive.
-                    if !BoundaryDepth::active(&self.partition_dir)
-                        && self.pending_marker_path().try_exists()?
-                    {
-                        return Ok(None);
-                    }
-                    let _depth = BoundaryDepth::enter(&self.partition_dir);
-                    let operation = op.take().ok_or_else(|| {
-                        OrbitError::Store("ordinary boundary operation was already consumed".into())
-                    })?;
-                    operation().map(Some)
+            self.recover_pending_in(section)?;
+            let result = self.shared(&self.lock_target(), section, || {
+                // A commit may have crashed while we waited for this lock.
+                // Drop the shared acquisition before taking recovery exclusive.
+                if !BoundaryDepth::active(&self.partition_dir)
+                    && self.pending_marker_path().try_exists()?
+                {
+                    return Ok(None);
+                }
+                let _depth = BoundaryDepth::enter(&self.partition_dir);
+                let operation = op.take().ok_or_else(|| {
+                    OrbitError::Store("ordinary boundary operation was already consumed".into())
                 })?;
+                operation().map(Some)
+            })?;
             if let Some(result) = result {
                 return Ok(result);
             }
@@ -198,15 +284,17 @@ impl TaskCommitBoundary {
     /// `op`, so nothing an ordinary write could change moves underneath the
     /// decision. Calling [`Self::commit_task_transition`] inside `op` re-enters
     /// the same acquisition.
+    #[track_caller]
     pub fn with_admission<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        with_exclusive_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
-            with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
+        let section = Section::here("admission");
+        self.exclusive(&self.host_lock_target(), section, || {
+            self.exclusive(&self.lock_target(), section, || {
                 #[cfg(test)]
                 let _probe = section_probe::SectionProbe::enter();
-                self.recover_if_pending()?;
+                self.recover_pending_in(section)?;
                 let _depth = BoundaryDepth::enter(&self.partition_dir);
                 op()
             })
@@ -235,6 +323,35 @@ impl TaskCommitBoundary {
             self.store
                 .task_coordination_row(&self.workspace_id, kind, row_id)
         })
+    }
+
+    /// Hold `target` shared for `section`, under this boundary's lock policy.
+    pub(super) fn shared<T>(
+        &self,
+        target: &Path,
+        section: Section,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        shared_section(target, section, self.lock_options, op)
+    }
+
+    /// Hold `target` exclusively for `section`, under this boundary's lock
+    /// policy.
+    pub(super) fn exclusive<T>(
+        &self,
+        target: &Path,
+        section: Section,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        exclusive_section(target, section, self.lock_options, op)
+    }
+
+    /// The same boundary with another lock policy, so a test can contend
+    /// within milliseconds instead of the production deadlines.
+    #[cfg(test)]
+    pub(crate) fn with_lock_options(mut self, options: FileLockOptions) -> Self {
+        self.lock_options = options;
+        self
     }
 
     pub(super) fn host_lock_target(&self) -> PathBuf {
