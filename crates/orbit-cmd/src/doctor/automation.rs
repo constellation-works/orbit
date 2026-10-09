@@ -203,6 +203,38 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
     }
 }
 
+/// `execution.env.pass` variables this process does not hold [ORB-14777].
+///
+/// Agents inherit the launching environment through the allowlist, so a
+/// pass-listed variable missing here (a dedicated worker token, say) silently
+/// leaves agents on another login. A warning, never an error: optional
+/// provider keys can legitimately be absent. Names only, never values.
+pub(super) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let unset = runtime.unset_env_pass_names();
+    if unset.is_empty() {
+        return check(
+            "env-pass",
+            WorkspaceDoctorStatus::Ok,
+            "every operator-added `execution.env.pass` variable is set in this environment"
+                .to_string(),
+        );
+    }
+    actionable_check(
+        "env-pass",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "`execution.env.pass` names variables unset or empty in this environment: {}; \
+             agents started from it will not receive them",
+            unset.join(", ")
+        ),
+        "Export the variables before starting the drain or service. Drains inherit the \
+         launching shell's environment, so start them from a login shell (or set the \
+         variables in the unit's environment), or remove the names from \
+         `execution.env.pass`, then rerun `orbit doctor`."
+            .to_string(),
+    )
+}
+
 /// Where required validation finds the user's toolchain [ORB-13987].
 ///
 /// Required commands run with PATH and toolchain locators resolved from the

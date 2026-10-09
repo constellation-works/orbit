@@ -170,6 +170,13 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "created_at": run.created_at.to_rfc3339(),
     });
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
+    // [ORB-14777] Pass-listed variables the submitting process did not hold.
+    // Added outside the literal: it is at `json!`'s recursion limit.
+    value["env_pass_unset"] = json!(
+        state_for_agent_result
+            .map(|state| state.env_pass_unset.as_slice())
+            .unwrap_or_default()
+    );
     value
 }
 

@@ -190,6 +190,7 @@ impl DoctorCommands for OrbitRuntime {
             WorkspaceDoctorResult::timed(|| doctor_check_review(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_forge_remote(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_host_shutdown(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_env_pass(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_validation_env(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_orphan_task_stores(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_tracked_orbit_files(self)),

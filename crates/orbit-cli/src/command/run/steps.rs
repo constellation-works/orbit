@@ -266,6 +266,14 @@ pub(crate) fn run_header_text_with_lock_holders(
     if let Some(line) = format_admissions_stop_line(state) {
         lines.push(line);
     }
+    // [ORB-14777] Variables `execution.env.pass` names that the submitting
+    // process did not hold, so agents of this run never received them.
+    if let Some(unset) = state
+        .map(|state| &state.env_pass_unset)
+        .filter(|names| !names.is_empty())
+    {
+        lines.push(format!("{} {}", bold("Unset env:"), unset.join(", ")));
+    }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
 }

@@ -1,6 +1,8 @@
 //! Codex execution settings and agent subprocess environment projection.
 
-use orbit_common::security::child_env::{allowlisted_child_env, inherited_child_env};
+use orbit_common::security::child_env::{
+    allowlisted_child_env, inherited_child_env, unset_pass_names_from,
+};
 
 use crate::registry::ConfigSnapshot;
 
@@ -91,6 +93,35 @@ impl ExecutionEnvPolicy {
             return inherited_child_env();
         }
         allowlisted_child_env(&self.pass, extras)
+    }
+}
+
+impl ExecutionEnvPolicy {
+    /// The operator-added `execution.env.pass` names the launching process
+    /// holds no value for, so no agent it starts receives them [ORB-14777].
+    ///
+    /// The built-in defaults (`HOME`, `PATH`, `CODEX_HOME`, and the
+    /// macOS-only `__CF_USER_TEXT_ENCODING`, …) are not reported: they can
+    /// legitimately be absent on a host, and warning on each would fire on
+    /// every drain start. A name the operator added is a statement that agents
+    /// need it. Empty when the policy inherits the whole environment.
+    pub fn unset_pass_names(&self) -> Vec<String> {
+        self.unset_pass_names_in(&std::env::vars().collect::<Vec<_>>())
+    }
+
+    /// [`Self::unset_pass_names`] over an explicit parent environment.
+    pub fn unset_pass_names_in(&self, parent: &[(String, String)]) -> Vec<String> {
+        if self.inherit {
+            return Vec::new();
+        }
+        let defaults = default_pass_list();
+        let added: Vec<String> = self
+            .pass
+            .iter()
+            .filter(|name| !defaults.contains(name))
+            .cloned()
+            .collect();
+        unset_pass_names_from(parent, &added)
     }
 }
 

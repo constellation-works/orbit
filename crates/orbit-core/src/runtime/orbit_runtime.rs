@@ -780,6 +780,21 @@ impl OrbitRuntime {
         self.validation_environment().preflight_warning()
     }
 
+    /// The operator-added `execution.env.pass` names this process's
+    /// environment holds no value for [ORB-14777]. Names only, never values.
+    /// Agents this process starts, directly or through a detached worker that
+    /// inherits its environment, do not receive them.
+    pub fn unset_env_pass_names(&self) -> Vec<String> {
+        self.execution_env_policy().unset_pass_names()
+    }
+
+    /// The warning for [`Self::unset_env_pass_names`], for drain/ship starts
+    /// and `orbit doctor`. `None` when every pass-listed variable is set.
+    pub fn unset_env_pass_warning(&self) -> Option<String> {
+        let unset = self.unset_env_pass_names();
+        (!unset.is_empty()).then(|| unset_env_pass_message(&unset))
+    }
+
     /// `[workflow] distributed_completion`: `review` or `done`.
     pub fn workflow_distributed_completion(&self) -> &str {
         self.context.settings().workflow_distributed_completion()
@@ -936,4 +951,14 @@ fn orbit_event_to_audit(id: i64, event: OrbitEvent) -> Audit {
         message: event_type,
         created_at: Utc::now(),
     }
+}
+
+/// The shared wording for pass-listed variables missing from the launching
+/// environment [ORB-14777].
+fn unset_env_pass_message(unset: &[String]) -> String {
+    format!(
+        "`execution.env.pass` names {} unset or empty in this environment, so agents will not          receive {}; a provider that needs one falls back to another login. Drains inherit the          launching shell's environment: start them from a login shell",
+        unset.join(", "),
+        if unset.len() == 1 { "it" } else { "them" },
+    )
 }

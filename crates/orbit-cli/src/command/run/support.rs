@@ -96,6 +96,18 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
+/// [ORB-14777] Warn once on stderr, at a drain, ship or job start, naming each
+/// `execution.env.pass` variable this environment does not hold. Agents the
+/// run starts inherit this environment, so a missing worker token otherwise
+/// falls back to another login without a sign. Names only, never values; the
+/// same names are recorded on the run. A warning, not a refusal: optional
+/// provider keys can legitimately be absent.
+pub(crate) fn warn_unset_env_pass(runtime: &OrbitRuntime) {
+    if let Some(warning) = runtime.unset_env_pass_warning() {
+        eprintln!("warning: {warning}");
+    }
+}
+
 /// Render dispatched workflow runs, failing the command when any waited run
 /// ended in a non-success terminal state. Submitted and queued runs report no
 /// outcome yet, so they keep a zero exit.
