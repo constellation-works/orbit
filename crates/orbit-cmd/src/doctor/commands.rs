@@ -12,6 +12,9 @@ pub enum WorkspaceDoctorStatus {
     Error,
     /// The subsystem is absent (fresh workspace) — nothing to check.
     Skipped,
+    /// A fact about the setup, neither a pass nor a problem: what Orbit can
+    /// and cannot observe here.
+    Info,
 }
 
 /// One row of `orbit doctor` output.

@@ -2132,16 +2132,42 @@ function autoDrainHostWaits(payload) {
   return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_HOST_WAIT_REASONS.has(autoDrainReason(task)));
 }
 
+// [ORB-14698] Tasks every crew of which a provider usage limit keeps out of
+// admission. Each detail names the window, its use, the reset and the crews
+// skipped; the wait lifts by itself then.
+function autoDrainProviderLimitWaits(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "provider_limit");
+}
+
 function autoDrainHostWaitList(tasks, workspace) {
-  const list = el("ul", { class: "drain-blocked drain-host-waits" });
-  list.setAttribute("aria-label", "Tasks waiting for a host of another OS");
+  return autoDrainWaitList(tasks, workspace, {
+    className: "drain-host-waits",
+    label: "Tasks waiting for a host of another OS",
+    fallback: "waits for a host of another OS",
+  });
+}
+
+function autoDrainProviderLimitWaitList(tasks, workspace) {
+  return autoDrainWaitList(tasks, workspace, {
+    className: "drain-provider-limit-waits",
+    label: "Tasks waiting for a provider usage limit to reset",
+    fallback: "waits for a provider usage limit to reset",
+    reason: "provider limit",
+  });
+}
+
+function autoDrainWaitList(tasks, workspace, { className, label, fallback, reason }) {
+  const list = el("ul", { class: `drain-blocked ${className}` });
+  list.setAttribute("aria-label", label);
   for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
     const taskId = autoDrainTaskId(task);
     list.appendChild(el("li", { class: "drain-blocked-row" }, [
       el("div", { class: "drain-blocked-line" }, [
         el("span", { class: "drain-blocked-who mono" }, [
           taskId ? taskLink(taskId, workspace?.id) : el("span", { text: "task not supplied" }),
-          el("span", { class: "drain-muted", text: ` ${typeof task.detail === "string" && task.detail ? task.detail : "waits for a host of another OS"}` }),
+          reason ? el("span", { class: "drain-wait-reason", text: ` ${reason}` }) : null,
+          el("span", { class: "drain-muted", text: ` ${typeof task.detail === "string" && task.detail ? task.detail : fallback}` }),
         ]),
       ]),
     ]));
@@ -2177,6 +2203,23 @@ function autoDrainThrottleNote(capacity) {
   return note;
 }
 
+// [ORB-14698] Each provider usage window that keeps crews out of admission,
+// with its use, threshold, reset and the crews skipped until then. Readings
+// below their threshold do not hold anything, so they are not shown here.
+function autoDrainProviderLimitNote(readings) {
+  const gated = (Array.isArray(readings) ? readings : []).filter(reading => reading?.gated === true);
+  if (gated.length === 0) return null;
+  const lines = gated.map((reading) => {
+    const label = `${reading.provider}${reading.scope ? ` [${reading.scope}]` : ""} ${reading.window || "usage window"}`;
+    const usage = reading.used_percent == null ? "exhausted" : `${reading.used_percent}% ≥ ${reading.threshold}%`;
+    const crews = Array.isArray(reading.crews) && reading.crews.length ? reading.crews.join(", ") : "no configured crew";
+    return `${label} ${usage} until ${time(reading.until)}: ${crews} skipped`;
+  });
+  const note = el("p", { class: "operation-control-note drain-provider-limit-note", text: `Provider limits: ${lines.join("; ")}.` });
+  note.setAttribute("role", "status");
+  return note;
+}
+
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   const body = $("auto-drain-body");
@@ -2188,6 +2231,8 @@ function renderAutoDrain(payload) {
   renderAutoDrainHead(payload);
   const throttle = autoDrainThrottleNote(payload.capacity);
   if (throttle) body.appendChild(throttle);
+  const providerLimits = autoDrainProviderLimitNote(payload.provider_limits);
+  if (providerLimits) body.appendChild(providerLimits);
   const reasons = autoDrainReasons(payload);
   if (reasons.submit) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: reasons.submit }));
@@ -2207,6 +2252,8 @@ function renderAutoDrain(payload) {
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
   const hostWaits = autoDrainHostWaits(payload);
   if (hostWaits.length > 0) body.appendChild(autoDrainHostWaitList(hostWaits, selectedWorkspace()));
+  const limitWaits = autoDrainProviderLimitWaits(payload);
+  if (limitWaits.length > 0) body.appendChild(autoDrainProviderLimitWaitList(limitWaits, selectedWorkspace()));
   const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
   // The concurrency field and the Start button are built apart but depend on
   // each other; they meet here.

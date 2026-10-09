@@ -1027,7 +1027,7 @@ function systemValueCell(row, payload) {
 
 // ------------------------------------------------------------------- crews
 
-const CREW_COLUMNS = ["Name", "Provider", "Model", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
 
 function crewsPanel(payload, { standalone }) {
   const crews = payload.crews || [];
@@ -1112,6 +1112,7 @@ function crewRow(crew, payload) {
     identity,
     providerCell(crew.provider),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.model) }),
+    crewLimitCell(crew.limit),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.effort) }),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.tags) }),
     el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
@@ -1129,6 +1130,38 @@ function crewRow(crew, payload) {
 
 function displayCrewValue(value) {
   return value == null || value === "" ? EMPTY_ARRAY : displayValue(value);
+}
+
+// [ORB-14698] The crew's tightest live usage window on this host: how much of
+// it is used, when it resets, and a badge while admission skips the crew.
+// The server's provider-limit view decides all of it; nothing is judged here.
+function crewLimitCell(limit) {
+  const cell = el("span", { class: "config-crew-limit" });
+  if (!limit) {
+    cell.appendChild(el("span", { class: "config-value mono", text: EMPTY_ARRAY, title: "No live usage reading covers this crew" }));
+    return cell;
+  }
+  const used = limit.used_percent == null
+    ? (limit.exhausted ? "exhausted" : "–")
+    : `${Math.round(Number(limit.used_percent))}%`;
+  const windowLabel = limit.window || "usage window";
+  cell.appendChild(el("span", { class: "config-crew-limit-line" }, [
+    el("span", { class: "config-value mono", text: used }),
+    el("span", { class: "config-crew-limit-window mono", text: limit.scope ? `${windowLabel} · ${limit.scope}` : windowLabel }),
+    limit.gated
+      ? el("span", {
+          class: "config-crew-gated",
+          text: "gated",
+          title: `Admission skips this crew until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)`,
+        })
+      : null,
+  ]));
+  const resets = limit.resets_at || limit.until;
+  cell.appendChild(el("span", {
+    class: "config-crew-limit-reset",
+    text: `${limit.resets_at ? "resets" : "counts until"} ${formatDateTime(resets)}`,
+  }));
+  return cell;
 }
 
 function providerCell(provider) {

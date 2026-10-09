@@ -88,6 +88,8 @@
 .drain-stop-note { margin: 0; font-size: 12px; }
 .drain-stop-note.disabled-reason { color: #f2c38b; }
 .drain-throttle-note { margin: 0; color: #f2c38b; }
+.drain-provider-limit-note { margin: 0; color: #f2c38b; overflow-wrap: anywhere; }
+.drain-wait-reason { color: var(--state-pending); }
 .drain-capacity { display: flex; flex-direction: column; gap: 8px; }
 .drain-capacity-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 8px; font-size: 13px; color: #c4c4cc; }
 .drain-capacity-free { font-size: 12.5px; color: var(--fg-dim); white-space: nowrap; }

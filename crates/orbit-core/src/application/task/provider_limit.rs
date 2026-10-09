@@ -61,25 +61,12 @@ impl ProviderLimit {
         if !observation.gating {
             return None;
         }
-        let until = match (observation.resets_at, observation.window_minutes) {
-            (Some(resets_at), _) => resets_at,
-            (None, _)
-                if observation.exhausted && observation.source == ProviderLimitSource::Error =>
-            {
-                observation.observed_at + base_backoff(ProviderFailureClass::Limit)
-            }
-            (None, Some(minutes)) => observation.observed_at + Duration::minutes(minutes.into()),
-            (None, None) => observation.observed_at + UNKNOWN_WINDOW_LIFETIME,
-        };
+        let until = reading_lifetime(observation);
         if until <= now {
             return None;
         }
         let threshold = policy.threshold(&observation.provider);
-        let over_threshold = threshold < 100
-            && observation
-                .used_percent
-                .is_some_and(|used| used >= f64::from(threshold));
-        (observation.exhausted || over_threshold).then(|| Self {
+        reading_at_limit(observation, threshold).then(|| Self {
             provider: observation.provider.clone(),
             model: observation.model.clone(),
             window: observation.window.clone(),
@@ -92,13 +79,7 @@ impl ProviderLimit {
     /// Whether the limit applies to `crew`: same provider, and the limit's
     /// model, when it names one, is the crew's.
     fn covers(&self, crew: &Crew) -> bool {
-        same_provider(Some(&crew.assignment.provider), Some(&self.provider))
-            && self.model.as_deref().is_none_or(|model| {
-                crew.assignment
-                    .model
-                    .to_ascii_lowercase()
-                    .contains(&model.to_ascii_lowercase())
-            })
+        reading_covers(&self.provider, self.model.as_deref(), crew)
     }
 
     /// `<provider> <window> at <used>% (limit <threshold>%) until <reset>`.
@@ -118,6 +99,42 @@ impl ProviderLimit {
             self.until.to_rfc3339()
         )
     }
+}
+
+/// When `observation` stops counting: the reset it reported; else, for an
+/// exhausted error reading, the first backoff a usage-limit hold uses; else
+/// its window's length, or an hour when that is unknown.
+pub(super) fn reading_lifetime(observation: &ProviderLimitObservation) -> DateTime<Utc> {
+    match (observation.resets_at, observation.window_minutes) {
+        (Some(resets_at), _) => resets_at,
+        (None, _) if observation.exhausted && observation.source == ProviderLimitSource::Error => {
+            observation.observed_at + base_backoff(ProviderFailureClass::Limit)
+        }
+        (None, Some(minutes)) => observation.observed_at + Duration::minutes(minutes.into()),
+        (None, None) => observation.observed_at + UNKNOWN_WINDOW_LIFETIME,
+    }
+}
+
+/// Whether `observation` is exhausted or used at or above `threshold`. A
+/// threshold of 100 gates only on exhaustion.
+pub(super) fn reading_at_limit(observation: &ProviderLimitObservation, threshold: u8) -> bool {
+    observation.exhausted
+        || (threshold < 100
+            && observation
+                .used_percent
+                .is_some_and(|used| used >= f64::from(threshold)))
+}
+
+/// Whether a reading of `provider`, scoped to `model` when it names one,
+/// applies to `crew`.
+pub(super) fn reading_covers(provider: &str, model: Option<&str>, crew: &Crew) -> bool {
+    same_provider(Some(&crew.assignment.provider), Some(provider))
+        && model.is_none_or(|model| {
+            crew.assignment
+                .model
+                .to_ascii_lowercase()
+                .contains(&model.to_ascii_lowercase())
+        })
 }
 
 /// The host's live provider limits at one admission.

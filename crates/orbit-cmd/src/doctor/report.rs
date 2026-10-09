@@ -21,6 +21,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     }),
     DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
+    DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),
     DoctorProbe::one("mcp-registration", |runtime, _| {
         mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
     }),
@@ -76,6 +77,7 @@ pub fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
             WorkspaceDoctorStatus::Warning => "warning",
             WorkspaceDoctorStatus::Error => "error",
             WorkspaceDoctorStatus::Skipped => "skipped",
+            WorkspaceDoctorStatus::Info => "info",
         },
         "message": row.message,
         "remediation": row.remediation,
@@ -240,6 +242,135 @@ fn provider_auth_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
             remediation: Some("Inspect the drain with `orbit run show`.".into()),
         }],
     }
+}
+
+/// The `provider-limits` rows of `orbit doctor`.
+fn provider_limit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+    provider_limit_findings(runtime)
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect()
+}
+
+/// [ORB-14698] One `provider-limits:<provider>` row per provider an enabled
+/// crew uses, from the host's provider-limit view: `warning` while a reading
+/// gates it (window, use, reset and skipped crews), `ok` below its threshold,
+/// and `info` for a provider that reports no usage, whose limits Orbit learns
+/// only from failures. The system and review lanes are not gated, so one
+/// whose crew's provider is gated gets its own warning. Each row comes with
+/// the provider it concerns; `None` for a row about every provider.
+pub fn provider_limit_findings(
+    runtime: &OrbitRuntime,
+) -> Vec<(Option<String>, WorkspaceDoctorResult)> {
+    let view = runtime.provider_limits_view(chrono::Utc::now());
+    let now = view.as_of;
+    let row = |check_name: String, status, message: String, remediation: Option<&str>| {
+        WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name,
+            status,
+            message,
+            remediation: remediation.map(ToString::to_string),
+        }
+    };
+    if let Some(error) = &view.error {
+        return vec![(
+            None,
+            row(
+                "provider-limits".into(),
+                WorkspaceDoctorStatus::Warning,
+                format!(
+                    "could not read this host's provider usage limits, so admission gates none: {error}"
+                ),
+                Some("Check the host store with `orbit doctor --deep`, then rerun `orbit doctor`."),
+            ),
+        )];
+    }
+    let mut rows = view
+        .providers
+        .iter()
+        .map(|provider| {
+            let check_name = format!("provider-limits:{}", provider.provider);
+            let readings = view
+                .provider_readings(&provider.provider)
+                .collect::<Vec<_>>();
+            let finding = if provider.gated {
+                let gated = readings
+                    .iter()
+                    .filter(|reading| reading.gated)
+                    .map(|reading| reading.skipped_line(now))
+                    .collect::<Vec<_>>();
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Warning,
+                    gated.join("; "),
+                    Some(
+                        "Admission draws these crews again after the reset. To run closer to \
+                         the limit, raise `workflow.provider_limit_overrides` for this provider.",
+                    ),
+                )
+            } else if !provider.reports_usage && readings.is_empty() {
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Info,
+                    format!(
+                        "{}: no usage signal; Orbit learns limits from failures",
+                        provider.provider
+                    ),
+                    None,
+                )
+            } else if readings.is_empty() {
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Ok,
+                    format!(
+                        "{}: no live usage reading; its crews are skipped at {}% of a window",
+                        provider.provider, provider.threshold
+                    ),
+                    None,
+                )
+            } else {
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Ok,
+                    format!(
+                        "{} below its {}% limit: {}",
+                        provider.provider,
+                        provider.threshold,
+                        readings
+                            .iter()
+                            .map(|reading| reading.describe(now))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    None,
+                )
+            };
+            (Some(provider.provider.clone()), finding)
+        })
+        .collect::<Vec<_>>();
+    rows.extend(view.ungated_lanes.iter().map(|lane| {
+        (
+            Some(lane.provider.clone()),
+            row(
+                format!("provider-limits:{}", lane.setting),
+                WorkspaceDoctorStatus::Warning,
+                format!(
+                    "{} '{}' uses {}, which is at its usage limit until {}; this lane is not \
+                     gated, so its runs may fail until then",
+                    lane.setting,
+                    lane.crew,
+                    lane.provider,
+                    orbit_core::application::task::short_time(lane.until, now),
+                ),
+                Some(
+                    "Wait for the reset, or point this setting at a crew on another provider \
+                     until then.",
+                ),
+            ),
+        )
+    }));
+    rows
 }
 
 fn mcp_registration_row(

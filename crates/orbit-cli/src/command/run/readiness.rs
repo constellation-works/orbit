@@ -1,6 +1,8 @@
 //! `orbit run readiness` read-only auto-drain diagnostic.
 
+use chrono::Utc;
 use clap::Args;
+use orbit_core::application::task::ProviderLimitReading;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
@@ -13,7 +15,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. When CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. When CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -118,6 +120,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     {
         lines.push(throttle.hold_reason());
     }
+    lines.extend(provider_limit_lines(&payload["provider_limits"]));
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);
     }
@@ -138,11 +141,15 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
             // A host-OS wait names the host, and a native-OS requirement the
-            // tag to add. A local-route before-PR hold names the remedy.
-            // Other long repair instructions stay in JSON.
+            // tag to add. A local-route before-PR hold names the remedy, and
+            // a provider limit its window, reset and skipped crews. Other
+            // long repair instructions stay in JSON.
             let host = matches!(
                 reason,
-                "host_os_mismatch" | "native_os_required" | "local_route_before_pr"
+                "host_os_mismatch"
+                    | "native_os_required"
+                    | "local_route_before_pr"
+                    | "provider_limit"
             )
             .then(|| task["detail"].as_str())
             .flatten()
@@ -216,6 +223,19 @@ fn approval_lines(approvals: &Value) -> Vec<String> {
         }
     }
     lines
+}
+
+/// [ORB-14698] One line per provider usage reading that keeps crews out of
+/// admission: its window, use against the threshold, reset and the crews
+/// skipped until then.
+fn provider_limit_lines(readings: &Value) -> Vec<String> {
+    let now = Utc::now();
+    serde_json::from_value::<Vec<ProviderLimitReading>>(readings.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|reading| reading.gated)
+        .map(|reading| format!("Provider limits: {}", reading.skipped_line(now)))
+        .collect()
 }
 
 /// [ORB-14624] While CPU alone throttles, the reserved light slots are the

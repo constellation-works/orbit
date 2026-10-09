@@ -540,6 +540,13 @@ pub fn explain_workspace_auto_readiness(
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
 
+    // [ORB-14698] Every live provider usage reading, with whether it keeps
+    // its crews out of admission and until when.
+    let provider_limits = runtime.provider_limits_view(Utc::now());
+    if let Some(error) = &provider_limits.error {
+        tracing::warn!("readiness shows no provider limits: {error}");
+    }
+
     Ok(json!({
         "snapshot": {
             "read_only": true,
@@ -600,6 +607,7 @@ pub fn explain_workspace_auto_readiness(
             "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
         },
         "approvals": approvals,
+        "provider_limits": provider_limits.readings,
         "total": total,
         "tasks": tasks,
     }))

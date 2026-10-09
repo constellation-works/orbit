@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 /// Largest detail an observation keeps, in bytes.
 pub const PROVIDER_LIMIT_DETAIL_MAX_BYTES: usize = 512;
 
+/// The providers whose own output reports their usage windows after a run
+/// [ORB-14696]. Every other provider is read only from a limit failure.
+pub const USAGE_REPORTING_PROVIDERS: [&str; 2] = ["claude", "codex"];
+
 /// Where an observation came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

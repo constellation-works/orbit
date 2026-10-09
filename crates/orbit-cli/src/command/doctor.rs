@@ -67,7 +67,7 @@ pub struct DoctorCommand {
 
 #[derive(Subcommand)]
 pub enum DoctorSubcommand {
-    /// Show each executor's provider CLI, configured sandbox, and Linux sandbox readiness
+    /// Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
     Providers(ProvidersArgs),
     /// Dry-run a workspace-relative path against a filesystem profile's read and modify rules
     FsAccess(FsAccessArgs),
@@ -350,6 +350,9 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                 .is_some_and(|kind| kind.as_str() == "linux-bwrap")
         })
         .then(orbit_core::bootstrap::linux_sandbox_host::probe_bwrap_fresh);
+    // [ORB-14698] The same provider-limit rows `orbit doctor` reports, under
+    // the executor of the provider each concerns.
+    let limit_findings = orbit_cmd::provider_limit_findings(runtime);
     let mut values = Vec::with_capacity(defs.len());
     let mut table = Table::new(vec![
         Column::new("EXECUTOR").fixed(),
@@ -359,6 +362,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("SANDBOX").fixed(),
         Column::new("READY").fixed(),
         Column::new("BWRAP").fixed(),
+        Column::new("LIMITS").fixed(),
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
@@ -377,6 +381,21 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         // Which trusted Bubblewrap the probe selected — the host's or the
         // one bundled with Orbit — and its version once it passed.
         let wrapper = readiness.and_then(|probe| probe.source.map(|source| (source, probe)));
+        let limits = limit_findings
+            .iter()
+            .filter(|(provider, _)| provider.as_deref().is_none_or(|name| name == def.name))
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        // The worst of them, as `orbit doctor` ranks a row.
+        let limit_status = [
+            WorkspaceDoctorStatus::Error,
+            WorkspaceDoctorStatus::Warning,
+            WorkspaceDoctorStatus::Ok,
+            WorkspaceDoctorStatus::Info,
+            WorkspaceDoctorStatus::Skipped,
+        ]
+        .into_iter()
+        .find(|status| limits.iter().any(|row| row.status == *status));
         values.push(json!({
             "name": def.name,
             "executor_type": def.executor_type.to_string(),
@@ -391,6 +410,10 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "sandbox_wrapper_path": wrapper.map(|(_, probe)| probe.trusted_path.as_str()),
             "sandbox_wrapper_version": wrapper.and_then(|(_, probe)| probe.version.as_deref()),
             "allow_fallback": def.allow_fallback,
+            "provider_limits": limits
+                .iter()
+                .map(|row| orbit_cmd::doctor_row_json(row))
+                .collect::<Vec<_>>(),
         }));
         table.add_row(vec![
             def.name.clone(),
@@ -414,6 +437,10 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                     None => source.as_str().to_string(),
                 },
             ),
+            limit_status.map_or_else(
+                || "-".to_string(),
+                |status| status_label(status).to_string(),
+            ),
             launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);
     }
@@ -426,6 +453,7 @@ fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
         WorkspaceDoctorStatus::Warning => "warning",
         WorkspaceDoctorStatus::Error => "ERROR",
         WorkspaceDoctorStatus::Skipped => "skipped",
+        WorkspaceDoctorStatus::Info => "info",
     }
 }
 

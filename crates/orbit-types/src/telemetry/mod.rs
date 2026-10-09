@@ -17,6 +17,7 @@ pub use metrics::MetricsEntry;
 pub use pricing::{InputTokenBasis, PriceRow, cost_from_rows, normalize_token_usage_from_rows};
 pub use provider_limit::{
     PROVIDER_LIMIT_DETAIL_MAX_BYTES, ProviderLimitObservation, ProviderLimitSource,
+    USAGE_REPORTING_PROVIDERS,
 };
 pub use self_reported_actor::{
     ANONYMOUS_ACTOR_LABEL, AuditAttribution, SELF_REPORTED_ACTOR_MAX_LEN,

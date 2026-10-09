@@ -155,7 +155,7 @@
 
 .config-crew-cells {
   display: grid;
-  grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 60px;
+  grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) minmax(120px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 60px;
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
 .config-crew-head {
@@ -175,6 +175,16 @@
 .config-crew-disabled {
   margin-left: 6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 2px;
   color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+/* [ORB-14698] A crew's tightest usage window: used percent, window, reset,
+   and an amber "gated" badge while admission skips the crew. */
+.config-crew-limit { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.config-crew-limit-line { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.config-crew-limit-window { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
+.config-crew-limit-reset { color: var(--fg-mute); font-size: 11px; }
+.config-crew-gated {
+  padding: 0 5px; border: 1px solid var(--state-pending); border-radius: 2px;
+  color: var(--state-pending); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
 }
 .config-provider { display: inline-flex; gap: 6px; align-items: center; color: var(--fg); font-size: 12px; }
 .config-provider-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }

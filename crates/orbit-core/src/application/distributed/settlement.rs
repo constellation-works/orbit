@@ -427,7 +427,7 @@ impl PullCrewWindow {
             };
             match exclusion.until {
                 Some(until) => format!(
-                    "excluded {} ({source}) until {}: {}",
+                    "excluded {} ({source} until {}): {}",
                     exclusion.crew,
                     until.to_rfc3339(),
                     exclusion.reason

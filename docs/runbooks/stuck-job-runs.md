@@ -425,12 +425,13 @@ provider. See
 
 ## A task waiting on a provider usage limit
 
-`orbit run readiness --json` reports `reason: "provider_limit"` when every crew
-the task may run as belongs to a provider this host reads at or above its
-usage threshold, or exhausted. The detail names the provider, window, used
-percent, threshold, reset and the crews skipped. Nothing failed and nothing
-needs repair: the wait lifts by itself at the next admission pass after the
-reset.
+`orbit run readiness` reports `provider_limit` when every crew the task may
+run as belongs to a provider this host reads at or above its usage threshold,
+or exhausted. The task's line carries the detail: the provider, window, used
+percent, threshold, reset and the crews skipped. A `Provider limits:` line
+above the tasks names each gated window, and `orbit doctor` warns on the
+provider's `provider-limits:<provider>` row. Nothing failed and nothing needs
+repair: the wait lifts by itself at the next admission pass after the reset.
 
 To run it sooner, give the pool an unlimited member, set the task's `crew` to
 a crew on another provider, or raise the threshold

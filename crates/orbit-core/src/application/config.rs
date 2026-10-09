@@ -810,7 +810,11 @@ fn base_row(
 /// The "Used by" column is decoration: a failed auto-task listing (every
 /// definition malformed) omits auto-task references rather than failing the
 /// Settings view or a crew write that already committed.
+///
+/// [ORB-14698] `limit` is the crew's tightest live usage window from the
+/// host's provider-limit view, `null` when no reading covers it.
 fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
+    let limits = runtime.provider_limits_view(chrono::Utc::now());
     let mut references: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in values {
         if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) || entry.key == "operation.review_crew"
@@ -902,6 +906,7 @@ fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Vec<Jso
                 "description": cell("description"),
                 "source": layers.join("+"),
                 "referenced_by": referenced_by,
+                "limit": limits.crew(&name),
             })
         })
         .collect()
