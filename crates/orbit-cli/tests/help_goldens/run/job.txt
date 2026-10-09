@@ -1,0 +1,54 @@
+Run an arbitrary job by ID
+
+Usage: orbit run job [OPTIONS] <JOB_ID>
+
+Arguments:
+  <JOB_ID>
+          Job ID from the catalog, or a direct path to a schemaVersion 2 job YAML
+
+Options:
+      --input <INPUT>
+          Input key=value pairs passed to all job steps (repeatable). Example: --input task_id=T123 --input base=main
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --wait
+          Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --timeout-seconds <TIMEOUT_SECONDS>
+          Wait deadline in seconds (0..=21600); requires --wait
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit run job task_auto_pipeline
+  orbit run job task_auto_pipeline --input mode=local
+  orbit run job crates/orbit-core/assets/jobs/task_pipeline.yaml --input task_id=T123
+  orbit run job task_pilot_pipeline --wait
+  orbit run job task_pilot_pipeline --input crew=luna --json
+
+There is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.
+That picks this run's resolved crew; an activity with an explicit `crew` or
+`system_crew: true` still routes there instead. Check `activity_provenance` in
+`orbit run show <RUN_ID> --json` for what actually dispatched.
+
+The run is submitted to a detached worker and the command returns as soon as it is durable.
+Inspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`.

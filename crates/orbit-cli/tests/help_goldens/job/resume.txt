@@ -1,0 +1,44 @@
+Submit a detached resume of an interrupted job run from its step checkpoints
+
+Usage: orbit job resume [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+          Source job run ID to resume from its persisted step checkpoints
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --wait
+          Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
+
+      --timeout-seconds <TIMEOUT_SECONDS>
+          Wait deadline in seconds (0..=21600); requires --wait
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit job resume jrun-20260704-0710
+  orbit job resume jrun-20260704-0710 --wait
+
+Submits a new linked run to a detached worker and returns its run ID.
+Completed top-level checkpoints are reused. Use `orbit run show <RUN_ID>`
+to inspect it, or `--wait` to block and exit with its terminal outcome.

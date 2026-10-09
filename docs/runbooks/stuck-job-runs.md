@@ -29,6 +29,14 @@ orbit run trace  <run_id>           # parent/child event tree
 Before changing run state, confirm the recorded owner PID and whether that exact process
 is still alive. A long-running run is not necessarily stuck.
 
+`orbit run job`, `orbit run task-pilot`, and `orbit job resume` accept `--wait`.
+The default wait deadline is 3600 seconds; `--timeout-seconds` overrides it with
+a value from 0 to 21600 and requires `--wait`. If the deadline expires, the CLI
+exits 1 and reports `wait_timeout=true` alongside the run's actual `state` in
+both text and JSON. The run continues independently. Inspect the reported run
+ID before resubmitting work. A run whose own execution ends in `timeout`
+retains that state; its JSON `wait_timeout` is `false`.
+
 ## Check the agent subprocess before cancelling
 
 Two separate execution channels spawn agents, and they do not share a run store:

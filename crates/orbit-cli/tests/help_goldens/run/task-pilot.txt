@@ -1,0 +1,54 @@
+Preflight proposed/backlog tasks and persist validated selectors
+
+Usage: orbit run task-pilot [<TASK_ID>...] [OPTIONS]
+
+Arguments:
+  [TASK_ID]...
+          Optional task IDs to audit. Omit for automatic discovery of proposed/backlog tasks with empty context_files or unassessed complexity
+
+Options:
+      --base-branch <BRANCH>
+          Base branch to inspect. Omit to use the registered workspace base branch, else `[workflow] base_branch`
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --max-tasks <N>
+          Maximum tasks to select. Omit to use the job default (50)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --max-partition-size <N>
+          Maximum tasks per pilot partition. Omit to use the job default (5)
+
+      --wait
+          Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
+
+      --timeout-seconds <TIMEOUT_SECONDS>
+          Wait deadline in seconds (0..=21600); requires --wait
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit run task-pilot
+  orbit run task-pilot <TASK_ID> <TASK_ID>
+  orbit run task-pilot --wait --json
+
+Pilots never promote or dispatch tasks. An omitted task list runs automatic
+discovery; explicit ids audit those tasks. Inspect submitted runs with
+`orbit run history -j task_pilot_pipeline` and `orbit run show <RUN_ID>`.

@@ -41,6 +41,7 @@ mod provider_limits;
 mod replay_crew;
 mod run_history;
 mod run_show_display;
+mod wait;
 
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
@@ -768,6 +769,7 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     fs::write(jobs.join("alias_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: alias_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
     let completed = fixture.json(&["job", "run", "alias_fixture", "--wait", "--json"]);
     assert_eq!(completed["state"], "success");
+    assert_eq!(completed["wait_timeout"], false);
     let run_id = completed["run_id"].as_str().unwrap();
     let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
     assert_eq!(shown["run"]["state"], "success");

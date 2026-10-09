@@ -113,6 +113,7 @@ impl Execute for ShipCommand {
                 "submitted".to_string()
             },
             attempt: 1,
+            wait_timeout: false,
             error_code: None,
             error_message: None,
         };
