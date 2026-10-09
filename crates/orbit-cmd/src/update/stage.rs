@@ -116,6 +116,29 @@ pub fn restore_backup(destination: &Path, backup: &Path) -> Result<(), OrbitErro
     restore_backup_with_rename(destination, backup, |from, to| std::fs::rename(from, to))
 }
 
+/// Reject an installed candidate without losing its verification failure if
+/// restoring the previous executable also fails. No workspace state has run yet.
+pub(super) fn reject_installed_candidate(
+    destination: &Path,
+    backup: &Path,
+    verification_failure: String,
+    restore: impl FnOnce(&Path, &Path) -> Result<(), OrbitError>,
+) -> OrbitError {
+    match restore(destination, backup) {
+        Ok(()) => OrbitError::Execution(format!(
+            "{verification_failure}; restored the previous executable and changed no workspace state"
+        )),
+        Err(restore_error) => OrbitError::Execution(format!(
+            "{verification_failure}; restoring the previous executable also failed ({restore_error}); \
+             the rejected candidate remains installed at '{}', and the previous executable's \
+             backup remains at '{}'; no workspace state was changed. Restore the backup before \
+             retrying the update",
+            destination.display(),
+            backup.display()
+        )),
+    }
+}
+
 /// Stage a complete copy of `backup`, then atomically replace `destination`.
 ///
 /// Keeping the replace operation injectable lets the sibling tests exercise

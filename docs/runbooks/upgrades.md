@@ -69,7 +69,10 @@ The check downloads no release archive and does not converge workspace state.
    version. If it does not, the previous executable is copied into a complete sibling staging
    file and atomically renamed over the replacement, so concurrent launches see either the
    complete replacement or the complete previous executable; the retained backup is not consumed
-   and no workspace state is touched. Then wait for the processes admitted to hand over to
+   and no workspace state is touched. If the restore fails too, the error reports both the
+   verification and restore failures, identifies the rejected candidate still installed, and
+   names the retained backup. Restore that backup before retrying the update. This also applies
+   to local-candidate updates. Then wait for the processes admitted to hand over to
    re-exec into the installed release, and pin its generation.
 8. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
    binary**, in the selected workspace. Orbit passes the resolved root to both subprocesses;
@@ -95,8 +98,9 @@ upgrade`, `cargo install` — still needs one `orbit clock repair` by hand; `orb
 `clock-unit` row and a hand-run `orbit sweep` both name it.
 
 Everything before the swap fails with nothing changed. After the swap the command never
-reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
-names the step that failed.
+reports success on an incomplete upgrade. Installed verification failures return an error
+describing whether rollback succeeded. Failures during generation pinning or convergence
+exit `4` with `outcome: needs_recovery` and name the step that failed.
 
 ### Upgrade admission: compatibility generations
 

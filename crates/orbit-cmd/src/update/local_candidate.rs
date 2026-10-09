@@ -45,7 +45,7 @@ use super::flow::{assert_downgrade_is_compatible, backup_path, locked_installed_
 use super::lock::UpdateLock;
 use super::report::{UpdateOutcome, UpdateReport, finish};
 use super::source::{MAX_METADATA_BYTES, read_bounded};
-use super::stage::{restore_backup, stage_executable};
+use super::stage::{reject_installed_candidate, restore_backup, stage_executable};
 use super::version::ReleaseVersion;
 
 /// `kind` every local-candidate manifest carries.
@@ -558,20 +558,24 @@ pub fn run_local_candidate_update(
             set_installed_after(&mut report, digest);
         }
         Ok((digest, version)) => {
-            restore_backup(target, &backup)?;
-            return Err(OrbitError::Execution(format!(
-                "the installed executable is {digest} reporting orbit {version}, not the accepted \
-                 candidate {} reporting {reported}; restored the previous executable and changed \
-                 no workspace state",
-                candidate.sha256
-            )));
+            return Err(reject_installed_candidate(
+                target,
+                &backup,
+                format!(
+                    "the installed executable is {digest} reporting orbit {version}, not the accepted \
+                     candidate {} reporting {reported}",
+                    candidate.sha256
+                ),
+                restore_backup,
+            ));
         }
         Err(error) => {
-            restore_backup(target, &backup)?;
-            return Err(OrbitError::Execution(format!(
-                "the installed local candidate could not be verified ({error}); restored the \
-                 previous executable and changed no workspace state"
-            )));
+            return Err(reject_installed_candidate(
+                target,
+                &backup,
+                format!("the installed local candidate could not be verified ({error})"),
+                restore_backup,
+            ));
         }
     }
 
