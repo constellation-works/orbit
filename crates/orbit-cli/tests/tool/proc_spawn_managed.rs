@@ -505,6 +505,7 @@ fn orbit_command(workspace: &Path, home: &Path) -> AssertCommand {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
+    command.env_remove("ORBIT_ACTIVITY_BUILD_BUDGET_DIR");
     command
         .env_remove("ORBIT_ACTIVITY_BUILD_BUDGET_DIR")
         .env_remove("ORBIT_ACTIVITY_TIMEOUT_MS");
