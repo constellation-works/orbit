@@ -73,13 +73,16 @@ fn rendered_agent_relays_put_kind_and_run_in_first_60_characters() {
             "a structured relay must not echo its provider JSON, and a line without a kind is its own summary: {text}"
         );
         assert_eq!(rendered.agent_stdout, stream == "stdout");
-        assert_eq!(rendered.source, "supervisor");
+        assert_eq!(
+            rendered.source, "codex",
+            "agent output is labelled by its provider, not the module path"
+        );
         assert_eq!(rendered.target, target);
     }
     for (target, line, expected) in [
         (
-            "orbit_engine::activity_job::cli_runner",
-            Some("legacy relay"),
+            "orbit_engine::activity_job::cli_runner::supervisor",
+            Some("agent line"),
             true,
         ),
         (
@@ -193,7 +196,7 @@ fn rendered_log_redacts_secret_tokens_in_lines_and_fields() {
     let runner = render_log_event_for_web(&json!({
         "timestamp": "2026-04-27T01:00:03Z",
         "level": "INFO",
-        "target": "orbit_engine::activity_job::cli_runner",
+        "target": "orbit_engine::activity_job::cli_runner::supervisor",
         "fields": {"stream": "stderr", "line": format!("using key {secret} now")}
     }));
     let generic = render_log_event_for_web(&json!({
