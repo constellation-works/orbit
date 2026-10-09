@@ -45,7 +45,10 @@ use crate::credential_paths::{
 /// - emits resolved `read` / `modify` rules in order, including explicit
 ///   `(deny ...)` clauses for negated entries and narrow host-policy or
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
-///   last-match-wins evaluation.
+///   last-match-wins evaluation;
+/// - then denies writes to each existing writable ancestor entry of a negated
+///   `modify` entry, so a denied path cannot be renamed aside with its parent
+///   — see `emit_denied_ancestor_pins`.
 ///
 /// Callers must resolve workspace-relative globs to absolute paths before
 /// invoking this function — a relative `subpath` is meaningless to the kernel.
@@ -160,9 +163,9 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     );
     out.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+\"))\n");
 
-    out.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-    out.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    out.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
+    for scratch in HOST_SCRATCH_WRITE_ROOTS {
+        out.push_str(&format!("(allow file-write* (subpath \"{scratch}\"))\n"));
+    }
     out.push_str("(allow file-write* (subpath \"/dev\"))\n");
     if let Some(home) = non_empty_env_path(home) {
         let home = home.display().to_string();
@@ -279,6 +282,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             super::sbpl_filter::sbpl_filter_for_allow_rule(rule)
         ));
     }
+    emit_denied_ancestor_pins(rules, &mut out);
 
     // Clause order below is the security contract, not a formatting choice.
     // SBPL is last-match-wins, so the default credential denies come first, the
@@ -446,6 +450,60 @@ fn emit_default_credential_read_denies(
 /// and no convenience grant may quietly turn it into a writer.
 fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
     rules.modify.iter().any(|rule| !rule.starts_with('!'))
+}
+
+/// Host scratch trees every confined process may write.
+const HOST_SCRATCH_WRITE_ROOTS: [&str; 3] = ["/tmp", "/private/tmp", "/private/var/folders"];
+
+/// Deny writes to each existing writable ancestor entry of a `modify` deny.
+///
+/// Seatbelt matches pathnames, and a rename is checked against the moved
+/// entry only, never its descendants. Without these clauses a process could
+/// move a writable directory holding a denied path aside (a worktree holding
+/// its `.git` pointer, say), rewrite the path at its new name, and move the
+/// directory back. A `literal` deny covers the entry itself, so it can be
+/// neither renamed nor replaced, while names beneath it keep the answer of
+/// their own rules. This mirrors the Linux compiler, which binds the same
+/// ancestors as mount points.
+///
+/// Writable means beneath a positive `modify` rule or strictly beneath a host
+/// scratch root. A glob deny pins only the directory above its first wildcard
+/// and that directory's ancestors, so a subdirectory holding a match can still
+/// be moved out of the glob's reach.
+fn emit_denied_ancestor_pins(rules: &ResolvedFsProfile, out: &mut String) {
+    let writable: Vec<(PathBuf, bool)> = rules
+        .modify
+        .iter()
+        .filter(|rule| !rule.starts_with('!'))
+        .map(|rule| super::sbpl_filter::rule_anchor(rule))
+        .collect();
+    let is_writable = |entry: &Path| {
+        writable
+            .iter()
+            .any(|(root, matched)| entry.starts_with(root) && (*matched || entry != root))
+            || HOST_SCRATCH_WRITE_ROOTS
+                .iter()
+                .any(|scratch| entry.starts_with(scratch) && entry != Path::new(scratch))
+    };
+    let mut pins = std::collections::BTreeSet::new();
+    for denied in rules
+        .modify
+        .iter()
+        .filter_map(|rule| rule.strip_prefix('!'))
+    {
+        let (root, matched) = super::sbpl_filter::rule_anchor(denied);
+        for entry in root.ancestors().skip(usize::from(matched)) {
+            if is_writable(entry) && std::fs::symlink_metadata(entry).is_ok() {
+                pins.insert(entry.to_path_buf());
+            }
+        }
+    }
+    for entry in pins {
+        out.push_str(&format!(
+            "(deny file-write* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&entry.display().to_string())
+        ));
+    }
 }
 
 /// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.

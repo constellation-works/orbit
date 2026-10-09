@@ -205,8 +205,9 @@ fn assert_registered_checkout_boundaries_unchanged(
     }
 }
 
-/// Last `file-write*` clause whose `subpath` covers `path`. The compiled
-/// profile denies by default, so a path with no covering clause is denied.
+/// Last `file-write*` clause whose `subpath` or `literal` covers `path`. The
+/// compiled profile denies by default, so a path with no covering clause is
+/// denied.
 #[cfg(target_os = "macos")]
 fn last_compiled_file_write_allows(profile: &str, path: &std::path::Path) -> bool {
     last_compiled_file_write_allows_under(profile, path, std::path::Path::new("/"))
@@ -232,14 +233,22 @@ pub(super) fn last_compiled_file_write_allows_under(
         } else {
             continue;
         };
-        let Some(root) = filter
-            .trim_end_matches(')')
-            .strip_prefix("(subpath \"")
-            .and_then(|rest| rest.strip_suffix('"'))
-        else {
+        let filter = filter.trim_end_matches(')');
+        let quoted = |prefix: &str| {
+            filter
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix('"'))
+        };
+        let (covers, root) = if let Some(root) = quoted("(subpath \"") {
+            (
+                rendered == root || rendered.starts_with(&format!("{root}/")),
+                root,
+            )
+        } else if let Some(entry) = quoted("(literal \"") {
+            (rendered == entry, entry)
+        } else {
             continue;
         };
-        let covers = rendered == root || rendered.starts_with(&format!("{root}/"));
         if covers && std::path::Path::new(root).starts_with(fixture) {
             allowed = !is_deny;
         }
