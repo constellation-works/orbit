@@ -1,19 +1,27 @@
 #![allow(missing_docs, clippy::expect_used)]
 
-//! Create-only seeding of workspace-local defaults, as host-level `orbit init`
-//! runs it: an absent routine or auto-task is created with the `enabled` value
-//! it ships with, and nothing that already exists is rewritten or retired.
+//! Workspace-local defaults: create-only seeding preserves existing definitions,
+//! and sync serializes settings-only migrations with runtime edits.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::time::Duration;
 
-use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_automation::auto_tasks::settings::load_settings_table;
+use orbit_common::OrbitError;
+use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
+use orbit_core::application::auto_tasks::AutoTaskBody;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{
-    ManagedArtifactOutcome, ManagedArtifactScope, RoutineSeedIdentity,
+    ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime, RoutineSeedIdentity,
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
+use orbit_store::compose::auto_task::cursor_state_path;
+
+use super::dispatch_admission::isolated;
 
 const MANIFEST: &str = ".orbit-managed-assets.json";
 
@@ -225,5 +233,126 @@ fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definiti
             .iter()
             .all(|action| action.outcome != ManagedArtifactOutcome::Created),
         "a repeated seed creates nothing: {again:?}"
+    );
+}
+
+#[test]
+fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
+    if !isolated(
+        "workspace_seed::settings_only_migration_waits_for_crud_and_preserves_concurrent_settings",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    let auto_tasks = workspace.join("auto_tasks");
+    let migrated_name = "friction-curation";
+    let edited_name = "qa-sweep";
+    let body_path = auto_tasks.join(format!("{migrated_name}.yaml"));
+    let bundled_body = std::fs::read_to_string(&body_path).expect("bundled body");
+    let mut fork = parse_auto_task_yaml(&bundled_body).expect("bundled definition");
+    fork.enabled = true;
+    let fork_body = serde_yaml::to_string(&fork).expect("settings-only fork");
+    std::fs::write(&body_path, &fork_body).expect("persist legacy settings-only fork");
+    runtime
+        .auto_task_toggle(edited_name, true)
+        .expect("existing settings entry for another managed default");
+
+    // Sync can reach the same workspace through an aliased ancestor; the lock
+    // must still be the one runtime CRUD holds through its canonical roots.
+    #[cfg(unix)]
+    let sync_workspace = {
+        let alias = dir.path().join("repo-alias");
+        std::os::unix::fs::symlink(workspace.parent().expect("repository"), &alias)
+            .expect("workspace alias");
+        alias.join(".orbit")
+    };
+    #[cfg(not(unix))]
+    let sync_workspace = workspace.clone();
+
+    let (check_tx, check_rx) = sync_channel(1);
+    let (done_tx, done_rx) = sync_channel(1);
+    let (worker, edited_settings) = with_exclusive_file_lock(
+        &cursor_state_path(&runtime.paths().state_dir),
+        "auto-task cursor",
+        || {
+            let worker = std::thread::spawn(move || {
+                let check = reconcile_workspace_managed_artifacts(
+                    &global,
+                    &sync_workspace,
+                    None,
+                    "main",
+                    true,
+                );
+                check_tx.send(check).expect("report read-only check");
+                let applied = reconcile_workspace_managed_artifacts(
+                    &global,
+                    &sync_workspace,
+                    None,
+                    "main",
+                    false,
+                );
+                done_tx.send(applied).expect("report migration");
+            });
+            let check = check_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("check mode must not wait for the cursor lock")
+                .expect("read-only convergence check");
+            assert!(check.actions.iter().any(|action| {
+                action.name == migrated_name && action.outcome == ManagedArtifactOutcome::Migrated
+            }));
+            assert!(
+                matches!(
+                    done_rx.recv_timeout(Duration::from_secs(1)),
+                    Err(RecvTimeoutError::Timeout)
+                ),
+                "sync must wait for the CRUD cursor lock before loading and replacing settings"
+            );
+            assert_eq!(std::fs::read_to_string(&body_path).unwrap(), fork_body);
+
+            // The public edit re-enters this thread's lock while sync is
+            // waiting. Migration must load this committed table after release,
+            // preventing an edit between its table load and replacement.
+            let edited = runtime
+                .auto_task_toggle(edited_name, false)
+                .expect("concurrent CRUD edit commits");
+            assert!(!edited.enabled);
+            let settings = load_settings_table(&auto_tasks).expect("committed settings");
+            assert!(!settings.contains_key(migrated_name));
+            Ok::<_, OrbitError>((worker, settings[edited_name].clone()))
+        },
+    )
+    .expect("hold the cursor lock across the concurrent edit");
+
+    let report = done_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("migration completes after lock release")
+        .expect("apply sync");
+    worker.join().expect("sync thread");
+    assert!(report.actions.iter().any(|action| {
+        action.name == migrated_name && action.outcome == ManagedArtifactOutcome::Migrated
+    }));
+    let settings = load_settings_table(&auto_tasks).expect("settings after migration");
+    assert_eq!(settings[migrated_name].enabled, Some(true));
+    assert_eq!(settings[edited_name], edited_settings);
+    assert_eq!(std::fs::read_to_string(&body_path).unwrap(), bundled_body);
+    assert!(
+        runtime
+            .auto_task_show(migrated_name)
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        !runtime
+            .auto_task_show(edited_name)
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(
+        runtime.auto_task_layering(migrated_name).unwrap().body,
+        AutoTaskBody::Managed
     );
 }
