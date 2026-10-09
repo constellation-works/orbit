@@ -42,7 +42,7 @@ impl OrbitRuntime {
         let task = self.get_task(id)?;
         let workspace_root = context_workspace_root(&self.paths().repo_root, None);
         let declared = declared_context_files(&task.context_files, &workspace_root);
-        let description_paths = extract_task_path_mentions(&task.description);
+        let description_paths = extract_task_path_mentions(&task.description, &workspace_root);
         let mut findings = Vec::new();
 
         self.lint_context_surface(&task, &declared, &mut findings)?;
@@ -276,11 +276,33 @@ pub(super) fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bo
     };
     let entry_anchor = entry_anchor.to_string_lossy().replace('\\', "/");
     let mentioned_anchor = mentioned_anchor.to_string_lossy().replace('\\', "/");
-    entry_anchor == mentioned_anchor
+    if entry_anchor == mentioned_anchor
         || entry_anchor
             .strip_prefix(format!("{mentioned_anchor}/").as_str())
             .is_some()
         || mentioned_anchor
             .strip_prefix(format!("{entry_anchor}/").as_str())
             .is_some()
+    {
+        return true;
+    }
+
+    if entry_anchor != "." {
+        if mentioned_anchor.starts_with('/')
+            && !entry_anchor.starts_with('/')
+            && (mentioned_anchor.ends_with(&format!("/{entry_anchor}"))
+                || mentioned_anchor.contains(&format!("/{entry_anchor}/")))
+        {
+            return true;
+        }
+        if entry_anchor.starts_with('/')
+            && !mentioned_anchor.starts_with('/')
+            && (entry_anchor.ends_with(&format!("/{mentioned_anchor}"))
+                || entry_anchor.contains(&format!("/{mentioned_anchor}/")))
+        {
+            return true;
+        }
+    }
+
+    false
 }

@@ -90,4 +90,70 @@ fn lint_reads_only_repository_paths_as_path_mentions() {
                 && finding.message.contains("crates/orbit-core/src/nope.rs")),
         "a missing repository path must stay a path_validity error: {missing:?}"
     );
+
+    // Absolute repository paths under the workspace root must be recognized
+    // as repository path mentions, both when existing (completeness warning)
+    // and when missing (path_validity error).
+    let abs_existing = root
+        .path()
+        .join("repo/crates/orbit-core/src/application/task/lint.rs");
+    let existing_abs = lint_description(&runtime, &format!("Edits {}.", abs_existing.display()));
+    assert!(
+        existing_abs
+            .iter()
+            .all(|finding| finding.check != "path_validity"),
+        "an existing absolute repository path must not be a path_validity error: {existing_abs:?}"
+    );
+    assert!(
+        existing_abs
+            .iter()
+            .any(|finding| finding.check == "context_completeness"),
+        "an existing absolute path is read and reported as missing from context_files: {existing_abs:?}"
+    );
+
+    let abs_missing = root.path().join("repo/crates/orbit-core/src/nope.rs");
+    let missing_abs = lint_description(&runtime, &format!("Edits {}.", abs_missing.display()));
+    assert!(
+        missing_abs
+            .iter()
+            .any(|finding| finding.check == "path_validity"
+                && finding.severity == TaskLintSeverity::Error
+                && finding.message.contains(&abs_missing.display().to_string())),
+        "a missing absolute repository path must be a path_validity error: {missing_abs:?}"
+    );
+
+    #[cfg(unix)]
+    {
+        // Non-canonical tempdir / symlink forms (e.g. macOS /var -> /private/var)
+        let symlink_repo = root.path().join("symlink_repo");
+        std::os::unix::fs::symlink(root.path().join("repo"), &symlink_repo).unwrap();
+        let symlink_missing = symlink_repo.join("crates/orbit-core/src/nope.rs");
+        let missing_symlink =
+            lint_description(&runtime, &format!("Edits {}.", symlink_missing.display()));
+        assert!(
+            missing_symlink
+                .iter()
+                .any(|finding| finding.check == "path_validity"
+                    && finding.severity == TaskLintSeverity::Error
+                    && finding
+                        .message
+                        .contains(&symlink_missing.display().to_string())),
+            "a missing path via symlink alias must be a path_validity error: {missing_symlink:?}"
+        );
+    }
+
+    // Declaring the context file covers the absolute mention
+    let declared_task = runtime
+        .add_task(TaskAddParams {
+            title: "Declared context".into(),
+            description: format!("Edits {}.", abs_existing.display()),
+            context_files: vec!["crates/orbit-core/src/application/task/lint.rs".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let declared_findings = runtime.lint_task(&declared_task.id).unwrap().findings;
+    assert!(
+        path_findings(&declared_findings).is_empty(),
+        "declared context file must cover the absolute mention: {declared_findings:?}"
+    );
 }
