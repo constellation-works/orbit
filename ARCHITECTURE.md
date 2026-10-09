@@ -123,13 +123,15 @@ per-job creation index in bounded groups and hydrates steps in batches, so a
 catalog refresh does not issue separate run and step queries for each job or
 decode older run history. Empty catalogs require no run-store reads.
 
-Task delivery observations without a named run filter the submitted
-`input.task_ids` array in SQLite before hydrating candidate runs. Candidates
-remain ordered by creation time, newest first, and the runtime skips jobs that
-do not hold task delivery. This avoids decoding unrelated workspace history
-without imposing a history cap that could hide an older delivery. The JSON
-predicate still scans workspace rows; candidate input hydration scales with
-the task's own history, while SQL filtering scales with workspace history.
+Task delivery observations without a named run prefilter candidate runs in
+SQLite by exact membership in the submitted `input.task_ids` array or equality
+with a text top-level `input.task_id`. The runtime then re-checks the
+`input.task_ids` array before accepting a candidate and skips jobs that do not
+hold task delivery. Candidates remain ordered by creation time, newest first.
+This avoids decoding unrelated workspace history without imposing a history
+cap that could hide an older delivery. The JSON predicate still scans workspace
+rows; candidate input hydration scales with the task's matching run history,
+while SQL filtering scales with workspace history.
 
 ## Stability tiers
 

@@ -10,7 +10,7 @@ Options:
           Override the Orbit root directory (highest precedence)
 
       --task <TASK_ID>
-          Filter to a task in the submitted task_ids array
+          Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
 
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
