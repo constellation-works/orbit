@@ -110,8 +110,11 @@ claim overlaps, that start is refused with the claim's task and run named.
 
 The CLI subcommand also closes without `--force`: run
 `orbit task update <task-id> --status in-progress --execution-summary "<…>"`,
-then `--status review` and `--status done`. Keep `--force` for an edge the
-lifecycle refuses. It records an override in task history.
+then `--status review` and `--status done`. From an agent shell (`ORBIT_AGENT_*`
+or a managed run), the CLI's move into `in-progress` starts work like the tool
+does and is refused with the claim's task and run named while another run's
+claim overlaps. Keep `--force` for an edge the lifecycle refuses. It records an
+override in task history.
 
 ## A PR exists but completion failed
 
