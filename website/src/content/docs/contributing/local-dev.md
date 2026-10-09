@@ -10,15 +10,19 @@ sidebar:
 Prerequisites and the first build are in the repository's
 [`CONTRIBUTING.md`](https://github.com/constellation-works/orbit/blob/main/CONTRIBUTING.md).
 
-Run targeted checks while you iterate. Before you hand off a task, run the fast
-guardrail gate:
+Run targeted checks while you iterate. Before you hand off a task, run the full
+pre-review set. `make ci-fast` alone is not enough, because it runs no Rust
+tests:
 
 ```bash
 make ci-fast
+make ci-test-affected
+make ci-lint
+make goldens
 ```
 
 The full `make ci` is the merge gate and runs in CI on every pull request. For
-the complete pre-review set, see [PR Workflow](../pr-workflow/#checks).
+what each gate covers, see [PR Workflow](../pr-workflow/#checks).
 
 ## Website
 
