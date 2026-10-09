@@ -173,6 +173,35 @@ export function withTaskTrailer(command: string, taskId: string): string | null 
 
 export const findRunId = (output: string): string | null => RUN_ID.exec(output)?.[0] ?? null
 
+export type ShipRun = {
+  job: string
+  state: string
+  error: string | null
+  startedAt: number | null
+  taskIds: string[]
+  children: string[]
+}
+
+/** Reads the run and durable gate/delivery dispatches from `orbit run show --json`. */
+export function parseShipRun(stdout: string): ShipRun {
+  const parsed: unknown = JSON.parse(stdout)
+  const run = isRecord(parsed) && isRecord(parsed.run) ? parsed.run : {}
+  const pipeline = isRecord(parsed) && isRecord(parsed.pipeline_state) ? parsed.pipeline_state : {}
+  const dispatches = Array.isArray(pipeline.child_dispatches) ? pipeline.child_dispatches.filter(isRecord) : []
+  const startedAt = Date.parse(text(run.started_at))
+  return {
+    job: text(run.job_id),
+    state: text(run.state) || 'running',
+    error: text(run.error_message) || null,
+    startedAt: Number.isFinite(startedAt) ? startedAt : null,
+    taskIds: strings(run.task_ids),
+    children: dispatches
+      .filter(child => child.job_name === 'task_gate_pipeline' || child.job_name === 'task_pr_pipeline')
+      .map(child => text(child.child_run_id))
+      .filter(id => id !== ''),
+  }
+}
+
 export type RunEvent = { type: string; step: string | null }
 
 /** Reads `orbit run events --json` into the step transitions the ship track needs. */

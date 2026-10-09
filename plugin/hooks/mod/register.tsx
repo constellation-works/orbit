@@ -17,6 +17,7 @@ import {
   findRunId,
   mentions,
   parseRunEvents,
+  parseShipRun,
   parseTasks,
   PIPELINE,
   preflight,
@@ -25,6 +26,7 @@ import {
   stepStates,
   toastFor,
   withTaskTrailer,
+  type ShipRun,
 } from './model'
 import { band } from './views/band'
 import { DEFAULT_OPEN } from './views/board'
@@ -73,6 +75,7 @@ let locating: Promise<Target> | null = null
 let inFlight = false
 let lastRefreshAt = 0
 let shipTimer: Timer | null = null
+let shipPolling = false
 let refreshTimer: Timer | null = null
 
 /** Which workspace this session's checkout belongs to, and where its tasks are read. */
@@ -287,7 +290,23 @@ function watchShip($: EngineInterface): void {
   shipTimer = $.clock.every(SHIP_POLL_MS, () => void pollShip($))
 }
 
+/** Resolves only this launch's descendants, so an older task run cannot supply its steps. */
+async function pipelineRun($: EngineInterface, runId: string, run: ShipRun, taskId: string, seen = new Set<string>()): Promise<{ runId: string; run: ShipRun } | null> {
+  if (seen.has(runId)) return null
+  seen.add(runId)
+  if (run.job === 'task_pr_pipeline') return { runId, run }
+  for (const childId of run.children) {
+    if (seen.has(childId)) continue
+    const child = parseShipRun((await orbit($, ['run', 'show', childId, '--json'])).stdout)
+    if (!child.taskIds.includes(taskId)) continue
+    const leaf = await pipelineRun($, childId, child, taskId, seen)
+    if (leaf !== null) return leaf
+  }
+  return null
+}
+
 async function pollShip($: EngineInterface): Promise<void> {
+  if (shipPolling) return
   const flying = await read($, shipAtom)
   if (flying === null || flying.runId === null || flying.phase !== 'flying') {
     shipTimer?.cancel()
@@ -295,22 +314,28 @@ async function pollShip($: EngineInterface): Promise<void> {
     return
   }
   const runId = flying.runId
+  shipPolling = true
   try {
-    const [shown, events] = await Promise.all([orbit($, ['run', 'show', runId, '--json']), orbit($, ['run', 'events', runId, '--json'])])
-    const run = (JSON.parse(shown.stdout) as { run?: { state?: unknown; error_message?: unknown; started_at?: unknown } }).run ?? {}
-    const runState = typeof run.state === 'string' ? run.state : 'running'
+    const run = parseShipRun((await orbit($, ['run', 'show', runId, '--json'])).stdout)
+    const runState = run.state
     const isOver = FINISHED.has(runState)
     const isFailed = isOver && !SUCCESS.has(runState)
-    const steps = stepStates(parseRunEvents(events.stdout), isFailed)
+    // A launch returns task_auto_pipeline; its own events contain no PR steps.
+    // Dispatch records appear before the parent waits, and may arrive on a later poll.
+    const leaf = run.job === 'task_auto_pipeline' || run.job === 'task_gate_pipeline'
+      ? await pipelineRun($, runId, run, flying.taskId)
+      : { runId, run }
+    const steps = leaf === null
+      ? flying.steps
+      : stepStates(parseRunEvents((await orbit($, ['run', 'events', leaf.runId, '--json'])).stdout), isFailed || (FINISHED.has(leaf.run.state) && !SUCCESS.has(leaf.run.state)))
     const now = await $.clock.now()
-    const started = typeof run.started_at === 'string' ? Date.parse(run.started_at) : Number.NaN
-    const message = isFailed && typeof run.error_message === 'string' ? (run.error_message.split('\n')[0] ?? '').slice(0, 240) : null
+    const message = isFailed && run.error !== null ? (run.error.split('\n')[0] ?? '').slice(0, 240) : null
     await update($, shipAtom, (prior): OrbitShip | null =>
       prior && prior.runId === runId
         ? {
             ...prior,
             steps,
-            startedAt: Number.isFinite(started) ? started : prior.startedAt,
+            startedAt: run.startedAt ?? prior.startedAt,
             phase: isOver ? (isFailed ? 'failed' : 'landed') : 'flying',
             finishedAt: isOver ? now : null,
             message,
@@ -325,6 +350,8 @@ async function pollShip($: EngineInterface): Promise<void> {
     }
   } catch (thrown) {
     await update($, shipAtom, (prior): OrbitShip | null => (prior && prior.runId === runId ? { ...prior, message: `Tracking paused: ${reason(thrown)}` } : prior))
+  } finally {
+    shipPolling = false
   }
   await publishStatus($)
 }
