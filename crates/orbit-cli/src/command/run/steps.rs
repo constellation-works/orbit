@@ -173,6 +173,22 @@ impl RunStepRecord {
         }
     }
 
+    /// The output this step recorded in the run's checkpoint state.
+    ///
+    /// Read by step id. The audit-derived `step_index` counts steps in
+    /// first-started order, while checkpoints are keyed by YAML position, and
+    /// a `when:`-skipped or resume-skipped step (which never starts) shifts
+    /// the two apart; indexing `step_outputs` with it returns another step's
+    /// output. Only the job-level summary step of a run that wrote no
+    /// per-step checkpoint is read by index: it is recorded at step 0.
+    pub(crate) fn output<'a>(&self, state: &'a PipelineState) -> Option<&'a Value> {
+        state.pipeline_step_output(&self.target_id).or_else(|| {
+            (self.target_type == JobTargetType::Job.to_string())
+                .then(|| state.step_output(self.step_index))
+                .flatten()
+        })
+    }
+
     fn from_audit_step(step: RunAuditStep) -> Self {
         let duration_ms = match (step.started_at, step.finished_at) {
             (Some(started), Some(finished)) => Some(

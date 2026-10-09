@@ -461,6 +461,76 @@ spec:
         }
     }
 
+    /// `run show -s` must return the named step's own checkpoint when an
+    /// earlier step was skipped by `when:`. The audit trail numbers only
+    /// steps that started, so its `step_index` runs one behind the YAML
+    /// position checkpoints are keyed by once a step is skipped.
+    #[test]
+    fn run_show_step_output_survives_an_earlier_when_skipped_step() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture
+                .home
+                .join(".orbit/resources/jobs/skipped_step_fixture.yaml"),
+            r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: skipped_step_fixture
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: first
+      target: activity:pipeline_success_guard
+      default_input:
+        context: first context
+        result:
+          run_id: first-result
+          status: success
+    - id: skipped
+      when: "{{ steps.first.output.checked_count }} == 99"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: skipped context
+        result:
+          run_id: skipped-result
+          status: success
+    - id: third
+      target: activity:pipeline_success_guard
+      default_input:
+        context: third context
+        results:
+          - run_id: third-result
+            status: success
+          - run_id: third-result-2
+            status: success
+"#,
+        )
+        .expect("fixture job");
+        let submitted = fixture.json(&["run", "job", "skipped_step_fixture", "--json"]);
+        let run_id = submitted["run_id"].as_str().expect("run id");
+        fixture.poll_run(run_id, "success", Duration::from_secs(30));
+
+        let output_of = |step: &str| {
+            let shown = fixture.json(&["run", "show", run_id, "-s", step, "--json"]);
+            (
+                shown["step"]["step_index"].clone(),
+                shown["step_output"].clone(),
+            )
+        };
+        let (_, first) = output_of("first");
+        let (_, third) = output_of("third");
+        assert_eq!(
+            first["checked_count"], 1,
+            "the step before the skip reads its own output: {first}"
+        );
+        assert_eq!(
+            third["checked_count"], 2,
+            "a step after a `when:`-skipped one must read its own output, not the previous step's: {third}"
+        );
+        assert_ne!(first, third);
+    }
+
     #[test]
     fn resume_returns_while_detached_worker_continues_after_cli_exit() {
         let fixture = Fixture::new();
