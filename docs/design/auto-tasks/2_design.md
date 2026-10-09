@@ -346,6 +346,13 @@ fork as `stale` with `orbit workspace sync` as its remedy, and a body fork as
 `forked` naming the differing body and settings fields; neither remedy moves
 or renames the file.
 
+Apply-mode migration holds the same workspace auto-task cursor sidecar lock as
+CRUD from the settings-table load through the table write, body restoration and
+digest update. A concurrent toggle or update therefore commits before migration
+loads its settings, or after migration completes; neither its entry nor its
+body edit can be overwritten by migration's stale view. Check mode reports
+without taking the write lock, and create-only seeding does not migrate forks.
+
 ## 5b. Manual mint — `mint` (ORB-10439, renamed by ORB-10446)
 
 `orbit auto-task mint <name>` mints one task from a definition on demand, so

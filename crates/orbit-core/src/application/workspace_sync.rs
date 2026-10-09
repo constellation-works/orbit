@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
@@ -17,7 +18,7 @@ use super::routines::seed::RoutineSeedIdentity;
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
-    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, render_default_auto_task,
+    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, render_default_auto_task,
 };
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
@@ -99,8 +100,8 @@ impl WorkspaceManagedArtifactSyncReport {
 
 /// Reconcile the host-global and workspace-local managed definitions used by
 /// one already-initialized workspace. This use case deliberately knows
-/// nothing about workspace registration, identity, role, config, or runtime
-/// state, so callers cannot accidentally turn convergence into bootstrap:
+/// nothing about workspace registration, identity, role, config, or scheduler
+/// cursor contents, so callers cannot accidentally turn convergence into bootstrap:
 /// the caller supplies the registered `base_branch` the delivery defaults are
 /// rendered against, exactly as it supplies the routine identity.
 pub fn reconcile_workspace_managed_artifacts(
@@ -223,7 +224,15 @@ fn reconcile_managed_artifacts(
     let migrated = if mode.creates_only() {
         Vec::new()
     } else {
-        migrate_settings_only_forks(&auto_tasks_root, base_branch, mode)?
+        let migrate = || migrate_settings_only_forks(&auto_tasks_root, base_branch, mode);
+        if mode.writes() {
+            // Serialize the whole settings read-modify-write and body restore
+            // with CRUD, which uses this same workspace cursor sidecar.
+            let state_path = cursor_state_path(&workspace_orbit_root.join("state"));
+            with_exclusive_file_lock(&state_path, "auto-task cursor", migrate)?
+        } else {
+            migrate()?
+        }
     };
     let mut auto_tasks = reconcile_managed_assets_in_mode(
         &auto_tasks_root,

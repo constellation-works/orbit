@@ -255,7 +255,9 @@ impl OrbitRuntime {
 /// reconciliation preserves it); `Check` mode reports without writing.
 ///
 /// Runs only on a catalog that already has a manifest, before the managed
-/// reconciliation that then finds the restored body current.
+/// reconciliation that then finds the restored body current. In apply mode,
+/// the caller holds the workspace auto-task cursor lock across this entire
+/// operation, including the table load, body restoration and digest update.
 pub(crate) fn migrate_settings_only_forks(
     dir: &Path,
     base_branch: &str,
