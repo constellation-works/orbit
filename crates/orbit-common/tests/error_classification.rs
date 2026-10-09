@@ -3,6 +3,8 @@
 //! not in it, and a classified error reads exactly as its unclassified twin.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::io;
 
 use orbit_common::{ClaimRefusalKind, OrbitError, StorageLayer};

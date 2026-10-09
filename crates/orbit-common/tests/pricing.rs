@@ -2,6 +2,8 @@
 //! area binary exercises the shipped table without process or state fixtures.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use chrono::{DateTime, Utc};
 use orbit_common::derive_cost_usd;
 use orbit_types::telemetry::TokenUsage;

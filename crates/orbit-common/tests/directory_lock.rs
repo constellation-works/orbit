@@ -1,6 +1,8 @@
 //! Public filesystem boundary for mkdir/mtime locking and legacy migration.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::fs::{self, File, FileTimes};
 use std::io;
 use std::time::{Duration, Instant, SystemTime};

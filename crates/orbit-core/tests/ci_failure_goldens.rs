@@ -1,6 +1,8 @@
 //! Captured CI log shapes through the deterministic task-filing boundary.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitRuntime;

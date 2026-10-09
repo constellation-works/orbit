@@ -2,6 +2,8 @@
 //! admission; this binary exercises its public snapshot boundary and safety cap.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use orbit_common::process::build_budget::read_waits;
 
 #[test]

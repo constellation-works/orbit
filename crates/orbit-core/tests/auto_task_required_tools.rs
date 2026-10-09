@@ -1,5 +1,7 @@
 //! Contract checks for tool requirements in bundled auto-task definitions.
 
+orbit_common::isolate_test_process!();
+
 use std::path::Path;
 
 use orbit_core::application::task::TaskAddParams;
