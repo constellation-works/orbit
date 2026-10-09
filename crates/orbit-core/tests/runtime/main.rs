@@ -13,6 +13,7 @@
 
 mod actor_identity;
 mod artifact_tools;
+mod config_settings;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;

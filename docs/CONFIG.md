@@ -290,7 +290,7 @@ orbit config set crews.gemini.enabled true
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns, on each workspace row, the normalized crews of that checkout's effective config, each with its `enabled` state (schema version 3), or `crews_error` when that configuration cannot be read.
 
-The dashboard's **Settings › Crews** table shows each crew's provider, model, effort, tags, layer and **Used by** references. At widths of 900 px or less, each value carries an inline field label. Usage is resolved server-side from the effective default, system and review crew settings, final-recovery and complexity pools, and enabled auto-task definitions whose plugin is active in the workspace. Auto-tasks without an explicit crew inherit the configured selection rather than adding a separate crew reference.
+The dashboard's **Settings › Crews** table shows each crew's provider, model, effort, tags, layer and **Used by** references. At widths of 900 px or less, each value carries an inline field label. Usage is resolved server-side from the effective default, system and review crew settings, final-recovery and complexity pools, and enabled auto-task definitions whose plugin is active in the workspace. Auto-tasks without an explicit crew inherit the configured selection rather than adding a separate crew reference. If the auto-task listing fails (every definition malformed), the Settings view and crew writes still succeed, the **Used by** column omits auto-task references, and a warning is logged.
 
 ### Disabled crews
 
