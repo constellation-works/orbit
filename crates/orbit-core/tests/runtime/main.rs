@@ -61,6 +61,7 @@ mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
 
+mod run_cli_invocations;
 mod run_history;
 mod task_delivery;
 mod task_lint_paths;

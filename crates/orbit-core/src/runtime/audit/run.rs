@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -645,6 +645,38 @@ impl OrbitRuntime {
         limit: Option<usize>,
         blob_preview_max_bytes: Option<usize>,
     ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        self.collect_run_cli_invocations_filtered(
+            run_id,
+            limit,
+            blob_preview_max_bytes,
+            None,
+            &HashSet::new(),
+        )
+    }
+
+    /// Collect full CLI invocation records for a run that are not in
+    /// `seen_event_ids`, optionally limited to one `step_id`.
+    ///
+    /// The step and seen-set filters apply to event metadata before any blob
+    /// is opened, so a caller that polls a live run and records the returned
+    /// `event_id`s reads each invocation's stdout/stderr at most once.
+    pub fn collect_new_run_cli_invocations(
+        &self,
+        run_id: &str,
+        step_id: Option<&str>,
+        seen_event_ids: &HashSet<String>,
+    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        self.collect_run_cli_invocations_filtered(run_id, None, None, step_id, seen_event_ids)
+    }
+
+    fn collect_run_cli_invocations_filtered(
+        &self,
+        run_id: &str,
+        limit: Option<usize>,
+        blob_preview_max_bytes: Option<usize>,
+        step_id: Option<&str>,
+        seen_event_ids: &HashSet<String>,
+    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
         if limit == Some(0) {
             return Ok(Vec::new());
         }
@@ -657,7 +689,10 @@ impl OrbitRuntime {
         let mut records = Vec::new();
 
         for event in events {
-            if event.body_kind.as_deref() != Some("cli_invocation_finished") {
+            if event.body_kind.as_deref() != Some("cli_invocation_finished")
+                || seen_event_ids.contains(&event.event_id)
+                || step_id.is_some_and(|step_id| event.step_id.as_deref() != Some(step_id))
+            {
                 continue;
             }
             let stdout_blob_ref = event
