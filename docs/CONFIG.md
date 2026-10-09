@@ -53,8 +53,8 @@ Global-only. `orbit init` writes the identity keys once.
 
 ```toml
 [machine]
-id          = "hm_9ca6004473492f06"
-name        = "dk-server-1"
+id          = "hm_0123456789abcdef"
+name        = "example-host"
 task_prefix = "ORB"
 ```
 

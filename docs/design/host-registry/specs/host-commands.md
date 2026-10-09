@@ -61,9 +61,9 @@ Path: `~/.orbit/hosts.toml`. It is machine-global and owned by orbit-registry, b
 schema_version = 1
 
 [[hosts]]
-name = "dk-server-2"
-machine_id = "hm_9ca6004473492f06"
-ssh = "dk-server-2"
+name = "example-host"
+machine_id = "hm_0123456789abcdef"
+ssh = "example-host"
 task_prefix = "ORB"
 ```
 

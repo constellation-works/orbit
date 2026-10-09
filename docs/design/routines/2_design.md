@@ -111,15 +111,15 @@ A routine is one YAML file under `.orbit/routines/` in a registered workspace,
 PR-reviewed and versioned like any other shared definition.
 
 ```yaml
-# .orbit/routines/almanac-auto-commit.yaml
+# .orbit/routines/vault-auto-commit.yaml
 schemaVersion: 1
-name: almanac-auto-commit
-description: Commit & push almanac changes nightly
+name: vault-auto-commit
+description: Commit & push vault changes nightly
 enabled: true                  # global kill-switch, versioned
 trigger:
   cron: "0 22 * * *"           # standard 5-field cron, evaluated in host-local time
   missed_run: catch_up_once    # catch_up_once | skip (default: skip)
-target: job:almanac_commit_pipeline   # job:<name>, resolved via the catalog
+target: job:vault_commit_pipeline    # job:<name>, resolved via the catalog
 policy:
   timeout_minutes: 10
   retries: { max: 2, backoff_minutes: 2 }
@@ -409,11 +409,11 @@ Registering an **owner** checkout is the whole opt-in — there is no config key
 directory exists. Replica checkouts cannot write the owner's coordination store, so they
 contribute one kind of routine only (§2.1). Two properties fall out:
 
-- **Registration is what already exists.** Registering the workspace with Orbit (which
-  polaris needs anyway) is the entire setup; nothing versioned has to agree per host.
+- **Registration is what already exists.** Registering the workspace with Orbit is the
+  entire setup; nothing versioned has to agree per host.
 - **Centralization is convention, not mechanism.** The constellation keeps all routines in
-  polaris; the mechanism tolerates additional sources, and `orbit routine list` names each
-  routine's source workspace so provenance is never ambiguous.
+  a central workspace; the mechanism tolerates additional sources, and `orbit routine list`
+  names each routine's source workspace so provenance is never ambiguous.
 
 ### 2.1 Replica checkouts: host-local worktree GC only
 

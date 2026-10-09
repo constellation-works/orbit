@@ -53,7 +53,7 @@ The files under `crates/orbit-core/assets/routines/retired/` are provenance shap
 Recurring work across the constellation currently has no home. Nothing is scheduled at the
 OS level on either host (no crontab, no custom launchd agents); recurring chores — vault
 auto-commits, session-log extraction, semantic reindexing — run only when a human or agent
-remembers to run them. The work spans two machines (`dk-mac`, `dk-server-1`) with different
+remembers to run them. The work spans a laptop and an always-on server with different
 availability profiles (a laptop that sleeps vs. an always-on box), so any solution must
 handle missed-fire policy and per-host toggles.
 

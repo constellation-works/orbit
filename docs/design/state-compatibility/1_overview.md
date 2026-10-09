@@ -39,7 +39,7 @@ with an inherited `ORBIT_BIN`, and a deploy script probing run history before
 it swaps the binary all coexist. One schema bump turned every one of them
 into a flag day, and each incident was worked around out of band — copying
 binaries, special-casing error text in deploy scripts (2026-08-10:
-F2026-08-063/064; 2026-09-13: `update-orbit.sh` on dk-server-1).
+F2026-08-063/064; 2026-09-13: `update-orbit.sh` on the owner host).
 
 The version number alone cannot answer "is this safe to read?" — a binary
 knows nothing about migrations that shipped after it. So the newer binary

@@ -117,7 +117,7 @@ arm's process group. The RSS number is a sampled peak, not an instantaneous kern
 high-water mark. Results depend on host load, filesystem cache, toolchain, and package
 graph; they characterize this workload rather than predict full-workspace Clippy.
 
-### Representative dk-server-1 result
+### Representative Linux x86-64 14-CPU host result
 
 Measured at `8b26169e91ca9dcf523bbae4d71308a2c82c4075` on 2026-09-08 with Linux
 6.8.0 x86-64, 14 logical CPUs, rustc 1.96.0, and Cargo 1.96.0. The host had
