@@ -188,7 +188,7 @@ same question for every kind.
 Activity *fault* detection is the exception: it walks every production catalog
 directory (env override, global managed tree, workspace `.orbit/resources/activities/`)
 and applies the same `load_activity_asset` + tool-allowlist validation catalog
-construction uses, so a workspace file that fails `orbit activity list` or job
+construction uses, so a workspace file that fails job
 dispatch cannot be reported healthy. Retired `spec.backend: http|auto` findings
 name `orbit doctor --fix-retired-activity-backends`, which deletes only that
 key from schemaVersion 2 agent-loop activities. Both the scan and the repair
@@ -227,7 +227,7 @@ Job runs:
 6. Build audit sinks and run id with `system` as the v2 envelope `agent_identity`.
 7. Execute the normalized `JobV2`.
 
-`orbit activity` is an inspection/catalog surface; activities execute through jobs (`orbit job run` and the workflow aliases under `orbit run`), not a standalone `orbit activity run` [T20260426-0047].
+Activities execute only through jobs (`orbit job run` and the workflow aliases under `orbit run`); there is no standalone activity runner [T20260426-0047]. `orbit job list` inspects the job catalog.
 
 Some module comments still describe older phase ordering; the authoritative behavior is the orbit-core call path in `crates/orbit-core/src/application/job/exec.rs`.
 
@@ -1464,7 +1464,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[T20260423-0114]** — Expose the `backend: cli` executor-args gap during a local task ship run.
 - **[T20260423-0445]** — Merge object-valued job defaults over explicit run input and persist synthetic failed job steps for early v2 pipeline failures.
 - **[T20260425-0204]** — Make v2 job catalog discovery honor workspace-over-global `MergeByKey` precedence.
-- **[T20260426-0047]** — Make v2 activity catalog discovery honor workspace-over-global `MergeByKey` precedence and remove the public `orbit activity run` command.
+- **[T20260426-0047]** — Make v2 activity catalog discovery honor workspace-over-global `MergeByKey` precedence and remove the public standalone activity run command.
 - **[T20260426-0526]** — Restore v2 job invocation trace persistence so dashboard metrics surfaces can report agent and tool usage.
 - **[T20260426-0519]** — Move file-backed activity/job audit traces under `.orbit/state/audit`.
 - **[T20260426-0705]** — Expose v2 run audit events through `orbit run events` and `orbit run trace`.

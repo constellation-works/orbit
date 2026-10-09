@@ -634,16 +634,10 @@ objects, or an external landing race keeps the landing an ordinary
 obligation. Inspection surfaces and the dashboard list
 excluded landings with their certificate and assurance label.
 
-## State preparation and failure triage [ORB-11331]
+## State preparation [ORB-11331]
 
-> Terminal failed-run triage is retired
-> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
-> `kind: execution_failed` still parses — persisted member state and existing
-> definitions keep deserializing — but its target `task_triage_pipeline` is no
-> longer shipped, so such a definition loads as *retired* (the loader's
-> `RETIRED_ROUTINE_JOBS`) and fires nothing. Do not author a new one. The
-> incident semantics below are retained for that state; only
-> `kind: preparation_eligible` schedules work today.
+> Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
+> trigger kind still parses but has no shipped target and fires nothing. Only `preparation_eligible` schedules work.
 
 The same routine sweep now accepts `trigger.state` with one of two kinds. Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
@@ -748,9 +742,7 @@ the upgrade carry the current contract, so their attempt's pin is released at
 settlement; `orbit doctor --fix-automation-pins` keeps any legacy assessment
 pin still needed for carry-forward.
 
-`kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
-longer ships; the shape is recorded here for definitions written before the
-retirement. Cron, deliveries and state triggers are mutually exclusive; state kinds have
+Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are
 the minimum of the trigger and routine policy. `max_items` bounds the candidate
 admission checks in a pass, not worker concurrency. The source page contains at
@@ -791,19 +783,9 @@ and exact resulting assessment in immutable receipt bytes. A fresh unready resul
 is an assessment, and does not repeatedly dispatch. Changing a material input
 creates new work; the quiet period coalesces edits up to the maximum wait.
 
-Incident observation requires the current workflow-failure history event and
-coupling. Later human blocks, cancellations, active recovery and missing
-lineage are withheld; the diagnostic-origin (triage-of-triage) exclusion is
-removed with the pipeline that produced such runs. Retry roots and an explicitly recorded blocking child cause
-identify the incident; uncertain multiple-child causality is `incident_unresolved`.
-The source adapter follows exact indexed retry-child edges, bounds an episode at
-1,000 runs and reports a scan-budget limit rather than guessing when reached.
-Incident membership is gathered from at most 1,000 current blocked tasks, including
-wrappers sharing a child cause; any unsettled member withholds the whole incident.
-An incident can include at most 50 tasks. Larger inventories remain withheld.
 Normal stale-owner reconciliation and the existing evidence-gated already-landed
-path remain in place. No automatic disposition writes remain: with triage
-retired, a terminal failure leaves its task blocked until a human moves it.
+path remain in place. No automatic disposition writes remain: a terminal failure
+leaves its task blocked until a human moves it.
 
 Action-key lookup recovers a run admitted before its scheduler acknowledgement.
 Retries preserve consumed attempts and an absolute deadline across restarts;

@@ -176,8 +176,7 @@ are evaluated by the tick directly; there is no seeded auto-task scheduler routi
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
-`task_triage.yaml` is a retired prior default. Existing definitions are reconciled through
-the retired-routine path and are not seeded into new workspaces.
+The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: `orbit workspace sync` compares a workspace definition with them to tell an Orbit-seeded copy from an operator's.
 
 Seeded files become workspace-authored immediately. Plain re-init is create-if-missing:
 it adds a newly shipped default or recreates a deleted default, but byte-for-byte preserves
@@ -635,9 +634,8 @@ copy the manifest never recorded is deprecated too, but its remediation is
 `orbit workspace sync`: the repair flag deletes only bytes a recorded digest proves
 Orbit wrote, and retiring an untracked file keeps a copy instead [DANI-10502].
 
-Until that sync runs, a definition targeting the retired `auto_task_scheduler_pipeline`
-job is *skipped*, not failed: the loader recognises the retired target
-(`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
+Until that sync runs, a definition targeting a retired job is *skipped*, not failed: the
+loader recognises the retired target (`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
 step that clears it, the dashboard carries it under `retired`, and a clock tick emits
 one non-noteworthy `retired` row instead of a load error on every pass [DANI-10392]. A
 job the workspace still defines itself resolves through the catalog first, and any other

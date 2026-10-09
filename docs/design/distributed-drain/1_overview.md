@@ -8,7 +8,7 @@ feature: distributed-drain
 doc_role: overview
 type: design
 summary: Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner.
-tags: [distributed-drain, multi-host, pull, federated-mcp, resident-orchestrator]
+tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-store/src/repository/task/coordination/admission.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, state-compatibility, task-migration, automation-triggers]
 related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992, ORB-13908]
