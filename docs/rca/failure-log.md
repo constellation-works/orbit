@@ -4,8 +4,11 @@ summary: Open causes of Orbit task-run failures and blocks, one entry per distin
 incident_date: 2026-09-27
 last_validated: 2026-10-09
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-store/src/driver/sqlite/job_run_store/queries.rs", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/activity_job/job_executor/recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "scripts/build-budget.py", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/activity_job/job_executor/recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs", "crates/orbit-exec/src/macos_sandbox/**"]
 related_artifacts:
+  - ORB-14873
+  - ORB-14832
+  - ORB-14799
   - ORB-14722
   - ORB-14727
   - ORB-14731
@@ -38,6 +41,25 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
+
+## 2026-10-09: Mac claimed leaves time out while queued for a build slot
+
+- **Where:** Mac follower `task_claimed_pr_pipeline`, `implement_one` step.
+- **Symptom:** "cli subprocess exceeded 10800s wall-clock timeout"
+  (`jrun-20261009-0106-c1`, `jrun-20261009-0106-c3`). Final recovery
+  escalated both, and the owner listed them as blocked.
+- **Cause:** The Mac drain ran 3 leaves against the host's default 2
+  build-budget slots, so one leaf was nearly always waiting in
+  `scripts/build-budget.py` admission. Single waits ran up to 82 minutes for
+  ORB-14812 and 35 minutes for ORB-14799. The activity wall clock counts that
+  queued time as agent runtime, so leaves that were still working timed out.
+- **Fix:** ORB-14873 (open): queued time does not advance the deadline, and
+  readiness and doctor warn when a drain's concurrency exceeds the build slots.
+  Until then, give the host at least as many slots as drain concurrency. The
+  Mac was raised to 3 slots on 10-09 (`~/.orbit/cache/build-budget/slots`).
+- **Tasks:** ORB-14812, ORB-14799.
+- **Final recovery:** `escalate` for both. The operator requeued them to
+  `backlog`.
 
 ## 2026-10-09: A finished review batch without an execution summary fails the no-diff guard
 
@@ -98,9 +120,13 @@ entries.
 - **Fix:** ORB-14812 (open): one cached apply-probe that every sandbox-gated test
   checks, skipping with a `SKIP:` notice. Coverage of the real paths stays with
   macOS CI and host-run sandbox evidence.
-- **Tasks:** ORB-14649, ORB-14655, ORB-14740.
+- **Tasks:** ORB-14649, ORB-14655, ORB-14740, ORB-14832 (`jrun-20261009-0409-c1`:
+  about 64 affected failures, and the agent stopped with `validation_blocked`
+  after its own checks passed).
 - **Final recovery:** ORB-14740's final recovery confirmed that even
   `sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` exits 71.
+  ORB-14832 escalated (`jrun-20261009-0409-c1`). The operator resumed its owner
+  run `jrun-20261009-0313-c3`, which validates on Linux.
 
 ## Operational causes (no code defect)
 
