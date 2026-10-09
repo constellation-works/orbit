@@ -273,8 +273,18 @@ impl crate::OrbitRuntime {
 
     /// Run the sandbox's Git protection scan on the registered checkout, as
     /// every leaf would at launch. `orbit doctor` reports the refusal.
+    /// Hosts other than Linux and macOS report the scan as unavailable.
     pub fn check_git_protection(&self) -> Result<(), OrbitError> {
-        crate::runtime::git_sandbox::scan_checkout(&self.paths().repo_root)
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            crate::runtime::git_sandbox::scan_checkout(&self.paths().repo_root)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Err(OrbitError::CapabilityRefused(
+                "Git protection scan is only available on Linux and macOS".to_string(),
+            ))
+        }
     }
 
     /// Refuse a drain on a host whose Git protection would fail every leaf

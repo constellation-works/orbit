@@ -10,6 +10,9 @@ pub(super) fn git_protection_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
             "Git metadata passes the sandbox protection scan".to_string(),
             None,
         ),
+        Err(OrbitError::CapabilityRefused(reason)) => {
+            (WorkspaceDoctorStatus::Skipped, reason, None)
+        }
         Err(OrbitError::PolicyDenied(reason)) => (
             WorkspaceDoctorStatus::Warning,
             format!("sandboxed leaves would be refused: {reason}"),
