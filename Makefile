@@ -20,18 +20,14 @@ INSTALL_BIN_DIR ?= $(HOME)/.orbit/bin
 PROFILE ?= debug
 ifeq ($(PROFILE),release)
 	CARGO_PROFILE := --release
-	TARGET_DIR := target/release
 else
 	CARGO_PROFILE :=
-	TARGET_DIR := target/debug
 endif
 
 ifeq ($(INSTALL_PROFILE),release)
 	INSTALL_CARGO_PROFILE := --release
-	INSTALL_TARGET_DIR := target/release
 else
 	INSTALL_CARGO_PROFILE :=
-	INSTALL_TARGET_DIR := target/debug
 endif
 
 GOLDENS_FLAGS :=
@@ -93,6 +89,7 @@ release:
 # is compilation-capable and must not run after the slot is released.
 define CARGO_EXECUTABLE_FROM_JSON
 import json, sys
+caller = sys.argv[1] if len(sys.argv) > 1 else "run"
 path = None
 for raw in sys.stdin:
     raw = raw.strip()
@@ -106,7 +103,7 @@ for raw in sys.stdin:
     if message.get("reason") == "compiler-artifact" and executable:
         path = executable
 if not path:
-    sys.stderr.write("make run: cargo did not report an executable\n")
+    sys.stderr.write(f"make {caller}: cargo did not report an executable\n")
     raise SystemExit(1)
 print(path)
 endef
@@ -118,13 +115,19 @@ run:
 	json="$$(mktemp)"; \
 	trap 'rm -f "$$json"' EXIT; \
 	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --message-format=json-render-diagnostics >"$$json"; \
-	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" <"$$json")"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" run <"$$json")"; \
 	rm -f "$$json"; \
 	"$$bin" $(ARGS)
 
 # Direct execution (after build)
-dev: build
-	$(TARGET_DIR)/$(BINARY) $(ARGS)
+dev:
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) $(CARGO_PROFILE) --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" dev <"$$json")"; \
+	rm -f "$$json"; \
+	"$$bin" $(ARGS)
 
 # ------------------------------------------------------------
 # Quality
@@ -202,9 +205,14 @@ docs-index:
 # Install
 # ------------------------------------------------------------
 install:
-	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) $(INSTALL_CARGO_PROFILE)
-	install -d $(INSTALL_BIN_DIR)
-	install -m 755 $(INSTALL_TARGET_DIR)/$(BINARY) $(INSTALL_BIN_DIR)/$(BINARY)
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) $(INSTALL_CARGO_PROFILE) --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" install <"$$json")"; \
+	rm -f "$$json"; \
+	install -d $(INSTALL_BIN_DIR); \
+	install -m 755 "$$bin" $(INSTALL_BIN_DIR)/$(BINARY)
 
 uninstall:
 	rm -f $(INSTALL_BIN_DIR)/$(BINARY)
@@ -247,8 +255,13 @@ cross-revision-check-test:
 # Dashboard resident-memory soak on a large disposable store (Linux only). See
 # docs/runbooks/web-memory-soak.md. [ORB-14723]
 web-memory-soak:
-	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release
-	python3 scripts/web-memory-soak.py --bin target/release/$(BINARY) $(SOAK_FLAGS)
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" web-memory-soak <"$$json")"; \
+	rm -f "$$json"; \
+	python3 scripts/web-memory-soak.py --bin "$$bin" $(SOAK_FLAGS)
 
 # ------------------------------------------------------------
 # Dev Loop
