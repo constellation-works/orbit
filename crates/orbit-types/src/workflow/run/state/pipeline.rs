@@ -163,6 +163,12 @@ pub struct PipelineState {
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<JobRunTrigger>,
+    /// `execution.env.pass` names the submitting process held no value for
+    /// when this run was submitted [ORB-14777]: agents it starts do not
+    /// receive them. Names only, never values. Absent when none were unset
+    /// and on runs recorded before this existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_pass_unset: Vec<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -200,6 +206,7 @@ impl PipelineState {
             forge_hold: None,
             forge_hold_expired_at: None,
             trigger: None,
+            env_pass_unset: Vec::new(),
             updated_at: Utc::now(),
         }
     }

@@ -40,6 +40,7 @@ impl Execute for JobRunArgs {
         // error. Everything the submitted run does afterwards is reported by
         // `--wait`, so the two outcomes never share an exit path.
         let invoke = runtime.submit_job_run(&self.job_id, input, None)?;
+        super::support::warn_unset_env_pass(runtime);
         if !self.wait {
             return render_submission(&invoke);
         }

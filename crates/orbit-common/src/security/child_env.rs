@@ -193,6 +193,26 @@ pub fn allowlisted_child_env_from(
     env.into_iter().collect()
 }
 
+/// The `pass` names that would reach no child because the parent environment
+/// holds no non-empty value for them, in first-listed order.
+///
+/// Only names [`allowlisted_child_env_from`] could admit are reported: a
+/// privilege-bearing `ORBIT_` name is never admitted whatever the parent
+/// holds, so reporting it as missing would mislead. Names are returned,
+/// never values.
+pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Vec<String> {
+    let mut unset: Vec<String> = Vec::new();
+    for name in pass {
+        let held = parent
+            .iter()
+            .any(|(key, value)| key == name && !value.is_empty());
+        if !held && !is_privilege_bearing_orbit_name(name) && !unset.contains(name) {
+            unset.push(name.clone());
+        }
+    }
+    unset
+}
+
 /// Full inheritance of the parent environment.
 ///
 /// The explicit opt-in behind `[execution.env] inherit = true`: every ambient

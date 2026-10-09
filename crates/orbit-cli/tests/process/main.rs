@@ -18,6 +18,7 @@ mod generation_fixture;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 
+mod env_pass_warning;
 mod job_resume_detached;
 mod run_observation;
 mod supervised_parent_signal;

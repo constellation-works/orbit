@@ -9,7 +9,9 @@ use serde_json::json;
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
+use super::support::{
+    WorkflowDispatchResult, warn_unset_env_pass, workflow_dispatch_payload_with_notices,
+};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -196,6 +198,7 @@ impl Execute for AutoCommand {
                 },
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
+            warn_unset_env_pass(runtime);
             return workflow_dispatch_payload_with_notices(
                 AUTO_WORKFLOW,
                 &[WorkflowDispatchResult {
@@ -243,6 +246,7 @@ impl Execute for AutoCommand {
             self.strict_worker_containment,
             self.approve_proposed,
         )?;
+        warn_unset_env_pass(runtime);
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,
             job_id: invoke.job_name,

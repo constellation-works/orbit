@@ -251,6 +251,11 @@ impl OrbitRuntime {
                 // writing checkpoints or controls.
                 if !existing_automation_run {
                     self.record_run_trigger(&run.run_id, &trigger)?;
+                    // [ORB-14777] A child inherits its drain's environment, so
+                    // only the submission that starts a process records it.
+                    if admission.is_none() {
+                        self.record_run_env_pass_unset(&run.run_id)?;
+                    }
                 }
 
                 // Pin the definition before the worker can exist. A direct-path
@@ -469,6 +474,23 @@ impl OrbitRuntime {
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 state.trigger = Some(trigger.clone());
+                Ok(())
+            })?;
+        Ok(())
+    }
+
+    /// [ORB-14777] Record which pass-listed variables this submitting process
+    /// does not hold, so `run show` and the dashboard explain a worker that
+    /// fell back to another login. Writes nothing when none are unset.
+    fn record_run_env_pass_unset(&self, run_id: &str) -> Result<(), OrbitError> {
+        let unset = self.unset_env_pass_names();
+        if unset.is_empty() {
+            return Ok(());
+        }
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.env_pass_unset = unset.clone();
                 Ok(())
             })?;
         Ok(())

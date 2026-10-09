@@ -316,11 +316,25 @@ export function renderRunDetailMeta() {
   if (leaves) wrap.appendChild(leaves);
   const crews = buildCrewWindow(detail.crew_window || null);
   if (crews) wrap.appendChild(crews);
+  const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
+  if (unsetEnv) wrap.appendChild(unsetEnv);
   const waiting = buildStillWaiting(run.drain_last_pass || null);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap, feedback]);
+}
+
+// `execution.env.pass` names the submitting process did not hold when the run
+// was submitted. Mirrors the `Unset env:` line of `orbit run show`; names only.
+function buildUnsetEnvPass(names) {
+  if (!Array.isArray(names) || names.length === 0) return null;
+  const panel = el("div", { class: "child-dispatch-panel" });
+  panel.appendChild(el("div", {
+    class: "label",
+    text: `unset env: ${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)`,
+  }));
+  return panel;
 }
 
 // A pull drain's launched leaves that are still running, and whether a

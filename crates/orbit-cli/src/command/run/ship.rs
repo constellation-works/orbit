@@ -105,6 +105,7 @@ impl Execute for ShipCommand {
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
         )?;
+        super::support::warn_unset_env_pass(runtime);
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,
             job_id: invoke.job_name,

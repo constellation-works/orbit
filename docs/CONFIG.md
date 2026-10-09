@@ -679,6 +679,8 @@ This is an allowlist, not a secret filter. A benignly named credential such as `
 pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 ```
 
+Agents inherit the environment of the process that starts them, so a name in `pass` that the launching shell does not set reaches no agent, and a provider falls back to another login (a missing `CLAUDE_CODE_OAUTH_TOKEN` falls back to the desktop login). Start a drain from a login shell, or export the variable in the service's environment. To make that visible, `orbit run auto` (including `--pull`), `orbit run ship` and `orbit run job` print one warning on stderr naming each unset (or empty) name you added to `pass`, and record the names on the run (`orbit run show`'s `Unset env:` line, `run.env_pass_unset` in JSON, and the dashboard run detail). The built-in defaults are not reported, since `CODEX_HOME` and the macOS-only `__CF_USER_TEXT_ENCODING` can legitimately be absent. `orbit doctor` reports the same check for its own environment as the `env-pass` row. These are warnings only: the start proceeds, and no value is ever printed.
+
 - `pass` replaces the default instead of extending it, so restate the baseline names you want.
 - A listed name that is unset is absent, not empty. Names must be valid identifiers.
 - `pass` is a security key: a workspace file that omits it gets the built-in default, not the global value.
