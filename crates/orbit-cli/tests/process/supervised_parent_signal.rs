@@ -251,6 +251,9 @@ fn install_signal_plugin(fixture: &Fixture) {
     // only waits; its readiness marker is fixture instrumentation.
     let source = fixture.home.join("plugin-source/.orbit-plugin");
     std::fs::create_dir_all(source.join("bin")).expect("create plugin source");
+    // The granted write root must exist before the sandboxed backend writes
+    // its readiness marker into it.
+    std::fs::create_dir_all(fixture.work.join("markers")).expect("create marker dir");
     let backend = source.join("bin/wait.sh");
     std::fs::write(
         &backend,
