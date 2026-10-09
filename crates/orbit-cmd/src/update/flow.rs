@@ -13,7 +13,7 @@ use super::converge;
 use super::environment::UpdateEnvironment;
 use super::lock::UpdateLock;
 use super::report::{UpdateOutcome, UpdateReport, finish};
-use super::stage::{restore_backup, stage_release};
+use super::stage::{reject_installed_candidate, restore_backup, stage_release};
 use super::version::ReleaseVersion;
 
 /// What the operator asked `orbit update` to do.
@@ -31,6 +31,15 @@ pub struct UpdateRequest {
 pub fn run_update(
     environment: &UpdateEnvironment,
     request: &UpdateRequest,
+) -> Result<UpdateReport, OrbitError> {
+    run_update_with_restore(environment, request, restore_backup)
+}
+
+/// Run the full flow with an injectable restore for deterministic rollback failures.
+pub(super) fn run_update_with_restore(
+    environment: &UpdateEnvironment,
+    request: &UpdateRequest,
+    restore: impl FnOnce(&Path, &Path) -> Result<(), OrbitError>,
 ) -> Result<UpdateReport, OrbitError> {
     let snapshot = ReleaseVersion::parse(&environment.current_version)?;
     let target = match &request.target_version {
@@ -191,18 +200,20 @@ pub fn run_update(
     match installed {
         Ok(installed) if installed == target => {}
         Ok(installed) => {
-            restore_backup(&executable, &backup)?;
-            return Err(OrbitError::Execution(format!(
-                "the release published as {target} reports itself as {installed}; \
-                 restored the previous executable and changed no workspace state"
-            )));
+            return Err(reject_installed_candidate(
+                &executable,
+                &backup,
+                format!("the release published as {target} reports itself as {installed}"),
+                restore,
+            ));
         }
         Err(error) => {
-            restore_backup(&executable, &backup)?;
-            return Err(OrbitError::Execution(format!(
-                "the installed release could not be verified ({error}); \
-                 restored the previous executable and changed no workspace state"
-            )));
+            return Err(reject_installed_candidate(
+                &executable,
+                &backup,
+                format!("the installed release could not be verified ({error})"),
+                restore,
+            ));
         }
     }
 
