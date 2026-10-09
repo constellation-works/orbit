@@ -351,7 +351,14 @@ orders non-terminal tasks before done, archived and rejected ones, each
 partition newest first, and the limit spans both.
 Missing/stale indexes require a lightweight bundle scan (task fields only) and
 best-effort index repair from the same scan; task-field errors encountered
-reading that scan propagate. A refused repair is recorded per process,
+reading that scan propagate. A registry opened read-only never takes a repair
+ticket or writes freshness proofs: its fallback logs only at debug and leaves
+the writer's repair gate untouched. Writable readers still attempt repair.
+Index fields and tags are loaded in one SQLite snapshot; the freshness probe
+retries once before accepting a mismatch, because a writer may finish publishing
+between the snapshot and an envelope probe. Completed task creation and update
+publish the generated row before returning, including history-only updates.
+A refused writable repair is recorded per process,
 registry and workspace against the envelope stamps of every registered task
 and the targets it found unresolved (ORB-14181). While that evidence holds,
 reads serve from the scan without retrying the rebuild, and at most one read
@@ -374,8 +381,10 @@ newest 50 from workspace metadata before hydration and shares one request-scoped
 global dependency-status projection. Storage and rendering run on the blocking
 pool, including cold workspace selection and runtime construction in the
 shared workspace extractor. Envelope validation remains linear in the
-workspace's corpus size; there is no persistent validation cache or content
-integrity audit added.
+workspace's corpus size. Persisted envelope stamps can spare a parse while the
+file identity, modification time and index-row fingerprint still agree;
+read-only processes consume those proofs and writable scans record new ones.
+They do not audit off-page bodies, event logs or artifacts.
 
 ### Reproducing the bounded-read measurements
 
