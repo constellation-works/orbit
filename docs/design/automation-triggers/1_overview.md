@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-25
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Draft
 feature: automation-triggers
 doc_role: overview
@@ -16,11 +16,14 @@ related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 
 # Automation Triggers — Overview
 
-Delivery triggers are implemented in [ORB-11330]; state preparation and failure
-triage are implemented in [ORB-11331]. Terminal failed-run triage has since been
+Delivery triggers are implemented in [ORB-11330], and bounded state preparation
+in [ORB-11331]. The earlier terminal failed-run triage target has since been
 retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
-the `execution_failed` trigger kind still parses but has no shipped target job. The shared `orbit-automation` domain uses
-the existing sweep clock, Core action adapters and Store checkpoints. See
+the `execution_failed` trigger kind still parses, but its `task_triage_pipeline`
+target is not shipped. Failed runs leave their task blocked with the failure
+attached; re-backlogging remains a deliberate human transition. The shared
+`orbit-automation` domain uses the existing sweep clock, Core action adapters
+and Store checkpoints. See
 [Operations](5_operations.md) for accepted configuration and limits. The broader
 batching and mode design below retains future intent; no live definition is
 automatically migrated or enabled.
