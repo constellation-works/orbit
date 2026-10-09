@@ -85,7 +85,7 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | V2 activity/job envelopes and SQLite sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002], [T20260426-0519] |
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-core/src/runtime/audit/run.rs` | [T20260426-0705], [T20260426-0709] |
 | Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | [T20260426-0605] |
-| Redaction utilities | `crates/orbit-common/src/security/redaction.rs` | [T20260426-0605], [T20260426-2349] |
+| Redaction utilities | [crates/orbit-common/src/security/redaction/](../../../crates/orbit-common/src/security/redaction/) | [T20260426-0605], [T20260426-2349] |
 | Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers | [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | [T20260510-13], [ORB-00062] |
 | V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | [T20260426-0526] |

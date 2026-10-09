@@ -182,7 +182,7 @@ Tier 2: bind the Tier 1 caller row to the SSH key through a root-managed `author
 
 **Recorded:** 2026-09 · [ORB-12564]
 
-**Code anchors:** `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`, `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`, `crates/orbit-mcp/src/remote/legacy.rs`, `crates/orbit-common/src/governance/authorization.rs::agent_context_declared`
+**Code anchors:** `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`, `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`, `crates/orbit-mcp/src/remote/legacy.rs`, `crates/orbit-common/src/governance/authorization/env.rs::agent_context_declared`
 
 ### Context
 
