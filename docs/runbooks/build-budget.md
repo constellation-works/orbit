@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-10-05
+last_validated: 2026-10-09
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -77,10 +77,14 @@ For allowlisted commands that receive only `HOME` and `PATH`, put them in the ho
 default `$HOME/.orbit/cache/build-budget` directory, since those commands do not receive
 `ORBIT_BUILD_BUDGET_DIR`.
 
-Each slot is a kernel `flock`. The wrapper replaces itself with the admitted command while
-retaining the lock descriptor, so normal completion, command failure, cancellation, and
-process termination release the slot. An inherited internal marker prevents nested Make
-or wrapper entry points from reacquiring a slot and deadlocking.
+Each slot is a kernel `flock` held by the supervising wrapper. The lock descriptor is
+never passed to the admitted command. The slot is released when that direct command
+exits, including failure or signal termination, even if a detached descendant remains
+alive. The wrapper forwards termination signals and waits for the command to finish
+handling them before releasing admission; it preserves the command's exit status or
+terminating signal. An inherited internal marker prevents nested Make or wrapper entry
+points from reacquiring a slot and deadlocking. Synchronous nested commands remain
+covered for the lifetime of the direct command.
 
 If every slot is occupied, stderr reports `build-budget: waiting for admission` with the
 configured slot count and budget directory. While the command remains queued, periodic
@@ -129,7 +133,8 @@ scripts/test-build-budget.sh
 ```
 
 It exercises separate worktree paths, a two-slot concurrency ceiling, progress after
-success, failure, and termination, nested admission, job-count precedence, bypass,
+success, failure, and termination, release despite a surviving detached child, signal
+forwarding and status preservation, nested admission, job-count precedence, bypass,
 invalid settings, `make run` releasing its slot before application runtime, and
 `make watch` admitting each check/test iteration without retaining a slot while idle.
 
@@ -174,7 +179,10 @@ deterministic environment test and host-capacity arithmetic rather than a second
 
 Admission is cooperative and per user: it covers the documented Make targets and explicit
 wrapper calls, not arbitrary direct Cargo commands. Slot selection is work-conserving but
-does not promise strict FIFO order. Changing `ORBIT_BUILD_SLOTS` while commands are active
+does not promise strict FIFO order. Killing the supervising wrapper with `SIGKILL` or a
+wrapper crash releases its lock immediately; the command can still be running because
+the wrapper cannot forward a signal or wait after such termination.
+Changing `ORBIT_BUILD_SLOTS` while commands are active
 changes which lock files new callers scan and should therefore be done only when the queue
 is idle. The lock directory must be on a filesystem that implements advisory `flock`
 consistently; the default local host cache satisfies that requirement.

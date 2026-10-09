@@ -8,6 +8,8 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -272,16 +274,50 @@ def main() -> None:
         os.execvpe(command[0], command, environment)
 
     slot, descriptor = acquire_slot(lock_directory(), slots)
-    os.set_inheritable(descriptor, True)
     environment["ORBIT_BUILD_BUDGET_HELD"] = "1"
     environment["ORBIT_BUILD_BUDGET_SLOT"] = str(slot)
 
     try:
-        os.execvpe(command[0], command, environment)
+        status = run_admitted_command(command, environment)
     except FileNotFoundError:
         fail(f"command not found: {command[0]}", 127)
     except OSError as error:
         fail(f"could not execute {command[0]}: {error}", 126)
+    finally:
+        os.close(descriptor)
+
+    if status < 0:
+        # Preserve signal termination for callers that inspect waitpid status,
+        # rather than only returning the shell's conventional 128 + signal.
+        if -status != signal.SIGKILL:
+            signal.signal(-status, signal.SIG_DFL)
+        os.kill(os.getpid(), -status)
+    raise SystemExit(status)
+
+
+def run_admitted_command(command: list[str], environment: dict[str, str]) -> int:
+    """Hold admission in the parent until the direct command has exited."""
+    child = None
+    pending_signals: list[int] = []
+
+    def forward_signal(signum: int, _frame: object) -> None:
+        if child is None:
+            # A cancellation can arrive while Popen is still starting the child.
+            pending_signals.append(signum)
+        else:
+            child.send_signal(signum)
+
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
+        # Retain inherited ignored signals (for example background-shell SIGINT).
+        if signal.getsignal(signum) != signal.SIG_IGN:
+            signal.signal(signum, forward_signal)
+
+    # In particular, never pass the flock descriptor to the command. Descendants
+    # may outlive it, but only this supervising process owns the build slot.
+    child = subprocess.Popen(command, env=environment, close_fds=True)
+    for signum in pending_signals:
+        child.send_signal(signum)
+    return child.wait()
 
 
 if __name__ == "__main__":
