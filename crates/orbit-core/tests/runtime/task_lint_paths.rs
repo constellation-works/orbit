@@ -156,4 +156,56 @@ fn lint_reads_only_repository_paths_as_path_mentions() {
         path_findings(&declared_findings).is_empty(),
         "declared context file must cover the absolute mention: {declared_findings:?}"
     );
+
+    // A context entry must not cover a path merely sharing a suffix elsewhere in the tree:
+    // workspace has crates/a/src/lib.rs and context_files: ["file:src/lib.rs"]
+    let nested_source = root.path().join("repo/crates/a/src/lib.rs");
+    std::fs::create_dir_all(nested_source.parent().unwrap()).unwrap();
+    std::fs::write(&nested_source, "// a\n").unwrap();
+    let root_lib = root.path().join("repo/src/lib.rs");
+    std::fs::create_dir_all(root_lib.parent().unwrap()).unwrap();
+    std::fs::write(&root_lib, "// root\n").unwrap();
+
+    let suffix_task = runtime
+        .add_task(TaskAddParams {
+            title: "Same suffix different path".into(),
+            description: format!("Edits {}.", nested_source.display()),
+            context_files: vec!["file:src/lib.rs".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let suffix_findings = runtime.lint_task(&suffix_task.id).unwrap().findings;
+    assert!(
+        suffix_findings.iter().any(|finding| {
+            finding.check == "context_completeness"
+                && finding.severity == TaskLintSeverity::Warning
+                && finding
+                    .message
+                    .contains(&nested_source.display().to_string())
+        }),
+        "context entry file:src/lib.rs must not cover absolute mention of crates/a/src/lib.rs: {suffix_findings:?}"
+    );
+
+    // Same for dir:docs against a nested crates/x/docs/y.md mention
+    let nested_docs = root.path().join("repo/crates/x/docs/y.md");
+    std::fs::create_dir_all(nested_docs.parent().unwrap()).unwrap();
+    std::fs::write(&nested_docs, "# docs\n").unwrap();
+
+    let docs_task = runtime
+        .add_task(TaskAddParams {
+            title: "Nested docs directory".into(),
+            description: format!("Edits {}.", nested_docs.display()),
+            context_files: vec!["dir:docs".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let docs_findings = runtime.lint_task(&docs_task.id).unwrap().findings;
+    assert!(
+        docs_findings.iter().any(|finding| {
+            finding.check == "context_completeness"
+                && finding.severity == TaskLintSeverity::Warning
+                && finding.message.contains(&nested_docs.display().to_string())
+        }),
+        "context entry dir:docs must not cover absolute mention of crates/x/docs/y.md: {docs_findings:?}"
+    );
 }

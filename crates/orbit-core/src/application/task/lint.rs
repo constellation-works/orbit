@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use orbit_common::OrbitError;
@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::OrbitRuntime;
 use crate::application::task::DeclaredContextFiles;
 
-use super::paths::{context_workspace_root, extract_task_path_mentions, task_path_exists};
+use super::paths::{
+    canonicalize_existing_prefix, context_workspace_root, extract_task_path_mentions,
+    task_path_exists,
+};
 use crate::runtime::task::declared_context_files;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -185,7 +188,7 @@ fn lint_context_completeness(
             || known_context.contains(path.as_str())
             || context_files
                 .iter()
-                .any(|entry| context_entry_covers_path(entry, path))
+                .any(|entry| context_entry_covers_path(entry, path, workspace_root))
         {
             continue;
         }
@@ -266,17 +269,53 @@ fn lint_acceptance_criteria(acceptance_criteria: &[String], findings: &mut Vec<T
     }
 }
 
-// pub(super) widened for sibling-layout tests in task/tests/lint.rs
-pub(super) fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bool {
+fn strip_workspace_root(path: &Path, workspace_root: &Path) -> PathBuf {
+    if !path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Ok(relative) = path.strip_prefix(workspace_root) {
+        return if relative.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative.to_path_buf()
+        };
+    }
+    let canonical_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| canonicalize_existing_prefix(workspace_root));
+    if let Ok(relative) = path.strip_prefix(&canonical_root) {
+        return if relative.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative.to_path_buf()
+        };
+    }
+    let canonical_path = canonicalize_existing_prefix(path);
+    if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
+        return if relative.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative.to_path_buf()
+        };
+    }
+    path.to_path_buf()
+}
+
+fn context_entry_covers_path(entry: &str, mentioned_path: &str, workspace_root: &Path) -> bool {
     let Ok(entry_anchor) = anchor_path(entry) else {
         return false;
     };
     let Ok(mentioned_anchor) = anchor_path(mentioned_path) else {
         return false;
     };
+    let entry_anchor = strip_workspace_root(&entry_anchor, workspace_root);
+    let mentioned_anchor = strip_workspace_root(&mentioned_anchor, workspace_root);
     let entry_anchor = entry_anchor.to_string_lossy().replace('\\', "/");
     let mentioned_anchor = mentioned_anchor.to_string_lossy().replace('\\', "/");
     if entry_anchor == mentioned_anchor
+        || (entry_anchor == "."
+            && !mentioned_anchor.starts_with('/')
+            && !mentioned_anchor.starts_with(".."))
         || entry_anchor
             .strip_prefix(format!("{mentioned_anchor}/").as_str())
             .is_some()
@@ -285,23 +324,6 @@ pub(super) fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bo
             .is_some()
     {
         return true;
-    }
-
-    if entry_anchor != "." {
-        if mentioned_anchor.starts_with('/')
-            && !entry_anchor.starts_with('/')
-            && (mentioned_anchor.ends_with(&format!("/{entry_anchor}"))
-                || mentioned_anchor.contains(&format!("/{entry_anchor}/")))
-        {
-            return true;
-        }
-        if entry_anchor.starts_with('/')
-            && !mentioned_anchor.starts_with('/')
-            && (entry_anchor.ends_with(&format!("/{mentioned_anchor}"))
-                || entry_anchor.contains(&format!("/{mentioned_anchor}/")))
-        {
-            return true;
-        }
     }
 
     false
