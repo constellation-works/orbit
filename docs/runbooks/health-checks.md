@@ -267,7 +267,8 @@ persisted mount identity. A mount point that exposes other entries after unmount
 mistaken for a populated checkout parent. Remount before running the repair on a host with
 removable or network-mounted checkouts; directory contents alone cannot prove a volume is mounted.
 
-The repair deletes partition directories, so it refuses to run without `--confirm`. It resolves the
+The repair deletes partition directories, so it refuses to run without `--confirm` before any
+other requested repair runs, leaving their repair targets unchanged. It resolves the
 claims once, deletes empty unclaimed partitions and populated partitions whose checkout is
 confirmed gone, retires any registry rows naming them, and is idempotent: running it again after a partition is gone is a
 no-op.
