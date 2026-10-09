@@ -60,7 +60,10 @@ fn fixture_command(home: &Path) -> Command {
         .env("USERPROFILE", home)
         .env("ORBIT_AGENT_NAME", "http-fixture")
         .env("ORBIT_AGENT_MODEL", "http-fixture")
-        .env_remove("ORBIT_LOG_PATH");
+        .env_remove("ORBIT_LOG_PATH")
+        // libtest otherwise prefixes a single-threaded child's first output
+        // line with its test status, hiding the server readiness announcement.
+        .env_remove("RUST_TEST_THREADS");
     command
 }
 
