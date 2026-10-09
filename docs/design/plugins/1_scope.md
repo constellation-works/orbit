@@ -472,7 +472,7 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 The manifest says *where* a tool appears (`mcp_scope`, `execution_kind`, CLI shape), never
 *who* may call it. Plugin tools resolve to one of two generic governed rows
 (`PLUGIN_TOOL_READ_ONLY`, `PLUGIN_TOOL_MUTATING` in
-`orbit-common/src/governance/authorization.rs`): `read_only` tools are callable by `Agent |
+`orbit-common/src/governance/authorization/mod.rs`): `read_only` tools are callable by `Agent |
 Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only when the
 task's `required_tools` or the activity allowlist names them.
 

@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/tests/authorization.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/tests/authorization.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
@@ -145,7 +145,7 @@ same role for MCP, where an empty `git diff` is the proof.
 ## Capability chokepoint for destructive operations outside MCP
 
 **Recorded:** 2026-07-26 21:49:30.348935Z · [ORB-10453]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation/registry.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation/registry.rs`
 
 ### Context
 
@@ -193,7 +193,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 ## MCP advertisement is placement; the capability chokepoint is permission
 
 **Recorded:** 2026-08 · [ORB-10478] · **Implemented** in [ORB-10478]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
 
 ### Context
 
@@ -262,7 +262,7 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 ## A governed row may be an identification floor, not only an operator gate
 
 **Recorded:** 2026-09-20 · [ORB-12582] · **Implemented** in [ORB-12582]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool/tool_list.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool/tool_list.rs`
 
 ### Context
 
