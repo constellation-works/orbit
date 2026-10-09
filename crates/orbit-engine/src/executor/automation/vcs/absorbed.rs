@@ -3,10 +3,12 @@
 //! `sync_base` stops on a conflict, conflict recovery resolves it to the
 //! base's side, and `rebase --continue` drops the now-empty pick: the branch
 //! ends exactly on the pinned base (or on the advanced tip the host then
-//! follows, when that drops the picks instead). When a commit reachable from
-//! that base, and not from the candidate's original base, touched every path
-//! the candidate changed, the host certifies the continuation as *absorbed*
-//! with that covering commit.
+//! follows, when that drops the picks instead). When that base holds the
+//! candidate's exact content (mode and blob) for every path the candidate
+//! changed, the host certifies the continuation as *absorbed* with the oldest
+//! commit reachable from it, and not from the candidate's original base, that
+//! holds that content. A resolution that discarded the candidate for the
+//! base's different content is refused and reaches the final-recovery agent.
 //!
 //! Nothing is left to deliver, so the `git_rebase` retry fails the step with
 //! [`CANDIDATE_ABSORBED_MARKER`] instead of the generic empty-branch refusal,
@@ -63,7 +65,8 @@ pub(crate) enum AbsorbedReason {
     RebaseInProgress,
     /// The checkout has tracked or untracked changes.
     DirtyWorktree,
-    /// No commit reachable from the pinned base covers the candidate's change.
+    /// The base does not hold the candidate's content for every path it
+    /// changed, or no commit reachable from that base introduced it.
     NoCoveringCommit,
     /// The covering commit is not reachable from the freshly resolved base ref.
     CoveringUnreachable,
@@ -162,19 +165,22 @@ pub(crate) fn task_scope_digest(task: &Task) -> String {
 }
 
 /// The paths the candidate `original_base..original_head` changed, and the
-/// oldest commit in `original_base..pinned_base` that touched all of them.
-/// `None` when the candidate changed nothing or no single base commit
-/// covers it: the resolution then dropped the candidate rather than finding
-/// it already landed.
+/// oldest commit in `original_base..landed_base` whose tree holds the
+/// candidate's version (mode and blob) of every one of them. `None` when the
+/// candidate changed nothing, or when `landed_base` itself does not hold that
+/// version: the resolution then dropped the candidate rather than finding it
+/// already landed. A base commit that merely touched the same paths, as the
+/// commit a rebase conflicted on always did, is no evidence.
 pub(crate) fn covering_commit(
     root: &Path,
     original_base: &str,
     original_head: &str,
-    pinned_base: &str,
+    landed_base: &str,
 ) -> Result<Option<(String, Vec<String>)>, OrbitError> {
     let candidate_paths = git_output_paths(
         root,
         &[
+            "--literal-pathspecs",
             "diff",
             "--name-only",
             "--no-renames",
@@ -187,30 +193,36 @@ pub(crate) fn covering_commit(
     if candidate_paths.is_empty() {
         return Ok(None);
     }
-    let range = format!("{original_base}..{pinned_base}");
-    let mut args = vec!["rev-list", "--reverse", range.as_str(), "--"];
+    // `diff-tree --quiet` exits 0 only when both trees agree on every path;
+    // a difference and a Git error both leave the candidate uncovered.
+    let holds_candidate = |commit: &str| {
+        let mut args = vec![
+            "--literal-pathspecs",
+            "diff-tree",
+            "-r",
+            "--quiet",
+            "--no-renames",
+            commit,
+            original_head,
+            "--",
+        ];
+        args.extend(candidate_paths.iter().map(String::as_str));
+        git_command_success(root, &args)
+    };
+    if !holds_candidate(landed_base)? {
+        return Ok(None);
+    }
+    let range = format!("{original_base}..{landed_base}");
+    let mut args = vec![
+        "--literal-pathspecs",
+        "rev-list",
+        "--reverse",
+        range.as_str(),
+        "--",
+    ];
     args.extend(candidate_paths.iter().map(String::as_str));
     for commit in git_output_raw(root, &args)?.lines().map(str::trim) {
-        if commit.is_empty() {
-            continue;
-        }
-        let touched = git_output_paths(
-            root,
-            &[
-                "diff-tree",
-                "--root",
-                "--no-commit-id",
-                "--name-only",
-                "--no-renames",
-                "-r",
-                "-m",
-                "--first-parent",
-                "-z",
-                commit,
-                "--",
-            ],
-        )?;
-        if candidate_paths.iter().all(|path| touched.contains(path)) {
+        if !commit.is_empty() && holds_candidate(commit)? {
             return Ok(Some((commit.to_string(), candidate_paths)));
         }
     }
@@ -324,8 +336,8 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
             return Err(AbsorbedRefusal::new(
                 Reason::NoCoveringCommit,
                 format!(
-                    "no commit reachable from {landed} covers the candidate {original_head} as \
-                     {covering}"
+                    "{landed} does not hold the candidate {original_head}'s content as \
+                     introduced by {covering}"
                 ),
             ));
         }
