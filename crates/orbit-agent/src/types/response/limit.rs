@@ -15,7 +15,8 @@
 //! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`.
 
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc,
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta,
+    TimeZone, Utc,
 };
 use orbit_types::workflow::ProviderLimitFailure;
 
@@ -99,7 +100,7 @@ fn relative_reset(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
             let start = folded.find(lead)? + lead.len();
             parse_duration(&folded[start..])
         })
-        .map(|duration| now + duration)
+        .and_then(|duration| now.checked_add_signed(duration))
 }
 
 /// A duration such as `1h37m37s`, `2 hours 5 minutes` or `45s`, read from
@@ -114,18 +115,18 @@ fn parse_duration(text: &str) -> Option<Duration> {
             break;
         }
         let Ok(value) = rest[..digits].parse::<i64>() else {
-            break;
+            return None;
         };
         let after = rest[digits..].trim_start();
         let unit_len = after.chars().take_while(char::is_ascii_alphabetic).count();
         let unit = match &after[..unit_len] {
-            "d" | "day" | "days" => Duration::days(value),
-            "h" | "hr" | "hrs" | "hour" | "hours" => Duration::hours(value),
-            "m" | "min" | "mins" | "minute" | "minutes" => Duration::minutes(value),
-            "s" | "sec" | "secs" | "second" | "seconds" => Duration::seconds(value),
+            "d" | "day" | "days" => TimeDelta::try_days(value)?,
+            "h" | "hr" | "hrs" | "hour" | "hours" => TimeDelta::try_hours(value)?,
+            "m" | "min" | "mins" | "minute" | "minutes" => TimeDelta::try_minutes(value)?,
+            "s" | "sec" | "secs" | "second" | "seconds" => TimeDelta::try_seconds(value)?,
             _ => break,
         };
-        total += unit;
+        total = total.checked_add(&unit)?;
         parsed = true;
         rest = after[unit_len..].trim_start_matches([' ', ',']);
         rest = rest.strip_prefix("and ").unwrap_or(rest);
@@ -187,11 +188,11 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         .from_local_datetime(&date.and_time(time))
         .earliest()?
         .with_timezone(&Utc);
-    Some(if at <= now && date == today {
-        at + Duration::days(1)
+    if at <= now && date == today {
+        at.checked_add_signed(TimeDelta::try_days(1)?)
     } else {
-        at
-    })
+        Some(at)
+    }
 }
 
 /// The year-less `Jan 2` occurrence nearest `today`, so a January reset seen in
