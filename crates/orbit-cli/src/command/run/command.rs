@@ -30,7 +30,7 @@ Workflow entrypoints:
   orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
-  orbit run history [--limit 50]
+  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50]
   orbit run history -j <job_id>
   orbit run show [run_id] [-s step_id] [--json]
   orbit run logs [run_id] [-s step_id] [--json]
@@ -64,7 +64,7 @@ Workflows:
   agent       Invoke an agent on the host for exploration or debugging (operator only)
 
 Audits:
-  history    Show recent job runs, optionally filtered to one job
+  history    Show recent job runs filtered by job, task, state or time
   show       Show structured state and step summary for a job run
   logs       Print raw stdout/stderr captured for a job run
   events     Show audit events recorded for a job run
@@ -108,7 +108,7 @@ pub enum RunSubcommand {
     TaskPilot(task_pilot::TaskPilotCommand),
     /// Explain why backlog tasks can or cannot start in auto-drain
     Readiness(ReadinessCommand),
-    /// Show recent job runs, optionally filtered to one job
+    /// Show recent job runs filtered by job, task, state or time
     History(RunHistoryArgs),
     /// Show structured state and step summary for a job run
     Show(RunShowArgs),

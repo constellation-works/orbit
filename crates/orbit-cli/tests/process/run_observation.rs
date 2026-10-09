@@ -35,6 +35,7 @@ use serde_json::Value;
 
 mod auth_exclusions;
 mod replay_crew;
+mod run_history;
 mod run_show_display;
 
 const STALE_RUNNING: &str = "jrun-20260920-0100";

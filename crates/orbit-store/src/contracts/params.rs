@@ -458,6 +458,9 @@ pub struct JobRunQuery {
     /// scan stays inside one job's history.
     pub trigger_routine: Option<String>,
     pub state: Option<JobRunState>,
+    /// Match any listed state before ordering and limiting. Empty means
+    /// unrestricted; other state predicates are intersected with this set.
+    pub states: Vec<JobRunState>,
     /// Whether to include only states for which `JobRunState::is_terminal()`
     /// returns true. Applied before ordering and limiting.
     pub terminal_only: bool,
@@ -484,6 +487,7 @@ impl Default for JobRunQuery {
             task_id: None,
             trigger_routine: None,
             state: None,
+            states: Vec::new(),
             terminal_only: false,
             active_only: false,
             created_since: None,

@@ -121,9 +121,10 @@ impl OrbitRuntime {
 fn job_run_query(params: JobRunListParams) -> JobRunQuery {
     JobRunQuery {
         job_id: params.job_id,
-        task_id: None,
+        task_id: params.task_id,
         trigger_routine: None,
         state: params.state,
+        states: params.states,
         terminal_only: params.terminal_only,
         active_only: false,
         created_since: params.since,
