@@ -79,7 +79,7 @@ Sweep must find routine definitions without a resident daemon and without bootst
 
 ### Decision
 
-Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml` from every registered, active workspace whose versioned `.orbit/config.toml` declares `[routines] role = "source"`. Centralizing all routines in polaris is constellation convention, not Orbit mechanism. `~/.orbit/host.toml` survives only to carry `host_id`.
+Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml` from every registered, active workspace whose versioned `.orbit/config.toml` declares `[routines] role = "source"`. Centralizing all routines in the constellation's primary workspace is a constellation convention, not Orbit mechanism. `~/.orbit/host.toml` survives only to carry `host_id`.
 
 ### Consequences
 
@@ -134,7 +134,7 @@ Each routine carries a `hosts:` list matched against the host-local `host_id`; t
 
 ### Context
 
-Routines run on two hosts (dk-mac, dk-server-1) with different availability profiles. Definitions must converge across hosts; scheduler runtime state (last fires, pauses, locks) could either be synced between hosts or kept local. Syncing state would let either machine answer "did the nightly fire on the other box?" but requires a scheduler network protocol between hosts that only expose 22/443 to each other.
+Routines run on two hosts (a laptop and an always-on server) with different availability profiles. Definitions must converge across hosts; scheduler runtime state (last fires, pauses, locks) could either be synced between hosts or kept local. Syncing state would let either machine answer "did the nightly fire on the other box?" but requires a scheduler network protocol between hosts that only expose 22/443 to each other.
 
 ### Decision
 

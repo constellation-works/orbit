@@ -444,7 +444,7 @@ The extra activity-scoped Linux Landlock read ruleset blocked Cargo from reading
 ### Decision
 Use `NoSandbox` for `proc.spawn` so its child inherits the worker's operating-system read and write view. Remove the coupled argument-level `fsProfile` read check; keeping it would still reject reads the parent may make. Preserve the activity program policy, cleared child environment, closed stdin, timeout, and supervision. Plugin backends keep their separate Landlock or `sandbox-exec` boundary.
 
-This deliberately retires the narrower child read guarantee from ORB-11514. Current Polaris STD-04 §R4 is non-binding guidance because Orbit has not vendored Constellation standards; its instruction to preserve previous negative read cases conflicts with this explicit policy decision. The tests now prove the new read scope and keep negative program and environment cases. STD-05 §R10 still shapes the cleared child environment.
+This deliberately retires the narrower child read guarantee from ORB-11514. The corresponding STD-04 §R4 guidance is non-binding because Orbit has not vendored Constellation standards; its instruction to preserve previous negative read cases conflicts with this explicit policy decision. The tests now prove the new read scope and keep negative program and environment cases. STD-05 §R10 still shapes the cleared child environment.
 
 ### Consequences
 - On Linux and macOS, a child can read any file its enclosing worker can read, including benign paths outside a linked worktree. Linux's unbounded `denyRead` globs are not a child kernel boundary.

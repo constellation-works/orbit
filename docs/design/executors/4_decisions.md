@@ -110,7 +110,7 @@ shell step an injection surface.
 
 ### Context
 
-The v1 runtime-host phase-out (knowledgebase/polaris/design/orbit-cleanup/phaseoutv1.md, Stage 3) deletes the v1 executor stack once planning duel is ported to v2 (ORB-10393). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point recorded in the retired protocol spec and the External Executor Protocol retirement decision (ORB-10395), alongside `assets/executors/external.example.yaml` — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
+The Stage 3 v1 runtime-host phase-out design deletes the v1 executor stack once planning duel is ported to v2 (ORB-10393). `ExternalExecutor` implements the External Executor Protocol v1 — a documented public extension point recorded in the retired protocol spec and the External Executor Protocol retirement decision (ORB-10395), alongside `assets/executors/external.example.yaml` — and shares the `direct_agent` subprocess transport slated for deletion. The phase-out design flagged an open question: if external executors remain a supported surface, the transport must be rehomed rather than deleted.
 
 ### Decision
 
