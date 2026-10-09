@@ -60,6 +60,8 @@ fi
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
+"$repo_root/scripts/test-check-unused-dependencies.py"
+"$repo_root/scripts/check-unused-dependencies.py"
 "$repo_root/scripts/check-workflow-yaml.py"
 "$repo_root/scripts/test-release-workflow.py"
 "$repo_root/scripts/test-pr-state-workflows.py"
