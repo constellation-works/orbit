@@ -67,6 +67,14 @@ impl Fixture {
             "--ship-mode",
             "pr",
         ]);
+        // Admission here tests forge routing, independently of the test host.
+        fixture.success(&[
+            "config",
+            "set",
+            "--global",
+            "workflow.resource_throttle.enabled",
+            "false",
+        ]);
         fixture
     }
 

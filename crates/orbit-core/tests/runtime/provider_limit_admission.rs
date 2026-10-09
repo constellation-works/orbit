@@ -62,6 +62,7 @@ impl Fixture {
             },
         )
         .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
     }
 
     /// An admissible hard backlog task, on `crew` when one is named.

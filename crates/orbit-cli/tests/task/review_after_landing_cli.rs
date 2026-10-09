@@ -756,6 +756,8 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     }
 
     let fixture = Fixture::new();
+    // CLI children cannot inherit an in-process probe; this case tests routing.
+    set_policy(&fixture, "workflow.resource_throttle.enabled", "false");
     let provider_bin = install_inert_claude_launcher(&fixture);
     let path_mode = std::env::var("ORBIT_TEST_REVIEW_PROVIDER_PATH_MODE")
         .expect("isolated test child selects a provider PATH mode");
@@ -953,6 +955,7 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
     }
 
     let fixture = Fixture::new();
+    set_policy(&fixture, "workflow.resource_throttle.enabled", "false");
     enable_review_crew(&fixture);
     set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
     set_policy(&fixture, "review.before_landing", "true");

@@ -433,6 +433,7 @@ fn mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks() {
 fn runtime_at(global: &Path, orbit_dir: &Path) -> OrbitRuntime {
     OrbitRuntime::from_roots(global, orbit_dir)
         .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
         .with_automation_machine_identity(Some("fixture-machine".into()))
 }
 

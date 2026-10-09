@@ -27,6 +27,7 @@ fn runtime_on(os: HostOs) -> (TempDir, OrbitRuntime) {
     std::fs::create_dir_all(&workspace).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace)
         .expect("build runtime")
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
         .with_host_os(Some(os));
     (root, runtime)
 }

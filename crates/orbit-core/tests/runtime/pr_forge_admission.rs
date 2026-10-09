@@ -59,8 +59,9 @@ fn open() -> Forgeless {
         ship_mode: ShipMode::Pr,
         base_branch: Some("main".to_string()),
     };
-    let runtime =
-        OrbitRuntime::from_roots_with_binding(&global, &repo.join(".orbit"), binding).unwrap();
+    let runtime = OrbitRuntime::from_roots_with_binding(&global, &repo.join(".orbit"), binding)
+        .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm());
     Forgeless {
         _root: root,
         runtime,

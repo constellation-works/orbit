@@ -112,7 +112,9 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
     let workspace = repo.join(".orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("build runtime")
+        .with_host_resource_probe(PressureProbe::calm());
     (root, runtime, repo)
 }
 

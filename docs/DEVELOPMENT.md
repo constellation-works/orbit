@@ -736,6 +736,9 @@ fixture. Keep fixture outcomes independent of host load:
   `OrbitRuntime::with_host_resource_probe` on every runtime it opens, including
   one reopened over the same roots; otherwise a loaded test host throttles
   the admissions it counts. A throttling test injects and drives its own probe.
+  CLI subprocesses cannot inherit an in-process probe: a fixture that does not
+  test throttling disables `workflow.resource_throttle.enabled` through
+  `orbit config set` in its disposable config roots instead.
 - Bound work, not elapsed time: measure a cost guard in CPU time where the
   platform allows, so scheduling delay cannot fail it.
 - A fixture that seeds thousands of tasks pays fsyncs for every one. Root it at

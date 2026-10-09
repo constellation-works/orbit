@@ -71,6 +71,7 @@ impl Workspace {
         }
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
+            .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
             .with_automation_machine_identity(Some("fixture-machine".into()));
         Self {
             _root: root,
