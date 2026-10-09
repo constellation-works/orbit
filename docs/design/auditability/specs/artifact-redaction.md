@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
-last_validated: 2026-09-26
+last_validated: 2026-10-09
 ---
 
 # Spec: Artifact Write Redaction
@@ -18,8 +18,10 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.task.add` | `title`, `description`, `plan`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context`, `external_refs[].url` | workspace, ids, enums, dependency/relation targets, crew, tags |
 | `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `note`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
-| `orbit.friction.add` | `body` / `description` | - | `model`, `during_task`, tags |
-| `orbit.friction.update` | `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
+| `orbit.task.reconcile_review` | `reason` | - | workspace, action, ids, request key, exact-match command, remediation commit |
+| `orbit.task.review_reset` | `reason` | - | workspace, task id, lineage key, `adopt_configured_budget` |
+| `orbit.friction.add` | `title`, `body`, `description` | - | `model`, `during_task`, tags |
+| `orbit.friction.update` | `title`, `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
 | `orbit.docs.add` | - | - | DocsAdd only registers a validated repo-relative path; it does not persist document content. |
 
@@ -34,13 +36,29 @@ bundle, history, or write-journal persistence. The tool policy above additionall
 normalizes home paths and reports redaction metadata for tool calls. Existing
 records and raw artifact bytes retain their existing contracts.
 
+`orbit.task.reconcile_review` sanitizes its free-text `reason` and returned
+reconciliation response; its selected `command` is preserved byte-for-byte for
+exact evidence matching.
+
 The table establishes the artifact boundary: tasks, frictions, and auto-task definitions are covered on their listed write operations. `DocsAdd` makes an explicit no-redaction decision because it only registers a checked path; registered docs remain ordinary repository files rather than a tool mutation primitive. The retired ADR tools are refused by the tool host before any write, so they have no field policy. Session-log writes are no longer a public tool mutation, so they are not in this inventory ([ORB-11097]).
 
 `policy_for_action` exhaustively matches `OrbitBuiltinAction`. Adding any builtin action therefore fails to compile until it receives either a field policy or an explicit no-redaction decision, instead of falling through to an unredacted default.
 
 ## Pattern Set
 
-Free-text fields first replace values of live environment variables whose names are credential-shaped (`SECRET`, `TOKEN`, `PASSWORD`, `API_KEY`, `PRIVATE`, `CREDENTIAL`, `COOKIE`, `SESSION`, `BEARER`, or `AUTH`). The shared structural patterns then mask:
+Free-text fields first replace eligible values of live environment variables
+whose names indicate credentials: names containing `SECRET`, `TOKEN`,
+`PASSWORD`, `PASSWD`, `PASSCODE`, `API_KEY`, `PRIVATE`, `CREDENTIAL`,
+`COOKIE`, `BEARER`, or an `AUTH`-family segment other than `AUTHOR`,
+`AUTHORS`, or `AUTHORED`; names ending in `_KEY` and
+most names containing `SESSION` are also covered. Well-known non-credential
+session metadata such as `XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`,
+`SESSION_MANAGER`, and `TERM_SESSION_ID` is exempt unless the name also
+contains a credential indicator. After trimming, values shorter than four
+bytes, the ordinary values `user`, `true`, `false`, `none`, `null`, `root`,
+`main`, `test`, `prod`, `local`, and `auto`, and pure ASCII decimal values
+shorter than twelve digits are not substituted. The shared structural
+patterns then mask:
 
 - JSON and raw header forms of `Authorization`, `x-api-key`, and `api_key`; bearer values; and `key` query parameters
 - OpenAI, Google, GitLab, GitHub, AWS, npm, and Slack credential token shapes, AWS secret assignments, and URI user-info passwords

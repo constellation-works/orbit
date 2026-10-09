@@ -1,14 +1,14 @@
 ---
 type: context
 summary: Lessons Learned While Building Orbit
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Lessons Learned While Building Orbit
 
 **Status:** Draft
 **Owner:** Daniel
-**Last updated:** 2026-09-06
+**Last updated:** 2026-10-09
 
 I am dedicating this place to record some of the lessons we learned along the way. These lessons may not apply to everyone or in every case, but they shaped some of the decisions we made.
 
@@ -47,7 +47,7 @@ In short, v3 results suggest MCP tools win the matchup against a generic `exec_c
 
 ## 2. The May 2026 Artifact Loss Incident
 
-On 2026-05-11, hundreds of task artifacts were wiped out due to our reckless workspace cleanup. These artifacts are now gone for good, and can never be recovered. The only way to prevent this from happening again is to implement a backup and recovery system for task artifacts.
+On 2026-05-11, hundreds of task artifacts were wiped out due to our reckless workspace cleanup. The lost copies could not be recovered. Orbit now supports portable `orbit task export` / `orbit task import` archives and an explicit per-workspace task-publication workflow that can restore published snapshots, but those workflows only recover copies that were made and retained before the loss.
 
 The original numbered decision cited for that proposal was among the bodies lost to worktree reaping. This lesson preserves only the proposal already recorded here; it does not reconstruct the missing rationale. The same incident temporarily orphaned the bodies now preserved as MCP ambient workspace session context (since folded into [mcp-session-context decisions](design/mcp-session-context/4_decisions.md)), [The v2 shell activity surface is removed, not sandboxed](design/activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed), [Default Claude to opus/sonnet CLI aliases; centralize model defaults in orbit-common::model_defaults](design/agent-families/4_decisions.md#default-claude-to-opussonnet-cli-aliases-centralize-model-defaults-in-orbit-commonmodel_defaults), and [PR handoff recovery follows job checkpoints and exact remote leases](design/activity-job/4_decisions.md#pr-handoff-recovery-follows-job-checkpoints-and-exact-remote-leases).
 
