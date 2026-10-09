@@ -34,6 +34,11 @@ let activeRunLogs = [];
 let activeRunLogsError = null;
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
+// The Step Timeline is drawn at the panel's pixel width; this observer
+// redraws it when that width changes.
+let ganttResizeObserver = null;
+let ganttObservedPanel = null;
+let ganttDrawnWidth = 0;
 
 let _runDetailCtx = null;
 
@@ -631,6 +636,29 @@ export function renderRunKnowledge() {
   panel.appendChild(grid);
 }
 
+/** The panel's content-box width in CSS pixels, with a floor for layouts that
+ * have not measured yet (a hidden panel reports 0). */
+function ganttContentWidth(panel) {
+  const style = getComputedStyle(panel);
+  const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  const width = Math.round(panel.clientWidth - padding);
+  ganttDrawnWidth = width > 0 ? width : 0;
+  return Math.max(360, width > 0 ? width : 1000);
+}
+
+function observeGanttWidth(panel) {
+  if (typeof ResizeObserver === "undefined" || ganttObservedPanel === panel) return;
+  if (!ganttResizeObserver) {
+    ganttResizeObserver = new ResizeObserver((entries) => {
+      const width = Math.round(entries[entries.length - 1].contentRect.width);
+      if (width > 0 && Math.abs(width - ganttDrawnWidth) > 1) renderRunGantt();
+    });
+  }
+  if (ganttObservedPanel) ganttResizeObserver.unobserve(ganttObservedPanel);
+  ganttResizeObserver.observe(panel);
+  ganttObservedPanel = panel;
+}
+
 export function renderRunGantt() {
   const panel = $("run-gantt-panel");
   if (!panel) return;
@@ -674,7 +702,10 @@ export function renderRunGantt() {
   const PAD_TOP = 18;
   const ROW_H = 22;
   const BAR_H = 14;
-  const W_TOTAL = 1000;  // virtual viewBox width; SVG rescales to container
+  // One viewBox unit per CSS pixel, so labels keep their font metrics at any
+  // panel width. A stretched fixed-width viewBox distorted the text.
+  const W_TOTAL = ganttContentWidth(panel);
+  observeGanttWidth(panel);
   const innerW = W_TOTAL - PAD_LEFT - PAD_RIGHT;
   const totalH = PAD_TOP + steps.length * ROW_H + 18;
   const span = derivedEnd - derivedStart;
@@ -684,7 +715,6 @@ export function renderRunGantt() {
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("class", "gantt-svg");
   svg.setAttribute("viewBox", `0 0 ${W_TOTAL} ${totalH}`);
-  svg.setAttribute("preserveAspectRatio", "none");
   svg.style.height = `${totalH}px`;
 
   // Lane backgrounds + step-index labels.
