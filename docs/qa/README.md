@@ -1,3 +1,9 @@
+---
+type: context
+summary: "This directory holds coverage records from QA passes."
+last_validated: 2026-10-08
+---
+
 # QA evidence
 
 This directory holds coverage records from QA passes. Each file maps a surface to the named tests and probes that demonstrated its behavior at the time of the pass, and lists the paths that pass left unproven. These files are records, not user or developer documentation, so they sit apart from the reference docs.
