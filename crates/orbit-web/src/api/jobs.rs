@@ -249,6 +249,7 @@ fn job_run_list_params(
         since: query.since,
         limit,
         order_by: JobRunOrder::Recency,
+        ..Default::default()
     }
 }
 

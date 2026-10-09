@@ -183,6 +183,21 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    for id in orbit_core::application::job::job_run_task_ids(&run) {
+        let title = match runtime.get_task(&id) {
+            Ok(task) => Some(task.title),
+            Err(error) => {
+                tracing::debug!(%id, %error, "run task title unavailable");
+                None
+            }
+        };
+        header.push_str(&format!(
+            "\n{} {}{}",
+            crate::output::color::bold("Task:"),
+            id,
+            title.map(|title| format!(" — {title}")).unwrap_or_default()
+        ));
+    }
     let cause_lines = format_root_cause_lines(&root_causes);
     if !cause_lines.is_empty() {
         header.push('\n');

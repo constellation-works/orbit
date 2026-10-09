@@ -1,5 +1,7 @@
 //! Shared JSON projection for persisted job runs.
 
+use std::collections::BTreeSet;
+
 use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
 use serde_json::{Value, json};
 
@@ -13,6 +15,27 @@ pub struct ActivityInvocationEvidence {
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
+}
+
+/// Task identities recorded in submitted run input, without any task-store reads.
+/// Array and singular bindings share the dashboard's sorted, deduplicated shape.
+pub fn job_run_task_ids(run: &JobRun) -> Vec<String> {
+    let Some(input) = run.input.as_ref() else {
+        return Vec::new();
+    };
+    input
+        .get("task_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain(input.get("task_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// The step whose error explains a run's outcome [ORB-13016].
@@ -51,6 +74,7 @@ pub fn run_error_step(run: &JobRun) -> Option<&JobRunStep> {
 /// overrides `child_dispatches`, which remains the record of who dispatched
 /// whom.
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
+    let task_ids = job_run_task_ids(run);
     let last = run.steps.last();
     let error_step = run_error_step(run);
     let child_dispatches = serde_json::to_value(
@@ -98,7 +122,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     .and_then(|result| serde_json::to_value(result).ok())
     .unwrap_or(Value::Null);
 
-    json!({
+    let mut value = json!({
         "agent_invocation": agent_invocation,
         "child_dispatches": child_dispatches,
         "drain_worker_limit": drain_worker_limit,
@@ -144,7 +168,9 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             "error_message": step.error_message,
         })).collect::<Vec<_>>(),
         "created_at": run.created_at.to_rfc3339(),
-    })
+    });
+    value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
+    value
 }
 
 /// Add activity-level provider/model evidence to the stable job-run projection.

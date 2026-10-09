@@ -517,6 +517,18 @@ fn job_run_filter_sql(
         conditions.push(format!("state = ?{}", params.len() + 1));
         params.push(Box::new(state.to_string()));
     }
+    if !query.states.is_empty() {
+        let placeholders = query
+            .states
+            .iter()
+            .map(|state| {
+                params.push(Box::new(state.to_string()));
+                format!("?{}", params.len())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!("state IN ({placeholders})"));
+    }
     if query.terminal_only {
         conditions.push(
             "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held')"

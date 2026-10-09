@@ -294,6 +294,8 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
     value["steps"] = serde_json::to_value(&run.steps)
         .map_err(serialize_error("serialize workflow run steps"))?;
     value["steps_source"] = json!("record");
+    let task_ids = crate::application::job::job_run_task_ids(run);
+    value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     Ok(value)
 }
 

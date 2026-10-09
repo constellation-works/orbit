@@ -5,24 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_core::{JobRun, OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
-pub(super) fn task_ids(run: &JobRun) -> Vec<String> {
-    let Some(input) = run.input.as_ref() else {
-        return Vec::new();
-    };
-    input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .chain(input.get("task_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
+use orbit_core::application::job::job_run_task_ids as task_ids;
 
 /// One metadata listing for the selected runs, never a task-body read per row.
 pub(super) fn task_titles<'a>(
