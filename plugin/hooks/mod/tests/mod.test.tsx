@@ -4,6 +4,8 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import type { OrbitShip } from '../../../types'
+import { PIPELINE } from '../model'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -16,13 +18,24 @@ const TASKS = [
 
 type Ran = { args: string[]; isRemote: boolean }
 
+function observeShip(on: On): () => OrbitShip | null {
+  let ship: OrbitShip | null = null
+  on('state.set', (_$, e, next) => {
+    if (e.key === 'ship') ship = e.value as OrbitShip | null
+    return next(e)
+  })
+  return () => ship
+}
+
 /** Answers every process the mod runs as an owner checkout of workspace `demo` would. */
-function fakeOrbit(on: On, ran: Ran[]): void {
+function fakeOrbit(on: On, ran: Ran[], answer?: (args: string[]) => unknown): void {
   on('process.run', (_$, e) => {
     const isRemote = e.argv[0] === 'ssh'
     const args = isRemote ? (e.argv.at(-1) ?? '').split(' ').slice(2).map(arg => arg.replace(/^'|'$/g, '')) : e.argv.slice(4)
     ran.push({ args, isRemote })
     const reply = (stdout: unknown) => ({ value: { exitCode: 0, stdout: JSON.stringify(stdout), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    const answered = answer?.(args)
+    if (answered !== undefined) return reply(answered)
     if (args[0] === 'workspace') return reply({ registered: true, workspace: { name: 'demo' }, checkout: { role: 'owner' } })
     if (args[0] === 'task' && args[1] === 'list') return reply(args.includes('done') ? [] : TASKS)
     if (args[0] === 'run' && args[1] === 'readiness') return reply({ tasks: [{ task_id: args[2], eligible: true, conflicts: [] }] })
@@ -96,6 +109,121 @@ test('Ship… on a backlog task opens the preflight with Launch armed', async ($
     await ui.press({ key: 'clear' })
     await ui.unmount()
   }
+})
+
+for (const surface of SURFACES) {
+  test(`Launch follows the leaf's steps while its coordinator is running on ${surface}`, async ($, on) => {
+    const ran: Ran[] = []
+    let dispatched = false
+    let completed = false
+    let landed = false
+    fakeOrbit(on, ran, args => {
+      if (args[0] !== 'run') return undefined
+      if (args[1] === 'ship') return { run_id: 'jrun-coordinator' }
+      if (args[1] === 'show') {
+        const runId = args[2]
+        const job = runId === 'jrun-coordinator' ? 'task_auto_pipeline' : runId === 'jrun-gate' ? 'task_gate_pipeline' : 'task_pr_pipeline'
+        const children = runId === 'jrun-coordinator'
+          ? (dispatched ? [{ child_run_id: 'jrun-other', job_name: 'task_pr_pipeline' }, { child_run_id: 'jrun-gate', job_name: 'task_gate_pipeline' }] : [])
+          : runId === 'jrun-gate' ? [{ child_run_id: 'jrun-leaf', job_name: 'task_pr_pipeline' }] : []
+        return {
+          run: { job_id: job, task_ids: [runId === 'jrun-other' ? 'ORB-1' : 'ORB-2'], state: landed || (runId === 'jrun-leaf' && completed) ? 'success' : 'running' },
+          pipeline_state: { child_dispatches: children },
+        }
+      }
+      if (args[1] === 'events') return args[2] === 'jrun-leaf'
+        ? { events: completed ? PIPELINE.map(step => ({ event_type: 'step.finished', step_id: step.id })) : [
+            { event_type: 'step.started', step_id: 'worktree' },
+            { event_type: 'step.finished', step_id: 'worktree' },
+            { event_type: 'step.started', step_id: 'implement_bundle' },
+          ] }
+        : { events: [{ event_type: 'step.started', step_id: 'gate_invoke' }] }
+      return undefined
+    })
+    on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: { answers: { 'Ship ORB-2 through the PR pipeline?': 'Ship it' } } }))
+    const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+    const ship = observeShip(on)
+    await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+    await clock.advance(0)
+    await $.command.run({ command: 'orbit-ship', args: 'ORB-2' } as never)
+    const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
+    await ui.press({ key: 'launch' })
+    await clock.advance(5000)
+    expect(ship()?.phase).toBe('flying')
+    expect(ship()?.steps.every(state => state === 'pending')).toBe(true)
+
+    dispatched = true
+    await clock.advance(5000)
+    const flying = ship()
+    expect(flying?.runId).toBe('jrun-coordinator')
+    expect(flying?.phase).toBe('flying')
+    expect(flying?.steps.slice(0, 3)).toEqual(['done', 'active', 'pending'])
+    expect(ran.some(run => run.args.slice(0, 3).join(' ') === 'run events jrun-leaf')).toBe(true)
+    expect(ran.some(run => run.args.slice(0, 3).join(' ') === 'run events jrun-other')).toBe(false)
+    expect(await ui.find({ key: 'clear' })).toBeUndefined()
+
+    completed = true
+    await clock.advance(5000)
+    expect(ship()?.steps.every(state => state === 'done')).toBe(true)
+    expect(ship()?.phase).toBe('flying')
+    landed = true
+    await clock.advance(5000)
+    expect(ship()?.phase).toBe('landed')
+    expect(await ui.find({ key: 'clear' })).toBeDefined()
+    const polls = ran.length
+    await clock.advance(5000)
+    expect(ran.length).toBe(polls)
+    await ui.unmount()
+  })
+}
+
+test('a coordinator failure before dispatch ends the ship with no completed steps', async ($, on) => {
+  let failed = false
+  fakeOrbit(on, [], args => {
+    if (args[0] !== 'run') return undefined
+    if (args[1] === 'ship') return { run_id: 'jrun-coordinator' }
+    if (args[1] === 'show') return { run: { job_id: 'task_auto_pipeline', state: failed ? 'failed' : 'running', error_message: failed ? 'Admission failed\nDetails' : null }, pipeline_state: null }
+    if (args[1] === 'events') return { events: [] }
+    return undefined
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: { answers: { 'Ship ORB-2 through the PR pipeline?': 'Ship it' } } }))
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  const ship = observeShip(on)
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+  await $.command.run({ command: 'orbit-ship', args: 'ORB-2' } as never)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'launch' })
+  failed = true
+  await clock.advance(5000)
+  const stopped = ship()
+  expect(stopped?.phase).toBe('failed')
+  expect(stopped?.message).toBe('Admission failed')
+  expect(stopped?.steps.every(state => state === 'pending')).toBe(true)
+  expect(await ui.find({ key: 'rescue' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Board tracking reads the leaf directly and marks its active step failed', async ($, on) => {
+  const ship = observeShip(on)
+  fakeOrbit(on, [], args => {
+    if (args[0] === 'task' && args[1] === 'list') return args.includes('done') ? [] : TASKS.map(task => task.id === 'ORB-1' ? { ...task, status: 'in-progress' } : task)
+    if (args[0] !== 'run') return undefined
+    if (args[1] === 'show') return { run: { job_id: 'task_pr_pipeline', state: 'failed', error_message: 'Implementation failed' } }
+    if (args[1] === 'events') return { events: [{ event_type: 'step.finished', step_id: 'worktree' }, { event_type: 'step.started', step_id: 'implement_bundle' }] }
+    return undefined
+  })
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'card:ORB-1' })
+  await ui.press({ key: 'track' })
+  const stopped = ship()
+  expect(stopped?.runId).toBe('jrun-1')
+  expect(stopped?.phase).toBe('failed')
+  expect(stopped?.steps.slice(0, 3)).toEqual(['done', 'failed', 'pending'])
+  await ui.unmount()
 })
 
 test('a replica checkout reads its owner over SSH when ownerHost is set', { options: { ownerHost: 'owner-box' } }, async ($, on) => {

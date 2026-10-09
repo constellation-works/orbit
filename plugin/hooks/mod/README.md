@@ -27,9 +27,11 @@ this folder.
   - **Ship.** First a preflight checks that the task is in backlog, its
     dependencies are done, no other ship is running, and its files are
     free of other tasks' locks (`orbit run readiness`). Then
-    `orbit run ship` runs and the view tracks the run through the 12 steps
-    of `task_pr_pipeline`. On desktop and VS Code the trajectory is drawn
-    as an SVG.
+    `orbit run ship` launches a coordinator. The view follows its recorded
+    child dispatches to the task's `task_pr_pipeline` run for the 12-step
+    track, retrying while delivery is waiting to start. The coordinator's
+    terminal state decides whether the ship landed or failed. On desktop
+    and VS Code the trajectory is drawn as an SVG.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
   context.
