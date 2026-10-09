@@ -28,7 +28,7 @@ use orbit_types::workflow::{
 use super::*;
 use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied,
+    FinalRecoveryApplied, TaskAutomationUpdate,
 };
 use crate::executor::automation::vcs::absorbed::{
     AbsorbedCandidate, is_candidate_absorbed, verify_absorbed_candidate,
@@ -184,7 +184,7 @@ pub(super) fn attempt_final_recovery(
             workspace_path: worktree.workspace_path.into(),
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         };
-        return conclude(job, ctx, step, activity, &application, None);
+        return conclude(job, ctx, step, activity, &application, None, None);
     }
     // [ORB-14668] A candidate conflict recovery found already on the pinned
     // base is settled from the host-certified evidence, re-observed here,
@@ -255,7 +255,7 @@ pub(super) fn attempt_final_recovery(
                 .to_string(),
         },
     };
-    let (mut decision, mut resume_index) = admit_resume_step(job, step_index, decision);
+    let (mut decision, mut resume_index, downgrade) = admit_resume_step(job, step_index, decision);
     let repair_commit = resume_index
         .and_then(|_| observe_repair_commit(&worktree.workspace_path, head_before.as_deref()));
     if repair_commit.is_some()
@@ -283,7 +283,15 @@ pub(super) fn attempt_final_recovery(
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
-    conclude(job, ctx, step, activity, &application, resume_index)
+    conclude(
+        job,
+        ctx,
+        step,
+        activity,
+        &application,
+        resume_index,
+        downgrade.as_deref(),
+    )
 }
 
 /// Hand the host a `complete_no_diff` for a verified absorbed candidate's
@@ -314,7 +322,7 @@ fn settle_absorbed(
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
-    conclude(job, ctx, step, activity, &application, None)
+    conclude(job, ctx, step, activity, &application, None, None)
 }
 
 fn observe_repair_commit(
@@ -348,12 +356,35 @@ fn conclude(
     activity: &ResolvedRecoveryActivity,
     application: &FinalRecoveryApplication,
     resume_index: Option<usize>,
+    downgrade: Option<&str>,
 ) -> FinalRecoveryVerdict {
     let applied = ctx.host.apply_final_recovery(&ctx.run_id, application);
     let kind = Some(application.decision.kind());
     match (applied, resume_index) {
         (Ok(FinalRecoveryApplied::Resume), Some(index)) => {
-            let detail = format!("rerunning from step `{}`", job.steps[index].id);
+            let mut detail = format!("rerunning from step `{}`", job.steps[index].id);
+            if let Some(downgrade) = downgrade {
+                detail.push_str(&format!("; {downgrade}"));
+                if let Err(error) = ctx.host.apply_task_automation_update(
+                    &application.task_id,
+                    TaskAutomationUpdate {
+                        append_comments: vec![orbit_types::task::TaskComment {
+                            at: chrono::Utc::now(),
+                            by: "system".to_string(),
+                            message: format!("Final recovery for run `{}`: {detail}.", ctx.run_id),
+                        }],
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::warn!(
+                        target: "orbit.engine.job_executor",
+                        run_id = %ctx.run_id,
+                        error = %error,
+                        "final recovery resume downgrade task comment not recorded"
+                    );
+                    detail.push_str(&format!("; task comment could not be recorded: {error}"));
+                }
+            }
             emit_final_recovery_event(ctx, step, activity, "resume", kind, Some(&detail));
             FinalRecoveryVerdict::Resume(index)
         }
@@ -440,6 +471,8 @@ fn final_recovery_input(
         ),
         "step_outputs": bounded_recovery_input(&ctx.run_id, ctx.pipeline_value()),
         "step_ids": job.steps.iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
+        "allowed_resume_step_ids": job.steps[1..=step_index]
+            .iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
         "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
     });
     inject_recovery_evidence(ctx, &mut input)?;
@@ -471,11 +504,19 @@ fn dispatch_final_recovery(
     activity: &ResolvedRecoveryActivity,
     input: &Value,
 ) -> Result<Value, String> {
-    let spec = crew_overridden_recovery_spec(activity, ctx, input)
-        .map_err(|error| format!("crew: {error}"))?;
+    let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
+        .map_err(|error| format!("crew: {error}"))?
+        .unwrap_or_else(|| activity.spec.clone());
+    if let ActivityV2Spec::AgentLoop(agent) = &mut spec {
+        agent.instruction.push_str(&format!(
+            "\n\nFor this failure, resume only from one of these step ids. The first \
+             admission step and later steps are excluded.\nAllowed resume step ids: {}",
+            input["allowed_resume_step_ids"]
+        ));
+    }
     let dispatch = dispatch_v2_activity_without_run_id_injection(V2DispatchInput {
         activity_name: &activity.name,
-        spec: spec.as_ref().unwrap_or(&activity.spec),
+        spec: &spec,
         fs_profile: step_fs_profile(step),
         input: input.clone(),
         audit: ctx.audit.clone(),
@@ -522,8 +563,10 @@ fn decision_payload(output: &Value) -> Value {
     )
 }
 
-/// Keep a `resume` only when it names the failed step or an earlier step of
-/// its phase; otherwise it becomes `escalate`.
+/// Keep a `resume` when it names the failed step or an earlier step of its
+/// phase. A later step downgrades to the failed step, preserving the intent
+/// to continue without skipping the failed contract. Missing and admission
+/// steps still become `escalate`.
 ///
 /// Phases are top-level steps — the executor's checkpoint and resume unit —
 /// so a step nested in a block resumes by naming its block. The job's first
@@ -533,15 +576,27 @@ fn admit_resume_step(
     job: &JobV2,
     failed_index: usize,
     decision: FinalRecoveryDecision,
-) -> (FinalRecoveryDecision, Option<usize>) {
-    let FinalRecoveryDecision::Resume { step_id, .. } = &decision else {
-        return (decision, None);
+) -> (FinalRecoveryDecision, Option<usize>, Option<String>) {
+    let FinalRecoveryDecision::Resume { step_id, rationale } = &decision else {
+        return (decision, None, None);
     };
     let step_id = step_id.trim();
     let target = job.steps.iter().position(|step| step.id == step_id);
     match target {
-        Some(index) if index == failed_index || (1..failed_index).contains(&index) => {
-            (decision, Some(index))
+        Some(index) if (1..=failed_index).contains(&index) => (decision, Some(index), None),
+        Some(index) if index > failed_index => {
+            let failed = &job.steps[failed_index].id;
+            let downgrade = format!(
+                "downgraded resume from `{step_id}` to failed step `{failed}` to rerun its contract"
+            );
+            (
+                FinalRecoveryDecision::Resume {
+                    step_id: failed.clone(),
+                    rationale: rationale.clone(),
+                },
+                Some(failed_index),
+                Some(downgrade),
+            )
         }
         _ => {
             let failed = &job.steps[failed_index].id;
@@ -556,6 +611,7 @@ fn admit_resume_step(
                          step after the first, or move the task by hand."
                     ),
                 },
+                None,
                 None,
             )
         }

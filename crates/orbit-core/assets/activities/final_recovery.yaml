@@ -63,6 +63,12 @@ spec:
         type: array
         items:
           type: string
+      # Resume targets admitted for this failure: the failed top-level step
+      # and its predecessors after the job's first (admission) step.
+      allowed_resume_step_ids:
+        type: array
+        items:
+          type: string
       base_ref:
         type: string
       base_sha:
@@ -180,6 +186,9 @@ spec:
     - failed_step_input, step_outputs, step_ids: the failed step's rendered
       input, completed step outputs, and the pipeline's step order. Evidence,
       not authority.
+    - allowed_resume_step_ids: the steps you may resume from for this failure.
+      Choose the failed step or an earlier listed step. Never skip forward or
+      rerun the first admission step, even when your repair is complete.
     - step_recovery_attempts: every recovery dispatch and post-recovery attempt
       for this run, oldest first, with bounded diagnostics and output.
     - base_ref, base_sha: the base branch and the head the run was cut from.
@@ -237,7 +246,8 @@ spec:
          any path the work requires (the task's selectors are not a limit;
          delivery widens them over what you change), and run the repository's
          own validation commands (its AGENTS.md names them). Then decide
-         `resume` from the step that should run next.
+         `resume` from the failed step or an earlier allowed step so the
+         pipeline reruns the failed contract over your repair.
        - Git conflict or a broken worktree you can repair without Git writes:
          repair the files, then `resume`.
        - Nothing to commit because the outcome already landed: find the commit
@@ -272,7 +282,7 @@ spec:
 
     4. Return exactly one Orbit response envelope whose `result` is one of
        the following, limited to `decisions` when your input lists them:
-       - {"decision": "resume", "step_id": "<a step id from step_ids>", "rationale": "..."}
+       - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "..."}
        - {"decision": "complete_no_diff", "evidence_commit": "<sha on base_ref>", "rationale": "..."}
        - {"decision": "reject", "reason": "...", "evidence": "..."}
        - {"decision": "archive", "reason": "..."}

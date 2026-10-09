@@ -110,6 +110,16 @@ impl RuntimeHost for FailingPipeline<'_> {
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         RuntimeHost::apply_final_recovery(&self.fixture.runtime, run_id, application)
     }
+
+    fn apply_task_automation_update(
+        &self,
+        task_id: &str,
+        update: TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.fixture
+            .runtime
+            .apply_task_automation_update(task_id, update)
+    }
 }
 
 fn failing_job() -> JobV2 {
@@ -123,7 +133,7 @@ fn failing_job() -> JobV2 {
             "spec": {
                 "state": "enabled",
                 "kind": "workflow",
-                "steps": [step("setup"), step("implement")],
+                "steps": [step("setup"), step("implement"), step("deliver")],
             },
         })
         .to_string(),
@@ -232,6 +242,61 @@ fn fail_pipeline(
         })
         .collect();
     (before, attempts)
+}
+
+#[test]
+fn a_later_resume_target_records_the_downgrade_on_the_task() {
+    if !super::super::dispatch_admission::isolated(
+        "final_recovery::terminalization::a_later_resume_target_records_the_downgrade_on_the_task",
+    ) {
+        return;
+    }
+    let fixture = fixture("[\"sol\"]");
+    let task = fixture.task();
+    let run = fixture.pipeline_run(&task, "task_pr_pipeline");
+    let (before, attempts) = fail_pipeline(
+        &fixture,
+        &run,
+        &task,
+        json!({"decision": "resume", "step_id": "deliver", "rationale": "repair is ready"}),
+        "review",
+        TaskStatus::InProgress,
+    );
+    let comments = fixture.runtime.get_task_comments(&task).unwrap();
+    let downgrades: Vec<_> = comments
+        .iter()
+        .filter(|comment| {
+            comment
+                .message
+                .contains("downgraded resume from `deliver` to failed step `implement`")
+        })
+        .collect();
+    assert_eq!(
+        downgrades.len(),
+        1,
+        "the real task store retains the downgrade"
+    );
+    assert_eq!(downgrades[0].by, "system");
+    assert!(downgrades[0].message.contains(&run));
+    assert_eq!(
+        serde_json::from_value::<TaskStatus>(before["status"].clone()).unwrap(),
+        TaskStatus::InProgress,
+        "the comment does not settle the task"
+    );
+    assert_eq!(
+        attempts,
+        [
+            ("resume".to_string(), Some("resume".to_string())),
+            ("skipped".to_string(), None),
+        ]
+    );
+    assert_eq!(
+        fixture.state(&run).final_recovery.unwrap().decision,
+        Some(FinalRecoveryDecision::Resume {
+            step_id: "implement".to_string(),
+            rationale: "repair is ready".to_string(),
+        })
+    );
 }
 
 #[test]
