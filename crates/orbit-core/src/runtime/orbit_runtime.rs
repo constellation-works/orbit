@@ -957,7 +957,9 @@ fn orbit_event_to_audit(id: i64, event: OrbitEvent) -> Audit {
 /// environment [ORB-14777].
 fn unset_env_pass_message(unset: &[String]) -> String {
     format!(
-        "`execution.env.pass` names {} unset or empty in this environment, so agents will not          receive {}; a provider that needs one falls back to another login. Drains inherit the          launching shell's environment: start them from a login shell",
+        "`execution.env.pass` names {} unset or empty in this environment, so agents will not \
+         receive {}; a provider that needs one falls back to another login. Drains inherit the \
+         launching shell's environment: start them from a login shell",
         unset.join(", "),
         if unset.len() == 1 { "it" } else { "them" },
     )

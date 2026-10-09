@@ -158,6 +158,13 @@ fn warning_lines(stderr: &str) -> Vec<&str> {
         .collect()
 }
 
+fn assert_warning_has_no_repeated_spaces(warning: &str) {
+    assert!(
+        !warning.as_bytes().windows(2).any(|spaces| spaces == b"  "),
+        "unset env.pass warning contains consecutive spaces: {warning}"
+    );
+}
+
 fn assert_recorded(fixture: &Fixture, started: &Value, unset: &[&str]) {
     let run_id = started["run_id"].as_str().expect("run id");
     let shown = fixture.show(run_id);
@@ -184,6 +191,7 @@ fn job_start_warns_once_naming_only_the_unset_variable_and_records_it() {
     let warnings = warning_lines(&stderr);
     assert_eq!(warnings.len(), 1, "one warning per start: {stderr}");
     assert!(warnings[0].contains(UNSET), "{stderr}");
+    assert_warning_has_no_repeated_spaces(warnings[0]);
     assert!(
         !warnings[0].contains(SET),
         "the set variable is not named as unset: {stderr}"
@@ -214,6 +222,7 @@ fn drain_start_warns_and_records_the_unset_variable() {
     let warnings = warning_lines(&stderr);
     assert_eq!(warnings.len(), 1, "one warning per start: {stderr}");
     assert!(warnings[0].contains(UNSET), "{stderr}");
+    assert_warning_has_no_repeated_spaces(warnings[0]);
     assert_recorded(&fixture, &started, &[UNSET]);
 }
 
