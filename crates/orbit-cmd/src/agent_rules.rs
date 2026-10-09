@@ -47,7 +47,9 @@ pub struct InjectAgentRulesResult {
 /// through to the file it names: the atomic rename would otherwise replace
 /// the link with a copy, and both names would then drift apart. A file
 /// reached through more than one name is written once. Links outside the
-/// workspace are rejected before either guide is changed.
+/// workspace are rejected before either guide is changed, and every target is
+/// planned before any is written: a marker problem in one guide leaves all of
+/// them byte-identical.
 pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResult, OrbitError> {
     let block = normalized_block(AGENT_RULES_TEMPLATE)?;
     let root = std::fs::canonicalize(workspace_root)
@@ -74,12 +76,30 @@ pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResul
         }
     }
 
-    let mut outcomes: Vec<InjectionOutcome> = Vec::with_capacity(TARGET_FILES.len());
-    for path in targets {
-        let action = apply_to_file(&path, &block)?;
-        outcomes.push(InjectionOutcome { path, action });
+    let plans = targets
+        .into_iter()
+        .map(|path| plan_file(&path, &block))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut outcomes: Vec<InjectionOutcome> = Vec::with_capacity(plans.len());
+    for plan in plans {
+        if let Some(next) = &plan.next {
+            atomic_write_text(&plan.path, next).map_err(|e| OrbitError::Io(e.to_string()))?;
+        }
+        outcomes.push(InjectionOutcome {
+            path: plan.path,
+            action: plan.action,
+        });
     }
     Ok(InjectAgentRulesResult { outcomes })
+}
+
+/// A target's outcome, with the content it should hold once written.
+struct PlannedWrite {
+    path: PathBuf,
+    action: InjectionAction,
+    /// `None` when the file already holds the block and needs no write.
+    next: Option<String>,
 }
 
 /// Normalize the template to a single trailing newline so the file produced
@@ -97,10 +117,15 @@ fn normalized_block(template: &str) -> Result<String, OrbitError> {
     Ok(block)
 }
 
-fn apply_to_file(path: &Path, block: &str) -> Result<InjectionAction, OrbitError> {
+/// Compute what `path` should hold after injection, without writing it. Every
+/// refusal fires here, so the caller writes nothing unless all targets pass.
+fn plan_file(path: &Path, block: &str) -> Result<PlannedWrite, OrbitError> {
     if !path.exists() {
-        atomic_write_text(path, block).map_err(|e| OrbitError::Io(e.to_string()))?;
-        return Ok(InjectionAction::Created);
+        return Ok(PlannedWrite {
+            path: path.to_path_buf(),
+            action: InjectionAction::Created,
+            next: Some(block.to_string()),
+        });
     }
     let existing = std::fs::read_to_string(path)
         .map_err(|e| OrbitError::Io(format!("read {}: {e}", path.display())))?;
@@ -108,25 +133,29 @@ fn apply_to_file(path: &Path, block: &str) -> Result<InjectionAction, OrbitError
     let has_end = existing.contains(END_MARKER);
     match (has_start, has_end) {
         (false, false) => {
-            let mut next = existing.clone();
+            let mut next = existing;
             if !next.ends_with('\n') {
                 next.push('\n');
             }
             // One blank-line separator between prior content and the block.
             next.push('\n');
             next.push_str(block);
-            atomic_write_text(path, &next).map_err(|e| OrbitError::Io(e.to_string()))?;
-            Ok(InjectionAction::AppendedBlock)
+            Ok(PlannedWrite {
+                path: path.to_path_buf(),
+                action: InjectionAction::AppendedBlock,
+                next: Some(next),
+            })
         }
         (true, true) => {
             let next = splice_block(&existing, block, path)?;
-            if next == existing {
-                // No-op — block already byte-matches; skip the write so file
-                // mtime does not change unnecessarily.
-                return Ok(InjectionAction::ReplacedBlock);
-            }
-            atomic_write_text(path, &next).map_err(|e| OrbitError::Io(e.to_string()))?;
-            Ok(InjectionAction::ReplacedBlock)
+            // No-op when the block already byte-matches; leaving `next` unset
+            // keeps the file's mtime unchanged.
+            let changed = next != existing;
+            Ok(PlannedWrite {
+                path: path.to_path_buf(),
+                action: InjectionAction::ReplacedBlock,
+                next: changed.then_some(next),
+            })
         }
         (true, false) => Err(OrbitError::InvalidInput(format!(
             "{}: contains `{START_MARKER}` without matching `{END_MARKER}` — refusing to write; resolve manually",
