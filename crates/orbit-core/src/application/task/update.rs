@@ -60,6 +60,11 @@ struct TaskUpdateContext {
     /// Orbit's own deterministic writer: artifacts record
     /// [`ArtifactWriter::System`]. Only `update_task_as_system` sets it.
     system_writer: bool,
+    /// A move into `in-progress` by a caller that is not a trusted operator
+    /// starts work, so it is written as a `started` event and the store runs
+    /// the execution-claim footprint guard, as the tool surface does. Only the
+    /// attributed CLI entry point sets it.
+    guard_work_start: bool,
 }
 
 /// A locked write's result plus what the after-lock side effects need: the
@@ -111,6 +116,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
+                guard_work_start: true,
                 ..Default::default()
             },
         )
@@ -312,6 +318,7 @@ impl OrbitRuntime {
             calling_run_id,
             operator_decision_authority,
             system_writer,
+            guard_work_start,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
             Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
@@ -505,9 +512,21 @@ impl OrbitRuntime {
         }
         // A forced transition is still a transition: naming it in history is
         // what separates a human override from a governed lifecycle move.
-        let status_event = (status_authority == StatusAuthority::Forced
-            && requested_status.is_some())
-        .then(|| FORCED_STATUS_EVENT.to_string());
+        let status_event =
+            if status_authority == StatusAuthority::Forced && requested_status.is_some() {
+                Some(FORCED_STATUS_EVENT.to_string())
+            } else if guard_work_start
+                && requested_status == Some(TaskStatus::InProgress)
+                && !(operator_write && !agent_context_declared())
+            {
+                // An agent or managed-run shell moving a task into `in-progress`
+                // starts work. Only a trusted operator's move (including the
+                // rescue close of a blocked task) is exempt from the footprint
+                // guard the store runs for a work-starting event.
+                Some("started".to_string())
+            } else {
+                None
+            };
         let evidence_attached = !params.upsert_artifacts.is_empty();
         let previous_status = task.status;
         let written_note = status_note.clone();

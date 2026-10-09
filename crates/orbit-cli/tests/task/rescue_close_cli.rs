@@ -114,8 +114,34 @@ fn operator_closes_rescued_blocked_task_without_force_while_another_run_claims_i
         assert_eq!(status(&tool_task), expected);
     }
 
-    // The same close-out through `orbit task update`, without --force.
+    // `orbit task update` from an agent shell starts work too: a backlog or
+    // blocked task is refused on the claimed files with the claim named, with
+    // or without the close-out summary.
     let cli_task = add("rescued through the CLI", TaskStatus::Blocked);
+    let backlog_task = add("started through the CLI", TaskStatus::Backlog);
+    for (task, from, extra) in [
+        (&cli_task, "blocked", &["--execution-summary", summary][..]),
+        (&backlog_task, "backlog", &[][..]),
+    ] {
+        let mut args = vec!["task", "update", task.as_str(), "--status", "in-progress"];
+        args.extend_from_slice(extra);
+        let refused = fixture
+            .command(&args)
+            .env("ORBIT_AGENT_NAME", "claude")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success()
+                && stderr.contains("task footprint overlaps an execution claim")
+                && stderr.contains(&holder)
+                && stderr.contains("jrun-holder-42"),
+            "agent CLI start from {from} must be refused naming the claim's task and run: {stderr}"
+        );
+        assert_eq!(status(task), from);
+    }
+
+    // The same close-out through `orbit task update`, without --force.
     for (args, expected) in [
         (
             vec!["--status", "in-progress", "--execution-summary", summary],
