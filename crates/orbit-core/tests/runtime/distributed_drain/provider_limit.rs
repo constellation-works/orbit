@@ -37,6 +37,7 @@ fn codex_reading(used_percent: f64, resets_at: chrono::DateTime<Utc>) -> Provide
         used_percent: Some(used_percent),
         window_minutes: Some(300),
         gating: true,
+        partial: false,
         observed_at: Utc::now(),
         run_id: None,
         crew: None,

@@ -9,6 +9,7 @@ mod context_widening;
 mod desktop;
 mod provider_hold;
 pub(crate) mod provider_limit;
+mod provider_limit_ledger;
 mod provider_limit_view;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;

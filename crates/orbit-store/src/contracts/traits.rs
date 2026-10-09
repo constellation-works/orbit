@@ -20,7 +20,7 @@ use super::friction::{
 use super::invocation::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    TaskInvocationMetrics, ToolInvocationMetrics,
+    ProviderLedgerEntry, TaskInvocationMetrics, ToolInvocationMetrics,
 };
 use super::params::*;
 use super::routine::{
@@ -504,6 +504,16 @@ pub trait InvocationStoreBackend: Send + Sync {
         &self,
         query: &InvocationAccountingQuery,
     ) -> Result<Vec<InvocationAccountingFact>, OrbitError>;
+    /// Every invocation of the provider recorded at or after `since`,
+    /// oldest first, across every workspace on this host [ORB-14699].
+    /// `provider_names` are the names the provider goes by: its canonical
+    /// name and aliases. An invocation recorded without a provider is
+    /// attributed by its agent.
+    fn list_provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProviderLedgerEntry>, OrbitError>;
     fn list_activity_invocation_metrics(
         &self,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError>;

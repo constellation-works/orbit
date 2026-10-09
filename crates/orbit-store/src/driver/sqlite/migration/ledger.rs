@@ -409,12 +409,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_provider_limit_readings,
     },
+    // ORB-14699: the provider an invocation ran on, beside its agent. One new
+    // nullable column, so older binaries keep inserting.
+    Migration {
+        version: 42,
+        name: "invocation_provider",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_invocation_provider,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 41;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 42;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -71,6 +71,7 @@ mod persistence;
 mod plugin_enablement;
 mod plugins;
 mod provider_limit;
+mod provider_limit_budget;
 mod raw;
 mod registry;
 mod resolved;
@@ -105,6 +106,7 @@ pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use provider_limit::{
     DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
 };
+pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
     ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,

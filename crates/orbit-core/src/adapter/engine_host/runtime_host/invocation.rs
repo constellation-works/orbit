@@ -1,10 +1,20 @@
 use orbit_engine::DispatchError;
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::telemetry::InvocationTrace;
+use orbit_types::workflow::Provider;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::task_context;
+
+/// The canonical name of `provider`, lower-cased as given when it is not a
+/// known one.
+fn canonical_provider(provider: &str) -> String {
+    Provider::parse(provider).map_or_else(
+        |_| provider.trim().to_ascii_lowercase(),
+        |parsed| parsed.as_str().to_string(),
+    )
+}
 
 pub(super) fn persist_invocation_trace(
     runtime: &OrbitRuntime,
@@ -27,6 +37,7 @@ pub(super) fn persist_invocation_trace(
             job_run_id: job_run_id.to_string(),
             activity_id: activity_id.to_string(),
             agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
+            provider: Some(canonical_provider(provider)),
             model,
             task_ids: task_context::associated_task_ids(input),
             trace: trace.clone(),

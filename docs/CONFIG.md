@@ -92,6 +92,7 @@ xhard_complexity_crews = []
 final_recovery_crews = ["sol:100", "opus:20"]
 provider_limit_max_used_pct = 90
 provider_limit_overrides = []
+provider_limit_budgets = []
 provider_limit_explicit_crews = "wait"
 ```
 
@@ -104,6 +105,7 @@ provider_limit_explicit_crews = "wait"
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to `["sol:100", "opus:20"]`, keeping only the members the crew registry defines; `[]` disables final recovery. See [final recovery pool](#final-recovery-pool). |
 | `workflow.provider_limit_max_used_pct` | `90` | Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `1`–`100`; `100` skips only on exhaustion. See [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing `provider_limit_max_used_pct`, each `provider:percent` (for example `["claude:80", "grok:100"]`). Each provider is named once, the percent is `1`–`100`, and an alias such as `anthropic` is stored as its provider. |
+| `workflow.provider_limit_budgets` | `[]` | Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (for example `["grok:30usd/5h", "antigravity:200000000tokens/24h"]`). Each provider is named once (an alias such as `xai` is stored as `grok`), the amount is positive (a whole number of tokens), and the window is at most 31 days. Counts this host's Orbit runs only: see [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_explicit_crews` | `wait` | What happens to a task whose explicit crew is limited: `wait` keeps it in the backlog until the limit lifts; `pool` draws it from the unlimited members of its complexity pool. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command. While `false`, that command skips the workspace with `auto_ship_disabled`. The seeded `ship-sweep` routine does not read this key; its own `enabled:` flag is its only switch. Neither path grants `--complete` or `--approve-proposed`; a task tagged `no-auto-approve` is never approved automatically by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery, except a [missing tool](#workflowvalidation_env--the-toolchain-required-validation-runs-with) or a failure the base shares, which holds the task until the command passes on a new base tip. Network-inconclusive failures are rerun first. Distributed handoffs must carry exact-candidate validation matching the owner's required list. Before-PR claims also freeze that list in the owner's review contract at admission; a later owner command-list change refuses their handoff rather than replacing the snapshot. A re-run of a task whose failed run preserved a candidate from `commit` or later also runs them on that candidate applied to the new base, to decide whether the implementation step runs at all. A candidate preserved from the implementation step, or from any step before `commit`, always returns to the implementer and these commands are not what decides that ([re-running a task](../crates/orbit-core/assets/skills/orbit-orchestrate/references/workflows.md#re-running-a-task-with-a-preserved-candidate)). An explicit empty list runs no required check, including on claimed handoffs; the other handoff guards still apply. |
@@ -575,6 +577,7 @@ A hold learns about a usage limit only after a run has failed on it. Delivery ad
 [workflow]
 provider_limit_max_used_pct = 90            # default
 provider_limit_overrides = ["claude:80", "grok:100"]
+provider_limit_budgets = ["grok:30usd/5h"]  # none by default
 provider_limit_explicit_crews = "wait"      # or "pool"
 ```
 
@@ -583,6 +586,16 @@ provider_limit_explicit_crews = "wait"      # or "pool"
 - A reading that names a model (Claude's `seven_day_opus`, say) limits only the crews whose model contains it, compared case-insensitively. Any other reading limits every crew of the provider. Provider labels are parsed, so a crew configured as `anthropic` counts as `claude`.
 - A threshold of `100` gates only an exhausted window, so a reading at 99% gates nothing.
 - An overage window (`gating` off) never gates.
+
+**Budgets for providers that report no usage.** Grok, Antigravity and Gemini do not say how close an account is to its limit; Orbit learns it only from the failure that refuses a run. For such a provider, `provider_limit_budgets` declares the operator's allowance as an amount per rolling window, and Orbit gates the provider before the account runs out.
+
+- Each entry is `provider:<amount><unit>/<window>`: a provider (an alias such as `xai` is stored as `grok`), an amount in `usd` or `tokens`, and a window of `<n>h` or `<n>d` up to 31 days. A provider is named once. There are no default budgets. `orbit config set` and a config load reject a malformed entry.
+- The reading is the spend of this host's invocations on that provider in the trailing window, divided by the amount. The result is an account-wide reading with source `ledger`. It is gated like any other reading, at the provider's threshold, and the crews of the provider are skipped while it is at or above that. A `usd` budget sums the cost the provider reported for each invocation. A `tokens` budget sums input plus output tokens, as the invocation ledger totals them.
+- Its reset is the earliest moment enough of the window's oldest spend has aged out for the reading to fall below the threshold. At a threshold of `100` that is the moment it falls below the budget.
+- **Partial readings.** A `usd` budget counts only invocations that recorded a cost. When some invocation in the window recorded none, the reading is marked `partial` (`"partial": true` in `--json`), and every surface notes `partial: some invocations report no cost`. The spend shown is then a lower bound.
+- **Precedence.** A provider-reported reading or a limit failure that is still live takes precedence over the ledger for the same provider, whatever the ledger says. The ledger reading applies again when theirs lapses. It is computed on each read and never stored.
+- **Attribution.** An invocation belongs to the provider it ran on. Invocations recorded before Orbit stored that are attributed by their agent name, so an Antigravity run recorded earlier, which carries its model's family as its agent, is not counted toward an `antigravity` budget.
+- **This host only.** The ledger holds only Orbit runs on this host. Interactive use of the provider, and other hosts sharing the same login, are invisible to it. A budget is therefore the operator's share of the allowance, not the allowance itself: set it below what the account allows, and keep the provider's own failure as the backstop.
 
 **When a reading lapses.** A reading counts until its `resets_at`, and is ignored after it. The crew is eligible again at the next admission pass, without probing the provider. A reading with no reset counts for its window's length, or 60 minutes when that is unknown. An exhausted error reading with no reset counts for the first usage-limit backoff, 30 minutes.
 
@@ -599,12 +612,12 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 
 **Seeing the limits.** Every surface below reads one view of this host's live readings. It uses the same liveness, threshold and crew rules as admission, so a surface cannot show a crew as runnable while admission skips it.
 
-- `orbit run readiness` prints a `Provider limits:` line per gated reading, for example `claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`. A reset on another UTC day is written with its date. Each waiting task's `provider_limit` line carries its detail. `--json` lists every live reading in a top-level `provider_limits` array. Each entry has `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `threshold`, `gated`, `until` and `crews` (the enabled crews it covers).
+- `orbit run readiness` prints a `Provider limits:` line per gated reading, for example `claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`. A reset on another UTC day is written with its date. Each waiting task's `provider_limit` line carries its detail. `--json` lists every live reading in a top-level `provider_limits` array. Each entry has `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (the enabled crews it covers).
 - `orbit run show <pull-drain>` lists a limited crew as `excluded <crew> (provider_limit until <time>): <reading>`.
 - `orbit doctor` reports one `provider-limits:<provider>` row per provider an enabled crew uses:
   - `ok`: below its threshold. The row lists the live readings.
   - `warning`: gated. The row names the window, use, reset and the crews skipped.
-  - `info`: `no usage signal; Orbit learns limits from failures`, for a provider that reports no usage windows: every provider but Codex and Claude.
+  - `info`: `no usage signal; Orbit learns limits from failures`, for a provider that reports no usage windows and has no `provider_limit_budgets` entry: every provider but Codex and Claude. A budgeted provider shows its `ledger` reading, `grok 5h budget 67%` for example, whether or not it is gated.
   - `warning` on `provider-limits:workflow.system_crew` or `provider-limits:operation.review_crew`: that lane's crew uses a gated provider. Those lanes are not gated, so their runs may fail until the reset.
 
   `orbit doctor providers` shows the same rows under each provider's executor: the `LIMITS` column and `provider_limits` in `--json`.

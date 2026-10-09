@@ -323,6 +323,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.provider_limit_budgets": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.provider_limit_explicit_crews": {
       "scope": "built-in",
       "state": "default",

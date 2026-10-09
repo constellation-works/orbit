@@ -1,5 +1,6 @@
 //! Invocation list and accounting queries, and the list filter builder.
 
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::types::ToSql;
 
 use orbit_common::OrbitError;
@@ -10,6 +11,7 @@ use super::hydrate::{
 use crate::Store;
 use crate::contracts::{
     InvocationAccountingFact, InvocationAccountingQuery, InvocationQuery, InvocationRecord,
+    ProviderLedgerEntry,
 };
 
 impl Store {
@@ -49,6 +51,66 @@ impl Store {
 
         hydrate_invocation_records(self, &mut records)?;
         Ok(records)
+    }
+
+    /// Every invocation of the provider since `since`, oldest first, on any
+    /// workspace of this host [ORB-14699].
+    ///
+    /// A row's provider is its `provider` column, else its `agent` for a row
+    /// recorded without one. The timestamps are text of varying fractional
+    /// width, so the query reads a second early and the cut is made on the
+    /// parsed time.
+    pub fn list_provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
+        if provider_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let mut filters = InvocationListQuery::default();
+        filters.push_filter("i.ts >= ?", (since - Duration::seconds(1)).to_rfc3339());
+        let names = provider_names
+            .iter()
+            .map(|name| {
+                filters.push_value(name.to_ascii_lowercase());
+                format!("?{}", filters.len())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        filters
+            .conditions
+            .push(format!("COALESCE(i.provider, LOWER(i.agent)) IN ({names})"));
+        let sql = format!(
+            "SELECT i.ts, i.input_tokens, i.output_tokens, i.provider_cost_usd \
+             FROM invocations i {} ORDER BY i.ts ASC, i.id ASC",
+            filters.where_clause()
+        );
+        let param_refs = filters
+            .params
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<_>>();
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let ts_raw: String = row.get(0)?;
+                Ok(ProviderLedgerEntry {
+                    ts: crate::parse_timestamp(&ts_raw)?,
+                    tokens: (row.get::<_, i64>(1)? as u64)
+                        .saturating_add(row.get::<_, i64>(2)? as u64),
+                    cost_usd: row.get(3)?,
+                })
+            })
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut entries = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        entries.retain(|entry| entry.ts >= since);
+        Ok(entries)
     }
 
     /// Loads every invocation in the requested workspace and half-open window exactly once.

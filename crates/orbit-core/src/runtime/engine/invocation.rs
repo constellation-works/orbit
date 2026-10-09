@@ -7,7 +7,8 @@ use orbit_common::model::pricing::normalize_token_usage;
 use orbit_store::contracts::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationStoreBackend, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
+    InvocationStoreBackend, ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter,
+    ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
@@ -292,6 +293,16 @@ impl OrbitRuntime {
     /// window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         self.context.stores().host.provider_limit.provider_limits()
+    }
+
+    /// [ORB-14699] The provider's invocations since `since`, oldest first,
+    /// across this host; `provider_names` are the names it goes by.
+    pub(crate) fn provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
+        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, since)
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.

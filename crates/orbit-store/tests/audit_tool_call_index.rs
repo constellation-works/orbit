@@ -44,7 +44,7 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
         DROP TABLE provider_limit_observations;
         DELETE FROM schema_meta
             WHERE key IN ('migration.v0037', 'migration.v0038', 'migration.v0039',
-                'migration.v0040', 'migration.v0041');
+                'migration.v0040', 'migration.v0041', 'migration.v0042');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",

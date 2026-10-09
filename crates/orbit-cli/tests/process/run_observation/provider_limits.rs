@@ -39,6 +39,7 @@ fn reading(provider: &str, used_percent: f64, resets_in: Duration) -> ProviderLi
         used_percent: Some(used_percent),
         window_minutes: Some(300),
         gating: true,
+        partial: false,
         observed_at: Utc::now(),
         run_id: None,
         crew: None,

@@ -26,6 +26,11 @@ pub struct InvocationInsertParams {
     pub job_run_id: String,
     pub activity_id: String,
     pub agent: String,
+    /// The canonical provider the invocation ran on, which `agent` does not
+    /// name for every lane: an Antigravity run is attributed to the model's
+    /// family. `None` for a caller that does not know it [ORB-14699].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub model: Option<String>,
     pub task_ids: Vec<String>,
     pub trace: InvocationTrace,
@@ -98,6 +103,17 @@ pub struct InvocationAccountingFact {
     pub task_ids: Vec<String>,
     pub provider_cost_usd: Option<f64>,
     pub derived_cost_usd: Option<f64>,
+}
+
+/// One invocation's spend as a provider budget reads it from the host ledger
+/// [ORB-14699].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderLedgerEntry {
+    pub ts: DateTime<Utc>,
+    /// Input plus output tokens, as the ledger totals an invocation.
+    pub tokens: u64,
+    /// The provider-reported cost; `None` when the invocation recorded none.
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

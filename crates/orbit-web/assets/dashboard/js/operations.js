@@ -2211,7 +2211,9 @@ function autoDrainProviderLimitNote(readings) {
   if (gated.length === 0) return null;
   const lines = gated.map((reading) => {
     const label = `${reading.provider}${reading.scope ? ` [${reading.scope}]` : ""} ${reading.window || "usage window"}`;
-    const usage = reading.used_percent == null ? "exhausted" : `${reading.used_percent}% ≥ ${reading.threshold}%`;
+    const used = reading.used_percent == null ? "exhausted" : `${reading.used_percent}% ≥ ${reading.threshold}%`;
+    // A ledger budget in dollars leaves out invocations that recorded no cost.
+    const usage = reading.partial === true ? `${used} (partial: some invocations report no cost)` : used;
     const crews = Array.isArray(reading.crews) && reading.crews.length ? reading.crews.join(", ") : "no configured crew";
     return `${label} ${usage} until ${time(reading.until)}: ${crews} skipped`;
   });

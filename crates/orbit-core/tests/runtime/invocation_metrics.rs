@@ -16,6 +16,7 @@ fn record(runtime: &OrbitRuntime, task_ids: &[String], scale: u64) {
             job_run_id: "fixture-run".to_string(),
             activity_id: "fixture".to_string(),
             agent: "codex".to_string(),
+            provider: None,
             model: Some("gpt-6.1-sol".to_string()),
             task_ids: task_ids.to_vec(),
             trace: InvocationTrace {
