@@ -76,7 +76,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                          GITHUB_OUTPUT=str(self.output))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
-                self.assertEqual(outputs, dict(self.outputs, version=tag[1:]))
+                self.assertEqual(outputs, dict(self.outputs, version=tag[1:],
+                                               prerelease="true" if "-" in tag else "false"))
+
+    def test_prerelease_release_flag_and_homebrew_formula_gate(self):
+        self.output.write_text("")
+        result = self.run_script(self.metadata, GITHUB_REF_NAME="v1.2.3-rc.1",
+                                 GITHUB_OUTPUT=str(self.output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
+        self.assertEqual(outputs["prerelease"], "true")
+
+        release = next(step for step in self.jobs["publish-release"]["steps"]
+                       if step.get("name") == "Create GitHub Release")
+        self.assertEqual(self.jobs["publish-release"]["outputs"].get("prerelease"),
+                         "${{ steps.metadata.outputs.prerelease }}")
+        self.assertEqual(release["with"].get("prerelease"),
+                         "${{ needs.publish-release.outputs.prerelease }}")
+        self.assertEqual(self.tap.get("if"),
+                         "${{ needs.publish-release.outputs.prerelease == 'false' }}",
+                         "Homebrew formula must not be rewritten for prerelease tags")
 
     def test_metadata_rejects_hostile_and_nonrelease_tags_before_outputs(self):
         for tag in ("1.2.3", "v1.2", "v1.2.3.4", "v1.2.3-", "v1.2.3-rc..1",

@@ -110,7 +110,9 @@ an empty date remains optional.
 
    The metadata step accepts only `vMAJOR.MINOR.PATCH`, optionally followed
    by a prerelease suffix such as `-rc.1`; it rejects other tags before
-   writing release outputs. Homebrew formula inputs pass through environment
+   writing release outputs. A prerelease tag creates a GitHub Release marked
+   as a prerelease and skips the Homebrew tap update; stable tags update the
+   tap. Homebrew formula inputs pass through environment
    variables and are validated before becoming Ruby literals. The tap checkout
    disables credential persistence, and only the push command receives the
    token's authorization header. `make ci-fast` checks this job for expressions
