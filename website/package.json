@@ -12,7 +12,8 @@
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "precheck": "node ./scripts/clean-legacy-metrics.mjs",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
-    "validate:security-txt": "node ./scripts/validate-security-txt.mjs"
+    "validate:security-txt": "node ./scripts/validate-security-txt.mjs",
+    "test:security-txt": "node ./scripts/test-security-txt.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "0.3.4",

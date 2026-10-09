@@ -7,7 +7,7 @@ let content;
 
 try {
   const bytes = await readFile(filePath);
-  content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 } catch (error) {
   errors.push(`${filePath} must be a readable UTF-8 file: ${error.message}`);
 }
