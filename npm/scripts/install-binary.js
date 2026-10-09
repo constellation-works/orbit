@@ -321,6 +321,24 @@ function extractTarGz(archivePath, destDir) {
   validateExtractedBinary(path.join(destDir, 'orbit'));
 }
 
+// Stage the binary beside `destPath` and rename it into place so `destPath`
+// only ever holds a complete, executable file. The bin shim treats an existing
+// file as installed, so a partial copy (ENOSPC, kill) must never land there.
+function installBinary(sourcePath, destPath, fsImpl = fs) {
+  const tempPath = path.join(
+    path.dirname(destPath),
+    `.${path.basename(destPath)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  );
+  try {
+    fsImpl.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+    fsImpl.chmodSync(tempPath, 0o755);
+    fsImpl.renameSync(tempPath, destPath);
+  } catch (err) {
+    fsImpl.rmSync(tempPath, { force: true });
+    throw err;
+  }
+}
+
 async function main() {
   if (process.env.ORBIT_SKIP_DOWNLOAD === '1') {
     log('ORBIT_SKIP_DOWNLOAD=1 set; skipping binary download.');
@@ -375,8 +393,7 @@ async function main() {
     if (!fs.existsSync(extractedBinary)) {
       fail(`extracted archive did not contain 'orbit' binary at ${extractedBinary}`);
     }
-    fs.copyFileSync(extractedBinary, BIN_PATH);
-    fs.chmodSync(BIN_PATH, 0o755);
+    installBinary(extractedBinary, BIN_PATH);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -395,6 +412,7 @@ module.exports = {
   acknowledgeTrustedPublicKeyOverride,
   acknowledgeTrustedKeysOverride,
   extractTarGz,
+  installBinary,
   normalizeTrustedReleaseKeys,
   readTrustedReleaseKeys,
   validateArchiveMembers,

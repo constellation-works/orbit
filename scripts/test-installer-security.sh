@@ -480,4 +480,6 @@ ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
   > "$TMP_ROOT/npm-keys-override-ack.log" 2>&1
 grep -q "trusting replacement release signing key set" "$TMP_ROOT/npm-keys-override-ack.log"
 
+node --test "$ROOT/npm/tests/install-binary.test.js"
+
 echo "test-installer-security: ok"
