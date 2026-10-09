@@ -260,7 +260,8 @@ pub fn remove_host(
 ///
 /// A retained legacy row that does not answer refuses the whole mutation and touches
 /// neither file. Each migrated row is named after the remote's
-/// `machine.name`, or after its SSH target when that name is taken. A row for
+/// `machine.name`, or after its SSH target when that name is taken, and gets a
+/// numeric suffix when the SSH target is taken too. A row for
 /// this machine was never a route and is dropped. Removal also excludes its
 /// selected row, whose cached identity suffices to drop it.
 fn migrated_entries(
@@ -308,7 +309,8 @@ fn migrated_entries(
             .machine_name
             .clone()
             .filter(|name| validate_machine_name(name).is_ok() && !taken(name))
-            .unwrap_or_else(|| row.ssh.clone());
+            .or_else(|| (!taken(&row.ssh)).then(|| row.ssh.clone()))
+            .unwrap_or_else(|| unique_name(&row.ssh, taken));
         entries.push(HostEntry {
             name,
             machine_id: row.machine_id.clone(),
@@ -317,6 +319,19 @@ fn migrated_entries(
         });
     }
     Ok(entries)
+}
+
+/// `base` with the first numeric suffix (`base-2`, `base-3`, …) that `taken`
+/// does not reject.
+fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 /// The host file's entries, or the migrated legacy rows standing in for them.
