@@ -36,10 +36,17 @@ routing is in [tool-surface.md](../tool-surface.md).
   death.
 - Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
   stay at their current enablement. This setup does not turn them on.
-- Remote machine labels (`--remote-caller-machine-id`) are attribution, not
-  credentials. SSH login is owner access. There is no destination callers
-  file, forced-command acceptance, KeyBound proof, or replacement identity
-  registry.
+- Remote machine labels (`--remote-caller-machine-id`) supply audit attribution,
+  the receipt namespace and the machine fence for claim bind/settle. The journal
+  compares the session label with the claim's execution machine, bound run and
+  phase; an SSH initialize worker binding must name the same execution machine.
+  The label grants no capability and is not an authenticated credential. Local
+  account access and SSH login are owner access in Orbit's single-user trust
+  model, so this fence prevents mixed attempts among cooperating executors.
+  A caller able to start a server can choose another label, including locally
+  from a managed agent context; it does not isolate mutually untrusted callers.
+  There is no destination callers file, forced-command acceptance, KeyBound
+  proof, or replacement identity registry.
 
 ## Prerequisites
 
@@ -83,8 +90,9 @@ build-budget defaults (two heavy slots, four Cargo jobs) unless the operator
 raises them.
 
 Managed agents never propagate `--operator` or `ORBIT_OPERATOR`. Claim,
-machine, bound run, and phase checks fence attempt ownership from trusted
-runtime invocation context, not from a payload label.
+machine, bound run, and phase checks fence attempt ownership from runtime/session
+invocation context, not tool arguments. For remote bind/settle, that context's
+machine comes from the caller-chosen session label described above.
 
 ## Collapse two owners before any replica work
 

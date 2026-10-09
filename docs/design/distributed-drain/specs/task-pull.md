@@ -65,9 +65,14 @@ Only the owner serves this `control_plane` tool. A caller must have the workspac
 capability. `agent_invoke` is not needed because execution starts locally. Workspace selection uses
 the host-qualified selector. SSH login establishes owner access; session agent/operator capability
 and caller-side managed-run restrictions remain. There is no destination callers file, key-bound
-proof, forced-command acceptance requirement, or replacement identity registry. Trusted runtime
-invocation context supplies attempt ownership; remote machine labels alone are attribution, not
-credentials. Owner-local drains use trusted local
+proof, forced-command acceptance requirement, or replacement identity registry. Runtime/session
+invocation context supplies attempt ownership. For remote bind/settle the caller-chosen session
+label selects the receipt namespace and fences the claim's execution machine, bound run and phase;
+an SSH initialize worker binding must name that same execution machine. The label grants no
+capability and authenticates no machine. Local account access and SSH login are owner access in
+this single-user model: the fence prevents mixed attempts among cooperating executors, not
+impersonation by a caller able to start the server with another label, including locally from a
+managed agent context. Owner-local drains use trusted local
 runtime identity and the same logical admission contract. With the owner's `review.before_pr` on,
 admission refuses, before creating a claim, an executor that does not declare `review_gate` and a
 local ship mode, where no gate runs; the executor's own `caller_before_pr` never refuses
@@ -587,10 +592,11 @@ review policy, run context, and the ship contract its probe reported); it
 answers `{receipt, claim_state}`. A follower drain also sends its window's crew capability as `crews` [ORB-13941].
 `orbit.drain.claim.bind` takes `claim_id`,
 `run_id` and the receipt's `ship`; `orbit.drain.claim.settle` takes `claim_id`,
-an optional `run_id`, and the executor's durable settlement (`AcceptHandoff` or
-`Fail`, nothing else). Each resolves the caller machine from the trusted
-session and replays under a per-claim mutation ID (`pull-bind:`, `pull-fail:`,
-`pull-handoff:`). The follower's `RoutedPullPeer` calls them over the federated
+an optional `run_id`, and the executor's durable settlement (`AcceptHandoff`,
+`Fail` or `Release`). Each resolves the caller machine from the session
+(its caller-chosen label for SSH MCP, the accepting machine identity locally)
+and replays under a per-claim mutation ID (`pull-bind:`, `pull-fail:`,
+`pull-release:`, `pull-handoff:`). The follower's `RoutedPullPeer` calls them over the federated
 transport, and `orbit run auto --pull <selector>` runs the refill loop as the
 `workspace_pull_pipeline` job. A local request the owner refused and holds no
 receipt for closes as `Refused` (a new terminal phase that releases its slot);
