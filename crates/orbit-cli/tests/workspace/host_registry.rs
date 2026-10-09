@@ -339,6 +339,68 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
 }
 
 #[test]
+fn doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol() {
+    let fleet = Fleet::new();
+    let alpha = fleet.install("alpha", "alpha", "AL");
+    fleet.route("alpha", &alpha, "plain");
+    fleet.json(&["host", "add", "alpha", "--json"]);
+
+    // An older build whose discovery facts lack both fields: not a match.
+    fleet.route("alpha", &alpha, "old");
+    let list = fleet.json(&["host", "list", "--json"]);
+    let alpha_row = host_row(&list, "alpha");
+    assert!(alpha_row["binary_version"].is_null(), "{alpha_row}");
+    assert!(alpha_row["protocol_fingerprint"].is_null(), "{alpha_row}");
+    let doctor = fleet.doctor_hosts_row();
+    assert_eq!(
+        doctor["status"], "warning",
+        "an unknown version and protocol on a host not pulled from warns: {doctor}"
+    );
+    let message = doctor["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("did not report binary_version and protocol_fingerprint")
+            && !message.contains("matching"),
+        "{doctor}"
+    );
+
+    // Once this machine pulls from that host, pull admission refuses it.
+    fleet.route("alpha", &alpha, "plain");
+    let replica = fleet.temp.path().join("replica-of-alpha");
+    git_repo::init(&replica);
+    fleet.orbit_ok(
+        &replica,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "alpha-replica",
+            "--role",
+            "replica",
+            "--owner",
+            &alpha.machine_id,
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(
+        fleet.doctor_hosts_row()["status"],
+        "ok",
+        "a matching host that is pulled from is healthy"
+    );
+    fleet.route("alpha", &alpha, "old");
+    let doctor = fleet.doctor_hosts_row();
+    assert_eq!(
+        doctor["status"], "error",
+        "an unknown protocol on a host pulled from fails: {doctor}"
+    );
+    let message = doctor["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("pull admission from it will refuse") && !message.contains("matching"),
+        "{doctor}"
+    );
+}
+
+#[test]
 fn doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
