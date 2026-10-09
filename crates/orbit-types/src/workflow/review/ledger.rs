@@ -65,8 +65,9 @@ pub struct ReviewerInvocation {
 /// observes it around the reviewer step's dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewerInvocationEvent {
-    /// The reviewer process is about to start under its own wall-clock bound.
-    Started { timeout_seconds: u64 },
+    /// The reviewer process is about to start; the ledger answers with the
+    /// wall-clock deadline it may run to ([`ReviewLedger::invocation_seconds_for`]).
+    Started,
     /// The reviewer process ended, successfully or not, after running this
     /// long.
     Finished { runtime_seconds: u64 },
@@ -241,6 +242,21 @@ impl ReviewLedger {
                 .saturating_mul(60)
                 .saturating_sub(consumed.seconds),
         }
+    }
+
+    /// The wall-clock deadline of `candidate`'s next reviewer invocation:
+    /// half of what its review has left, keeping the other half for a
+    /// continuation if the invocation hits the deadline. The manifest
+    /// advertises it and the engine bounds the reviewer process by it.
+    pub fn invocation_seconds_for(
+        &self,
+        candidate: &SourceRevision,
+        task_meaning_digest: &str,
+        now: DateTime<Utc>,
+    ) -> u64 {
+        self.remaining_for(candidate, task_meaning_digest, now)
+            .seconds
+            / 2
     }
 
     /// What the latest review may still spend at `now`: the candidate of the

@@ -11,7 +11,7 @@ use orbit_types::identity::Crew;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewManifest, ReviewReservation, ReviewerIdentity,
+    ReviewConsumption, ReviewManifest, ReviewReservation, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -390,7 +390,9 @@ fn admit(
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
         budget: ledger.budget,
-        remaining: ledger.remaining_for(&candidate.head, task_meaning_digest, now),
+        remaining: ReviewConsumption {
+            seconds: ledger.invocation_seconds_for(&candidate.head, task_meaning_digest, now),
+        },
         issued_at: now,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)

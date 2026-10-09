@@ -205,9 +205,7 @@ impl Fixture {
             attempt_id: attempt.attempt_id,
             binding,
         };
-        fixture.reviewer(ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        });
+        fixture.reviewer(ReviewerInvocationEvent::Started);
         fixture.pin_manifest(&fixture.attempt_id.clone());
         fixture
     }
@@ -739,9 +737,7 @@ fn a_reviewer_past_its_deadline_without_finishing_reaches_nothing() {
     let fixture = Fixture::new();
     let broker = fixture.serve("agent_review_repair");
     fixture.reviewer_at(
-        ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        },
+        ReviewerInvocationEvent::Started,
         Utc::now() - chrono::Duration::hours(1),
     );
     let (source, _) = fixture.report("report.json", &fixture.attempt_id);
@@ -799,9 +795,7 @@ fn a_run_two_open_attempts_name_reaches_nothing() {
                 lineage_key: "lineage-2",
                 attempt_id: &attempt.attempt_id,
                 run_id: LEAF,
-                event: ReviewerInvocationEvent::Started {
-                    timeout_seconds: 1800,
-                },
+                event: ReviewerInvocationEvent::Started,
                 now: Utc::now(),
             },
         )

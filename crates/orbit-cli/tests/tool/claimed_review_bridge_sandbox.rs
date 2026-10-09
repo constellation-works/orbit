@@ -424,9 +424,7 @@ fn sandbox_fixture() {
                 lineage_key: LINEAGE,
                 attempt_id: &attempt_id,
                 run_id: LEAF,
-                event: ReviewerInvocationEvent::Started {
-                    timeout_seconds: 1800,
-                },
+                event: ReviewerInvocationEvent::Started,
                 now: Utc::now(),
             },
         )
@@ -872,9 +870,7 @@ fn sandbox_fixture() {
                 lineage_key: LINEAGE,
                 attempt_id: &attempt_id,
                 run_id: LEAF,
-                event: ReviewerInvocationEvent::Started {
-                    timeout_seconds: 1800,
-                },
+                event: ReviewerInvocationEvent::Started,
                 now: Utc::now(),
             },
         )

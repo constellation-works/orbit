@@ -111,9 +111,7 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
                 lineage_key: &lineage,
                 attempt_id: &attempt.attempt_id,
                 run_id: &gated.run_id,
-                event: ReviewerInvocationEvent::Started {
-                    timeout_seconds: 600,
-                },
+                event: ReviewerInvocationEvent::Started,
                 now: started + Duration::minutes(1),
             },
         )
@@ -318,13 +316,7 @@ fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
 
     let first = gated.admit().expect("admit");
     assert_eq!(
-        invoke(
-            &gated.run_id,
-            &first,
-            ReviewerInvocationEvent::Started {
-                timeout_seconds: 3600
-            }
-        ),
+        invoke(&gated.run_id, &first, ReviewerInvocationEvent::Started),
         Some(30),
         "the invocation reserves half the remaining minutes for continuation"
     );
@@ -343,13 +335,7 @@ fn review_minutes_bound_each_reviewer_and_refuse_a_retry_once_spent() {
         .expect("an unfinished review continues while minutes remain");
     assert_eq!(retry["remaining"]["seconds"], 15);
     assert_eq!(
-        invoke(
-            &resumed,
-            &retry,
-            ReviewerInvocationEvent::Started {
-                timeout_seconds: 3600
-            }
-        ),
+        invoke(&resumed, &retry, ReviewerInvocationEvent::Started),
         Some(7)
     );
     invoke(

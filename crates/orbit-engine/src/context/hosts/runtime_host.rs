@@ -313,10 +313,10 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     /// Record a reviewer invocation starting or ending for its attempt.
-    /// For a start, returns the seconds the invocation may run: the review's
-    /// remaining `review.minutes`, never more than the requested timeout
+    /// For a start, returns the seconds the invocation may run, which become
+    /// the reviewer process's wall clock whatever the activity declares
     /// [ORB-13992]. Hosts without review evidence have nothing to charge or
-    /// bound.
+    /// bound, and the activity's own wall clock applies.
     fn record_reviewer_invocation(
         &self,
         _request: &ReviewerInvocationRequest,

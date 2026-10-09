@@ -150,6 +150,61 @@ pub(super) fn run_review_pipeline(fixture: &Fixture) {
         .unwrap();
 }
 
+/// [ORB-15094] The manifest advertises the deadline the reviewer process is
+/// given, for a `review.minutes` below and above the activity's 3600 s wall
+/// clock. The deadline is half the review's seconds, the other half kept for
+/// a continuation.
+#[test]
+fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::the_manifest_advertises_the_deadline_the_host_hands_the_reviewer",
+    ) {
+        return;
+    }
+    for (minutes, deadline_seconds) in [(30_u32, 900_u64), (180, 5400)] {
+        let mut fixture = Fixture::new_with_review_minutes(minutes);
+        fixture.admit();
+        RuntimeHost::mark_job_run_running(
+            &fixture.runtime,
+            fixture.input["job_run_id"].as_str().unwrap(),
+            Utc::now(),
+            std::process::id(),
+        )
+        .unwrap();
+        let advertised = manifest(&fixture);
+        assert_eq!(advertised.budget.minutes, minutes);
+        let bound = RuntimeHost::record_reviewer_invocation(
+            &fixture.runtime,
+            &ReviewerInvocationRequest {
+                run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
+                lineage_key: fixture.input["admission"]["lineage_key"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                attempt_id: fixture.input["admission"]["attempt_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                event: ReviewerInvocationEvent::Started,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            bound, deadline_seconds,
+            "review.minutes = {minutes}: the reviewer's bound is not capped by the activity's wall clock"
+        );
+        assert_eq!(
+            advertised.remaining.seconds, bound,
+            "review.minutes = {minutes}: the manifest must advertise the deadline the reviewer is given"
+        );
+        assert_eq!(
+            fixture.input["admission"]["remaining"]["seconds"], bound,
+            "review.minutes = {minutes}: admission reports the same deadline"
+        );
+    }
+}
+
 #[test]
 fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     if !super::dispatch_admission::isolated(
@@ -182,9 +237,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     };
     let bound = RuntimeHost::record_reviewer_invocation(
         &fixture.runtime,
-        &request(ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        }),
+        &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();
@@ -354,9 +407,7 @@ fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
     };
     let bound = RuntimeHost::record_reviewer_invocation(
         &fixture.runtime,
-        &request(ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        }),
+        &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();

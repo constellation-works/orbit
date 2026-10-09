@@ -438,9 +438,7 @@ impl ReviewedLeaf {
                     lineage_key,
                     attempt_id,
                     run_id: &self.leaf,
-                    event: ReviewerInvocationEvent::Started {
-                        timeout_seconds: 1800,
-                    },
+                    event: ReviewerInvocationEvent::Started,
                     now: Utc::now(),
                 },
             )

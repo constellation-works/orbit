@@ -1083,10 +1083,7 @@ fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
         let invocations = host.invocations();
         assert_eq!(invocations.len(), reviewer_calls * 2);
         for pair in invocations.chunks(2) {
-            assert!(matches!(
-                pair[0].event,
-                ReviewerInvocationEvent::Started { timeout_seconds } if timeout_seconds > 0
-            ));
+            assert!(matches!(pair[0].event, ReviewerInvocationEvent::Started));
             assert!(matches!(
                 pair[1].event,
                 ReviewerInvocationEvent::Finished { .. }

@@ -72,8 +72,9 @@ spec:
       validation then reruns on the fixed head.
     - Fix findings; do not do unrelated cleanup. Reading unrelated code does
       not authorize editing it.
-    - This invocation is bounded by the activity timeout and half the review's
-      remaining minutes, leaving time for continuation. Persist an initial
+    - This invocation is bounded by half the review's remaining minutes,
+      leaving time for continuation; the manifest's `remaining.seconds` is
+      that deadline. Persist an initial
       `incomplete` report and update it after meaningful review or validation
       progress, so a wall-clock timeout retains your findings and checks.
       If you cannot finish, leave an honest partial report before stopping.
