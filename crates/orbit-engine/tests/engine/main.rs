@@ -1,8 +1,8 @@
 //! Activity dispatch and the engine's deterministic actions: v2 agent and
 //! local-shell dispatch, provider capacity, limits and usage windows, name
 //! resolution, worktree lifecycle, PR and handoff landing, the shipped PR
-//! pipeline's before-PR review fixes, completion re-review rounds and candidate
-//! resume, and history notes.
+//! pipeline's before-PR review fixes, its before-landing review, completion
+//! re-review rounds and candidate resume, and history notes.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -11,6 +11,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod before_landing_review;
 mod candidate_resume;
 mod claimed_candidate_paths;
 mod commit_verifier;

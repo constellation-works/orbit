@@ -46,9 +46,10 @@ pub fn is_reserved_review_artifact(path: &str) -> bool {
 /// its fix commit and final validation included [ORB-13992].
 pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 
-/// Whether a managed delivery holds PR creation for a reviewer. A run
-/// captures `before-pr` exactly when `review.before_pr` was on at submission,
-/// and `none` otherwise [ORB-13992].
+/// When a managed delivery's reviewer runs. A run captures `before-pr`
+/// exactly when `review.before_pr` was on at submission, `before-landing`
+/// exactly when `review.before_landing` was [ORB-14849], and `none`
+/// otherwise [ORB-13992]. Configuration never turns both on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewTiming {
@@ -56,6 +57,9 @@ pub enum ReviewTiming {
     None,
     /// Hold PR creation for a fresh reviewer that fixes what it finds.
     BeforePr,
+    /// Open the PR, then have a fresh reviewer review and fix it while
+    /// hosted CI runs; the PR lands only at the head that review settled.
+    BeforeLanding,
     /// Captured by runs submitted under the retired
     /// `operation.review_policy = after-landing`; it never gated the run.
     /// After-landing review is the `delivery-code-review` auto-task, which
@@ -69,6 +73,7 @@ impl ReviewTiming {
         match self {
             ReviewTiming::None => "none",
             ReviewTiming::BeforePr => "before-pr",
+            ReviewTiming::BeforeLanding => "before-landing",
             ReviewTiming::AfterLanding => "after-landing",
         }
     }
@@ -163,6 +168,17 @@ impl ReviewAdmission {
     /// Whether this admission holds PR creation for a reviewer.
     pub fn gates_pr(&self) -> bool {
         self.timing == ReviewTiming::BeforePr
+    }
+
+    /// Whether this admission reviews the open PR before it lands.
+    pub fn gates_landing(&self) -> bool {
+        self.timing == ReviewTiming::BeforeLanding
+    }
+
+    /// Whether a reviewer must settle the head this run merges: either
+    /// review layer before landing.
+    pub fn gates_merge(&self) -> bool {
+        self.gates_pr() || self.gates_landing()
     }
 }
 

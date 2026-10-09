@@ -48,6 +48,8 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
             "test_stub_push",
             "test_stub_pr_open",
             "test_stub_promote_tasks",
+            "test_stub_review_gate_admit",
+            "test_stub_review_gate_settle",
             "test_stub_pr_complete",
             "test_stub_review_gate_admit",
             "test_stub_agent_review_repair",
@@ -63,10 +65,14 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     );
 
     let admissions = inputs_of(&calls, "test_stub_review_gate_admit");
-    assert_eq!(admissions.len(), 3);
+    assert_eq!(admissions.len(), 4);
     assert!(admissions[0].get("re_review_after").is_none());
-    assert_eq!(admissions[1]["re_review_after"], "complete_pr");
-    assert_eq!(admissions[2]["re_review_after"], "complete_reviewed_pr");
+    assert_eq!(
+        admissions[1]["before_landing"], true,
+        "the before-landing gate runs and does not apply to a before-PR run"
+    );
+    assert_eq!(admissions[2]["re_review_after"], "complete_pr");
+    assert_eq!(admissions[3]["re_review_after"], "complete_reviewed_pr");
 
     let reviewer_inputs = inputs_of(&calls, "test_stub_agent_review_repair");
     assert_eq!(reviewer_inputs.len(), 2);
@@ -168,8 +174,8 @@ fn a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers() {
     );
 
     let admissions = inputs_of(&calls, "test_stub_review_gate_admit");
-    assert_eq!(admissions.len(), 3);
-    assert_eq!(admissions[2]["re_review_after"], "complete_reviewed_pr");
+    assert_eq!(admissions.len(), 4);
+    assert_eq!(admissions[3]["re_review_after"], "complete_reviewed_pr");
     let reviewer_inputs = inputs_of(&calls, "test_stub_agent_review_repair");
     assert_eq!(
         reviewer_inputs
@@ -334,7 +340,16 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     }
     let middle = stubs(&["push", "pr_open", "promote_tasks"]);
     job.steps.extend(job_asset(json!(middle)).steps);
-    job.steps.push(find_step("complete_pr"));
+    for id in [
+        "landing_review_gate_admit",
+        "landing_review",
+        "landing_review_gate_settle",
+        "landing_review_validate",
+        "landing_push",
+        "complete_pr",
+    ] {
+        job.steps.push(find_step(id));
+    }
     for id in [
         "re_review_gate_admit",
         "re_review",
@@ -478,6 +493,10 @@ impl CompletionReviewHost {
     /// Admission reads the named completion's checkpoint; here that is the
     /// most recent completion, which is the one each round follows.
     fn review_gate_admit(&self, input: &Value) -> Value {
+        // A before-PR run: the gate after `pr_open` does not apply.
+        if input.get("before_landing") == Some(&json!(true)) {
+            return json!({ "applies": false, "reason": "reviewed_before_pr" });
+        }
         let attempt_id = match input.get("re_review_after").and_then(Value::as_str) {
             None => "rvw-first",
             Some("complete_pr") => "rvw-re-review",
@@ -568,7 +587,11 @@ impl RuntimeHost for CompletionReviewHost {
             }
             "test_stub_review_gate_settle" => {
                 if input.pointer("/admission/applies") != Some(&json!(true)) {
-                    json!({ "gate": "not_applicable", "reviewer_fixed": false })
+                    json!({
+                        "gate": "not_required",
+                        "reviewed_head_sha": "",
+                        "reviewer_fixed": false,
+                    })
                 } else {
                     let attempt = input
                         .pointer("/admission/attempt_id")

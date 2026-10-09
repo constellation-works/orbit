@@ -476,8 +476,9 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     }
 }
 
-/// The before-PR review admission a claimed leaf runs under: the owner's
-/// captured contract, when the ship contract carries one [ORB-13908].
+/// The review admission a claimed leaf runs under: the owner's captured
+/// contract and timing, when the ship contract carries one [ORB-13908]
+/// [ORB-14849].
 fn claim_review_admission(
     request: &AdmissionRequest,
     now: chrono::DateTime<Utc>,
@@ -488,7 +489,11 @@ fn claim_review_admission(
         // The claim's contract is resolved by the owner and carries no
         // operation policy version of its own.
         policy_version: 0,
-        timing: ReviewTiming::BeforePr,
+        timing: if request.ship.before_landing {
+            ReviewTiming::BeforeLanding
+        } else {
+            ReviewTiming::BeforePr
+        },
         timing_source: CLAIM_SOURCE.into(),
         crew: review.crew.clone(),
         crew_source: CLAIM_SOURCE.into(),
@@ -564,9 +569,12 @@ pub(super) fn allocate(
     {
         return Err(invalid("followers cannot execute owner-local leaves"));
     }
-    if request.ship.before_pr && !(request.review_gate && request.ship.mode == "pr") {
+    if (request.ship.before_pr || request.ship.before_landing)
+        && !(request.review_gate && request.ship.mode == "pr")
+    {
         return Err(invalid(
-            "an owner with review.before_pr on admits only a PR leaf that runs the before-PR gate",
+            "an owner with review.before_pr or review.before_landing on admits only a PR leaf \
+             that runs the review gate",
         ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {

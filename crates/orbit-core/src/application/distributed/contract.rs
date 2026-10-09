@@ -67,18 +67,22 @@ impl crate::OrbitRuntime {
     /// rather than claiming a task its gate would escalate.
     pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let review = ship.review.as_ref()?;
+        let key = if ship.before_landing {
+            "review.before_landing"
+        } else {
+            "review.before_pr"
+        };
         let Some(crew) = review.crew.as_deref() else {
-            return Some(
-                "before_pr_reviewer_unavailable: the owner has review.before_pr on but no \
+            return Some(format!(
+                "before_pr_reviewer_unavailable: the owner has {key} on but no \
                  operation.review_crew; a claimed leaf never reviews with its implementer's crew"
-                    .to_string(),
-            );
+            ));
         };
         self.resolve_crew_for_task(Some(crew), None)
             .err()
             .map(|error| {
                 format!(
-                    "before_pr_reviewer_unavailable: the owner's before-PR review crew `{crew}` \
+                    "before_pr_reviewer_unavailable: the owner's {key} review crew `{crew}` \
                      cannot be resolved on this executor: {error}"
                 )
             })
@@ -113,14 +117,15 @@ impl crate::OrbitRuntime {
 
     /// Ship configuration as the owner would resolve it at admission.
     ///
-    /// With `review.before_pr` on it also captures the review contract a
-    /// claimed leaf's gate and the owner's acceptance are held to
-    /// [ORB-13895]. It carries no capture time, so a follower that echoes
+    /// With `review.before_pr` or `review.before_landing` on it also
+    /// captures the review contract a claimed leaf's gate and the owner's
+    /// acceptance are held to [ORB-13895] [ORB-14849]. It carries no capture time, so a follower that echoes
     /// the probed contract still matches the owner's current resolution.
     pub(super) fn owner_ship_contract(&self) -> AdmissionShipContract {
         let base_branch = self.workspace_base_branch().to_string();
         let policy = self.operation_policy();
         let before_pr = self.local_review_before_pr();
+        let before_landing = policy.review_before_landing.value;
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -132,9 +137,10 @@ impl crate::OrbitRuntime {
             landing_branch: base_branch.clone(),
             base_branch,
             before_pr,
+            before_landing,
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
-            review: before_pr.then(|| AdmissionReviewContract {
+            review: (before_pr || before_landing).then(|| AdmissionReviewContract {
                 contract_version: REVIEW_CONTRACT_VERSION,
                 crew: policy.review_crew.value.clone(),
                 budget: policy.review_budget(),
@@ -169,13 +175,21 @@ impl crate::OrbitRuntime {
         diagnostics: &mut Vec<String>,
     ) -> Result<Option<AdmissionRefusal>, OrbitError> {
         if let Some(review) = &ship.review {
-            diagnostics.push(format!(
-                "owner has review.before_pr on; each claimed leaf runs the before-PR review with                  crew {} before it opens a pull request",
-                review
-                    .crew
-                    .as_deref()
-                    .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"))
-            ));
+            let crew = review
+                .crew
+                .as_deref()
+                .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"));
+            diagnostics.push(if ship.before_landing {
+                format!(
+                    "owner has review.before_landing on; each claimed leaf reviews its open pull \
+                     request with crew {crew} before it hands off"
+                )
+            } else {
+                format!(
+                    "owner has review.before_pr on; each claimed leaf runs the before-PR review \
+                     with crew {crew} before it opens a pull request"
+                )
+            });
         }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
@@ -215,7 +229,9 @@ impl crate::OrbitRuntime {
                     "declared caller version, schema, or drain context is missing or malformed"
                         .to_string()
                 }
-                AdmissionRefusal::ProtocolSkew => "pull request schema fingerprints differ".to_string(),
+                AdmissionRefusal::ProtocolSkew => {
+                    "pull request schema fingerprints differ".to_string()
+                }
                 AdmissionRefusal::ProtocolMismatch => format!(
                     "protocol_mismatch: caller revision {}; owner revision {}",
                     request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
@@ -232,7 +248,13 @@ impl crate::OrbitRuntime {
                     request.ship.mode
                 ),
                 AdmissionRefusal::BeforePrUnsupported => format!(
-                    "owner has review.before_pr on; the before-PR review runs only on the PR                      route, and this owner ships '{}'",
+                    "owner has {} on; that review runs only on the PR route, and this owner \
+                     ships '{}'",
+                    if request.ship.before_landing {
+                        "review.before_landing"
+                    } else {
+                        "review.before_pr"
+                    },
                     request.ship.mode
                 ),
             });

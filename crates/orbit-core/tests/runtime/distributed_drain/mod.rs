@@ -58,6 +58,7 @@ mod admission;
 mod allow_crew;
 #[cfg(unix)]
 mod auth_recovery;
+mod before_landing;
 mod before_pr;
 mod cancel;
 mod candidate_carry;

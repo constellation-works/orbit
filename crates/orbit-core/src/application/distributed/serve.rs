@@ -351,7 +351,7 @@ impl crate::OrbitRuntime {
         handoff: &TaskHandoff,
         candidate: &HandoffCandidate,
     ) -> Result<Option<HandoffReviewObservation>, OrbitError> {
-        let Some(evidence) = handoff.review.before_pr() else {
+        let Some(evidence) = handoff.review.evidence() else {
             return Ok(None);
         };
         let repo_root = &self.paths().repo_root;

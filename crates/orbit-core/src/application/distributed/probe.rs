@@ -39,16 +39,17 @@ pub struct DrainProbeReport {
     pub session: DrainProbeSession,
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
-    /// The owner's two review switches. Only `review.before_pr` takes part in
-    /// admission — with it on, each claimed PR leaf runs the before-PR review
-    /// the ship contract captures [ORB-13908]; after-landing
+    /// The owner's review switches. `review.before_pr` and
+    /// `review.before_landing` take part in admission — with either on, each
+    /// claimed PR leaf runs the review the ship contract captures
+    /// [ORB-13908] [ORB-14849]; after-landing
     /// review (the `delivery-code-review` auto-task) is reported for context
     /// and never refuses a pull [ORB-13992].
     pub review: ReviewSwitches,
     /// `true` when the caller would pass the admission ladder now.
     /// Undeclared optional caller fields are unknown and skip only the legs
-    /// that compare those fields; owner-resolved ship mode and
-    /// `review.before_pr` are always evaluated.
+    /// that compare those fields; owner-resolved ship mode and the owner's
+    /// review switches are always evaluated.
     pub admits: bool,
     /// First refusal the shared admission ladder reports, by spec name.
     pub refusal: Option<String>,

@@ -373,6 +373,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
                 base_branch: "main".into(),
                 landing_branch: "main".into(),
                 before_pr: false,
+                before_landing: false,
                 completion: "review".into(),
                 authorization_reference: None,
                 review: None,

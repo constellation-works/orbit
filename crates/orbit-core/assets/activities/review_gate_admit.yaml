@@ -5,13 +5,15 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Admit a fresh before-PR reviewer for the committed, base-synchronized
-    candidate when the run captured `review.before_pr` on. Reserves the
+    Admit a fresh reviewer for the committed, base-synchronized candidate:
+    before the PR when the run captured `review.before_pr` on, or, with
+    `before_landing`, for the published PR head when it captured
+    `review.before_landing` on. Reserves the
     candidate's one review against its lineage ledger, pins base and head
     commits and trees, resolves the separately configured review crew inside
     the run's persisted crew allowlist, and writes the immutable reviewer manifest as a
-    task artifact. Reports `applies: false` when before-PR review was off at
-    capture, and for checked no-diff exemptions.
+    task artifact. Reports `applies: false` when the step's review timing was
+    off at capture, and for checked no-diff exemptions.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path]
@@ -42,6 +44,11 @@ spec:
           synchronized base ref is used.
       skipped_no_diff_expected:
         type: boolean
+      before_landing:
+        type: boolean
+        description: >
+          This step reviews the published PR head: it applies only when the
+          run captured `review.before_landing` on.
   output_schema_json:
     type: object
     required: [applies]

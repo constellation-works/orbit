@@ -24,9 +24,10 @@ const CANDIDATE_CARRY_ACTIVITY: &str = "claim_candidate_carry";
 const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
 /// The claimed PR leaf's steps in order, from the commit on: a step a leaf's
-/// pipeline state holds no output for did not complete. `review` is absent
-/// because it is skipped when no before-PR review applies.
-const CLAIMED_PR_DELIVERY_STEPS: [&str; 9] = [
+/// pipeline state holds no output for did not complete. `review`,
+/// `landing_review` and `landing_push` are absent because they are skipped
+/// when no review, or no reviewer fix, applies.
+const CLAIMED_PR_DELIVERY_STEPS: [&str; 12] = [
     "commit",
     "prepare_branch",
     SYNC_BASE_STEP,
@@ -35,6 +36,9 @@ const CLAIMED_PR_DELIVERY_STEPS: [&str; 9] = [
     "validate",
     "push",
     "pr_open",
+    "landing_review_gate_admit",
+    "landing_review_gate_settle",
+    "landing_review_validate",
     "pin_validation",
 ];
 
@@ -64,8 +68,8 @@ pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Opti
 /// The committed candidate the leaf ended with, from its pipeline state.
 /// `None` before its commit.
 ///
-/// A PR leaf's is the branch it pushed, with the pull request it opened for
-/// it. Before its push, it is the branch tip its failure hook carried to a
+/// A PR leaf's is the branch it pushed — last by a before-landing reviewer's
+/// fix — with the pull request it opened for it. Before its push, it is the branch tip its failure hook carried to a
 /// durable ref — or could not, and why — else the branch it synchronized
 /// onto the base, or, when synchronization itself stopped it, the branch it
 /// prepared. A claimed-local leaf's is its worktree branch at the commit it
@@ -101,7 +105,11 @@ pub(super) fn preserved_candidate(
         (candidate.branch, candidate.head_sha) = (text(step("worktree"), "head_ref")?, committed?);
         return Some(candidate);
     }
-    if let Some(pushed) = both(step("push"), "branch", "local_sha") {
+    // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
+    // the published head from then on.
+    if let Some(pushed) = both(step("landing_push"), "branch", "local_sha")
+        .or_else(|| both(step("push"), "branch", "local_sha"))
+    {
         (candidate.branch, candidate.head_sha) = pushed;
         candidate.published = true;
         return Some(candidate);

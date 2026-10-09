@@ -1,10 +1,14 @@
 //! Typed review preferences [ORB-11333] [ORB-13992].
 //!
 //! Each review mechanism has one switch. Before-PR review is
-//! `review.before_pr` (default off), bounded by `review.minutes` per
-//! candidate; `operation.review_crew` names the crew of automatic review.
-//! After-landing review has no key here at all: its only switch is the
-//! `delivery-code-review` auto-task's own `enabled` flag, which Core reads.
+//! `review.before_pr` (default off); before-landing review, which reviews the
+//! open pull request while hosted CI runs on it, is `review.before_landing`
+//! (default off) [ORB-14849]. Both are bounded by `review.minutes` per
+//! candidate, and `operation.review_crew` names the crew of automatic review.
+//! There is one review layer before landing, so a resolution with both
+//! switches on fails to load and names both keys. After-landing review has
+//! no key here at all: its only switch is the `delivery-code-review`
+//! auto-task's own `enabled` flag, which Core reads.
 //!
 //! Each layer states any subset; a value resolves built-in → global →
 //! workspace with its winning layer recorded.
@@ -42,13 +46,16 @@ use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 /// reinterpreted. Version 2 added the independent review budget fields
 /// [ORB-11333]; version 3 replaced the review policy enum with
 /// `review.before_pr` and dropped the reviewer-start budget [ORB-13992];
-/// version 4 added `review.host_evidence`.
-pub const OPERATION_POLICY_VERSION: u32 = 4;
+/// version 4 added `review.host_evidence`; version 5 added
+/// `review.before_landing` [ORB-14849].
+pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
 /// The before-PR switch.
 pub const REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
+/// The before-landing switch: review the open pull request before it lands.
+pub const REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
 /// The before-PR review's time limit.
 pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
 /// The retired review timing enum, translated on load.
@@ -67,6 +74,7 @@ pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 /// Every live `[review]` key, as the unknown-key guard sees it.
 const REVIEW_KEYS: &[&str] = &[
     REVIEW_BEFORE_PR_KEY,
+    REVIEW_BEFORE_LANDING_KEY,
     REVIEW_MINUTES_KEY,
     REVIEW_BASELINE_COMMANDS_KEY,
     REVIEW_HOST_EVIDENCE_KEY,
@@ -195,6 +203,8 @@ impl<T: Clone> OperationField<T> {
 pub struct OperationLayer {
     /// Explicit `review.before_pr`, or its translation from a legacy policy.
     pub review_before_pr: Option<bool>,
+    /// Explicit `review.before_landing`.
+    pub review_before_landing: Option<bool>,
     /// Explicit `review.minutes`, or the legacy `operation.review_minutes`.
     pub review_minutes: Option<u32>,
     /// Explicit review crew.
@@ -221,6 +231,7 @@ impl OperationLayer {
 
         Ok(Self {
             review_before_pr: read_optional(document, REVIEW_BEFORE_PR_KEY, config_path)?,
+            review_before_landing: read_optional(document, REVIEW_BEFORE_LANDING_KEY, config_path)?,
             review_minutes: review_minutes(read_optional(
                 document,
                 REVIEW_MINUTES_KEY,
@@ -289,7 +300,12 @@ pub struct OperationPolicy {
     pub version: u32,
     /// Whether a delivery submitted now holds PR creation for a reviewer.
     pub review_before_pr: OperationField<bool>,
-    /// Reviewer runtime minutes for one candidate's before-PR review.
+    /// Whether a delivery submitted now reviews its open pull request before
+    /// it lands. Never on together with `review_before_pr`.
+    #[serde(default = "before_landing_off")]
+    pub review_before_landing: OperationField<bool>,
+    /// Reviewer runtime minutes for one candidate's before-PR or
+    /// before-landing review.
     pub review_minutes: OperationField<u32>,
     /// Crew selected for automatic review: the before-PR reviewer and the
     /// crew of minted after-landing review tasks.
@@ -317,6 +333,7 @@ impl OperationPolicy {
         Self {
             version: OPERATION_POLICY_VERSION,
             review_before_pr: OperationField::built_in(false),
+            review_before_landing: before_landing_off(),
             review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
             review_crew: OperationField::built_in(None),
             review_host_evidence: no_host_evidence(),
@@ -333,9 +350,25 @@ impl OperationPolicy {
         policy
     }
 
+    /// Refuse a resolution that turns on both review layers before landing,
+    /// naming both keys and the layer that set each [ORB-14849].
+    pub fn ensure_one_review_layer(&self) -> Result<(), OrbitError> {
+        if self.review_before_pr.value && self.review_before_landing.value {
+            return Err(OrbitError::InvalidInput(format!(
+                "{REVIEW_BEFORE_PR_KEY} ({}) and {REVIEW_BEFORE_LANDING_KEY} ({}) are both on; \
+                 there is one review layer before landing, so turn one of them off",
+                self.review_before_pr.source.label(),
+                self.review_before_landing.source.label(),
+            )));
+        }
+        Ok(())
+    }
+
     fn apply_layer(&mut self, source: OperationLayerSource, layer: &OperationLayer) {
         self.review_before_pr
             .set(layer.review_before_pr.as_ref(), source);
+        self.review_before_landing
+            .set(layer.review_before_landing.as_ref(), source);
         self.review_minutes
             .set(layer.review_minutes.as_ref(), source);
         if let Some(crew) = &layer.review_crew {
@@ -365,6 +398,10 @@ pub(crate) fn review_minutes(raw: Option<u32>) -> Result<Option<u32>, OrbitError
 
 fn no_host_evidence() -> OperationField<Vec<HostEvidenceRule>> {
     OperationField::built_in(Vec::new())
+}
+
+fn before_landing_off() -> OperationField<bool> {
+    OperationField::built_in(false)
 }
 
 /// Refuse a rule Orbit could never fulfil, so a misconfiguration fails at

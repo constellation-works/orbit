@@ -1,19 +1,31 @@
 ---
 type: runbook
-summary: Inspect before-PR review verdicts, findings, and evidence holds, then decide how to resume a task.
+summary: Inspect before-PR and before-landing review verdicts, findings, and evidence holds, then decide how to resume a task.
 tags: [operations, review-gate, delivery]
-paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
+paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
-related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194"]
-last_validated: 2026-10-07
+related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
+last_validated: 2026-10-09
 ---
 
-# Operate the Before-PR Review Gate
+# Operate the Review Gate
 
-Use this runbook when `review.before_pr = true` and you need to read what a
-review did to a delivery, or a task is `blocked` with a `review_gate_escalation`
-or `review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
-or `in-progress` while awaiting named external evidence.
+Use this runbook when `review.before_pr = true` or `review.before_landing =
+true` and you need to read what a review did to a delivery, or a task is
+`blocked` with a `review_gate_escalation` or
+`review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
+`in-progress` while awaiting named external evidence, or in `review` with an
+open PR after a before-landing review did not approve it.
+
+Review has three timings. Before-PR review (`review.before_pr`) holds PR
+creation for the reviewer. Before-landing review (`review.before_landing`)
+opens the PR first and reviews it while hosted CI runs. After-landing review is
+the `delivery-code-review` auto-task. There is one review layer before
+landing: config load fails, naming both keys, while `review.before_pr` and
+`review.before_landing` are both on. Both share `review.minutes` and
+`operation.review_crew`, and neither runs on a workspace that ships locally:
+readiness holds that backlog as `local_route_before_pr` or
+`local_route_before_landing`, and `orbit doctor` fails its `review` check.
 
 ## 1. What the gate does
 
@@ -54,6 +66,24 @@ review certificate to another head.
 The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate
 records `accept_with_fixes`.
+
+### Before-landing review
+
+With `review.before_landing` captured, the table above applies to the
+`landing_review*` steps after `pr_open`, with these differences:
+
+| Outcome | Pull request | Task |
+| --- | --- | --- |
+| `accept` | completion merges the reviewed head | `done` with `--complete`, else `review` |
+| `accept_with_fixes` | owner validation reruns on the reviewer commit, which `landing_push` pushes onto the published head under a lease; hosted CI restarts and completion merges that head | `done` with `--complete`, else `review` |
+| `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
+
+No outcome closes the PR or requeues the task. A later DIRTY rebase of the
+reviewed head routes through the `re_review*` steps as before. A claimed leaf
+runs the same review after its `pr_open` and hands off the settled verdict as
+before-landing evidence; the owner refuses a handoff without it or for another
+head, and a leaf whose review does not approve blocks the task on the owner
+with its PR open.
 
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree
@@ -264,6 +294,15 @@ fulfilled always does.
 
 Identify the failed step from `orbit run show`, then act:
 
+- **A `landing_review*` or `landing_push` step failed** (before-landing
+  review): the PR is open and unmerged and the task is in `review`. Read the
+  findings comment and the "Before-landing review did not approve" comment.
+  To keep the change, fix it on the PR branch and land it with an operator
+  decision, or re-queue the task for a fresh run (a new lineage reviews the
+  new candidate). To drop it, reject the task; `pr.close_on_terminal` closes
+  the PR then. `push_lease_lost` means the PR branch moved after the review
+  settled: inspect who pushed before deciding.
+
 - **`review` timed out**: read the retained partial report and timeout
   handoff. The first timeout requeues automatically. If
   `review_timeout_requeue_exhausted` blocked the task, repair the candidate or
@@ -344,7 +383,7 @@ handoff output must show acceptance for the same final candidate. For
 
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
-- [CONFIG.md](../CONFIG.md) — the `operation.review_*` keys.
+- [CONFIG.md](../CONFIG.md) — the `[review]` keys and `operation.review_crew`.
 - [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the

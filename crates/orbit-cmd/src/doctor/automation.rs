@@ -516,13 +516,14 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
     )
 }
 
-/// Both automatic-review switches in one row [ORB-13992]: before-PR review
-/// (`review.before_pr`, its minutes and crew) and after-landing review (the
+/// Every automatic-review switch in one row [ORB-13992]: before-PR review
+/// (`review.before_pr`, its minutes and crew), before-landing review
+/// (`review.before_landing`, sharing them) and after-landing review (the
 /// `delivery-code-review` auto-task, with when its next batch is due), each
 /// with its source. A switch that is on but cannot run here reviews nothing
 /// while every other surface looks healthy, so that is an error, not a
-/// warning: before-PR review on a local-only ship workspace [ORB-14168],
-/// before-PR review without a resolvable crew, or an after-landing
+/// warning: before-PR or before-landing review on a local-only ship
+/// workspace [ORB-14168], either without a resolvable crew, or an after-landing
 /// consumer that is missing, owned by another machine, wedged, stalled, held
 /// for an operator, watching a branch that does not resolve, naming a crew
 /// that does not, or trailing `origin/<branch>` past the batch's
@@ -543,8 +544,9 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
             }
         };
     let message = format!(
-        "before-PR review: {}. after-landing review: {}",
+        "before-PR review: {}. before-landing review: {}. after-landing review: {}",
         switches.before_pr_line(),
+        switches.before_landing_line(),
         switches.after_landing_line()
     );
     let mut remediation = Vec::new();
@@ -557,13 +559,32 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
                 .to_string(),
         );
     }
-    if switches.before_pr.problems.len() > usize::from(switches.before_pr.local_route_incompatible)
-    {
+    if switches.before_landing.local_route_incompatible {
         remediation.push(
-            "Before-PR review needs `operation.review_crew` set to a crew that resolves on this \
-             host; set it, or turn `review.before_pr` off."
+            "`review.before_landing` is on and this workspace ships locally, which opens no pull \
+             request to review, so every local delivery is refused before it can run. Turn it \
+             off with `orbit config set review.before_landing false`, or ship through the PR \
+             route."
                 .to_string(),
         );
+    }
+    let crew_unusable = |problems: usize, local_route: bool| problems > usize::from(local_route);
+    if crew_unusable(
+        switches.before_pr.problems.len(),
+        switches.before_pr.local_route_incompatible,
+    ) || crew_unusable(
+        switches.before_landing.problems.len(),
+        switches.before_landing.local_route_incompatible,
+    ) {
+        let (layer, key) = if switches.before_landing.enabled {
+            ("Before-landing", "review.before_landing")
+        } else {
+            ("Before-PR", "review.before_pr")
+        };
+        remediation.push(format!(
+            "{layer} review needs `operation.review_crew` set to a crew that resolves on this \
+             host; set it, or turn `{key}` off."
+        ));
     }
     if let Some(health) = switches
         .after_landing

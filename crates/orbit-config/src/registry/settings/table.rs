@@ -214,7 +214,7 @@ define_config_settings! {
     },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
-        description: "Crew for automatic review: the before-PR reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR review refuses to start without it.",
+        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR and before-landing review refuse to start without it.",
         section: ConfigSection::Review, order: 30,
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
@@ -250,13 +250,19 @@ define_config_settings! {
     },
     review_before_pr: bool => bool {
         key: "review.before_pr", value_type: "bool",
-        description: "Hold PR creation for a fresh reviewer that fixes what it finds (default false). A drain or ship captures it at submission, so a run in flight keeps the value it started with. PR route only: refused for local-only delivery, and distributed admission refuses an endpoint that has it on. After-landing review is not a config key: it is the delivery-code-review auto-task's own enabled flag.",
+        description: "Hold PR creation for a fresh reviewer that fixes what it finds (default false). A drain or ship captures it at submission, so a run in flight keeps the value it started with. PR route only: refused for local-only delivery, and distributed admission refuses an endpoint that has it on. Never on together with review.before_landing. After-landing review is not a config key: it is the delivery-code-review auto-task's own enabled flag.",
         section: ConfigSection::Review, order: 10,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    review_before_landing: bool => bool {
+        key: "review.before_landing", value_type: "bool",
+        description: "Open the PR first, then have a fresh reviewer review it and fix what it finds while hosted CI runs; the PR lands only at the head that review settled (default false). Any outcome other than an approve leaves the PR open and the task in review. Shares review.minutes and operation.review_crew with before-PR review, and is captured at submission like it. PR route only: refused for local-only delivery. Loading fails while it and review.before_pr are both on: there is one review layer before landing.",
+        section: ConfigSection::Review, order: 15,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     review_minutes: u32 => u32 {
         key: "review.minutes", value_type: "integer",
-        description: "Reviewer runtime minutes for one candidate's before-PR review, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
+        description: "Reviewer runtime minutes for one candidate's before-PR or before-landing review, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
         section: ConfigSection::Review, order: 20,
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },

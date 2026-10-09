@@ -77,7 +77,7 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
 ];
 
 const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \
-     [review] (before_pr, minutes) and operation.review_crew";
+     [review] (before_pr, before_landing, minutes) and operation.review_crew";
 
 /// Keys retired from the registry whose value is still honoured: loading
 /// translates each into its replacement and warns that it is deprecated

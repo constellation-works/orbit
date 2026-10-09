@@ -328,9 +328,10 @@ function registryStrip(payload) {
   return strip;
 }
 
-// Both automatic-review switches, each with its source: before-PR review is
-// `review.before_pr`; after-landing review is the delivery-code-review
-// auto-task's own `enabled` flag.
+// The automatic-review switches, each with its source: before-PR review is
+// `review.before_pr`, before-landing review is `review.before_landing`, and
+// after-landing review is the delivery-code-review auto-task's own `enabled`
+// flag.
 function reviewStrip(payload) {
   const review = payload.review;
   if (!review) return null;
@@ -343,6 +344,8 @@ function reviewStrip(payload) {
 
   const before = review.before_pr || {};
   const beforeProblems = Array.isArray(before.problems) ? before.problems : [];
+  const landing = review.before_landing || {};
+  const landingProblems = Array.isArray(landing.problems) ? landing.problems : [];
   const after = review.after_landing || {};
   const afterHealth = after.health || null;
   const afterProblems = Array.isArray(afterHealth?.problems) ? afterHealth.problems : [];
@@ -352,6 +355,12 @@ function reviewStrip(payload) {
       before.enabled === true,
       beforeProblems,
       "It can gate delivery before PR creation.",
+    ),
+    reviewSwitchStatus(
+      "Before-landing review",
+      landing.enabled === true,
+      landingProblems,
+      "It can gate an open PR before it lands.",
     ),
     reviewSwitchStatus(
       "After-landing review",
@@ -368,6 +377,7 @@ function reviewStrip(payload) {
   }
   const diagnostics = [
     before.line ? `Before-PR review: ${before.line}` : null,
+    landing.line ? `Before-landing review: ${landing.line}` : null,
     after.line ? `After-landing review: ${after.line}` : null,
     afterHealth?.line ? `After-landing health: ${afterHealth.line}` : null,
   ].filter(Boolean);

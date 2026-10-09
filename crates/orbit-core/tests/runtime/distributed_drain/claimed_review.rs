@@ -81,11 +81,25 @@ impl ReviewedLeaf {
     /// [`Self::admit_with_follower_config`] with `owner_config` appended to
     /// the before-PR owner's workspace `config.toml`.
     pub(super) fn admit_with_configs(owner_config: &str, follower_config: &str) -> Self {
-        let pair = Pair::with_configs(
+        Self::admit_from(
             &format!("{}{owner_config}", before_pr_owner(REVIEW_CREW)),
             follower_config,
-            &[None],
-        );
+        )
+    }
+
+    /// A leaf admitted from an owner with `review.before_landing` on
+    /// [ORB-14849].
+    pub(super) fn admit_before_landing() -> Self {
+        Self::admit_from(
+            &format!(
+                "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+            ),
+            "",
+        )
+    }
+
+    fn admit_from(owner_config: &str, follower_config: &str) -> Self {
+        let pair = Pair::with_configs(owner_config, follower_config, &[None]);
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         let task = pair.claimed_task(&leaf);
@@ -170,7 +184,7 @@ impl ReviewedLeaf {
     /// The reviewer's work: its fix in the worktree, when it made one, and
     /// its report, persisted through the leaf's binding as the reviewer's
     /// tool call is.
-    fn reviewer_reports(&self, attempt_id: &str, verdict: ReviewVerdict, fix: bool) {
+    pub(super) fn reviewer_reports(&self, attempt_id: &str, verdict: ReviewVerdict, fix: bool) {
         if fix {
             std::fs::write(
                 self.pair.follower_repo.join("src/f0.rs"),
@@ -246,15 +260,27 @@ impl ReviewedLeaf {
         evidence: HandoffReviewEvidence,
         head: &SourceRevision,
     ) -> Result<(), OrbitError> {
+        self.owner_accepts_review(
+            HandoffReview {
+                policy: ReviewTiming::BeforePr,
+                disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+            },
+            head,
+        )
+    }
+
+    /// [`Self::owner_accepts`] with the handoff carrying `review` as is.
+    pub(super) fn owner_accepts_review(
+        &self,
+        review: HandoffReview,
+        head: &SourceRevision,
+    ) -> Result<(), OrbitError> {
         let record = self.pair.admission(&self.leaf);
         let mut handoff = handoff(&record);
         handoff.candidate.repository = REPOSITORY.into();
         handoff.candidate.candidate = head.clone();
         handoff.candidate.base = self.base.clone();
-        handoff.review = HandoffReview {
-            policy: ReviewTiming::BeforePr,
-            disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
-        };
+        handoff.review = review;
         let (_, worker) = self.claim();
         let observation = HandoffObservation {
             footprint_widening: vec![],
@@ -507,7 +533,7 @@ impl ReviewedLeaf {
     }
 }
 
-fn revision(repo: &Path, spec: &str) -> SourceRevision {
+pub(super) fn revision(repo: &Path, spec: &str) -> SourceRevision {
     SourceRevision {
         commit: git(repo, &["rev-parse", spec]).trim().to_string(),
         tree: git(repo, &["rev-parse", &format!("{spec}^{{tree}}")])

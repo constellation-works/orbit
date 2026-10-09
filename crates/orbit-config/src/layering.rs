@@ -422,10 +422,12 @@ fn resolve_operation_layers(
         .map(|document| OperationLayer::from_document(&document.value, &document.path))
         .transpose()?
         .unwrap_or_default();
-    Ok(OperationPolicy::resolve(&[
+    let policy = OperationPolicy::resolve(&[
         (OperationLayerSource::Global, &global_layer),
         (OperationLayerSource::Workspace, &workspace_layer),
-    ]))
+    ]);
+    policy.ensure_one_review_layer()?;
+    Ok(policy)
 }
 
 /// Refuse a `[machine]` table in a workspace `config.toml`.

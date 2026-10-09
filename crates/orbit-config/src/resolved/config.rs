@@ -175,7 +175,12 @@ impl ResolvedConfig {
             ))
         })?;
         translate_legacy_review_keys(&mut document, config_path)?;
-        Self::from_document_with_warnings(document, config_path, persistence, true, false)
+        let resolved =
+            Self::from_document_with_warnings(document, config_path, persistence, true, false)?;
+        // A merged layered document is checked once its layers resolve, with
+        // each switch's real source; one file is its own workspace layer.
+        resolved.operation.ensure_one_review_layer()?;
+        Ok(resolved)
     }
 
     /// Resolve an already-merged layered document while leaving compatibility

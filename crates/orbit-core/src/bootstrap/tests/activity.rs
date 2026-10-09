@@ -190,13 +190,34 @@ fn the_claimed_pr_leaf_validates_before_it_publishes() {
             "{publication} must take the path that validates the PR candidate"
         );
     }
+    // The before-landing review step carries the pre-publication result
+    // forward, rerunning the commands only on a reviewer fix, and before that
+    // fix is pushed.
+    let carry = &steps[position("landing_review_validate")];
+    assert!(
+        matches!(&carry.body, JobV2StepBody::TargetRef(target)
+            if target.target == "activity:claim_validate"
+                && target.default_input.as_ref().is_some_and(|input|
+                    input.get("carry") == Some(&json!("{{ steps.validate.output }}")))),
+        "the before-landing step must carry the commands that passed before publication"
+    );
+    assert_eq!(
+        carry.when,
+        steps[position("validate")].when,
+        "the carried validation must take the PR candidate's path"
+    );
+    assert!(
+        position("landing_review_validate") < position("landing_push"),
+        "a reviewer fix is validated before it is pushed"
+    );
     let pin = &steps[position("pin_validation")];
     assert!(
         matches!(&pin.body, JobV2StepBody::TargetRef(target)
             if target.target == "activity:claim_validate"
                 && target.default_input.as_ref().is_some_and(|input|
-                    input.get("prevalidated") == Some(&json!("{{ steps.validate.output }}")))),
-        "pin_validation must reuse the commands that passed before publication"
+                    input.get("prevalidated")
+                        == Some(&json!("{{ steps.landing_review_validate.output }}")))),
+        "pin_validation must reuse the commands that passed for the head it pins"
     );
     assert_eq!(
         pin.when,

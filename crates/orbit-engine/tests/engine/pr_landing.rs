@@ -577,6 +577,80 @@ fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery() {
     );
 }
 
+/// [ORB-14849] A before-landing review runs on the open PR. Its reviewer's
+/// fix reaches the PR branch only under a lease on the published head the
+/// review settled on, and completion merges exactly the head that review
+/// settled, never a head pushed after it.
+#[test]
+fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges() {
+    isolated(
+        "a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            // The PR opens before any review settles.
+            action(&host, "pr_open", &fx.open_input("", "")).expect("open unreviewed");
+            host.set_status(TASK_ID, TaskStatus::Review);
+
+            fs::write(fx.repo.join("src/feature.txt"), "reviewed and fixed\n").unwrap();
+            git(&fx.repo, &["commit", "-am", "review: fix the change"]);
+            let fix = fx.head();
+            let push = |lease: &str| {
+                action(
+                    &host,
+                    "git_push",
+                    &json!({
+                        "workspace_path": fx.repo,
+                        "job_run_id": RUN_ID,
+                        "completed_task_ids": [TASK_ID],
+                        "branch": BRANCH,
+                        "lease_remote_sha": lease,
+                    }),
+                )
+            };
+            let lost = push(&fix).expect_err("a lease on another head pushes nothing");
+            assert!(lost.to_string().contains("push_lease_lost"), "{lost}");
+            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+            let pushed = push(&fx.candidate).expect("the fix goes onto the published head");
+            assert_eq!(pushed["remote_sha_before"], fx.candidate.as_str());
+            assert_eq!(fx.remote_tip(BRANCH), fix);
+
+            // The shipped pipeline's pins: no before-PR review, the
+            // before-landing one, and `push`'s published head.
+            let mut input = fx.complete_input();
+            input["reviewed_head_sha"] = json!("");
+            input["landing_reviewed_head_sha"] = json!(fix);
+            let completed = action(&host, "pr_complete", &input).expect("merge the settled head");
+            assert_eq!(completed["merge"]["merged"], true);
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={fix} merge_method=squash")],
+                "the merge is conditional on the head the review settled"
+            );
+            assert_eq!(host.landings()[0].reviewed_head_sha, fix);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+
+            // A head pushed after the review settled is never merged.
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(&host, "pr_open", &fx.open_input("", "")).expect("open unreviewed");
+            host.set_status(TASK_ID, TaskStatus::Review);
+            fx.commit("src/later.txt", "pushed after the review\n");
+            let mut input = fx.complete_input();
+            input["reviewed_head_sha"] = json!("");
+            input["landing_reviewed_head_sha"] = json!(fx.candidate);
+            let refused =
+                action(&host, "pr_complete", &input).expect_err("an unreviewed head is refused");
+            assert!(
+                refused.to_string().contains(&fx.candidate),
+                "the refusal names the settled head: {refused}"
+            );
+            assert!(fx.merge_requests().is_empty());
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+        },
+    );
+}
+
 /// A required check that fails, before or after a wait, or an outstanding
 /// required review, refuses completion before any merge request. The PR stays
 /// open, the remote base does not move, and the task stays in `review`.
@@ -2451,7 +2525,7 @@ fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
 
             let handoffs = host.handoffs.lock().unwrap();
             assert_eq!(handoffs[0].review.policy, ReviewTiming::BeforePr);
-            let carried = handoffs[0].review.before_pr().expect("before-PR evidence");
+            let carried = handoffs[0].review.evidence().expect("before-PR evidence");
             assert_eq!(carried.reviewed_head_sha, fx.candidate);
             assert_eq!(carried.verdict, ReviewVerdict::AcceptWithFixes);
             assert_eq!(handoffs[1].review.policy, ReviewTiming::None);

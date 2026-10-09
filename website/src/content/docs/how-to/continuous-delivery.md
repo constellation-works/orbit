@@ -167,6 +167,9 @@ Common reasons a backlog task waits:
   after dispatch. The detail names whether the global or workspace config
   turned the switch on. Turn `review.before_pr` off, or ship through the PR
   route. `orbit doctor` names the same combination.
+- **`local_route_before_landing`**: the same hold for `review.before_landing`,
+  which reviews an open pull request before it lands; a local delivery opens
+  none. Turn `review.before_landing` off, or ship through the PR route.
 
 Neither approval nor the drain bypasses dependencies or locks, so a window may
 end with some tasks still in the backlog.

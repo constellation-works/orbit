@@ -122,6 +122,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         base_branch: "main".into(),
         landing_branch: "main".into(),
         before_pr: true,
+        before_landing: false,
         completion: "review".into(),
         authorization_reference: None,
         review: Some(AdmissionReviewContract {

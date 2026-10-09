@@ -13,7 +13,7 @@ use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     CommitIdentity, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewerIdentity,
+    REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewTiming, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -141,14 +141,20 @@ pub(crate) fn review_gate_settle(
         Ok(Settled::Blocked(certificate)) => Err(DispatchError::DeterministicActionRefused {
             action: action.to_string(),
             message: format!(
-                "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; the candidate \
-                 stays unpublished until a recorded decision resumes delivery",
+                "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; {}",
                 certificate.verdict.as_str(),
                 certificate
                     .escalation
                     .as_deref()
                     .unwrap_or("no escalation reason recorded"),
-                certificate.findings.len()
+                certificate.findings.len(),
+                if admission_output.get("timing").and_then(Value::as_str)
+                    == Some(ReviewTiming::BeforeLanding.as_str())
+                {
+                    "the pull request stays open and unmerged until a recorded decision lands it"
+                } else {
+                    "the candidate stays unpublished until a recorded decision resumes delivery"
+                }
             ),
         }),
         // Typed `[baseline_red]`, so the failure handoff keeps the candidate
@@ -672,8 +678,15 @@ fn settled_outcome(
     context: &GateContext,
     certificate: ReviewCertificate,
 ) -> Result<Settled, OrbitError> {
+    // [ORB-14849] A before-landing review already published its PR and
+    // promoted the task, so an evidence-only verdict is not held in progress:
+    // like any other verdict but an approve, it leaves the PR open.
+    let holds_evidence = context
+        .admission
+        .as_ref()
+        .is_none_or(|admission| !admission.gates_landing());
     if !certificate.verdict.passed() {
-        for task_id in &context.task_ids {
+        for task_id in context.task_ids.iter().filter(|_| holds_evidence) {
             if let Some(hold) =
                 super::super::evidence::evidence_hold(runtime, task_id)?.filter(|hold| {
                     hold.schema_version == 1

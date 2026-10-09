@@ -88,12 +88,13 @@ Confirm:
   `~/.orbit/mcp-callers.toml` / `~/.orbit/mcp-ssh-acceptance/` warning that
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
-- when before-PR review is on at the owner (`review.before_pr = true`), the
-  owner sets `operation.review_crew`, the workspace ships through the PR route,
+- when before-PR or before-landing review is on at the owner
+  (`review.before_pr = true` or `review.before_landing = true`), the owner sets `operation.review_crew`, the workspace ships through the PR route,
   and every follower can run that crew.
 
 ```bash
 orbit config get review.before_pr
+orbit config get review.before_landing
 orbit config get operation.review_crew
 orbit config show        # the Review lines report both switches and their sources
 ```
@@ -123,6 +124,20 @@ commands; a command-list mismatch fails closed. A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
 before-PR review on is refused (`before_pr_unsupported`).
+
+The owner's `review.before_landing` is captured the same way, and the
+follower's own value is ignored. A claimed PR leaf then pushes and opens its
+PR first and runs the same contract on the published head after `pr_open`,
+while hosted CI runs. A reviewer fix is revalidated on the leaf and pushed onto
+the PR under a lease (`push_lease_lost` if the branch moved). The handoff
+carries before-landing evidence for the settled head, and the owner refuses a
+handoff without it, with before-PR evidence instead, or for any other head, so
+an unreviewed head never reaches `review` or a merge. A leaf whose review does
+not approve fails with its PR open and unmerged; evidence-only holds do not
+apply to this timing. The claim's ship contract carries the field, so owner and
+followers need matching builds. Readiness, refusals and the reviewer-crew
+requirement are the same as for before-PR review, with the reason codes
+unchanged.
 After-landing review (the `delivery-code-review` auto-task) never affects
 admission: the owner reviews landed deliveries whatever host implemented them.
 A follower's landed PR reaches the owner's review batch under the claimed
@@ -366,9 +381,10 @@ orbit tool run orbit.drain.probe --input '{
 
 The probe reports owner machine, binary version, distributed-drain protocol
 schema `8`, this session's capabilities, diagnostic caller machine,
-owner-resolved ship configuration (`ship.before_pr`), and `review`: both review
-switches with their sources — before-PR on/off and minutes, after-landing
-enabled and its next batch due. Declaring version, schema, or `caller_before_pr`
+owner-resolved ship configuration (`ship.before_pr`, `ship.before_landing`),
+and `review`: the review switches with their sources — before-PR and
+before-landing on/off and minutes, after-landing enabled and its next batch
+due. Declaring version, schema, or `caller_before_pr`
 also reports the **first refusal admission would raise**, in admission order. It creates no receipt, reservation, claim, or
 task. A replica destination refuses the tool instead of answering about
 itself, naming its owner. Run the diagnostic CLI there; the follower runtime
@@ -384,7 +400,7 @@ Expected refusals you may see (and must not work around):
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
-| `before_pr_unsupported` | Owner has `review.before_pr` on and ships local-only, or the executor's leaf does not run the before-PR gate (an older binary) |
+| `before_pr_unsupported` | Owner has `review.before_pr` or `review.before_landing` on and ships local-only, or the executor's leaf does not run the review gate (an older binary) |
 
 ### 7. Receipt lookup after uncertainty
 

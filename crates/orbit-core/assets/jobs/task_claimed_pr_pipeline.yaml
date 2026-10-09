@@ -58,6 +58,21 @@
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
+# ORB-14849: when the claim captured the owner's `review.before_landing`
+# instead, the before-PR gate does not apply and the leaf publishes at once.
+# After `pr_open` the `landing_review*` steps review the published head while
+# hosted CI runs on it, under the same crew, budget, manifest and
+# host-evidence rules as the before-PR gate. A reviewer fix is validated on
+# its new head (`landing_review_validate`, which otherwise carries the
+# pre-publication validation through unchanged) and pushed to the PR branch
+# under a lease on the published head (`landing_push`), and `pin_validation`
+# pins the final head. The handoff carries the settled verdict as
+# before-landing evidence; the owner refuses a handoff without it, or for
+# another head, so the claimed PR never lands unreviewed. A verdict other
+# than an approve fails the leaf with the PR open and unmerged, and its
+# failure settlement blocks the task on the owner; an evidence-only gap is
+# not held after publication.
+#
 # ORB-14261: a repair claim — admitted after the owner's landing of an earlier
 # handoff stopped on a base conflict or stale base — runs this same leaf with
 # `claim_repair` set. `resume_candidate` re-applies that handoff's candidate
@@ -204,7 +219,8 @@ spec:
 
     # `review_gate_admit` and `review_gate_settle` always run so later steps
     # can read their output; they report `applies: false` when the claim
-    # captured `review.before_pr` off. Transient gate and reviewer failures
+    # captured `review.before_pr` off (a `review.before_landing` claim
+    # reviews after `pr_open` instead). Transient gate and reviewer failures
     # retry, then get one diagnosed recovery before the leaf fails.
     - id: review_gate_admit
       retry:
@@ -326,6 +342,89 @@ spec:
         # Same attempt-scoped delivery gate as `commit`.
         implementation: "{{ steps.implement_one.output }}"
 
+    # ORB-14849: the before-landing review of the published pull request.
+    # The gate steps always run and report `applies: false` unless the claim
+    # captured `review.before_landing`, and for a no-diff exemption.
+    - id: landing_review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        before_landing: true
+
+    - id: landing_review
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.landing_review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.landing_review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.landing_review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.landing_review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.landing_review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.landing_review_gate_admit.output.reviewer.crew }}"
+
+    - id: landing_review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.landing_review_gate_admit.output }}"
+
+    # Carries `validate`'s output through unchanged unless the reviewer
+    # committed a fix; then the required commands run on that new head, still
+    # unpublished. No step recovery: a failing fix is the review's reject.
+    - id: landing_review_validate
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sync: "{{ input.base_sync }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        carry: "{{ steps.validate.output }}"
+        revalidate: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }}"
+
+    - id: landing_push
+      when: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }} == true"
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.sync_base.output.head }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
+        lease_remote_sha: "{{ steps.push.output.local_sha }}"
+        implementation: "{{ steps.implement_one.output }}"
+
     # The leaf's published pull request pins the validation that already
     # passed on this exact commit and base; no command runs again.
     - id: pin_validation
@@ -336,7 +435,7 @@ spec:
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
         pull_request: "{{ steps.pr_open.output.pr_number }}"
-        prevalidated: "{{ steps.validate.output }}"
+        prevalidated: "{{ steps.landing_review_validate.output }}"
 
     - id: handoff
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
@@ -351,6 +450,8 @@ spec:
         # The settled before-PR verdict, or null when the claim captured no
         # review: the owner judges it against the claim's review contract.
         review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"
+        # [ORB-14849] The settled before-landing verdict, or null.
+        landing_review_evidence: "{{ steps.landing_review_gate_settle.output.handoff_evidence }}"
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
         implementation: "{{ steps.implement_one.output }}"

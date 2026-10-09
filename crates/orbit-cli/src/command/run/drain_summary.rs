@@ -388,7 +388,7 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
         line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
     }
     // A host-OS wait names the host it waits for, and a native-OS
-    // requirement the tag to add. A local-route before-PR hold names the
+    // requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the
     // commits it cites. Other details (long repair instructions) stay in `--json`.
     if matches!(
@@ -397,6 +397,7 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
             "host_os_mismatch"
                 | "native_os_required"
                 | "local_route_before_pr"
+                | "local_route_before_landing"
                 | "crew_unavailable"
                 | "owner_hold"
                 | "invalid_candidate"

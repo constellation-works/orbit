@@ -46,8 +46,9 @@ impl Execute for ConfigShowArgs {
     }
 }
 
-/// Both automatic-review switches with their sources [ORB-13992]: before-PR
-/// review (`review.before_pr`, minutes, crew) and after-landing review (the
+/// Every automatic-review switch with its source [ORB-13992]: before-PR
+/// review (`review.before_pr`, minutes, crew), before-landing review
+/// (`review.before_landing`) and after-landing review (the
 /// `delivery-code-review` auto-task, its next batch and health).
 struct ReviewView {
     json: JsonValue,
@@ -63,8 +64,9 @@ fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
     let text = match json["error"].as_str() {
         Some(error) => format!("\nReview: {error}\n"),
         None => format!(
-            "\nReview:\n  before-PR: {}\n  after-landing: {}\n",
+            "\nReview:\n  before-PR: {}\n  before-landing: {}\n  after-landing: {}\n",
             json["before_pr"]["line"].as_str().unwrap_or_default(),
+            json["before_landing"]["line"].as_str().unwrap_or_default(),
             json["after_landing"]["line"].as_str().unwrap_or_default(),
         ),
     };

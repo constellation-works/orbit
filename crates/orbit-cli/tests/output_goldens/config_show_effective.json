@@ -213,6 +213,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "review.before_landing": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "review.before_pr": {
       "scope": "built-in",
       "state": "default",

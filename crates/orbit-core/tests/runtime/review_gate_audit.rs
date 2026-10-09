@@ -36,6 +36,20 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
+        Self::build(required, review, ReviewTiming::BeforePr)
+    }
+
+    /// The fixture for a run that captured `review.before_landing` instead
+    /// [ORB-14849].
+    pub(super) fn before_landing() -> Self {
+        Self::build(&[], "", ReviewTiming::BeforeLanding)
+    }
+
+    fn build(required: &[&str], review: &str, timing: ReviewTiming) -> Self {
+        let switch = match timing {
+            ReviewTiming::BeforeLanding => "before_landing",
+            _ => "before_pr",
+        };
         let root = TempDir::new().unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -50,7 +64,7 @@ impl Fixture {
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n{review}"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\n{switch} = true\n{review}"
             ),
         )
         .unwrap();
@@ -93,8 +107,11 @@ impl Fixture {
         let admission = ReviewAdmission {
             contract_version: REVIEW_CONTRACT_VERSION,
             policy_version: policy.version,
-            timing: ReviewTiming::BeforePr,
-            timing_source: policy.review_before_pr.source.label().into(),
+            timing,
+            timing_source: match timing {
+                ReviewTiming::BeforeLanding => policy.review_before_landing.source.label().into(),
+                _ => policy.review_before_pr.source.label().into(),
+            },
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().into(),
             // A bounded fixture budget exercises exhaustion without depending
