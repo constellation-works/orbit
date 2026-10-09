@@ -204,7 +204,10 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         run_id: prior_run_id.clone(),
         branch,
         head_sha: head_sha.clone(),
-        durable_ref: None,
+        // [ORB-14905] A hold carried its candidate to `origin` too, which
+        // still serves it once this host's branch or worktree is gone.
+        durable_ref: input_string_field(evidence, "durable_ref")
+            .filter(|reference| valid_candidate_ref(reference)),
         failed_step_id: checkpoint.failed_step_id,
         needs_review_repair: evidence["decision"] == "blocked_review_gate",
         held: false,

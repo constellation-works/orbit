@@ -617,6 +617,19 @@ owns delivery:
   judges the result. A candidate that is not on `origin` or in the executing host's object store
   is implemented fresh with the reason in the step's output. Carried refs are not deleted by
   Orbit; the runbook covers pruning them.
+- *Held owner-local candidates* ([ORB-14905]). An owner-local run whose failure handoff holds a
+  committed candidate without judging it — `held_baseline_red`, `blocked_validation_environment`,
+  `held_provider_failure` — pushes it to the same `refs/orbit/candidates/<task>/<run>` on
+  `origin` and records a `candidate_held` history entry whose note carries the typed
+  `HeldCandidate` (run, machine, branch, head, `durable_ref` or `carry_failure`, spec digest)
+  after `[candidate_held]`. The handoff output carries `carry` (`durable` or `failed`) with
+  `durable_ref` or `carry_failure`, and its comment says whether the candidate is on `origin` or
+  host-local, with the push diagnostic. A refused push never stops the hold. While the task's
+  `job_run_id` still names that run, admission offers the held candidate to the task's next
+  claim (`task.resume_candidate`, with no failed step, so the leaf continues it) under the same
+  spec, discard and fetchability checks, recording a `fresh:` `candidate_resume` event when it
+  sets the candidate aside; any later run linked to the task supersedes it. The agent-blocked
+  handoff commits nothing and is never resumed, so it carries no ref.
 - *Owner-local continuation after a failed claim* ([ORB-14603]). A task whose claim failed with
   a kept candidate may next run on the owner itself, an owner-local `task_pr_pipeline` or
   `task_local_pipeline` (on-call returns a task tagged `os:linux` to the backlog after a
@@ -1151,6 +1164,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-14338] — carried an unpublished claimed candidate to a durable ref on `origin` so any host resumes it, gave claimed-local leaves candidate continuation, and recorded a typed reason in task history when a kept candidate is set aside.
 - [ORB-14261] — added one automatic repair of a handoff whose landing stopped on its base.
 - [ORB-14603] — made an owner-local run after a failed claim continue the kept candidate, and stopped resolving a follower's run id in the owner's own run store.
+- [ORB-14905] — carried a candidate an owner-local red-base, validation-environment or provider-failure hold kept to a durable ref on `origin`, and offered it to the task's next claim on any host.
 - [ORB-14439] — kept each claimed leaf's failure or release settlement on the owner's claim state and listed settled claims through `orbit run settlements`.
 - [ORB-14695] — released a claimed leaf whose provider account hit its usage limit as an unbudgeted `provider` failure that excludes every crew of that provider for the window.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.

@@ -1431,6 +1431,11 @@ fn a_missing_validation_tool_is_an_environment_failure() {
             assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
             assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
             assert_eq!(
+                fx.durable_candidate(&handoff),
+                fx.candidate,
+                "a claim on another host can fetch the candidate"
+            );
+            assert_eq!(
                 fx.head(),
                 fx.candidate,
                 "the candidate is kept as validated"
@@ -1568,6 +1573,11 @@ fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
             );
             assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
             assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                fx.durable_candidate(&handoff),
+                fx.head(),
+                "a claim on another host can fetch the partial candidate"
+            );
             assert_eq!(
                 host.status(TASK_ID),
                 TaskStatus::InProgress,
@@ -3249,6 +3259,22 @@ impl Fixture {
 
     fn local_tip(&self, branch: &str) -> String {
         git(&self.repo, &["rev-parse", branch])
+    }
+
+    /// [ORB-14905] The commit a held candidate's durable ref names on the
+    /// remote, after checking the handoff says it carried it there.
+    fn durable_candidate(&self, handoff: &Value) -> String {
+        assert_eq!(handoff["carry"], "durable", "{handoff}");
+        let reference = handoff["durable_ref"].as_str().expect("durable ref");
+        assert_eq!(
+            reference,
+            format!("refs/orbit/candidates/{TASK_ID}/{RUN_ID}"),
+            "{handoff}"
+        );
+        git(
+            &self.forge,
+            &["--git-dir", "remote.git", "rev-parse", reference],
+        )
     }
 
     fn remote_tip(&self, branch: &str) -> String {

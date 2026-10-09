@@ -142,6 +142,7 @@ fn apply_task_automation_update_under_lock(
                 status_event: update.status_event.clone(),
                 status_note: update.status_note.clone(),
                 append_comments: update.append_comments.clone(),
+                append_history: update.append_history.clone(),
                 expected_status: Some(vec![existing_task.status]),
                 ..StoreTaskUpdateParams::from(TaskUpdateParams {
                     execution_summary: update.execution_summary.clone(),

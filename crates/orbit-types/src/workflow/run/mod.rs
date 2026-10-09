@@ -2,6 +2,7 @@ mod agent_blocker;
 mod baseline;
 mod delivery;
 mod forge_hold;
+mod held_candidate;
 mod id;
 mod provider_hold;
 mod state;
@@ -24,6 +25,7 @@ pub use forge_hold::{
     FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER,
     ForgeUnavailableHold, is_forge_unavailable,
 };
+pub use held_candidate::{CANDIDATE_HELD_EVENT, CANDIDATE_HELD_MARKER, HeldCandidate};
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use provider_hold::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,

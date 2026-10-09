@@ -158,6 +158,28 @@ impl TaskCommitBoundary {
         }))
     }
 
+    /// What admission offers a claim of `task` on `machine_id`: the
+    /// candidate an owner-local run of the task held [ORB-14905] while the
+    /// task is still linked to that run, else the candidate its latest claim
+    /// settlement kept. Each comes with why the claim implements afresh
+    /// instead, if it does.
+    pub(in super::super) fn admission_offer(
+        &self,
+        task: &orbit_types::task::Task,
+        history: &[orbit_types::task::TaskHistoryEntry],
+        machine_id: &str,
+    ) -> Result<Option<CandidateOffer>, OrbitError> {
+        if let Some(held) = held_candidate_offer(task, history, machine_id) {
+            return Ok(Some(held));
+        }
+        Ok(self
+            .candidate_offer(task, machine_id)?
+            .map(|kept| CandidateOffer {
+                candidate: kept.candidate,
+                fresh: kept.fresh,
+            }))
+    }
+
     /// [ORB-14603] `Self::candidate_offer` for the owner's own run of
     /// `task_id` on `machine_id`: the task's last claim failed, and its run
     /// continues the candidate that claim kept rather than implementing anew.
@@ -234,16 +256,97 @@ pub(in super::super) struct DrainReleases {
     pub(in super::super) host: Option<ClaimReleaseRecord>,
 }
 
+/// A candidate admission offers a claim, and why the claim implements afresh
+/// instead, if it does.
+#[derive(Debug)]
+pub(in super::super) struct CandidateOffer {
+    pub(in super::super) candidate: ClaimCandidateRef,
+    pub(in super::super) fresh: Option<(CandidateFreshReason, String)>,
+}
+
+/// [ORB-14905] The candidate the task's latest owner-local hold kept, as
+/// offered to a claim on `machine_id`: a red base, a missing validation tool
+/// or a failed provider held it without judging it, and its run pushed it to
+/// a durable ref on `origin` unless that push failed. Offered only while the
+/// task is still linked to that run, so a later run on any host supersedes
+/// it, and only while the task's spec is unchanged, no operator discarded it
+/// since, and `machine_id` can fetch it.
+fn held_candidate_offer(
+    task: &orbit_types::task::Task,
+    history: &[orbit_types::task::TaskHistoryEntry],
+    machine_id: &str,
+) -> Option<CandidateOffer> {
+    use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == CANDIDATE_HELD_EVENT)?;
+    let held = HeldCandidate::from_text(entry.note.as_deref()?)?;
+    if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
+        return None;
+    }
+    // Run ids are unique only per machine [ORB-13649].
+    if let Some(linked) = &task.job_run_machine
+        && held.machine_id.as_deref() != Some(linked.machine_id.as_str())
+    {
+        return None;
+    }
+    let holder = held
+        .machine_id
+        .clone()
+        .unwrap_or_else(|| "the host that held it".into());
+    let fresh = if !task.spec_digest_matches(&held.task_spec_digest) {
+        Some((
+            CandidateFreshReason::SpecChanged,
+            "the task's description or acceptance criteria changed since it was held".into(),
+        ))
+    } else if history.iter().any(|later| {
+        later.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && later.at >= entry.at
+    }) {
+        Some((
+            CandidateFreshReason::Discarded,
+            "an operator discarded it since it was held".into(),
+        ))
+    } else if held.durable_ref.is_none() && held.machine_id.as_deref() != Some(machine_id) {
+        let why = match &held.carry_failure {
+            Some(failure) => format!("pushing it to a durable ref failed ({failure})"),
+            None => "its run did not push it to a durable ref".into(),
+        };
+        Some((
+            CandidateFreshReason::NotDurable,
+            format!("it exists only on {holder}, whose run held it: {why}"),
+        ))
+    } else {
+        None
+    };
+    Some(CandidateOffer {
+        candidate: ClaimCandidateRef {
+            branch: held.branch,
+            head_sha: held.head_sha,
+            pull_request: None,
+            source_run_id: Some(held.run_id),
+            // None of these holds judged the candidate on its merits, so a
+            // claim continues it rather than repairs a review verdict.
+            failed_step_id: None,
+            published: false,
+            durable_ref: held.durable_ref,
+            carry_failure: held.carry_failure,
+        },
+        fresh,
+    })
+}
+
 /// The `candidate_resume` history entry a claim admitted on `machine_id`
-/// records when it cannot resume the kept candidate, naming the claim, the
+/// records when it cannot resume the offered candidate, naming the claim, the
 /// candidate and the typed reason [ORB-14338].
 pub(in super::super) fn fresh_offer_history(
-    kept: &KeptClaimCandidate,
+    offer: &CandidateOffer,
     claim_id: &str,
     machine_id: &str,
 ) -> Option<orbit_types::task::TaskHistoryEntry> {
-    let (reason, detail) = kept.fresh.as_ref()?;
-    let candidate = &kept.candidate;
+    let (reason, detail) = offer.fresh.as_ref()?;
+    let candidate = &offer.candidate;
     Some(orbit_types::task::TaskHistoryEntry {
         at: Utc::now(),
         by: machine_id.to_string(),

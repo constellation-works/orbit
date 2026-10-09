@@ -42,6 +42,7 @@ mod observe;
 mod published;
 mod validation;
 
+pub(super) use carry::carry_to_durable_ref;
 pub(in crate::executor::automation) use carry::claim_candidate_carry;
 pub(super) use delivery::{delivery, slug};
 pub(in crate::executor::automation) use handoff::claim_handoff;
