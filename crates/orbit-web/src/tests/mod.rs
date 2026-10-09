@@ -3,7 +3,6 @@
 mod dashboard_assets;
 #[cfg(unix)]
 mod host_tunnels;
-mod log_format;
 mod runtime_memo;
 mod serve;
 #[cfg(unix)]
