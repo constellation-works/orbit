@@ -6,7 +6,7 @@ use orbit_registry::{
     MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
     inspect_machine_identity, os_hostname,
 };
-use orbit_types::identity::validate_new_task_prefix;
+use orbit_types::identity::{validate_machine_name, validate_new_task_prefix};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -210,6 +210,8 @@ fn validate_fresh_identity_flags(
                 "machine name must not be empty".to_string(),
             ));
         }
+        // Checked as `ensure_machine_identity` stores it: trimmed.
+        Some(name) => validate_machine_name(name.trim())?,
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
                 "machine identity is absent; pass --machine-name and --task-prefix \
@@ -384,18 +386,49 @@ fn prompt_machine_name() -> Result<String, OrbitError> {
         Some(name) => format!("Machine name [{name}]: "),
         None => "Machine name: ".to_string(),
     };
-    let answer = read_line(&prompt)?;
-    if answer.is_empty() {
-        default.ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "no machine name entered and the OS hostname is unavailable; \
-                 re-run with --machine-name"
-                    .to_string(),
-            )
-        })
-    } else {
-        Ok(answer)
+    let stderr = io::stderr();
+    let mut output = stderr.lock();
+    collect_machine_name(&prompt, default, &mut output, |prompt, output| {
+        prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)
+    })
+}
+
+const MAX_MACHINE_NAME_ATTEMPTS: usize = 4;
+
+fn collect_machine_name<W, F>(
+    prompt: &str,
+    default: Option<String>,
+    output: &mut W,
+    mut read_answer: F,
+) -> Result<String, OrbitError>
+where
+    W: Write,
+    F: FnMut(&str, &mut W) -> Result<String, OrbitError>,
+{
+    for _ in 0..MAX_MACHINE_NAME_ATTEMPTS {
+        let answer = read_answer(prompt, output)?;
+        let name = if answer.is_empty() {
+            default.clone().ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "no machine name entered and the OS hostname is unavailable; \
+                     re-run with --machine-name"
+                        .to_string(),
+                )
+            })?
+        } else {
+            answer
+        };
+        match validate_machine_name(&name) {
+            Ok(()) => return Ok(name),
+            Err(error) => {
+                writeln!(output, "{error}").map_err(|error| OrbitError::Io(error.to_string()))?;
+            }
+        }
     }
+
+    Err(OrbitError::InvalidInput(format!(
+        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; pass --machine-name or --non-interactive"
+    )))
 }
 
 const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
@@ -426,12 +459,6 @@ where
     Err(OrbitError::InvalidInput(format!(
         "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; pass --task-prefix or --non-interactive"
     )))
-}
-
-fn read_line(prompt: &str) -> Result<String, OrbitError> {
-    let stderr = io::stderr();
-    let mut output = stderr.lock();
-    prompt_stdin::read_trimmed_line(prompt, &mut output).map_err(prompt_io_to_orbit)
 }
 
 fn prompt_io_to_orbit(error: io::Error) -> OrbitError {

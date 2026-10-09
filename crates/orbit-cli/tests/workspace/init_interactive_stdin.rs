@@ -161,6 +161,39 @@ fn drip_writing_without_newline_expires_one_prompt_budget() {
 }
 
 #[test]
+fn invalid_piped_machine_name_is_asked_again_before_the_root_is_seeded() {
+    let fixture = IsolatedHome::new();
+    let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn orbit init");
+
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        // The first machine name is path-like, so the registry rejects it and
+        // the prompt asks again; the second answer names the machine.
+        stdin
+            .write_all(b"dk/server\npipe-host\nZZ\n")
+            .expect("write interactive answers");
+    }
+
+    let status = wait_with_deadline(&mut child, SUCCESS_DEADLINE)
+        .unwrap_or_else(|| panic!("orbit init with a rejected machine name did not finish"));
+    let (stdout, stderr) = read_stdio(&mut child);
+    assert!(
+        status.success(),
+        "a retried machine name must complete init\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    let config = fs::read_to_string(fixture.home.join(".orbit").join("config.toml"))
+        .expect("config.toml after interactive init");
+    assert!(config.contains("name = \"pipe-host\""), "{config}");
+    assert!(!config.contains("dk/server"), "{config}");
+}
+
+#[test]
 fn oversized_unterminated_pipe_answer_is_rejected() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
