@@ -392,9 +392,9 @@ impl OrbitRuntime {
     }
 
     /// Look up the crew a task names, or the configured default, without the
-    /// enabled check. For read surfaces and material fingerprints only: they
-    /// describe the configured crew, disabled or not, and must never launch
-    /// it.
+    /// enabled check. For read surfaces, material fingerprints and startup
+    /// validation of deterministic jobs: these describe the configured crew,
+    /// disabled or not, and must never launch an agent.
     pub fn lookup_crew_for_task(
         &self,
         cli_override: Option<&str>,

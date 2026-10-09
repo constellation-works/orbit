@@ -144,6 +144,14 @@ fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
         return;
     }
     let fixture = Fixture::new();
+    // Hosted CI has no provider CLI, so init leaves its default crew disabled.
+    // Retention is deterministic and must run without an enabled provider.
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[workflow]\ndefault_crew = \"parked\"\n\n[crews.parked]\nenabled = false\n\
+         provider = \"claude\"\nmodel = \"test-model\"\n",
+    )
+    .unwrap();
     let workspace_id = fixture.workspace_id();
     let now = chrono::Utc::now().to_rfc3339();
     let (dropped, kept, step, orphan, pending) =
@@ -277,14 +285,40 @@ fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
         .failure();
 
     // The routine's shipped job applies both sweeps.
-    let completed = fixture.json(&["job", "run", "store_gc_pipeline", "--wait", "--json"]);
-    assert_eq!(completed["state"], "success", "{completed}");
+    let output = fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["job", "run", "store_gc_pipeline", "--wait", "--json"])
+        .output()
+        .unwrap();
+    let completed: Value = serde_json::from_slice(&output.stdout).unwrap();
     let run_id = completed["run_id"].as_str().unwrap();
     let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
+    assert!(
+        output.status.success(),
+        "store retention job failed: {completed}; run: {shown}; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(completed["state"], "success", "{shown}");
+    assert!(shown["run"]["resolved_crew"].is_null(), "{shown}");
     let sweep = &shown["pipeline_state"]["pipeline"]["sweep"];
     assert_eq!(sweep["audit"]["apply"], true, "{sweep}");
     assert_eq!(sweep["runs"]["apply"], true, "{sweep}");
     assert!(kept_path.is_file() && step_path.is_file() && pending_path.is_file());
+
+    // Deterministic jobs still refuse an unknown configured crew.
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[workflow]\ndefault_crew = \"missing\"\n",
+    )
+    .unwrap();
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["job", "run", "store_gc_pipeline", "--wait", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("crew 'missing' is not defined"));
 }
 
 #[test]

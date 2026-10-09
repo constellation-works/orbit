@@ -54,7 +54,7 @@ This chain resolves the run crew. At activity dispatch there is one additional, 
 
 Run-start code resolves the crew before dispatch, emits structured tracing fields for `resolved_crew` and `crew_model`, and persists those strings on the job run record. Persisting resolved values protects audit trails from later config edits.
 
-Only a job that can dispatch an agent persists them. A job whose steps and recovery or failure hooks are all deterministic activities (for example `worktree_gc_pipeline`, or a drain coordinator whose children carry their own crews) still resolves the crew at start, so a misconfiguration fails as before, but records no `resolved_crew` or `crew_model`: no model does that run's work [ORB-13016].
+Only a job that can dispatch an agent persists them. A job whose steps and recovery or failure hooks are all deterministic activities (for example `worktree_gc_pipeline`, or a drain coordinator whose children carry their own crews) validates the selected crew's name at start but permits a disabled crew. Unknown names or a missing selection still fail. It records no `resolved_crew` or `crew_model`: no model does that run's work [ORB-13016]. This keeps retention and reap jobs available on hosts without an enabled provider.
 
 Legacy records without crew fields still deserialize because the run-record fields are optional. Display code may use `infer_agent_family_from_model()` only as a recovery path for older artifacts.
 
