@@ -1,7 +1,7 @@
 //! Resolved configuration construction and admitted consumer settings.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
@@ -175,8 +175,14 @@ impl ResolvedConfig {
             ))
         })?;
         translate_legacy_review_keys(&mut document, config_path)?;
-        let resolved =
-            Self::from_document_with_warnings(document, config_path, persistence, true, false)?;
+        let resolved = Self::from_document_with_warnings(
+            document,
+            config_path,
+            &|_, _| config_path.to_path_buf(),
+            persistence,
+            true,
+            false,
+        )?;
         // A merged layered document is checked once its layers resolve, with
         // each switch's real source; one file is its own workspace layer.
         resolved.operation.ensure_one_review_layer()?;
@@ -187,13 +193,22 @@ impl ResolvedConfig {
     /// warnings to the loader, which still has each source document and its
     /// path. Takes ownership of the merged `toml::Value` directly rather than
     /// a re-serialized string, so the document is parsed once by the loader
-    /// and never re-parsed here.
+    /// and never re-parsed here. `config_path` is the merged document's path;
+    /// `crew_field_path` attributes an ignored crew field to the layer that set it.
     pub(crate) fn from_layered_value(
         document: toml::Value,
         config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        Self::from_document_with_warnings(document, config_path, persistence, false, false)
+        Self::from_document_with_warnings(
+            document,
+            config_path,
+            crew_field_path,
+            persistence,
+            false,
+            false,
+        )
     }
 
     /// Admit a file snapshot with contextual crews, without requiring the
@@ -201,14 +216,23 @@ impl ResolvedConfig {
     pub(crate) fn from_scoped_value(
         document: toml::Value,
         config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        Self::from_document_with_warnings(document, config_path, persistence, false, true)
+        Self::from_document_with_warnings(
+            document,
+            config_path,
+            crew_field_path,
+            persistence,
+            false,
+            true,
+        )
     }
 
     fn from_document_with_warnings(
         document: toml::Value,
         config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
         emit_compatibility_warnings: bool,
         scoped: bool,
@@ -237,7 +261,7 @@ impl ResolvedConfig {
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
         let (mut crews, ignored_crew_properties) =
-            crews_from_raw(parsed.crews.as_ref(), config_path)?;
+            crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
         let snapshot = if scoped {
             ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
         } else {
