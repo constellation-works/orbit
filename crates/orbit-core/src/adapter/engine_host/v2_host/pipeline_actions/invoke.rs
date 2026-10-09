@@ -23,8 +23,10 @@ use super::gate_admission::{gate_admission_stop, wait_success_status};
 /// timestamps.
 ///
 /// [ORB-10819]'s blocking leaf contract is unchanged past that checkpoint: the
-/// activity still returns the child's terminal wait entry, so a following
-/// `pipeline_success_guard` sees exactly what it saw before.
+/// activity still returns the child's terminal status as data, so a following
+/// `pipeline_success_guard` sees exactly what it saw before. It returns a
+/// bounded summary of the wait entry, never the child's pipeline: the child's
+/// own run keeps that, and a reader fetches it by `run_id` [ORB-14587].
 pub(in super::super) fn invoke_and_wait(
     runtime: &OrbitRuntime,
     action: &str,
@@ -67,7 +69,7 @@ pub(in super::super) fn invoke_and_wait(
 /// Internal seam over the two pipeline tools so tests can drive the phase
 /// ordering — checkpoint before wait, prompt failure without one — without
 /// spawning real detached workers.
-fn invoke_and_wait_with<Invoke, Wait>(
+pub(super) fn invoke_and_wait_with<Invoke, Wait>(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -161,8 +163,8 @@ where
     )
 }
 
-/// Terminalize the dispatch record from the wait's outcome and hand the child's
-/// wait entry back to the caller.
+/// Terminalize the dispatch record from the wait's outcome and hand the
+/// summary of the child's wait entry back to the caller.
 ///
 /// A wait that errored outright is not a failed child: the parent simply stopped
 /// being able to observe one it did durably submit. That is recorded as
@@ -238,7 +240,23 @@ fn close_child_wait(
         error_message.as_deref(),
     )?;
 
-    Ok(entry)
+    Ok(child_result_summary(&entry))
+}
+
+/// The wait entry fields a parent step, guard or reader uses. The child's
+/// pipeline stays out: the parent would otherwise store a copy of it in its
+/// own state, once more for every fan-in alias of the step [ORB-14587].
+fn child_result_summary(entry: &Value) -> Value {
+    let summary = ["run_id", "status", "finished_at", "duration_ms", "error"]
+        .into_iter()
+        .filter_map(|field| {
+            entry
+                .get(field)
+                .filter(|value| !value.is_null())
+                .map(|value| (field.to_string(), value.clone()))
+        })
+        .collect();
+    Value::Object(summary)
 }
 
 fn required_job_name(action: &str, input: &Value) -> Result<String, DispatchError> {

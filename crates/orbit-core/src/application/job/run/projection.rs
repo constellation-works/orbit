@@ -114,13 +114,10 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     // [ORB-11354] An agent invocation's answer is the reason its run exists,
     // so the shared projection carries it rather than making each surface dig
     // it out of the step output. `None` for every other job.
-    let agent_invocation = crate::application::job::agent_invoke_result(
-        run,
-        state_for_agent_result.map(|state| &state.step_outputs),
-        None,
-    )
-    .and_then(|result| serde_json::to_value(result).ok())
-    .unwrap_or(Value::Null);
+    let agent_invocation =
+        crate::application::job::agent_invoke_result(run, state_for_agent_result, None)
+            .and_then(|result| serde_json::to_value(result).ok())
+            .unwrap_or(Value::Null);
 
     let mut value = json!({
         "agent_invocation": agent_invocation,

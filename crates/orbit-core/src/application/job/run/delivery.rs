@@ -297,7 +297,7 @@ fn checkpoint<'a>(state: &'a PipelineState, step: &DeliveryStep) -> Checkpoint<'
     if state.step_states.get(&step.index) != Some(&JobRunState::Success) {
         return Checkpoint::Absent;
     }
-    let Some(output) = state.step_outputs.get(&step.index) else {
+    let Some(output) = state.step_output(step.index) else {
         return Checkpoint::Absent;
     };
     // The pipeline entry under the step's id is written by the same host

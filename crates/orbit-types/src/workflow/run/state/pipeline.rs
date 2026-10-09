@@ -33,7 +33,10 @@ pub struct PipelineState {
     /// This replaces the in-memory `current_input` blob.
     pub pipeline: Value,
     /// Raw per-step outputs keyed by global step index.
-    /// These are used to rebuild `steps.*` template context during recovery.
+    /// These are used to rebuild `steps.*` template context during recovery;
+    /// a finished run drops those its `pipeline` also holds (see
+    /// `step_output_pointers`), so read a step's output through
+    /// [`Self::step_output`].
     #[serde(default)]
     pub step_outputs: BTreeMap<u32, Value>,
     /// Pipeline entries a completed compound step (`parallel:`, `fan_out:`,
@@ -49,6 +52,14 @@ pub struct PipelineState {
     /// Successful steps merge these patches into `pipeline`.
     #[serde(default)]
     pub pipeline_patches: BTreeMap<u32, Value>,
+    /// Where a finished run's step outputs live in `pipeline`, as RFC 6901
+    /// JSON pointers keyed by global step index. A run that ends `success` or
+    /// `cancelled` can never resume, so [`Self::compact_for_terminal`] drops
+    /// the resume-only maps and records here where each dropped output is
+    /// still found; [`Self::step_output`] reads either form. An output the
+    /// pipeline does not hold stays in `step_outputs`: it is the only copy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub step_output_pointers: BTreeMap<u32, String>,
     /// Per-step states keyed by global step index.
     #[serde(default)]
     pub step_states: BTreeMap<u32, JobRunState>,
@@ -183,6 +194,7 @@ impl PipelineState {
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
             pipeline_patches: BTreeMap::new(),
+            step_output_pointers: BTreeMap::new(),
             step_states: BTreeMap::new(),
             next_step_index: 0,
             previous_step_state: None,
@@ -347,6 +359,56 @@ impl PipelineState {
         self.updated_at = Utc::now();
     }
 
+    /// The output step `step_index` recorded: its resume checkpoint while the
+    /// run can still resume, its entry in `pipeline` once compacted.
+    pub fn step_output(&self, step_index: u32) -> Option<&Value> {
+        self.step_outputs.get(&step_index).or_else(|| {
+            self.step_output_pointers
+                .get(&step_index)
+                .and_then(|pointer| self.pipeline.pointer(pointer))
+        })
+    }
+
+    /// Every recorded step output in step order, compacted or not.
+    pub fn step_output_entries(&self) -> impl DoubleEndedIterator<Item = (u32, &Value)> {
+        let indices: std::collections::BTreeSet<u32> = self
+            .step_outputs
+            .keys()
+            .chain(self.step_output_pointers.keys())
+            .copied()
+            .collect();
+        indices
+            .into_iter()
+            .filter_map(|index| self.step_output(index).map(|output| (index, output)))
+    }
+
+    /// Drop what only resume reads once `run_state` rules resume out.
+    ///
+    /// `success` and `cancelled` are the terminals no resume accepts; every
+    /// other state keeps the full checkpoint. Each step output the `pipeline`
+    /// already holds is replaced by a pointer to that entry; checkpoints
+    /// write every output there, so normally none remain. Returns whether
+    /// anything was dropped. Idempotent.
+    pub fn compact_for_terminal(&mut self, run_state: JobRunState) -> bool {
+        if !matches!(run_state, JobRunState::Success | JobRunState::Cancelled) {
+            return false;
+        }
+        let mut compacted = !self.pipeline_patches.is_empty() || !self.compound_outputs.is_empty();
+        let pipeline = &self.pipeline;
+        let pointers = &mut self.step_output_pointers;
+        self.step_outputs.retain(|index, output| {
+            let Some(pointer) = pipeline_pointer_to(pipeline, output) else {
+                return true;
+            };
+            pointers.insert(*index, pointer);
+            compacted = true;
+            false
+        });
+        self.pipeline_patches.clear();
+        self.compound_outputs.clear();
+        compacted
+    }
+
     /// Replace the nested pipeline entries recorded for `step_index`; an
     /// empty map clears them so a re-checkpointed step never keeps entries
     /// from an earlier attempt.
@@ -505,6 +567,20 @@ impl PipelineState {
             .map(|dispatch| dispatch.child_run_id.clone())
             .collect()
     }
+}
+
+/// The JSON pointer to the first `pipeline` entry equal to `output`: the
+/// whole document, else a top-level key. Checkpoints write each step output
+/// under its step id, so a top-level search finds every output still held.
+fn pipeline_pointer_to(pipeline: &Value, output: &Value) -> Option<String> {
+    if pipeline == output {
+        return Some(String::new());
+    }
+    pipeline
+        .as_object()?
+        .iter()
+        .find(|(_, value)| *value == output)
+        .map(|(key, _)| format!("/{}", key.replace('~', "~0").replace('/', "~1")))
 }
 
 fn merge_pipeline_patch(pipeline: &mut Value, patch: &Value) {

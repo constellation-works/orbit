@@ -432,7 +432,7 @@ impl MemberHost for Host<'_> {
             state
                 .as_ref()
                 .filter(|state| state.step_states.get(&index) == Some(&JobRunState::Success))
-                .and_then(|state| state.step_outputs.get(&index))
+                .and_then(|state| state.step_output(index))
         };
         let Some(initial) = apply_output(APPLY_STEP) else {
             if !stopped {
@@ -444,7 +444,7 @@ impl MemberHost for Host<'_> {
             let prepared = state
                 .as_ref()
                 .filter(|state| state.step_states.get(&PREPARE_STEP) == Some(&JobRunState::Success))
-                .and_then(|state| state.step_outputs.get(&PREPARE_STEP))
+                .and_then(|state| state.step_output(PREPARE_STEP))
                 .unwrap_or(&Value::Null);
             let stale = stale_tasks(
                 self.runtime,
