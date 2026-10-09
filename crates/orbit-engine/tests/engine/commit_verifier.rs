@@ -500,6 +500,154 @@ fn commit_verifier_accepts_valid_already_landed_evidence() {
     assert_eq!(result["committed"], false);
 }
 
+#[cfg(unix)]
+#[test]
+fn commit_verifier_accepts_already_landed_through_symlinked_parent_workspace() {
+    let temp = tempdir().expect("create tempdir");
+    let real_parent = temp.path().join("real");
+    fs::create_dir_all(&real_parent).expect("create real parent");
+    let repo = real_parent.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_git_repo(&repo);
+    let head = git_head(&repo);
+
+    let symlink_parent = temp.path().join("symlink_parent");
+    std::os::unix::fs::symlink(&real_parent, &symlink_parent).expect("create symlink");
+    let symlinked_repo = symlink_parent.join("repo");
+
+    let host = VerifierHost::new(&symlinked_repo, fixture_task());
+
+    let valid_already_landed = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "covering_commit": head,
+        "covering_task_id": TASK_ID,
+        "scope": {
+            "title": "Test Task",
+            "description": "",
+            "acceptance_criteria": ["Criterion 1"],
+            "plan": "",
+            "context_files": ["file:README.md"],
+            "tags": [],
+            "relations": [],
+            "required_tools": [],
+            "type": "bug",
+            "comments": []
+        },
+        "required_commands": ["make test"],
+        "validation": [{
+            "command": "make test",
+            "outcome": "passed",
+            "role": "required",
+            "log_artifact": "validation.json"
+        }],
+        "criteria_evidence": ["Verified criterion"]
+    });
+    let log = json!({
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "command": "make test",
+        "exit_code": 0,
+        "output": "ok"
+    });
+
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            artifact("already-landed.json", valid_already_landed),
+            artifact("validation.json", log),
+        ],
+    );
+
+    let result = action(&host, &commit_input(&symlinked_repo, &head))
+        .expect("already-landed evidence through symlinked workspace must be accepted");
+    assert_eq!(result["decision"], "verified_already_landed");
+    assert_eq!(result["skipped_no_diff_expected"], true);
+    assert_eq!(result["committed"], false);
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_verifier_refuses_already_landed_with_escaping_anchor_symlink() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let outside = temp.path().join("outside.txt");
+    fs::write(&outside, "outside\n").expect("write outside");
+    let escaping_link = repo.join("escaping.txt");
+    std::os::unix::fs::symlink(&outside, &escaping_link).expect("create symlink");
+
+    let git = |args: &[&str]| git_output(&repo, args);
+    git(&["init"]);
+    git(&["config", "user.name", "Test User"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    let hooks = repo.join(".git").join("orbit-test-empty-hooks");
+    fs::create_dir_all(&hooks).expect("create empty hooks dir");
+    git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    fs::write(repo.join("README.md"), "base\n").expect("write README");
+    git(&["add", "README.md", "escaping.txt"]);
+    git(&["commit", "-m", "initial commit [T1]"]);
+    let head = git_head(&repo);
+
+    let mut task = fixture_task();
+    task.context_files = vec!["file:escaping.txt".to_string()];
+    let host = VerifierHost::new(&repo, task);
+
+    let report = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "covering_commit": head,
+        "covering_task_id": TASK_ID,
+        "scope": {
+            "title": "Test Task",
+            "description": "",
+            "acceptance_criteria": ["Criterion 1"],
+            "plan": "",
+            "context_files": ["file:escaping.txt"],
+            "tags": [],
+            "relations": [],
+            "required_tools": [],
+            "type": "bug",
+            "comments": []
+        },
+        "required_commands": ["make test"],
+        "validation": [{
+            "command": "make test",
+            "outcome": "passed",
+            "role": "required",
+            "log_artifact": "validation.json"
+        }],
+        "criteria_evidence": ["Verified criterion"]
+    });
+    let log = json!({
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "command": "make test",
+        "exit_code": 0,
+        "output": "ok"
+    });
+
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            artifact("already-landed.json", report),
+            artifact("validation.json", log),
+        ],
+    );
+
+    let err = action(&host, &commit_input(&repo, &head))
+        .expect_err("anchor symlink escaping workspace must be refused");
+    assert!(
+        err.to_string()
+            .contains("scope anchor is outside the tested workspace"),
+        "expected outside workspace refusal, got: {err}"
+    );
+}
+
 /// Already-landed evidence that is valid except for the overrides applied.
 fn already_landed_refusal(
     host: &VerifierHost,
