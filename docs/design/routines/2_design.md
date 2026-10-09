@@ -311,9 +311,13 @@ promotion nor hotfix dispatch. A `verified_no_diff` assessment is never promoted
 reports it as `pilot_verified_no_diff` with the pilot's evidence and the commits it cites.
 After the pilot write the task is archived, with a system comment naming the covering
 commits and the assessment, only when every cited commit exists and at least one is an
-ancestor of the base branch. An `--approve-proposed` drain applies the same rule. Without
-that proof (no commit cited, an unknown SHA, or none on the base branch) the task stays
-proposed with that reason. The routine is a scheduling surface only: an
+ancestor of the base branch that relates to the finding. The commits the finding itself
+names (any commit in its description, and the landed commit of a `regression_from` target)
+never count, since they are on the base branch by construction. When one is known, a
+covering commit must descend from all of them, and when the task declared path selectors
+it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
+Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
+commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
 Publication shares that release boundary. A job can fail because the repository already
