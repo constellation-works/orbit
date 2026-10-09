@@ -328,9 +328,15 @@ pub(crate) fn resolve_workspace_file_document(
     // overrides only part of a crew definition.
     merge_tables(&mut scoped, &workspace.value);
     warn_compatibility_keys(&workspace.value, workspace_path);
+    let crew_field_path = |crew: &str, field: &str| {
+        source_for_crew_field(crew, field, Some(&global), Some(&workspace))
+            .path
+            .unwrap_or_else(|| workspace_path.to_path_buf())
+    };
     ResolvedConfig::from_scoped_value(
         scoped,
         workspace_path,
+        &crew_field_path,
         PersistenceConfig::default_for_data_root(workspace_path.parent().unwrap_or(workspace_path)),
     )
 }
@@ -420,7 +426,15 @@ fn load_layered_resolved_with_staged(
         .or(global.as_ref())
         .map(|document| document.path.as_path())
         .unwrap_or_else(|| Path::new("<built-in defaults>"));
-    let mut resolved = ResolvedConfig::from_layered_value(merged, config_path, persistence)?;
+    // The merged document has lost which layer set each crew field, so the
+    // ignored-field records ask the layers directly, as `config show` does.
+    let crew_field_path = |crew: &str, field: &str| {
+        source_for_crew_field(crew, field, global.as_ref(), workspace.as_ref())
+            .path
+            .unwrap_or_else(|| config_path.to_path_buf())
+    };
+    let mut resolved =
+        ResolvedConfig::from_layered_value(merged, config_path, &crew_field_path, persistence)?;
     for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
         warn_compatibility_keys(&document.value, &document.path);
     }
