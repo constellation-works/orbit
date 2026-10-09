@@ -209,6 +209,8 @@ impl crate::OrbitRuntime {
         // Unknown or blank names fail here, before the probe and before any
         // run exists; canonical names are what every pass reads back.
         let allowed_crews = self.canonical_allowed_crews(request.allowed_crews)?;
+        // A host that would refuse every leaf claims nothing: no run exists yet.
+        self.preflight_git_protection()?;
         let destination = self.resolve_pull_destination(request.selector)?;
         let mut input = json!({
             "for_seconds": request.for_seconds.unwrap_or(0),

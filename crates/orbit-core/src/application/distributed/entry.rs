@@ -271,6 +271,33 @@ impl crate::OrbitRuntime {
         Ok(decision)
     }
 
+    /// Run the sandbox's Git protection scan on the registered checkout, as
+    /// every leaf would at launch. `orbit doctor` reports the refusal.
+    pub fn check_git_protection(&self) -> Result<(), OrbitError> {
+        crate::runtime::git_sandbox::scan_checkout(&self.paths().repo_root)
+    }
+
+    /// Refuse a drain on a host whose Git protection would fail every leaf
+    /// into `blocked`. Only an executor with an OS sandbox this host can apply
+    /// runs the scan, so a host without one is never held for it.
+    pub fn preflight_git_protection(&self) -> Result<(), OrbitError> {
+        let sandboxed = self.list_executor_defs()?.iter().any(|executor| {
+            executor.sandbox.is_some_and(|kind| {
+                kind.target_os().is_some() && kind.is_available_on(std::env::consts::OS)
+            })
+        });
+        if !sandboxed {
+            return Ok(());
+        }
+        self.check_git_protection().map_err(|error| match error {
+            OrbitError::PolicyDenied(reason) => OrbitError::PolicyDenied(format!(
+                "this host's Git protection would refuse every sandboxed leaf, so no task was \
+                 claimed: {reason}"
+            )),
+            other => other,
+        })
+    }
+
     /// Host pressure as admission sees it: a fresh sample evaluated against
     /// recent host-wide history, or the throttle a live auto or pull drain
     /// recorded on its latest pass. Disabled settings report nothing.

@@ -1727,3 +1727,74 @@ fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
         assert_eq!(probe["admits"], true, "{config}: {probe}");
     }
 }
+
+/// A host whose Git protection would refuse every sandboxed leaf must not
+/// turn the tasks it claims into `blocked` one by one [ORB-14928]. The drain
+/// stops at submission with the scan's diagnostic: no owner call, no run, no
+/// task touched.
+#[cfg(unix)]
+#[test]
+fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
+    if !isolated(
+        module_path!(),
+        "a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    let sandbox = if cfg!(target_os = "linux") {
+        orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
+    } else {
+        orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec
+    };
+    pair.follower
+        .upsert_executor_def(&ExecutorDef {
+            name: "codex".to_string(),
+            executor_type: ExecutorType::DirectAgent,
+            command: Some("codex".to_string()),
+            args: vec![],
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            auth_probe: None,
+            env: Default::default(),
+            sandbox: Some(sandbox),
+            allow_fallback: false,
+            created_at: None,
+            updated_at: None,
+        })
+        .expect("sandboxed executor");
+    let outside = pair.follower_repo.parent().unwrap().join("outside-hook");
+    std::fs::write(&outside, "#!/bin/sh\n").unwrap();
+    let hook = pair.follower_repo.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::hard_link(&outside, &hook).unwrap();
+    let before: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
+    let selector = pair.destination["selector"].as_str().unwrap().to_string();
+
+    let error = pair
+        .follower
+        .submit_workspace_pull_run(
+            orbit_core::WorkspacePullRequest {
+                selector: &selector,
+                for_seconds: Some(60),
+                max_active_leaf_runs: Some(1),
+                allowed_crews: &[],
+                actor: None,
+            },
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
+        .expect_err("a failing scan refuses admission");
+
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_))
+            && message.contains(&hook.display().to_string()),
+        "the scan's diagnostic names the entry: {message}"
+    );
+    assert!(pair.wire.calls("orbit.drain.probe").is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    let after: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
+    assert_eq!(before, after, "no task changed status");
+}

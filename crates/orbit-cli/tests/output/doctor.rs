@@ -777,3 +777,48 @@ fn doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values() {
     };
     assert_eq!(database_line(piped), database_line(explicit));
 }
+
+/// `orbit doctor` runs the scan a sandboxed leaf meets, so an operator learns
+/// of a refusal, and of its fix, before a drain claims work.
+#[cfg(unix)]
+#[test]
+fn doctor_reports_git_protection_refusals_with_their_fix() {
+    let fixture = WorkCheckout::new();
+    let git = fixture.work.join(".git");
+    assert_eq!(
+        row(&rows(&doctor(&fixture, &[])), "git-protection")["status"],
+        "ok"
+    );
+
+    // Git's own interrupted write: a temporary name beside the final one.
+    let object = git.join("objects/61/5bfcb2ad167392037266f1f2dfec4546b37dd6");
+    fs::create_dir_all(object.parent().unwrap()).expect("object fan-out");
+    fs::write(&object, "loose object").expect("object");
+    fs::hard_link(&object, object.with_file_name("tmp_obj_Ab12Cd")).expect("temp leftover");
+    assert_eq!(
+        row(&rows(&doctor(&fixture, &[])), "git-protection")["status"],
+        "ok",
+        "a temp leftover paired inside the object store is not an attack"
+    );
+
+    // A hook aliased to a file outside `.git` stays refused.
+    let outside = fixture.temp.path().join("outside-hook");
+    fs::write(&outside, "#!/bin/sh\n").expect("outside file");
+    let hook = git.join("hooks/pre-commit");
+    fs::hard_link(&outside, &hook).expect("aliased hook");
+    let report = rows(&doctor(&fixture, &[]));
+    let refused = row(&report, "git-protection");
+    assert_eq!(refused["status"], "warning");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&hook.display().to_string())),
+        "the warning names the entry: {refused}"
+    );
+    assert!(
+        refused["remediation"]
+            .as_str()
+            .is_some_and(|remediation| remediation.contains("git fsck")),
+        "the warning names the remedy: {refused}"
+    );
+}

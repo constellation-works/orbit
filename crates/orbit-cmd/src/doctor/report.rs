@@ -10,6 +10,7 @@ use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 
+use super::git_protection::git_protection_row;
 use super::permissions::state_directory_permissions_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -19,6 +20,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("state-directory-permissions", |runtime, _| {
         state_directory_permissions_row(runtime)
     }),
+    DoctorProbe::one("git-protection", |runtime, _| git_protection_row(runtime)),
     DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
     DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),

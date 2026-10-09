@@ -382,6 +382,20 @@ platforms: a pathname deny or read-only mount cannot protect a writable alias
 of the same inode. This deliberately does not support
 local clones whose metadata is hard-linked into another repository.
 
+One exception covers Git's own interrupted writes. Git creates an object, pack
+or index under a `tmp_obj_*`, `tmp_pack_*` or `tmp_idx_*` name, links it to its
+final name and unlinks the temporary one; a crash between the last two steps
+leaves both names. Under the root's `objects/` directory a regular file with
+several names is accepted when the scan finds every one of them inside that
+directory. A name that is also reachable from outside `objects/` is refused, as
+is any hard link elsewhere in the metadata. When the refused entry is a git
+temporary name, the message says it is a leftover of an interrupted Git write
+and to delete it and run `git fsck`. `orbit doctor` (row `git-protection`) runs
+the same scan on the registered checkout, and `orbit run auto` and
+`orbit run auto --pull` run it once before submitting a drain on a host with an
+OS-sandboxed executor, so a refusing host is not admitted rather than failing
+each claimed task into `blocked`.
+
 Host Git operations can remove a transient entry such as `maintenance.lock`
 between directory enumeration and inspection. Preparation restarts the whole
 metadata scan on a descendant `NotFound`, with at most three attempts, and
