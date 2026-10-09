@@ -5,7 +5,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_common::{process, test_env};
@@ -89,13 +89,36 @@ fn insert_run_audit(store: &Store, workspace_id: &str, first: DateTime<Utc>, row
         .unwrap();
 }
 
+/// The calling thread's CPU time. A saturated host stretches wall-clock time
+/// without changing the work a batch does, so a batch's cost is read here.
+#[cfg(unix)]
+fn thread_cpu_time() -> Duration {
+    let mut time = std::mem::MaybeUninit::<libc::timespec>::zeroed();
+    // Safety: `clock_gettime` fills the `timespec` it is handed and reads nothing else.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) },
+        0
+    );
+    // Safety: a zero return means the kernel filled `time`.
+    let time = unsafe { time.assume_init() };
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
+
+#[cfg(not(unix))]
+fn thread_cpu_time() -> Duration {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// Run `batch` until it removes nothing. Returns the rows removed and the
+/// slowest batch's thread CPU time.
 fn drain(mut batch: impl FnMut() -> usize) -> (usize, Duration) {
     let mut removed = 0;
     let mut slowest = Duration::ZERO;
     loop {
-        let started = Instant::now();
+        let started = thread_cpu_time();
         let n = batch();
-        slowest = slowest.max(started.elapsed());
+        slowest = slowest.max(thread_cpu_time() - started);
         if n == 0 {
             return (removed, slowest);
         }
@@ -345,6 +368,6 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
     );
     assert!(
         slowest < Duration::from_secs(1),
-        "one {BATCH_ROWS}-row retention batch held the write lock for {slowest:?}"
+        "one {BATCH_ROWS}-row retention batch held the write lock for {slowest:?} of CPU"
     );
 }
