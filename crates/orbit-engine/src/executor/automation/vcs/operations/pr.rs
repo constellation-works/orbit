@@ -46,6 +46,8 @@ pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "pull_requests": pull_requests }))
 }
 
+/// One create attempt. `pr_open` owns retries so it can reconcile an ambiguous
+/// response with a head lookup before sending another mutation.
 pub(super) fn pr_create(input: &Value) -> Result<Value, OrbitError> {
     let title = required_string(input, "title")?;
     let body = required_string(input, "body")?;
