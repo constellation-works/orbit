@@ -139,7 +139,7 @@ function flightBlock(kit: Kit, ship: OrbitShip, columns: number, act: Actions, S
       {ship.message ? <Text color={ship.phase === 'failed' ? 'red' : undefined}>{ship.message}</Text> : null}
       {ship.phase === 'landed' ? <Text color="green">Landed. The task moves on to review; its PR is open against the base branch.</Text> : null}
       {ship.phase === 'held' ? <Text color="yellow">Held. Delivery is waiting on external review evidence; the run is over and the task stays as it is.</Text> : null}
-      {ship.phase === 'skipped' ? <Text dimColor>Skipped. The run ended without doing any work.</Text> : null}
+      {ship.phase === 'skipped' ? <Text dimColor>Skipped. The run was skipped and is no longer tracked.</Text> : null}
       <Box marginTop={1} columnGap={1}>
         {ship.phase === 'failed' ? <Button key="rescue" label="Rescue here" hotkey="r" variant="primary" onPress={() => void act.rescue(ship.taskId)} /> : null}
         <Button key="back" label="Back to board" hotkey="b" onPress={() => act.setView('board')} />
