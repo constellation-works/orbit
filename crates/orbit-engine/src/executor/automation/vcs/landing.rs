@@ -591,7 +591,10 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
 }
 
 /// A verified clean base completes without an external merge. The Core host
-/// rechecks the pinned verifier report and live base at the completion write.
+/// rechecks the pinned verifier report, and that the live base still contains
+/// the synchronized base, at the completion write. The landing branch may
+/// have advanced past that base since the run synchronized [ORB-15074];
+/// `observe_or_stop` already stops when it no longer contains it.
 fn land_no_diff<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
@@ -603,15 +606,11 @@ fn land_no_diff<H: RuntimeHost + ?Sized>(
         &observed.landing_branch,
         &observed.delivery,
     )?;
-    let tip = git_output(
-        &context.workspace_path,
-        &["rev-parse", "--verify", &format!("{landing}^{{commit}}")],
-    )?;
-    if observed.candidate != observed.base || tip != observed.base.commit {
+    if observed.candidate != observed.base {
         return Err(stop(
             host,
             context,
-            "NoDiff base moved; revalidate the current base",
+            "NoDiff candidate is not its synchronized base; revalidate the current base",
         )?);
     }
     complete(

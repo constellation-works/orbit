@@ -215,7 +215,8 @@ no origin or PR credentials.
   with the candidate. An absent or unrelated cached base preserves the typed `transient`
   failure, so settlement releases the owner's task rather than blocking it. Missing refs,
   authentication and permission refusals retain their existing failure class and never use
-  the cache. NoDiff observations still require a successful fetch of the current base.
+  the cache. NoDiff observations still require a successful fetch of the current base,
+  which must contain the synchronized base.
 
 **Claimed-leaf crew.** The claimed task lives in the owner's store, so the leaf's run input carries
 the owner's snapshot of it (`claimed_task: {id, crew}`, from the receipt's task summary). Crew
@@ -747,6 +748,10 @@ and landing branch, execution summary and validation artifact references.
   in the owner's store; a follower-local path is not evidence.
 - No-diff/already-landed work carries its typed evidence instead of a PR; the owner observer
   itself runs the Git ancestry, delivery-marker, unchanged-scope and clean-tree checks.
+  A NoDiff candidate is the base its run synchronized onto, with no commits or uncommitted
+  changes of its own; `claim_validate` refuses either and names them. That base need not be
+  the current tip: acceptance and landing require only that the owner's current base still
+  contains it, so a base that advanced during a long chore is not a refusal ([ORB-15074]).
 
 **Acceptance** (`application::review`, `TaskCommitBoundary`). `TaskHandoff` binds workspace, task,
 claim, execution machine/run, repository, delivery variant, branches and candidate/base

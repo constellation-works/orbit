@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 
 use super::super::baseline::run_validation_command;
-use super::super::git::{BaseSyncMode, resolve_worktree_start_point};
+use super::super::git::{
+    BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
+};
 use super::super::review_gate::revision;
 use super::delivery::repository;
 use super::input::refused;
@@ -161,6 +163,57 @@ fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<
     Ok(())
 }
 
+/// Refuse a NoDiff leaf whose worktree no longer is its pinned base, naming
+/// the commits beyond that base and the uncommitted paths. Only the leaf's own
+/// checkout is read: `origin/<base>` advancing since does not matter here.
+fn require_unchanged_base(workspace: &Path, base_sha: &str) -> Result<(), OrbitError> {
+    const SHOWN: usize = 10;
+    let listed = |lines: &str| {
+        let lines = lines.lines().collect::<Vec<_>>();
+        let more = lines.len().saturating_sub(SHOWN);
+        let mut text = lines.into_iter().take(SHOWN).collect::<Vec<_>>().join("; ");
+        if more > 0 {
+            text.push_str(&format!("; and {more} more"));
+        }
+        text
+    };
+    if base_sha.is_empty() {
+        return Err(refused("the NoDiff checkpoint names no synchronized base"));
+    }
+    let head = git_output(workspace, &["rev-parse", "HEAD"])?;
+    let mut changes = Vec::new();
+    if head != base_sha {
+        let commits = git_output(
+            workspace,
+            &[
+                "log",
+                "--format=%h %s",
+                "--end-of-options",
+                &format!("{base_sha}..{head}"),
+            ],
+        )?;
+        changes.push(if commits.is_empty() {
+            format!("HEAD {head} does not sit on it")
+        } else {
+            format!("commit(s) beyond it: {}", listed(&commits))
+        });
+    }
+    let pending = git_output(
+        workspace,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    if !pending.is_empty() {
+        changes.push(format!("uncommitted change(s): {}", listed(&pending)));
+    }
+    if changes.is_empty() {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "a NoDiff handoff must be its synchronized base {base_sha} unchanged; the worktree has {}",
+        changes.join(", and ")
+    )))
+}
+
 pub(super) fn validate<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
@@ -170,6 +223,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     let report = claimed_clean_base_checkpoint(input)
         .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?;
     require_checkpoint_identity(report, &context.task_id, &context.run_id)?;
+    require_unchanged_base(workspace, report["base_sha"].as_str().unwrap_or_default())?;
     let task = host.get_task(&context.task_id)?;
     verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, report)?;
     let content =
@@ -210,9 +264,11 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
-/// Observe and reverify a NoDiff claim on the owner's live base. No executor
-/// branch or pull request needs to exist on the owner, and no checkout is
-/// modified: the shared verifier reads immutable Git objects and task artifacts.
+/// Observe and reverify a NoDiff claim against the base its run synchronized
+/// onto, which the owner's live base must still contain. The live base may
+/// have advanced since [ORB-15074]. No executor branch or pull request needs
+/// to exist on the owner, and no checkout is modified: the shared verifier
+/// reads immutable Git objects and task artifacts.
 pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -235,7 +291,25 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
         }
     };
     let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, sync)?;
-    let base = revision(workspace, &base_ref)?;
+    let tip = revision(workspace, &base_ref)?;
+    let contained = git_command_success(
+        workspace,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            &submitted.base.commit,
+            &tip.commit,
+        ],
+    )?;
+    if !contained {
+        return Err(refused(format!(
+            "NoDiff base '{}' is not contained in the owner's base '{base_ref}' ({}); the \
+             run's base was rewritten, so revalidate the current base",
+            submitted.base.commit, tip.commit
+        )));
+    }
+    let base = revision(workspace, &submitted.base.commit)?;
     if submitted.candidate != base
         || submitted.base != base
         || report["base_sha"] != base.commit
@@ -243,7 +317,8 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
         || !handoff.footprint_widening.is_empty()
     {
         return Err(refused(
-            "NoDiff candidate must equal the owner's current base, with no footprint widening",
+            "NoDiff candidate must equal its synchronized base and the checkpoint's base, with \
+             no footprint widening",
         ));
     }
     let task = host.get_task(&handoff.task_id)?;
