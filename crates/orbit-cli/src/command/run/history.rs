@@ -28,7 +28,7 @@ pub struct RunHistoryArgs {
     #[arg(short = 'j', long = "job")]
     pub job_id: Option<String>,
 
-    /// Filter to a task in the submitted task_ids array
+    /// Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
     #[arg(long = "task")]
     pub task_id: Option<String>,
 
