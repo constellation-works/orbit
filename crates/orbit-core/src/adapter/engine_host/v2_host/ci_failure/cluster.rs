@@ -357,6 +357,12 @@ impl FailureCluster {
         ]
     }
 
+    /// Extract `file:` context selectors for compiler or test-panic locations
+    /// named in the log excerpt.
+    pub(super) fn context_files(&self) -> Vec<String> {
+        super::log_signature::extract_context_files_from_log(&self.log_excerpt)
+    }
+
     /// Each run's runner OS evidence, in run order (see
     /// [`super::runner_os::failure_runner_os`]).
     pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<Value> {

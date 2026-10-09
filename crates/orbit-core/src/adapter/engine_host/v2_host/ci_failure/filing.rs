@@ -585,6 +585,7 @@ where
             description,
             acceptance_criteria: cluster.acceptance_criteria(),
             tags,
+            context_files: cluster.context_files(),
             // Deliberately empty: the evidence is already in the description,
             // so the task ships on the ordinary agent baseline.
             required_tools: Vec::new(),

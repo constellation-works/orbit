@@ -1142,3 +1142,68 @@ fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run
         );
     }
 }
+
+#[test]
+fn ci_failure_sweep_strips_ansi_codes_and_extracts_context_files() {
+    if !isolated("ci_failure_sweep_strips_ansi_codes_and_extracts_context_files") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    let colored_compiler_log = "build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[31merror[E0425]: cannot find value `foo` in this scope\u{1b}[0m\n\
+                                build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[38;5;12m  --> \u{1b}[0m\u{1b}[1mcrates/orbit-core/src/runtime/mod.rs:31:16\u{1b}[0m\n\
+                                build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[31m##[error]Process completed with exit code 101.\u{1b}[0m\n";
+
+    let output = file(
+        &runtime,
+        vec![failure(colored_compiler_log, 0, &"2".repeat(40))],
+    );
+    assert_eq!(output["filed_count"], 1, "{output}");
+    let task_id = output["filed"][0]["task_id"].as_str().unwrap();
+    let task = runtime.get_task(task_id).unwrap();
+
+    assert!(
+        !task.description.contains('\u{1b}'),
+        "task description must have no \\x1b byte: {}",
+        task.description
+    );
+    assert!(
+        !task.description.contains("[0m"),
+        "task description must have no [0m remnant: {}",
+        task.description
+    );
+    assert_eq!(
+        task.context_files,
+        vec!["file:crates/orbit-core/src/runtime/mod.rs".to_string()]
+    );
+
+    let colored_panic_log = "build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[31mthread 'crew_pools' panicked at \u{1b}[0mcrates/orbit-core/src/application/job/tests/crew_pools.rs:277:5:\u{1b}[0m\n\
+                             build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[31massertion failed: `(left == right)`\u{1b}[0m\n\
+                             build\tRun CI\t2026-10-09T12:00:00.0000000Z \u{1b}[31m##[error]Process completed with exit code 101.\u{1b}[0m\n";
+
+    let panic_output = file(
+        &runtime,
+        vec![failure(colored_panic_log, 1, &"3".repeat(40))],
+    );
+    assert_eq!(panic_output["filed_count"], 1, "{panic_output}");
+    let panic_task_id = panic_output["filed"][0]["task_id"].as_str().unwrap();
+    let panic_task = runtime.get_task(panic_task_id).unwrap();
+
+    assert!(
+        !panic_task.description.contains('\u{1b}'),
+        "panic task description must have no \\x1b byte"
+    );
+    assert!(
+        !panic_task.description.contains("[0m"),
+        "panic task description must have no [0m remnant"
+    );
+    assert_eq!(
+        panic_task.context_files,
+        vec!["file:crates/orbit-core/src/application/job/tests/crew_pools.rs".to_string()]
+    );
+}

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
 use super::fields::{run_order, value_string};
@@ -263,7 +264,9 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
         return Some("job log source is incomplete");
     }
     if selected_diagnostic(failure).is_none()
-        && (value_string(failure, "log_excerpt").trim().is_empty()
+        && (strip_ansi_sequences(&value_string(failure, "log_excerpt"))
+            .trim()
+            .is_empty()
             || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
     {
         return Some("job diagnostic evidence is missing or truncated");

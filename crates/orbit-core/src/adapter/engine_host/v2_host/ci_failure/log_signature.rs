@@ -428,3 +428,90 @@ pub(super) fn relevant_log_query_errors<'a>(evidence: &'a Value, runs: &[Value])
         })
         .unwrap_or_default()
 }
+
+/// Where the excerpt names a source file in a compiler or test-panic location
+/// (`--> path:line:col`, `panicked at path:line:col`), extract a `file:` context
+/// selector for it so CI-sweep tasks are filed with scope.
+pub(super) fn extract_context_files_from_log(log: &str) -> Vec<String> {
+    let mut files = BTreeSet::new();
+    for line in log.lines() {
+        if let Some(arrow_idx) = line.find("-->") {
+            let after = &line[arrow_idx + 3..];
+            for token in after.split_whitespace() {
+                if let Some(path) = extract_path_from_location_token(token) {
+                    files.insert(format!("file:{path}"));
+                    break;
+                }
+            }
+        }
+        if let Some(panic_idx) = line.find("panicked at") {
+            let after = &line[panic_idx + "panicked at".len()..];
+            for token in after.split_whitespace() {
+                if let Some(path) = extract_path_from_location_token(token) {
+                    files.insert(format!("file:{path}"));
+                    break;
+                }
+            }
+        }
+    }
+    files.into_iter().collect()
+}
+
+fn extract_path_from_location_token(token: &str) -> Option<String> {
+    let cleaned = strip_ansi_sequences(token);
+    let trimmed = cleaned.trim_matches(|c: char| {
+        c == '\''
+            || c == '"'
+            || c == '`'
+            || c == ':'
+            || c == ','
+            || c == '('
+            || c == ')'
+            || c == '['
+            || c == ']'
+    });
+    let (rest, col_or_line) = trimmed.rsplit_once(':')?;
+    if col_or_line.is_empty() || !col_or_line.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let path = if let Some((path_part, line)) = rest.rsplit_once(':') {
+        if !line.is_empty() && line.chars().all(|c| c.is_ascii_digit()) {
+            path_part
+        } else {
+            rest
+        }
+    } else {
+        rest
+    };
+    let normalized = path.replace('\\', "/");
+    let path = normalized.strip_prefix("./").unwrap_or(&normalized);
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains("..")
+        || path.contains("://")
+        || path.starts_with('~')
+        || (path.len() >= 2
+            && path.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && path.chars().nth(1) == Some(':'))
+        || path.starts_with(".cargo/")
+        || path.contains("/.cargo/")
+        || path.starts_with("target/")
+        || path.contains("/target/")
+        || path.starts_with("library/std/")
+        || path.starts_with("library/core/")
+        || path.starts_with("library/alloc/")
+        || !is_likely_source_path(path)
+    {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+fn is_likely_source_path(path: &str) -> bool {
+    const SOURCE_EXTENSIONS: &[&str] = &[
+        ".rs", ".toml", ".sh", ".c", ".cpp", ".cc", ".h", ".hpp", ".js", ".ts", ".py", ".yaml",
+        ".yml", ".json",
+    ];
+    SOURCE_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+}
