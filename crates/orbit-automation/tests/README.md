@@ -15,6 +15,11 @@ UTC host time and a 30-second deadline. The shared process supervisor drains
 output and kills/reaps a timed-out child. Real stores and definition discovery
 exercise cursors, overlap admission and coverage receipts; dispatch adapters
 provide the lifecycle outcomes that Core normally supplies.
+`scheduling/pending_mints.rs` seeds claims with and without recorded task ids
+for enabled and disabled definitions. It compares dry-run and live reports,
+checks that previews leave cursor bytes unchanged, and verifies that live
+recovery consumes recorded mints while retaining unresolved claims without
+reminting.
 `scheduling/failed_members.rs` drives a member consumer through more than 1,000
 distinct failed members that leave the source, beside a backlog of withheld
 task ids, and shows every pass still commits and admits the next wave. It also
