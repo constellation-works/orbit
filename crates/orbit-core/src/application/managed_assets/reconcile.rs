@@ -81,9 +81,13 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         })
         .unwrap_or_default();
     let mut result = ManagedAssetReconciliation::default();
-    let mut next_assets = BTreeMap::new();
+    // Create-only keeps every recorded digest; only absent files gain new ones.
+    let mut next_assets: BTreeMap<String, String> = match &previous {
+        Some(previous) if mode.creates_only() => previous.assets.clone(),
+        _ => BTreeMap::new(),
+    };
 
-    if let Some(previous) = &previous {
+    if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
         for (name, managed_digest) in &previous.assets {
             if current_names.contains(name.as_str()) {
                 continue;
@@ -234,6 +238,10 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         }
 
         let exists = matches!(resolved, ConfinedAssetPath::File(_));
+        if exists && mode.creates_only() {
+            // Its recorded digest was carried forward unchanged above.
+            continue;
+        }
         if exists {
             if previous_digest.is_none() {
                 let existing = fs::read_to_string(&path).map_err(|error| {
@@ -338,7 +346,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
             }
         }
 
-        if mode == ManagedAssetReconcileMode::Apply {
+        if mode.writes() {
             write_confined_asset(&path, &rendered, exists, asset_kind)?;
         }
         next_assets.insert((*name).to_string(), rendered_digest);
@@ -354,8 +362,13 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     // The legacy sweep only makes sense for the flat YAML catalogs: a skill
     // tree's untracked files are ordinary reference material inside an
     // otherwise-managed directory, not stray definitions the loader would pick
-    // up.
-    if previous.is_none() && layout == ManagedAssetLayout::YamlStem && dir.exists() {
+    // up. Create-only never records the existing shipped files, so a sweep
+    // would report them as untracked; it leaves that to a converging pass.
+    if previous.is_none()
+        && layout == ManagedAssetLayout::YamlStem
+        && !mode.creates_only()
+        && dir.exists()
+    {
         let ambiguous = ambiguous_legacy_yaml_files(dir, &next_assets)?;
         if !ambiguous.is_empty() {
             result.warnings.push(format!(
@@ -376,7 +389,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         routine_provenance: BTreeMap::new(),
         opted_out,
     };
-    if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&manifest) {
+    if mode.writes() && previous.as_ref() != Some(&manifest) {
         let encoded = encode_managed_asset_manifest(&manifest)?;
         let recorded = record_managed_manifest_write(
             &manifest_path,

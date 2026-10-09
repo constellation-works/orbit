@@ -919,7 +919,11 @@ cannot read a row whose `source` is `event`.
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when
 a package manager owns the binary, and run steps 2–5 in every other registered workspace:
 
-1. Replace or upgrade the binary.
+1. Replace or upgrade the binary. Running `orbit init` (the install step) also creates, in every
+   registered workspace on the host, each shipped routine and auto-task that is absent there, and
+   prints what it created per workspace. It is create-only: existing definitions are not
+   refreshed, retired, or rewritten, so step 3 still converges those. `orbit update` converges only
+   the workspace it runs in and does not run this pass for the others.
 2. Run `orbit migrate` (or `orbit migrate --dry-run`) to review pending layout/store changes,
    then `orbit migrate --confirm` to apply them.
 3. Run `orbit workspace sync` to apply the provenance-safe managed-artifact actions. Operator

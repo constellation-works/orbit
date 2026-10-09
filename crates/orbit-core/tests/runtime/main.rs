@@ -41,6 +41,7 @@ mod security_alert_sweep;
 mod session_events;
 mod shared_root_identity;
 mod step_recovery;
+mod workspace_seed;
 
 mod host_os_routing;
 mod host_resources;

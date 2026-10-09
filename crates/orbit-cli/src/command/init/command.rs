@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
 use super::prompt_stdin;
+use super::registered_workspaces::{WorkspaceSeed, seed_registered_workspaces};
 use serde_json::json;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
@@ -154,6 +155,12 @@ impl InitCommand {
             self.machine_name,
             self.task_prefix,
         )?;
+        // A release that ships a workspace routine or auto-task must reach
+        // every registered workspace here, not only at the next `workspace sync`.
+        let registered =
+            seed_registered_workspaces(&resolve_global_root(root_override)?, &identity.id);
+        let mut managed_asset_warnings = result.managed_asset_warnings;
+        managed_asset_warnings.extend(registered.warnings);
         let paths = reported_init_paths(root_override);
         Ok(init_payload(
             &identity,
@@ -167,9 +174,10 @@ impl InitCommand {
                 retired_default_activities: result.retired_default_activities,
                 refreshed_default_jobs: result.refreshed_default_jobs,
                 retired_default_jobs: result.retired_default_jobs,
-                managed_asset_warnings: result.managed_asset_warnings,
+                managed_asset_warnings,
                 refreshed_default_executors: result.refreshed_default_executors,
                 refreshed_default_policies: result.refreshed_default_policies,
+                workspace_seeds: registered.seeds,
                 #[cfg(target_os = "linux")]
                 linux_sandbox,
             },
@@ -436,7 +444,7 @@ fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
 }
 
 fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput {
-    let text = format!(
+    let mut text = format!(
         "machine identity ({}): name=\"{}\", id={}, task_prefix={}\n\
          skills: root={}, refreshed={}, symlink_created={}; config: path={}, created={}; default_activities_refreshed={}, retired={}; default_jobs_refreshed={}, retired={}; default_executors_refreshed={}; default_policies_refreshed={}",
         identity.outcome,
@@ -455,6 +463,16 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
         output.refreshed_default_executors,
         output.refreshed_default_policies,
     );
+    for seed in &output.workspace_seeds {
+        text.push_str(&format!(
+            "\nworkspace {}: created={}",
+            seed.workspace,
+            seed.created.len()
+        ));
+        for path in &seed.created {
+            text.push_str(&format!("\n  created {}", path.display()));
+        }
+    }
     for warning in &output.managed_asset_warnings {
         eprintln!("warning: {warning}");
     }
@@ -482,6 +500,11 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
             "executors_refreshed": output.refreshed_default_executors,
             "policies_refreshed": output.refreshed_default_policies,
         },
+        "workspaces": output.workspace_seeds.iter().map(|seed| json!({
+            "workspace": seed.workspace,
+            "orbit_root": seed.orbit_root,
+            "created": seed.created,
+        })).collect::<Vec<_>>(),
         "warnings": output.managed_asset_warnings,
     });
     #[cfg(target_os = "linux")]
@@ -507,6 +530,7 @@ struct InitOutput {
     managed_asset_warnings: Vec<String>,
     refreshed_default_executors: usize,
     refreshed_default_policies: usize,
+    workspace_seeds: Vec<WorkspaceSeed>,
     #[cfg(target_os = "linux")]
     linux_sandbox: LinuxSandboxReadiness,
 }

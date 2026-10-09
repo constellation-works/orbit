@@ -38,8 +38,27 @@ pub(crate) struct ManagedAssetReconciliation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedAssetReconcileMode {
+    /// Converge the directory: create, refresh, and retire by provenance.
     Apply,
+    /// Create only the shipped defaults that are absent. Files that exist,
+    /// their recorded provenance, and retirements are left exactly as they
+    /// are, so an operator's edits and user-authored files are never touched.
+    CreateAbsent,
+    /// Report what `Apply` would do without writing anything.
     Check,
+}
+
+impl ManagedAssetReconcileMode {
+    /// Whether this mode may create or rewrite files and the manifest.
+    pub(crate) fn writes(self) -> bool {
+        !matches!(self, Self::Check)
+    }
+
+    /// Whether this mode leaves files that already exist, and retirements,
+    /// alone.
+    pub(crate) fn creates_only(self) -> bool {
+        matches!(self, Self::CreateAbsent)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

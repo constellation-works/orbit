@@ -30,6 +30,7 @@ mod init_interactive_stdin;
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod init_linux_sandbox;
 mod init_minted_prefix;
+mod init_workspace_seed;
 mod replica_routines;
 mod routine_root;
 mod routine_state_seed;
