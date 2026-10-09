@@ -585,13 +585,22 @@ pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
     paths.into_iter().collect()
 }
 
+/// Whether a token names a pattern, a placeholder, or a host location rather
+/// than a path inside the checkout: globs (`.orbit/**`), `<repo>/README.md`
+/// placeholders, and `~/` or absolute host paths (`~/.orbit/config.toml`,
+/// `/tmp/u.json`). A description names these legitimately, and they are never
+/// in the checkout, so reading them as missing repository files misleads.
+fn is_non_repository_token(token: &str) -> bool {
+    token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with(['~', '/'])
+}
+
 pub(super) fn normalize_path_token(token: &str) -> Option<String> {
     if token.is_empty() || token.contains("://") {
         return None;
     }
 
     let token = token.trim_matches('`').trim_end_matches('/');
-    if token.is_empty() {
+    if token.is_empty() || is_non_repository_token(token) {
         return None;
     }
     let anchored = anchor_path(token)
