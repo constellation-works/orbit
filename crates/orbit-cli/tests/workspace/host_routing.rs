@@ -369,9 +369,17 @@ fn a_routed_call_carries_the_callers_authority_and_no_more() {
         dialed.iter().any(|line| line.contains("--operator")),
         "an operator CLI is an operator on B: {dialed:?}"
     );
-    assert_ne!(
-        operator_code, code,
-        "the operator is not refused for its authority: {operator_message}"
+    assert!(
+        !["capability_denied", "capability_refused"].contains(&operator_code.as_str()),
+        "the operator gets past authorization on B: {operator_code}: {operator_message}"
+    );
+    assert_eq!(
+        operator_code, "invalid_input",
+        "the operator fails on lineage resolution on B: {operator_message}"
+    );
+    assert!(
+        operator_message.contains("lineage"),
+        "the operator refusal names the missing lineage (backend.rs review_reset no-ledger): {operator_message}"
     );
 }
 
