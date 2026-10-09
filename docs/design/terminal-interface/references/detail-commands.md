@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_updated: 2026-10-03
-last_validated: 2026-09-26
+last_updated: 2026-10-08
+last_validated: 2026-10-09
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
