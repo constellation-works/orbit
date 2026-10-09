@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: test isolation, coverage, MSRV, supply chain, vendored JS"
-last_validated: 2026-09-23
+last_validated: 2026-10-08
 ---
 
 # Development Reference
