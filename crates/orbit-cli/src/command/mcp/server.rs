@@ -754,20 +754,18 @@ impl ServerMcpHost {
             } else {
                 name
             };
+            if let Some(selector) = call_workspace_selector(&input)?
+                && selector != binding.owner_destination
+                && selector != binding.owner_workspace_id
+                && !std::env::current_dir().ok().is_some_and(|cwd| {
+                    std::fs::canonicalize(selector).is_ok_and(|path| path == cwd)
+                })
+            {
+                return Err(OrbitError::PolicyDenied(
+                    "worker workspace binding mismatch".into(),
+                ));
+            }
             if let Some(object) = input.as_object_mut() {
-                if object.get("workspace").is_some_and(|value| {
-                    value.as_str() != Some(&binding.owner_destination)
-                        && value.as_str() != Some(&binding.owner_workspace_id)
-                        && !value.as_str().is_some_and(|selector| {
-                            std::env::current_dir().ok().is_some_and(|cwd| {
-                                std::fs::canonicalize(selector).is_ok_and(|path| path == cwd)
-                            })
-                        })
-                }) {
-                    return Err(OrbitError::PolicyDenied(
-                        "worker workspace binding mismatch".into(),
-                    ));
-                }
                 object.insert(
                     "workspace".into(),
                     Value::String(binding.owner_destination.clone()),

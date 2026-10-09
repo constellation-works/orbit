@@ -103,6 +103,14 @@ impl McpWorkspace {
     }
 
     fn init_with_workspace_args(workspace_name: &str, extra_workspace_args: &[&str]) -> Self {
+        Self::init_with_task_prefix(workspace_name, extra_workspace_args, "TST")
+    }
+
+    fn init_with_task_prefix(
+        workspace_name: &str,
+        extra_workspace_args: &[&str],
+        task_prefix: &str,
+    ) -> Self {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
@@ -137,7 +145,7 @@ impl McpWorkspace {
             "--machine-name",
             "mcp-roundtrip-host",
             "--task-prefix",
-            "TST",
+            task_prefix,
         ];
         let output = orbit_ok(Self::orbit_command(&work, &home).args(init_args));
         assert!(output.status.success());
@@ -6226,3 +6234,5 @@ fn agent_invoke_mcp_reports_a_saturated_queue() {
 }
 
 mod search;
+#[cfg(unix)]
+mod worker_routing;

@@ -40,6 +40,13 @@ containing `_worker_read` or `_worker_update` are refused before routing and
 again at the owner. Allowed worker updates still pass through input redaction
 and record any redaction audit against the claimed task.
 
+Ordinary worker MCP calls to task and friction tools route to the bound remote
+owner. Omitting `workspace`, sending `null`, or sending an empty or whitespace-only
+string uses that owner destination. A non-string selector is refused as invalid
+input; a string naming another workspace is denied as a worker binding mismatch.
+Explicit selectors may name the bound owner destination, its logical workspace
+ID, or the worker's current checkout path.
+
 ## Prerequisites and safety
 
 - **One control plane per repository.** Two independently initialized owners of
