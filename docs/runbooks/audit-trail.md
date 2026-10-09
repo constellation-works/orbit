@@ -59,6 +59,21 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 `machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
 `origin_session_id`, `mcp_call_id`, and `lease_id`.
 
+JSON list, show and export include `self_reported_actor` (an unverified caller
+claim), `plugin` (name, version, manifest digest and grants), `plugin_secrets`
+(delivered secret names), `plugin_secret_updates` (secret names mapped to
+`applied` or `refused`), `brokered`, and `peer_pid` (the authenticated broker
+peer's host PID). Secret metadata contains names and update outcomes only;
+secret values are never exported. Rows without this metadata use `null` for
+optional fields, empty arrays/maps for collections, and `false` for `brokered`.
+
+CSV export appends the same six columns after the existing columns. `plugin`,
+`plugin_secrets` and `plugin_secret_updates` are compact JSON within CSV cells;
+the CSV writer escapes their quotes and commas. An absent plugin is `null`,
+empty secret collections are `[]` and `{}`, `brokered` is `true` or `false`,
+and an absent `peer_pid` or `self_reported_actor` is an empty cell. The
+`self_reported_actor` column is unverified attribution, separate from `role`.
+
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the
 canonical run correlation. `origin_session_id` groups MCP calls while `mcp_call_id` identifies

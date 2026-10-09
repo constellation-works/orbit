@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use serde_json::Value;
+use orbit_core::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 struct Fixture {
@@ -105,6 +107,24 @@ impl Fixture {
 
 #[test]
 fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
+    const TEST: &str = "audit_cli::audit_cli_round_trips_real_mutation_filters_stats_and_export";
+    const CHILD: &str = "ORBIT_AUDIT_EXPORT_FIXTURE_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok(TEST) {
+        let home = tempdir().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            child.env_remove(name);
+        });
+        child
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, TEST)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = test_env::run_child_test(&mut child, TEST, home.path());
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+        return;
+    }
     let fixture = Fixture::new();
     let events = fixture.task_events();
     let rows = events.as_array().unwrap();
@@ -123,6 +143,15 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
     let event = &rows[0];
     let id = event["id"].as_i64().unwrap().to_string();
     assert_eq!(fixture.json(&["audit", "show", &id, "--json"]), *event);
+    let empty_metadata = json!({
+        "self_reported_actor": null,
+        "plugin": null,
+        "plugin_secrets": [],
+        "plugin_secret_updates": {},
+        "brokered": false,
+        "peer_pid": null,
+    });
+    assert_fields(event, &empty_metadata);
 
     let workspace = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_id = workspace["workspace"]["id"].as_str().unwrap();
@@ -153,6 +182,75 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
     assert_eq!(filtered["total"], 0);
     assert_eq!(filtered["denied_by_operation"], serde_json::json!([]));
 
+    // Seed persisted evidence independently of the CLI JSON projection, so a
+    // field omitted by every CLI surface still fails this test.
+    let mut expected = json!({
+        "execution_id": "audit-plugin-fixture",
+        "command": "tool",
+        "tool_name": "audit-fixture.echo",
+        "role": "unverified",
+        "status": "success",
+        "self_reported_actor": "client, \"claimed\"",
+        "plugin": {
+            "name": "audit-fixture",
+            "version": "1.2.3",
+            "manifest_digest": "sha256:fixture-manifest",
+            "grants": ["net:example.invalid", "secret:api_token"],
+        },
+        "plugin_secrets": ["api_token", "refresh_token"],
+        "plugin_secret_updates": {"api_token": "refused", "refresh_token": "applied"},
+        "brokered": true,
+        "peer_pid": 4242,
+    });
+    let db = Connection::open(fixture.root.join("orbit.db")).unwrap();
+    db.execute(
+        "INSERT INTO audit_events (
+            execution_id, timestamp, command, subcommand, tool_name, role,
+            status, exit_code, duration_ms, working_directory, pid,
+            self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest,
+            plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid
+        ) VALUES (?1, ?2, 'tool', 'run-mcp', ?3, 'unverified', 'success', 0, 1, ?4, 1234,
+                  ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, 4242)",
+        params![
+            expected["execution_id"].as_str().unwrap(),
+            chrono::Utc::now().to_rfc3339(),
+            expected["tool_name"].as_str().unwrap(),
+            fixture.repo.to_str().unwrap(),
+            expected["self_reported_actor"].as_str().unwrap(),
+            expected["plugin"]["name"].as_str().unwrap(),
+            expected["plugin"]["version"].as_str().unwrap(),
+            expected["plugin"]["manifest_digest"].as_str().unwrap(),
+            expected["plugin"]["grants"].to_string(),
+            expected["plugin_secrets"].to_string(),
+            expected["plugin_secret_updates"].to_string(),
+        ],
+    )
+    .unwrap();
+    expected["id"] = json!(db.last_insert_rowid());
+    drop(db);
+
+    // Values exist in the separate host secret store, while the audit row
+    // deliberately carries only names and rotation outcomes.
+    const SECRET: &str = "audit-export-secret-value-3bd481";
+    let secrets = PluginSecretStore::new(&fixture.root);
+    for name in ["api_token", "refresh_token"] {
+        secrets
+            .put(
+                "audit-fixture",
+                name,
+                &PluginSecretValue::new(SECRET.to_string()).unwrap(),
+            )
+            .unwrap();
+    }
+    let plugin_id = expected["id"].as_i64().unwrap().to_string();
+    let shown = fixture.json(&["audit", "show", &plugin_id, "--json"]);
+    assert_fields(&shown, &expected);
+    assert!(!shown.to_string().contains(SECRET));
+    let listed = fixture.json(&["audit", "list", "--tool", "audit-fixture.echo", "--json"]);
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_fields(&listed[0], &expected);
+    assert!(!listed.to_string().contains(SECRET));
+
     let export = fixture.repo.join("audit.json");
     fixture
         .command(&[
@@ -165,10 +263,24 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
         ])
         .assert()
         .success();
-    let exported: Value = serde_json::from_slice(&fs::read(export).unwrap()).unwrap();
-    assert!(
-        exported.as_array().unwrap().contains(event),
-        "export must preserve persisted event fields"
+    let export_bytes = fs::read(export).unwrap();
+    assert!(!String::from_utf8_lossy(&export_bytes).contains(SECRET));
+    let exported: Value = serde_json::from_slice(&export_bytes).unwrap();
+    let exported_plugin = exported
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == expected["id"])
+        .unwrap();
+    assert_fields(exported_plugin, &expected);
+    assert_fields(
+        exported
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == event["id"])
+            .unwrap(),
+        &empty_metadata,
     );
     let csv_export = fixture.repo.join("audit.csv");
     fixture
@@ -182,22 +294,53 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
         ])
         .assert()
         .success();
+    assert!(!fs::read_to_string(&csv_export).unwrap().contains(SECRET));
     let mut csv = csv::Reader::from_path(csv_export).unwrap();
-    let id_column = csv
-        .headers()
-        .unwrap()
+    let headers = csv.headers().unwrap().clone();
+    let id_column = headers.iter().position(|column| column == "id").unwrap();
+    let records: Vec<_> = csv.records().map(Result::unwrap).collect();
+    let plugin_row = records
         .iter()
-        .position(|column| column == "id")
+        .find(|record| record.get(id_column) == Some(plugin_id.as_str()))
         .unwrap();
-    assert!(
-        csv.records()
-            .any(|record| record.unwrap().get(id_column) == Some(id.as_str())),
-        "CSV export must preserve the audited event identity"
+    let cell = |record: &csv::StringRecord, name: &str| {
+        let column = headers.iter().position(|header| header == name).unwrap();
+        record.get(column).unwrap().to_string()
+    };
+    for field in ["plugin", "plugin_secrets", "plugin_secret_updates"] {
+        let value: Value = serde_json::from_str(&cell(plugin_row, field)).unwrap();
+        assert_eq!(value, expected[field], "CSV must preserve {field}");
+    }
+    assert_eq!(cell(plugin_row, "brokered"), "true");
+    assert_eq!(cell(plugin_row, "peer_pid"), "4242");
+    assert_eq!(
+        cell(plugin_row, "self_reported_actor"),
+        expected["self_reported_actor"].as_str().unwrap()
     );
+    let legacy_row = records
+        .iter()
+        .find(|record| record.get(id_column) == Some(id.as_str()))
+        .unwrap();
+    for (field, value) in [
+        ("self_reported_actor", ""),
+        ("plugin", "null"),
+        ("plugin_secrets", "[]"),
+        ("plugin_secret_updates", "{}"),
+        ("brokered", "false"),
+        ("peer_pid", ""),
+    ] {
+        assert_eq!(cell(legacy_row, field), value, "legacy CSV field {field}");
+    }
     assert!(
         fs::read_dir(&fixture.home).unwrap().next().is_none(),
         "explicit root must keep isolated HOME untouched"
     );
+}
+
+fn assert_fields(row: &Value, expected: &Value) {
+    for (field, value) in expected.as_object().unwrap() {
+        assert_eq!(row.get(field), Some(value), "audit field {field}");
+    }
 }
 
 #[test]
