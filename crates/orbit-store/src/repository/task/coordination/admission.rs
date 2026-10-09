@@ -391,7 +391,7 @@ impl TaskCommitBoundary {
             }
             let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
             let machine_id = &identity.location().machine_id;
-            let offer = self.candidate_offer(&task, machine_id)?;
+            let offer = self.admission_offer(&task, &history, machine_id)?;
             let resume_candidate = offer
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())

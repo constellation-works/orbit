@@ -90,31 +90,18 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
         Ok(sha) if !sha.trim().is_empty() => sha.trim().to_string(),
         _ => return Ok(none(&format!("branch '{branch}' no longer resolves"))),
     };
-    let durable_ref = format!("{CANDIDATE_REF_PREFIX}{task_id}/{run_id}");
-    let pushed = ensure_origin_publishes_elsewhere(workspace_path, &branch).and_then(|()| {
-        host.run_private_vcs_operation(
-            CANDIDATE_REF_PUSH,
-            json!({
-                "repo_root": workspace_path.to_string_lossy(),
-                "head_sha": head_sha,
-                "target_ref": durable_ref,
-            }),
-        )
-    });
     let mut output = json!({
         "phase": "candidate_carry",
         "task_id": task_id,
         "branch": branch,
         "head_sha": head_sha,
     });
-    match pushed {
-        Ok(_) => {
+    match carry_to_durable_ref(host, workspace_path, &branch, &head_sha, task_id, run_id) {
+        Ok(durable_ref) => {
             output["carry"] = json!("durable");
             output["durable_ref"] = json!(durable_ref);
         }
-        Err(error) => {
-            let reason = error.to_string();
-            let reason = reason.trim();
+        Err(reason) => {
             tracing::warn!(
                 run_id,
                 task_id,
@@ -123,11 +110,42 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
                 "claimed candidate could not be carried to a durable ref"
             );
             output["carry"] = json!("failed");
-            output["reason"] =
-                json!(&reason[..floor_char_boundary(reason, MAX_CARRY_REASON_BYTES)]);
+            output["reason"] = json!(reason);
         }
     }
     Ok(output)
+}
+
+/// Push the committed candidate `head_sha` on `branch` to
+/// `refs/orbit/candidates/<task_id>/<run_id>` on `origin`, so a run on any
+/// host can fetch it. Returns the ref, or the bounded push diagnostic.
+/// [ORB-14905] An owner-local hold carries its candidate the same way.
+pub(in crate::executor::automation::vcs) fn carry_to_durable_ref<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    branch: &str,
+    head_sha: &str,
+    task_id: &str,
+    run_id: &str,
+) -> Result<String, String> {
+    let durable_ref = format!("{CANDIDATE_REF_PREFIX}{task_id}/{run_id}");
+    ensure_origin_publishes_elsewhere(workspace_path, branch)
+        .and_then(|()| {
+            host.run_private_vcs_operation(
+                CANDIDATE_REF_PUSH,
+                json!({
+                    "repo_root": workspace_path.to_string_lossy(),
+                    "head_sha": head_sha,
+                    "target_ref": durable_ref,
+                }),
+            )
+        })
+        .map(|_| durable_ref)
+        .map_err(|error| {
+            let reason = error.to_string();
+            let reason = reason.trim();
+            reason[..floor_char_boundary(reason, MAX_CARRY_REASON_BYTES)].to_string()
+        })
 }
 
 fn none(reason: &str) -> Value {

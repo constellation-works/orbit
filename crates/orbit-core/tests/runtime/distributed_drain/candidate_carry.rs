@@ -11,8 +11,15 @@
 //! [ORB-14603] The owner's own run of a task whose claim failed continues
 //! the candidate that claim kept, and never reads a local run that shares the
 //! follower leaf's id.
+//!
+//! [ORB-14905] An owner-local run whose candidate a red base held carries it
+//! to the same durable ref, and the task's next claim on another host resumes
+//! it; when that push is refused the task is still held, and says the
+//! candidate is host-local.
 
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskStatus};
+use orbit_types::workflow::BaselineRedHold;
 
 use super::*;
 
@@ -579,4 +586,235 @@ fn an_owner_local_run_records_why_it_sets_a_kept_candidate_aside() {
     assert!(note.contains(&format!("machine={FOLLOWER}")), "{note}");
     assert!(note.contains(&format!("source_run={leaf}")), "{note}");
     assert!(note.contains("reason_code=not_durable"), "{note}");
+}
+
+/// The owner's own `task_pr_pipeline` run of `task` commits a candidate in its
+/// worktree, then its required validation fails on base `base` exactly as on
+/// the candidate, and the run's failure handoff holds the task. Returns the
+/// run, the candidate commit and the handoff's output.
+fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, String, Value) {
+    let owner = &pair.wire.owner;
+    let run = owner_jobs(pair)
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .unwrap()
+        .run_id;
+    let setup = engine_action(
+        owner,
+        "worktree_setup",
+        &json!({
+            "job_run_id": run,
+            "run_id": run,
+            "task_ids": [task],
+            "base": "main",
+            "base_sync": "local",
+            "dependency_delivery": "ignore",
+        }),
+    );
+    owner
+        .apply_task_automation_update(
+            task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(run.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("the run admits the task");
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    std::fs::write(checkout.join("src/f0.rs"), CARRIED).unwrap();
+    git(&checkout, &["commit", "-q", "-am", "candidate"]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]).trim().to_string();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: base.into(),
+        command: "make ci-fast".into(),
+        run_id: run.clone(),
+    };
+    let handoff = engine_action(
+        owner,
+        "pr_failure_handoff",
+        &json!({
+            "failed_step_id": "validate",
+            "error_code": "baseline_red",
+            "error_message": hold.text("make ci-fast fails on the base exactly as here"),
+            "run_id": run,
+            "job_input": {"task_ids": [task]},
+            "pipeline": {"worktree": {"job_run_id": run, "workspace_path": checkout}},
+        }),
+    );
+    assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
+    assert_eq!(handoff["head_sha"], head.as_str(), "{handoff}");
+    assert_eq!(pair.owner_status(task), "backlog", "the task is held");
+    (run, head, handoff)
+}
+
+/// An operator returns the held task to the backlog, which supersedes the
+/// red-base hold so admission hands the task out again.
+fn hold_superseded(pair: &Pair, task: &str) {
+    for status in [TaskStatus::Blocked, TaskStatus::Backlog] {
+        pair.wire
+            .owner
+            .update_task_as_human(
+                task,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                "human:on-call".into(),
+            )
+            .expect("operator status change");
+    }
+}
+
+/// [ORB-14905] An owner-local run held on a red base pushes its candidate to
+/// a durable ref on `origin`, and the task's next claim — on a host with its
+/// own object store — resumes that commit instead of implementing anew.
+#[test]
+fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
+    if !isolated(
+        module_path!(),
+        "a_red_base_hold_carries_its_candidate_to_another_hosts_claim",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let (run, head, handoff) = owner_run_held_on_red_base(&pair, &task, &base);
+
+    let reference = format!("refs/orbit/candidates/{task}/{run}");
+    assert_eq!(handoff["carry"], "durable", "{handoff}");
+    assert_eq!(handoff["durable_ref"], reference.as_str(), "{handoff}");
+    assert!(handoff.get("carry_failure").is_none(), "{handoff}");
+    assert_eq!(
+        git(&bare(&pair), &["rev-parse", &reference]).trim(),
+        head,
+        "origin holds the held candidate at its durable ref"
+    );
+    assert!(
+        comments_of(&pair.owner_task(&task)).contains(&reference),
+        "the hold comment names the durable ref: {}",
+        pair.owner_task(&task)
+    );
+    hold_superseded(&pair, &task);
+
+    let second = pair.another_host(SECOND);
+    let repo = host_checkout(&pair, &second);
+    assert!(
+        !has_commit(&repo, &head),
+        "the second host's object store starts without the candidate"
+    );
+    let drain = second.run_drain();
+    let next = second.running_leaf(&drain, 1);
+    assert_eq!(second.claimed_task(&next), task, "the task is pulled again");
+    let offered = claim_candidate(&second, &next).expect("the claim carries the held candidate");
+    assert_eq!(offered.head_sha, head);
+    assert_eq!(offered.durable_ref.as_deref(), Some(reference.as_str()));
+    assert_eq!(offered.source_run_id.as_deref(), Some(run.as_str()));
+    let input = second
+        .follower_jobs
+        .get_job_run(&next)
+        .unwrap()
+        .and_then(|run| run.input)
+        .expect("leaf input");
+
+    let resumed = engine_action(
+        &second.follower,
+        "candidate_resume",
+        &json!({
+            "job_run_id": next,
+            "task_ids": [task],
+            "workspace_path": repo,
+            "base_sha": base,
+            "candidate": input["resume_candidate"],
+            "claimed": true,
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+    assert_eq!(resumed["source_sha"], head.as_str(), "{resumed}");
+    assert_eq!(resumed["source_run_id"], run.as_str(), "{resumed}");
+    assert!(has_commit(&repo, &head), "the candidate was fetched");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("src/f0.rs")).unwrap(),
+        CARRIED,
+        "the held change is applied for the implementer to continue"
+    );
+}
+
+/// [ORB-14905] When `origin` refuses the held candidate's push, the task is
+/// still held, the hold's output and comment say the candidate is host-local
+/// with the push diagnostic, and a claim on another host implements fresh
+/// for that typed reason.
+#[test]
+fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
+    if !isolated(
+        module_path!(),
+        "a_red_base_hold_whose_push_is_refused_stays_host_local",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    // The owner can fetch from `origin`, but its pushes go nowhere.
+    let unreachable = pair.owner_repo.with_file_name("unreachable.git");
+    git(
+        &pair.owner_repo,
+        &[
+            "config",
+            "remote.origin.pushurl",
+            unreachable.to_str().unwrap(),
+        ],
+    );
+    let (run, head, handoff) = owner_run_held_on_red_base(&pair, &task, &base);
+
+    assert_eq!(handoff["carry"], "failed", "{handoff}");
+    assert!(handoff.get("durable_ref").is_none(), "{handoff}");
+    let failure = handoff["carry_failure"].as_str().unwrap_or_default();
+    assert!(!failure.is_empty(), "the push diagnostic: {handoff}");
+    let reference = format!("refs/orbit/candidates/{task}/{run}");
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(bare(&pair))
+            .args(["rev-parse", "--verify", "--quiet", &reference])
+            .output()
+            .unwrap()
+            .stdout
+            .is_empty(),
+        "nothing reached origin"
+    );
+    let comments = pair.wire.owner.get_task_comments(&task).unwrap();
+    let hold = comments
+        .iter()
+        .rev()
+        .map(|comment| comment.message.as_str())
+        .find(|message| message.starts_with("## Red base"))
+        .expect("the hold comment");
+    assert!(hold.contains("host-local"), "{hold}");
+    assert!(
+        hold.contains(failure),
+        "the comment carries the push diagnostic: {hold}"
+    );
+    hold_superseded(&pair, &task);
+
+    let second = pair.another_host(SECOND);
+    let drain = second.run_drain();
+    let next = second.running_leaf(&drain, 1);
+    assert_eq!(second.claimed_task(&next), task);
+    assert!(
+        claim_candidate(&second, &next).is_none(),
+        "another host cannot fetch the held candidate, so it implements fresh"
+    );
+    let history = pair.wire.owner.get_task_history(&task).unwrap();
+    let fresh = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == CANDIDATE_RESUME_EVENT)
+        .expect("the owner records why the claim implements fresh");
+    let note = fresh.note.as_deref().unwrap_or_default();
+    assert!(note.starts_with("fresh: "), "{note}");
+    assert!(note.contains("reason=not_durable"), "{note}");
+    assert!(note.contains(&head), "{note}");
 }

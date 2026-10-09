@@ -1,7 +1,7 @@
 //! Task-update requests and unavailable-capability errors.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{ExternalRef, TaskComment, TaskStatus};
+use orbit_types::task::{ExternalRef, TaskComment, TaskHistoryEntry, TaskStatus};
 
 use crate::activity_job::DispatchError;
 
@@ -21,6 +21,8 @@ pub struct TaskAutomationUpdate {
     pub status_event: Option<String>,
     pub status_note: Option<String>,
     pub append_comments: Vec<TaskComment>,
+    /// History entries recorded with the update, beside its status event.
+    pub append_history: Vec<TaskHistoryEntry>,
     pub agent: Option<String>,
     pub model: Option<String>,
     pub job_run_id: Option<String>,
