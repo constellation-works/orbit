@@ -1,7 +1,9 @@
 //! Worktree GC: which runs' worktrees are delivered, and the owner lookups it needs.
 
 use chrono::{Duration, Utc};
-use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
+use orbit_engine::{
+    RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
+};
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
@@ -10,6 +12,79 @@ use serde_json::{Value, json};
 use crate::{OrbitError, OrbitRuntime};
 
 impl OrbitRuntime {
+    /// Inspect declared reclaimable paths without reconciling or writing state.
+    /// Used by doctor; every terminal/worker/path gate also applies to estimates.
+    pub fn reclaimable_worktrees(&self) -> Result<WorktreeGcResult, OrbitError> {
+        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        collect_worktrees(
+            &self.paths().repo_root,
+            &runs,
+            self,
+            &WorktreeGcOptions {
+                target_only: true,
+                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                ..WorktreeGcOptions::default()
+            },
+        )
+    }
+
+    /// Best-effort space recovery at admission; active workers are protected
+    /// by the collector, including runs sharing a terminal run's path.
+    pub(crate) fn reclaim_worktrees_on_admission(&self) {
+        let Some(threshold) = self.context.settings().worktree_reclaim_below_free_mib() else {
+            return;
+        };
+        let state = &self.paths().state_dir;
+        let free = || fs2::available_space(state).map(|bytes| bytes / (1024 * 1024));
+        if !free().is_ok_and(|mib| mib < threshold) {
+            return;
+        }
+        let runs = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        }) {
+            Ok(runs) => runs,
+            Err(error) => {
+                tracing::warn!(%error, "admission could not inventory reclaimable worktrees");
+                return;
+            }
+        };
+        let mut oldest = runs
+            .iter()
+            .filter(|run| run.state.is_terminal())
+            .collect::<Vec<_>>();
+        oldest.sort_by_key(|run| (run.finished_at.unwrap_or(run.created_at), &run.run_id));
+        for run in oldest {
+            if !free().is_ok_and(|mib| mib < threshold) {
+                break;
+            }
+            match self.reclaim_run_build_output(&runs, &run.run_id) {
+                Ok(result) => {
+                    tracing::info!(run_id = %run.run_id, bytes = result.bytes_reclaimed,
+                        reports = ?result.reports, "admission reclaimed oldest kept worktree output");
+                    if result.bytes_reclaimed > 0
+                        && let Err(error) = self.record_pipeline_audit(
+                            "worktree.reclaim",
+                            Some(&run.run_id),
+                            None,
+                            orbit_types::telemetry::AuditEventStatus::Success,
+                            json!({"run_id": run.run_id, "reclaim": result}),
+                            None,
+                        )
+                    {
+                        tracing::warn!(%error, "could not record admission reclamation");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, run_id = %run.run_id, "admission reclaim failed; continuing")
+                }
+            }
+        }
+    }
+
     /// Every recorded run, without step rows. Worktree GC classifies live
     /// worktrees from non-terminal runs and never reads `agent_response_json`.
     pub(crate) fn list_job_runs_for_worktree_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
@@ -48,6 +123,8 @@ impl OrbitRuntime {
                 older_than: None,
                 estimate_bytes: false,
                 target_only: false,
+                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_kept: false,
             },
         )
         .map(Some)
@@ -197,10 +274,8 @@ impl OrbitRuntime {
         Some(format!("claim settled with its owner {owner}"))
     }
 
-    /// Reclaim the `target/` build output of one terminal run's worktree,
-    /// keeping its checkout. The collector's target-only gates apply: a
-    /// terminal run, a registered worktree, no live or undecidable worker,
-    /// and only Git-ignored content under `target/`.
+    /// Reclaim declared output of one terminal run, keeping its checkout.
+    /// Registration, worker, confinement and Git content gates apply.
     pub(crate) fn reclaim_run_build_output(
         &self,
         runs: &[JobRun],
@@ -216,6 +291,8 @@ impl OrbitRuntime {
                 older_than: None,
                 estimate_bytes: false,
                 target_only: true,
+                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_kept: false,
             },
         )
     }
@@ -252,6 +329,8 @@ impl OrbitRuntime {
                 older_than,
                 estimate_bytes,
                 target_only,
+                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_kept: false,
             },
         )
     }

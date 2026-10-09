@@ -192,6 +192,7 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    runtime.reclaim_worktrees_on_admission();
     runtime
         .record_backlog_pilot_operator_handoffs()
         .map_err(|error| DispatchError::DeterministicActionFailed {

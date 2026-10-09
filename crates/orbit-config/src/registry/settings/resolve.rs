@@ -16,6 +16,15 @@ use super::super::{
 };
 use crate::memory_limit::MemoryLimit;
 
+pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| vec!["target".to_string()]);
+    for pattern in &patterns {
+        orbit_common::fs::path_glob::RelativePathGlob::new(pattern)
+            .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;
+    }
+    Ok(patterns)
+}
+
 /// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];

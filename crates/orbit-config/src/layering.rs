@@ -469,6 +469,14 @@ fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, Orbit
         ))
     })?;
     translate_legacy_review_keys(&mut value, path)?;
+    if let Some(patterns) =
+        crate::registry::read_optional::<Vec<String>>(&value, "worktree.reclaim", path)?
+    {
+        for pattern in patterns {
+            orbit_common::fs::path_glob::RelativePathGlob::new(&pattern)
+                .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;
+        }
+    }
     Ok(ConfigDocument {
         path: path.to_path_buf(),
         value,

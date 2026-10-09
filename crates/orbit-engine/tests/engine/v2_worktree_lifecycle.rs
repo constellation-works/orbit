@@ -56,6 +56,8 @@ const BASE: &str = "agent-main";
 
 #[cfg(unix)]
 mod absorbed_candidate;
+#[cfg(unix)]
+mod declared_reclaim;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -3693,6 +3695,7 @@ fn task(id: &str, status: TaskStatus) -> Task {
 /// read through, kept in memory.
 #[derive(Default)]
 struct LifecycleHost {
+    reclaim_patterns: Option<Vec<String>>,
     repo: PathBuf,
     provider: Option<PathBuf>,
     tasks: Mutex<BTreeMap<String, Task>>,
@@ -4013,6 +4016,12 @@ impl RuntimeHost for LifecycleHost {
 
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        self.reclaim_patterns
+            .clone()
+            .unwrap_or_else(|| vec!["target".into()])
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {

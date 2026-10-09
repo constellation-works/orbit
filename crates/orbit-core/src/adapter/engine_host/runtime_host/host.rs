@@ -573,6 +573,10 @@ impl RuntimeHost for OrbitRuntime {
         self.list_job_runs_for_worktree_gc()
     }
 
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        self.context.settings().worktree_reclaim().to_vec()
+    }
+
     fn lookup_task_for_worktree_gc(
         &self,
         run_id: &str,

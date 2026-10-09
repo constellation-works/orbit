@@ -1,6 +1,28 @@
 use super::system::human_bytes;
 use super::*;
 
+pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "worktree-reclaim";
+    if !runtime.paths().repo_root.join(".git").exists() {
+        return check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "not a git checkout".into(),
+        );
+    }
+    match runtime.reclaimable_worktrees() {
+        Ok(result) if result.bytes_reclaimed > 10 * 1024 * 1024 * 1024 => actionable_check(
+            CHECK, WorkspaceDoctorStatus::Warning,
+            format!("{} reclaimable in kept run worktrees", human_bytes(result.bytes_reclaimed)),
+            "Inspect `orbit gc worktrees --reclaim`; run `orbit gc worktrees --reclaim --confirm` to reclaim declared output.".into(),
+        ),
+        Ok(result) => check(CHECK, WorkspaceDoctorStatus::Ok,
+            format!("{} reclaimable in kept run worktrees", human_bytes(result.bytes_reclaimed))),
+        Err(error) => check(CHECK, WorkspaceDoctorStatus::Warning,
+            format!("cannot inspect kept worktree output: {error}")),
+    }
+}
+
 /// The plugin section's source-built rows: each plugin this host built from
 /// source at install time, with its command, consent, profile and artifact
 /// digest, and any drift `orbit plugin doctor` finds in those builds.

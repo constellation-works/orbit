@@ -349,14 +349,16 @@ orbit gc worktrees
 # Remove the settled worktrees.
 orbit gc worktrees --confirm
 # Free build output while keeping checkouts.
-orbit gc worktrees --target-only --confirm
+orbit gc worktrees --reclaim --confirm
 ```
 
 `orbit gc worktrees` collects only worktrees whose task is `done`, `rejected`,
 or `archived`, and removes nothing without `--confirm`. On a replica it reads
-task status from the owner machine. `--target-only` deletes only
-`<worktree>/target` for terminal runs with no live worker, so a failed run's
-checkout stays available for rescue. To limit it by age or to one run, see
+task status from the owner machine. `--reclaim` deletes declared
+`worktree.reclaim` paths (default `["target"]`) only after terminal-run, worker,
+registration, confinement, symlink and Git content checks. The failed run's
+checkout and unmatched evidence stay available for rescue. The scheduled sweep
+also reclaims declared output in every kept terminal worktree. To limit it by age or to one run, see
 the [CLI reference](../../reference/cli/).
 
 The scheduled `worktree_gc_pipeline` run also prunes the checkout's

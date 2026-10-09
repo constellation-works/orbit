@@ -97,6 +97,7 @@ impl OrbitRuntime {
         if !reconciliation && run_input_declares_review_reconciliation(&input) {
             return Err(reserved_reconciliation_key_error(job_name));
         }
+        self.reclaim_worktrees_on_admission();
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input
