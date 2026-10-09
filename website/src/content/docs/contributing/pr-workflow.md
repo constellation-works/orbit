@@ -21,10 +21,17 @@ replaced entry at its successor with a `Superseded by:` link.
 Run these before you ask for review:
 
 ```bash
-make ci-fast    # formatting and repository guardrails
-make ci-lint    # dependency direction, then clippy with warnings as errors
-make goldens    # CLI help, MCP, CI log, and sandbox profile goldens
+make ci-fast            # formatting and repository guardrails; no Rust tests
+make ci-test-affected   # full test targets for changed crates and their dependents
+make ci-lint            # dependency direction, then clippy and rustdoc with warnings as errors
+make goldens            # CLI help, MCP, CI log, and sandbox profile goldens
 ```
+
+`make ci-fast`, `make ci-lint`, and `make goldens` check formatting, guardrails,
+lints, and snapshots, but they don't run the test suite. `make ci-test-affected`
+runs the full test targets of every changed crate and its reverse workspace
+dependents. Focused test filters don't replace it, so run it before review even
+when the other gates pass.
 
 After an intentional change to CLI help, the MCP surface, or a sandbox policy,
 regenerate the goldens with `make goldens UPDATE=1` and review the diff. Use
