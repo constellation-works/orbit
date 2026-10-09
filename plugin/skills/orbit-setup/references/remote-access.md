@@ -218,10 +218,14 @@ direct request gets `403 authorization_denied` for `host.forward` before any SSH
 starts. A remote dashboard Orbit starts gets `--operator` exactly when the
 serving session has it, and one already running keeps its own capability.
 
-The dashboard refuses non-loopback binds and has no application login. Its
-Origin checks mitigate browser CSRF, not unauthorized port access. Anyone with
-access to its forwarded port can reach mutation endpoints with the server's
-application authority. Keep access within the intended operator boundary.
+The dashboard refuses non-loopback binds and has no application login. Origin
+checks and `Sec-Fetch-Site` checks mitigate browser CSRF, not unauthorized port
+access. When present, `Sec-Fetch-Site` must be `same-origin` or `none`; direct
+CLI/curl requests without the header continue to work. Older browsers that
+omit both Fetch Metadata and `Origin` on GETs do not receive the additional
+Fetch Metadata protection. Anyone with access to the forwarded port can reach
+mutation endpoints with the server's application authority. Keep access within
+the intended operator boundary.
 
 ## TCP MCP
 
