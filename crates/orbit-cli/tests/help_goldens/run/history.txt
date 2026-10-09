@@ -26,9 +26,6 @@ Options:
           
           [default: 50]
 
-      --json
-          Output as JSON
-
       --no-reconcile
           Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted and releases its task reservations
 
@@ -40,6 +37,9 @@ Options:
           - table:  Aligned columns with a header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')
