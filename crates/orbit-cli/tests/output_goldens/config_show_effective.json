@@ -13,6 +13,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "ci_failure.operator_suppression_hours": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "crews.golden.description": {
       "scope": "built-in",
       "state": "unset",

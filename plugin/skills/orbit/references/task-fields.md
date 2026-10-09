@@ -30,9 +30,10 @@ The connected tool schema is authoritative for supported fields.
   resolution metadata); a covering task there also counts. Other types
   (`produces`, `blocked_by`, `child_of`,
   `spawned_from`, `regression_from`, `supersedes`, `related_to`) are tracked
-  but inert. Only `produces`/`resolves` accept non-task targets; the rest
-  require a task ID. A dangling target (unknown in every workspace this host
-  can see) succeeds but emits a `TaskRelationDangling` audit event.
+  but inert. Only `produces`/`resolves` accept non-task artifact IDs; `covered_by`
+  also accepts GitHub PR external keys as described below. The remaining
+  relation types require a task ID. A dangling target (unknown in every
+  workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
 - `parent_id` is a retired `orbit.task.add` input and is refused with the
   other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired
@@ -60,6 +61,12 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `covered_by` names a task or GitHub PR covering an archived/rejected CI
+  sweep finding. Its target is a task ID or an external key such as
+  `github-pr:NUMBER` (this checkout's repository) or
+  `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
+  relations and append it in the same update that archives/rejects the finding;
+  see [CI recovery](../../orbit-orchestrate/references/recovery.md).
 
 ## Validation your lane can actually run
 

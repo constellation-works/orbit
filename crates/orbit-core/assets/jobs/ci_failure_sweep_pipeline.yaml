@@ -12,7 +12,13 @@
 # - `file` (deterministic): clusters the snapshot's current, non-stale failures
 #   by root cause and files each surviving cluster as a `proposed` bug task
 #   carrying that evidence inline. Filing is deduped against still-open tasks
-#   by failure key. Completed owners require structured diagnostic, validation,
+#   by failure key. Operator covered_by relations retain archived/rejected
+#   ownership while a task or PR cover is open; uncovered decisions hold for
+#   ci_failure.operator_suppression_hours (default 6). Every hold is reported
+#   with its key, reason, owner and cover/expiry, and is never piloted. A failure
+#   on a checkout containing a landed cover files a repair naming the failed fix.
+#   Equal normalized test signatures across jobs share one task listing all jobs.
+#   Completed owners require structured diagnostic, validation,
 #   delivery and branch proof; covered observations never become pilot candidates.
 #   A failure tested before a done repair of the same signature landed, or a
 #   lone red run whose workflow is still running on a descendant commit, is

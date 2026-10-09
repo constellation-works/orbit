@@ -301,6 +301,18 @@ impl<'a> Source<'a> {
         Ok(paths)
     }
 
+    /// Read an operator-named cover through the bounded provider transport.
+    pub(crate) fn ci_cover_pull_request(
+        &self,
+        reference: &str,
+    ) -> Result<serde_json::Value, AutomationError> {
+        let output = self.command(
+            "gh",
+            &["pr", "view", reference, "--json", "state,mergeCommit,url"],
+        )?;
+        serde_json::from_str(&output).map_err(|error| AutomationError::Deferred(error.to_string()))
+    }
+
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
         self.command("git", args)
     }

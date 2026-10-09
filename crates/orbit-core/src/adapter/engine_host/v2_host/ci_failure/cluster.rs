@@ -84,6 +84,9 @@ impl FailureCluster {
                 )],
             );
             if let Some(found) = find_covering_task(lookup, &candidate)? {
+                if self.compiler_cause.is_none() {
+                    return Ok(Some(found));
+                }
                 let source_id = found.evidence["matched_fields"]
                     .as_array()
                     .and_then(|fields| {

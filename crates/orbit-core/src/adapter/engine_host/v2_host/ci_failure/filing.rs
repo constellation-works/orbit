@@ -22,11 +22,14 @@
 //! commit collapses into one task instead of two.
 //!
 //! Ordinary `failure_key` tags omit the commit to keep a still-open repair
-//! across branch advances. Proven compiler causes instead include the exact
+//! across branch advances. Concrete failing-test keys omit job and step
+//! wrappers so equal test signatures retain one owner across job ordering.
+//! Proven compiler causes instead include the exact
 //! diagnostic set, source locations and observed checkout, omitting job and
 //! workflow wrappers. That conservative proof consolidates cross-job failures
 //! without conflating different compiler operands or source revisions. Shipped
-//! per-job tags remain readable for the same immutable supplying evidence.
+//! per-job test tags remain exact owners; legacy compiler tags require the
+//! same immutable supplying evidence.
 
 use std::collections::BTreeSet;
 
@@ -142,6 +145,7 @@ where
             "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
+            "withheld": [],
             "skipped_over_cap": [],
             "deferred": [],
             "audit": audit,
@@ -342,6 +346,7 @@ where
             "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
+            "withheld": [],
             "skipped_over_cap": [],
             "deferred": [],
             "inconclusive": inconclusive,
@@ -362,6 +367,7 @@ where
     let mut pilot_candidates = Vec::new();
     let mut pilot_candidate_ids = BTreeSet::new();
     let mut skipped_existing = Vec::new();
+    let mut withheld = Vec::new();
     let mut skipped_over_cap = Vec::new();
     // Two clusters in one snapshot can share a failure key when the same root
     // cause was tested at two commits. The first filing closes the second.
@@ -372,12 +378,21 @@ where
     // task list is hydrated at most once per filing and each open task's
     // comments are read at most once, however many clusters the run has.
     let lookup = SnapshotDuplicateLookup::new(lookup);
+    let mut operator_covers = super::operator_cover::OperatorCovers::new(runtime)?;
+    let operator_assessments = clusters
+        .iter()
+        .map(|cluster| operator_covers.assess(cluster, &lookup))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut assessor = repair_assessment::Assessor::new(runtime);
     let mut repair_assessments = Vec::new();
     let duplicate_matches = clusters
         .iter()
-        .map(|cluster| {
-            let existing = cluster.find_covering_task(&lookup).map_err(|error| {
+        .zip(&operator_assessments)
+        .map(|(cluster, operator)| {
+            if operator.withheld.is_some() {
+                return Ok(None);
+            }
+            let mut existing = cluster.find_covering_task(&lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
@@ -390,6 +405,15 @@ where
                     })],
                 )
             })?;
+            if !operator.failed_covers.is_empty()
+                && existing.as_ref().is_some_and(|matched| {
+                    lookup
+                        .get_task(&matched.task_id)
+                        .is_ok_and(|task| task.status == TaskStatus::Done)
+                })
+            {
+                existing = None;
+            }
             if existing.is_some() {
                 return Ok(existing);
             }
@@ -409,8 +433,12 @@ where
     let descendant_landings = clusters
         .iter()
         .zip(&duplicate_matches)
-        .map(|(cluster, duplicate_match)| {
-            if duplicate_match.is_some() {
+        .zip(&operator_assessments)
+        .map(|((cluster, duplicate_match), operator)| {
+            if duplicate_match.is_some()
+                || operator.withheld.is_some()
+                || !operator.failed_covers.is_empty()
+            {
                 return Ok(None);
             }
             landed_repairs.find(cluster, &lookup).map_err(|error| {
@@ -454,12 +482,17 @@ where
 
     let attributed = retain_branch_observations(runtime, &branch_observations)?;
 
-    for (((cluster, duplicate_match), duplicate_task), descendant_landing) in clusters
+    for ((((cluster, duplicate_match), duplicate_task), descendant_landing), operator) in clusters
         .iter()
         .zip(duplicate_matches)
         .zip(duplicate_tasks)
         .zip(descendant_landings)
+        .zip(operator_assessments)
     {
+        if let Some(entry) = operator.withheld {
+            withheld.push(entry);
+            continue;
+        }
         if let Some(DuplicateTaskMatch {
             task_id,
             match_kind,
@@ -536,9 +569,20 @@ where
             "github-actions".to_string(),
         ];
         tags.extend(os_tags.iter().cloned());
+        let mut description = cluster.description(evidence, &runners);
+        if !operator.failed_covers.is_empty() {
+            description.push_str("\n## Prior operator covers that did not hold\n\n");
+            for cover in &operator.failed_covers {
+                description.push_str(&format!(
+                    "- Cover `{}` landed at `{}`; the failing checkout contains this fix and the same failure key reproduced.\n",
+                    cover["cover"].as_str().unwrap_or_default(),
+                    cover["landed_commit"].as_str().unwrap_or_default(),
+                ));
+            }
+        }
         let task_id = add_task(TaskAddParams {
             title: cluster.title(),
-            description: cluster.description(evidence, &runners),
+            description,
             acceptance_criteria: cluster.acceptance_criteria(),
             tags,
             // Deliberately empty: the evidence is already in the description,
@@ -573,15 +617,20 @@ where
         let mut filing = cluster.filing_entry(&task_id);
         filing["runner_os"] = json!(runners);
         filing["os_tags"] = json!(os_tags);
+        if !operator.failed_covers.is_empty() {
+            filing["failed_covers"] = json!(operator.failed_covers);
+        }
         pilot_candidate_ids.insert(task_id);
         pilot_candidates.push(filing.clone());
         filed.push(filing);
     }
 
-    let final_audit = pending_audit(
+    let mut final_audit = pending_audit(
         filing_audit(audit, &filed, &skipped_existing),
         &pending_supersession,
     );
+    final_audit["withheld_count"] = json!(withheld.len());
+    final_audit["withheld"] = json!(withheld);
     Ok(json!({
         "outcome": OUTCOME_CURRENT_FAILURES,
         "capability": capability,
@@ -591,6 +640,7 @@ where
         "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
+        "withheld": withheld,
         "repair_assessments": repair_assessments,
         "attributed": attributed,
         "excluded_branch_failures": excluded_branch_failures,

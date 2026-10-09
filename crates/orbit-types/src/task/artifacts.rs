@@ -153,6 +153,8 @@ pub enum TaskRelationType {
     RegressionFrom,
     Supersedes,
     RelatedTo,
+    /// An operator-named task or GitHub PR covering this task's failure.
+    CoveredBy,
     Produces,
     Resolves,
 }
@@ -244,6 +246,34 @@ pub fn validate_task_relations_for_source(
 
 fn validate_target_for(relation_type: TaskRelationType, target: &str) -> Result<(), TaskError> {
     match relation_type {
+        TaskRelationType::CoveredBy => {
+            if is_valid_orb_task_id(target) {
+                return Ok(());
+            }
+            let reference = ExternalRef::parse_key(target)?;
+            if reference.system == "github-pr"
+                && (reference.id.parse::<u64>().is_ok_and(|number| number > 0)
+                    || url::Url::parse(&reference.id).is_ok_and(|url| {
+                        let parts = url.path().trim_matches('/').split('/').collect::<Vec<_>>();
+                        url.scheme() == "https"
+                            && url.host_str() == Some("github.com")
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.query().is_none()
+                            && url.fragment().is_none()
+                            && parts.len() == 4
+                            && !parts[0].is_empty()
+                            && !parts[1].is_empty()
+                            && parts[2] == "pull"
+                            && parts[3].parse::<u64>().is_ok_and(|n| n > 0)
+                    }))
+            {
+                return Ok(());
+            }
+            Err(TaskError::Invalid(
+                "covered_by target must be a task id or github-pr:<number or GitHub PR URL>".into(),
+            ))
+        }
         TaskRelationType::Produces | TaskRelationType::Resolves => {
             if is_valid_orb_task_id(target)
                 || is_valid_friction_id(target)
@@ -603,6 +633,7 @@ fn cyclic_relation_family(relation_type: TaskRelationType) -> Option<RelationCyc
         TaskRelationType::RegressionFrom
         | TaskRelationType::Supersedes
         | TaskRelationType::RelatedTo
+        | TaskRelationType::CoveredBy
         | TaskRelationType::Produces
         | TaskRelationType::Resolves => None,
     }
