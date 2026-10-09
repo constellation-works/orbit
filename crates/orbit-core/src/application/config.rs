@@ -142,7 +142,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         },
         "workspace_binding": workspace_binding_json(runtime, values),
         "sections": sections,
-        "crews": crew_rows(runtime, values)?,
+        "crews": crew_rows(runtime, values),
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),
@@ -544,7 +544,7 @@ fn effective_value(runtime: &OrbitRuntime, key: &str) -> Result<JsonValue, Orbit
 /// The layered value of one crew, as the object its row renders.
 fn crew_value(runtime: &OrbitRuntime, name: &str) -> Result<JsonValue, OrbitError> {
     let effective = load_effective_config(&config_roots(runtime))?;
-    Ok(crew_rows(runtime, effective.values())?
+    Ok(crew_rows(runtime, effective.values())
         .into_iter()
         .find(|crew| crew["name"] == json!(name))
         .unwrap_or(JsonValue::Null))
@@ -568,7 +568,7 @@ fn write_outcome(
         Some(key) if keys.len() == 1 => effective.value_for(key).unwrap_or(JsonValue::Null),
         Some(key) => {
             let name = key.split('.').nth(1).unwrap_or_default();
-            crew_rows(runtime, values)?
+            crew_rows(runtime, values)
                 .into_iter()
                 .find(|crew| crew["name"] == json!(name))
                 .unwrap_or(JsonValue::Null)
@@ -806,10 +806,11 @@ fn base_row(
 }
 
 /// One row per crew, folded from the per-field `crews.<name>.<field>` values.
-fn crew_rows(
-    runtime: &OrbitRuntime,
-    values: &[EffectiveConfigValue],
-) -> Result<Vec<JsonValue>, OrbitError> {
+///
+/// The "Used by" column is decoration: a failed auto-task listing (every
+/// definition malformed) omits auto-task references rather than failing the
+/// Settings view or a crew write that already committed.
+fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
     let mut references: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in values {
         if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) || entry.key == "operation.review_crew"
@@ -834,16 +835,24 @@ fn crew_rows(
         }
     }
     // Use the scheduler's listing to omit definitions parked by an inactive plugin.
-    for listed in runtime.auto_task_listing(false)? {
-        let definition = listed.definition;
-        if definition.enabled
-            && let Some(name) = definition.template.crew
-        {
-            references
-                .entry(name.trim().to_string())
-                .or_default()
-                .insert(format!("auto-task {}", definition.name));
+    match runtime.auto_task_listing(false) {
+        Ok(listed_tasks) => {
+            for listed in listed_tasks {
+                let definition = listed.definition;
+                if definition.enabled
+                    && let Some(name) = definition.template.crew
+                {
+                    references
+                        .entry(name.trim().to_string())
+                        .or_default()
+                        .insert(format!("auto-task {}", definition.name));
+                }
+            }
         }
+        Err(error) => tracing::warn!(
+            %error,
+            "auto-task listing unavailable; crew 'Used by' omits auto-task references"
+        ),
     }
 
     let mut crews: BTreeMap<String, BTreeMap<String, (JsonValue, ConfigValueSourceKind)>> =
@@ -861,7 +870,7 @@ fn crew_rows(
         );
     }
 
-    Ok(crews
+    crews
         .into_iter()
         .map(|(name, fields)| {
             let cell = |field: &str| {
@@ -895,7 +904,7 @@ fn crew_rows(
                 "referenced_by": referenced_by,
             })
         })
-        .collect())
+        .collect()
 }
 
 fn shadow_note(layer: ConfigValueSourceKind, value: &JsonValue, reason: ShadowReason) -> String {
