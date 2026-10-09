@@ -34,6 +34,13 @@ pub const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(10);
 /// `worktree add`.
 pub const GIT_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Deadline for a bulk object copy into an empty repository: the full-ancestry
+/// fetch that seeds a source-inspection slot. A cold copy of Orbit's own
+/// history took about 2 s on an idle 32-core host. The same copy overran
+/// [`GIT_LOCAL_TIMEOUT`] under drain load, so this bound sits far above the
+/// idle time and still caps how long a wedged copy can hold its slot.
+pub const GIT_BULK_COPY_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Deadline for a command that talks to a remote (`fetch`, `ls-remote`,
 /// `push`, `clone`). A single-branch fetch from the forge takes well under a
 /// second. A fetch usually runs under [`with_git_fetch_lock`], whose waiters
