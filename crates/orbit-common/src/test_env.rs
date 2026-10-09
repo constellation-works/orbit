@@ -28,6 +28,10 @@
 //! guards reject successful libtest exits that never executed the exact filter.
 
 use std::io::Write;
+#[cfg(unix)]
+mod fifo;
+#[cfg(unix)]
+pub use fifo::{create_fixture_fifo, release_fixture_fifo};
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicUsize, Ordering},

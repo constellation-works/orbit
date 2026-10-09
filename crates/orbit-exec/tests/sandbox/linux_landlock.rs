@@ -89,8 +89,17 @@ impl Fixture {
     /// Start the confined child without waiting for it, so a test can change
     /// the workspace while the ruleset is already in force.
     fn spawn(&self, profile: &ResolvedFsProfile, script: &str) -> std::process::Child {
+        self.spawn_program(profile, "/bin/sh", script)
+    }
+
+    fn spawn_program(
+        &self,
+        profile: &ResolvedFsProfile,
+        program: &str,
+        script: &str,
+    ) -> std::process::Child {
         let request = ExecRequest {
-            program: "/bin/sh".to_string(),
+            program: program.to_string(),
             args: vec!["-c".to_string(), script.to_string()],
             current_dir: Some(self.root().display().to_string()),
             timeout_ms: Some(10_000),
@@ -432,9 +441,11 @@ fn a_secret_written_after_admission_is_withheld_from_an_indirect_descendant() {
 
     // The child waits for the writer, then reads the secret through a
     // grandchild and generates a file of its own through another.
-    let child = fixture.spawn(
+    orbit_common::test_env::create_fixture_fifo(&fixture.root().join("go")).expect("release FIFO");
+    let child = fixture.spawn_program(
         &profile,
-        "n=0; while [ ! -e go ] && [ $n -lt 200 ]; do n=$((n+1)); sleep 0.05; done; \
+        "/bin/bash",
+        "read -r -t 10 _ <> go || exit 97; \
          sh -c 'cat vault/secret.txt' || echo DESCENDANT_REFUSED; \
          printf GENERATED_SENTINEL > build/out.txt; \
          sh -c 'cat build/out.txt'",
@@ -443,7 +454,11 @@ fn a_secret_written_after_admission_is_withheld_from_an_indirect_descendant() {
     let secret = fixture.root().join("vault/secret.txt");
     fs::create_dir(fixture.root().join("vault")).expect("concurrent writer creates vault");
     fs::write(&secret, "LATE_SENTINEL").expect("concurrent writer writes secret");
-    fs::write(fixture.root().join("go"), "").expect("release the child");
+    orbit_common::test_env::release_fixture_fifo(
+        &fixture.root().join("go"),
+        std::time::Instant::now() + std::time::Duration::from_secs(10),
+    )
+    .expect("release the child");
 
     // The test is only meaningful if the secret really is there to be read.
     assert_eq!(

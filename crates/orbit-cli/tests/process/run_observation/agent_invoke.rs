@@ -364,12 +364,13 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     use std::time::{Duration, Instant};
     let fixture = Fixture::init();
     let release = fixture.work.join("release-provider");
+    test_env::create_fixture_fifo(&release).unwrap();
     let live = serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":"live fixture line"}}).to_string();
     let final_frame = serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":AGENT_TEST_ANSWER}}).to_string();
     plant_invoke_provider(
         &fixture,
         &format!(
-            "printf '%s\\n' '{live}'\nprintf '%s\\n' 'live diagnostic' >&2\nwhile [ ! -f '{}' ]; do /bin/sleep 0.05; done\nprintf '%s\\n' '{final_frame}'",
+            "printf '%s\\n' '{live}'\nprintf '%s\\n' 'live diagnostic' >&2\nread -r _ < '{}'\nprintf '%s\\n' '{final_frame}'",
             release.display()
         ),
     );
@@ -404,7 +405,7 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     let first = receive.recv_timeout(Duration::from_secs(15));
     // Release on assertion failures too: never leave a fixture provider alive.
     let state_before_release = fixture.run_state(run_id);
-    fs::write(&release, "go").unwrap();
+    test_env::release_fixture_fifo(&release, Instant::now() + Duration::from_secs(15)).unwrap();
     let first = first.expect("--follow must emit before the provider finishes");
     let first: Value = serde_json::from_str(&first).unwrap();
     assert_eq!(first["run_id"], run_id);

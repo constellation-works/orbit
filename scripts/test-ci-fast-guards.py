@@ -167,6 +167,69 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_rejects_shell_sleep_polls(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-shell-waits.py", self.scripts)
+        (self.scripts / "test-shell-waits-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        cases = [
+            'let script = "while [ ! -e x ]; do sleep 0.1; done";',
+            'let script = r#"until [ -e x ]; do /bin/sleep 0.1; done"#;',
+            'let script = r#"while [ ! -e x ]; do\n/bin/sleep 0.1\ndone"#;',
+            's.push_str("while [ ! -e x ]; do\\n");\n'
+            's.push_str("sleep 0.1\\ndone\\n");',
+            'let script = "while true; do for n in 1 2; do sleep 0.1; done; done";',
+            'let script = "sh -c \'while true; do /bin/sleep 0.1; done\'";',
+            'let script = r#"while true; do "/bin/sleep" 0.1; done"#;',
+            'let script = "while true; do sh -c \'sleep 0.1\'; done";',
+        ]
+        for source in cases:
+            with self.subTest(source=source):
+                fixture.write_text(source)
+                result = self.run_guard("ci-guardrails.sh", "--fast")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture.rs:", result.stderr)
+                self.assertIn("shell sleep poll", result.stderr)
+        # A sibling unit-test path receives the same protection.
+        fixture.write_text("")
+        fixture = self.root / "crates/example/src/process/tests/wait.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(cases[0])
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_fast_allows_nonpolling_sleep_and_narrow_reasoned_exception(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-shell-waits.py", self.scripts)
+        allowlist = self.scripts / "test-shell-waits-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('let script = "sleep 0.1; while true; do read -r x; done";\n'
+                           '// "while true; do sleep 1; done"\n'
+                           'let prose = "we sleep while waiting";')
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fixture.write_text('let script = "while [ ! -e x ]; do sleep 0.1; done";')
+        exception = dict(path="crates/example/tests/fixture.rs",
+                         loop="while [ ! -e x ]; do", reason="bounded sandbox fixture")
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # An exception grants one exact loop, not the entire file or duplicates.
+        fixture.write_text(fixture.read_text() + '\nlet other = "until true; do sleep 1; done";')
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        fixture.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("stale shell-wait exception", result.stderr)
+        exception["reason"] = ""
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
     def test_fast_propagates_desktop_ui_failure(self):
         self.prepare_ci()
         self.write_executable(self.scripts / "check-desktop-ui.sh", "#!/bin/bash\nexit 17\n")

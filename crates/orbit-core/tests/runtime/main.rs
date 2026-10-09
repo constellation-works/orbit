@@ -58,3 +58,4 @@ mod task_pilot;
 mod task_pr_closure;
 mod task_update;
 mod upgrade_resume;
+mod worker_fixture;
