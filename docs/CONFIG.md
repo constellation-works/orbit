@@ -215,6 +215,13 @@ The before-PR reviewer can hit the same red base with a check the workspace requ
 
 **The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 
+`orbit init --force` deletes the global root before seeding shipped defaults,
+including executor sandbox settings and the machine identity. A reset creates
+a new machine ID and prompts for its name and task prefix. For a non-interactive
+reset, pass both `--machine-name` and `--task-prefix`; missing or invalid identity
+flags are rejected before the existing root is deleted. Ordinary `orbit init`
+preserves an existing identity.
+
 **What `orbit init` seeds.** Only the global file, and only when it is absent (or under `--force`):
 
 - every [built-in crew](#crewsname--which-provider-model-runs-the-task), with `enabled = true` on the crews of each detected provider CLI and `enabled = false` on the rest,

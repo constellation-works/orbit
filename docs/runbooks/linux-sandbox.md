@@ -268,7 +268,11 @@ workspaces on the host. It survives fresh runtime opens, ordinary `orbit init`
 (without `--force`), repeated default seeding, and normal `orbit workspace
 sync`. `orbit init --force` resets the global root to shipped defaults,
 including executor sandbox, and therefore restores the sandboxed shipped
-value. Existing processes keep their launch configuration.
+value. It also discards the machine identity and creates a new machine ID.
+Non-interactive resets require both `--machine-name` and `--task-prefix`;
+missing non-interactive inputs or invalid supplied identity flags are refused
+before deleting the root.
+Existing processes keep their launch configuration.
 
 `off` is distinct from an omitted or `null` sandbox field. Omitted/null values
 on installed Linux defaults are legacy unspecified settings and migrate to
