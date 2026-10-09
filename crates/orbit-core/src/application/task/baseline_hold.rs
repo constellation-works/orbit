@@ -19,7 +19,9 @@
 //! from recorded base results. When a hold's base moved to a tip nobody has
 //! checked, it dispatches one detached [`BASELINE_HOLD_REFRESH_JOB`] run per
 //! workspace at a time, whose step ([`OrbitRuntime::refresh_baseline_holds`])
-//! runs the command. Either records the verdict as a
+//! runs the command. An inconclusive attempt suppresses further refreshes
+//! for that tip and command for 15 minutes, or until the base moves.
+//! Either records the verdict as a
 //! `baseline_red_hold_verdict` history entry, which changes no status.
 //! Admission reads only the latest verdict after the hold. A hold with no
 //! verdict yet stays held until one is recorded.
@@ -146,7 +148,8 @@ impl OrbitRuntime {
     /// each changed verdict: the step of a [`BASELINE_HOLD_REFRESH_JOB`] run.
     ///
     /// The check may run the hold's required command on a new base tip (once
-    /// per tip and command: the engine caches the result), so it runs only in
+    /// per tip and command for a conclusive result; inconclusive attempts
+    /// retry after a 15-minute back-off), so it runs only in
     /// that detached run, never on a read or admission path or inside the
     /// clock tick. Holds sharing a base and command share that run. No new
     /// hold is started after `deadline`.
