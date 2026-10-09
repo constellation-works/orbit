@@ -503,3 +503,66 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         "follow must recover the complete retained stdout when tracing is unavailable"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
+    let fixture = Fixture::init();
+    // Keep the captured stderr larger than a pipe buffer so `head` closes its
+    // read end while `--follow` is still writing the retained capture.
+    plant_invoke_provider(
+        &fixture,
+        &format!("printf '%2097152s\\n' x >&2\nprintf '%s\\n' '{AGENT_TEST_ANSWER}'"),
+    );
+    let submitted = fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .env_remove("RUST_LOG")
+        .env("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "4194304")
+        .args([
+            "run",
+            "agent",
+            "pipe probe",
+            "--wait",
+            "--timeout",
+            "30",
+            "--json",
+        ])
+        .timeout(AGENT_COMMAND_TIMEOUT)
+        .output()
+        .unwrap();
+    assert!(submitted.status.success(), "{submitted:?}");
+    let submission: Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let run_id = submission["run_id"].as_str().unwrap();
+    assert_eq!(fixture.run_state(run_id), "success", "{submission}");
+
+    let mut shell = Command::new("/bin/bash");
+    test_env::clear_inherited_authority(|name| {
+        shell.env_remove(name);
+    });
+    let output = shell
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "4194304")
+        .env("ORBIT_BINARY", env!("CARGO_BIN_EXE_orbit"))
+        .env("ORBIT_RUN_ID", run_id)
+        .args([
+            "-o",
+            "pipefail",
+            "-c",
+            "\"$ORBIT_BINARY\" run logs \"$ORBIT_RUN_ID\" --follow 2>&1 | head -c 1",
+        ])
+        .timeout(AGENT_COMMAND_TIMEOUT)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "a closed merged output pipe must end follow successfully, without a panic: {output:?}"
+    );
+    assert_eq!(
+        output.stdout.len(),
+        1,
+        "the reader must receive one byte before closing: {output:?}"
+    );
+}

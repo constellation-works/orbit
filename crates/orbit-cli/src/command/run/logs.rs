@@ -154,9 +154,10 @@ fn follow_logs(
                 // Only skip a proven prefix; otherwise replay the capture so
                 // a following reader never silently loses retained evidence.
                 if prefix.is_some() && remainder.is_none() {
-                    eprintln!(
+                    writeln!(
+                        std::io::stderr().lock(),
                         "Live logs differ from the retained capture; replaying captured {stream} for {provider}."
-                    );
+                    )?;
                 }
                 let remainder = remainder.unwrap_or(&capture);
                 if !remainder.is_empty() {
@@ -275,7 +276,7 @@ fn emit_follow_record(
         })?;
         writeln!(writer)?;
     } else if stream == "stderr" {
-        eprint!("{text}");
+        std::io::stderr().lock().write_all(text.as_bytes())?;
     } else {
         writer.write_all(text.as_bytes())?;
     }
