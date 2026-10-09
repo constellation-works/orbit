@@ -41,7 +41,7 @@ fn short_socket_dir() -> tempfile::TempDir {
 fn metadata_aliases_and_invalid_pointers_fail_closed() {
     use std::fs;
 
-    use super::super::git_sandbox::append_linux_git_denies;
+    use super::super::git_sandbox::append_git_denies;
     use orbit_types::policy::ResolvedFsProfile;
 
     for case in [
@@ -89,7 +89,7 @@ fn metadata_aliases_and_invalid_pointers_fail_closed() {
             modify: Vec::new(),
         };
         assert!(
-            append_linux_git_denies(&workspace, &mut profile).is_err(),
+            append_git_denies(&workspace, &mut profile).is_err(),
             "{case}"
         );
         assert_eq!(fs::read_to_string(outside).unwrap(), "host state");
@@ -104,7 +104,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use super::super::git_sandbox::{GitScanHookGuard, GitScanStage, append_linux_git_denies};
+    use super::super::git_sandbox::{GitScanHookGuard, GitScanStage, append_git_denies};
 
     for case in [
         "symlink-leaf",
@@ -179,7 +179,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
             read: Vec::new(),
             modify: Vec::new(),
         };
-        let error = append_linux_git_denies(&workspace, &mut profile).unwrap_err();
+        let error = append_git_denies(&workspace, &mut profile).unwrap_err();
         assert!(
             matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
             "{case}: {error}"

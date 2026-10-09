@@ -185,7 +185,23 @@ fn assert_registered_checkout_boundaries_unchanged(
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = (runtime, repo_root);
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
+            .expect("compile registered checkout profile");
+        let authority = orbit_exec::physical_with_missing_tail(
+            &runtime
+                .paths()
+                .global_dir
+                .join("state/recovery-authority/authority.db"),
+        );
+        assert!(
+            !last_compiled_file_write_allows(&sbpl, &authority),
+            "recovery authority must stay denied:\n{sbpl}"
+        );
+        let git_config = orbit_exec::physical_with_missing_tail(&repo_root.join(".git/config"));
+        assert!(
+            !last_compiled_file_write_allows(&sbpl, &git_config),
+            "registered Git metadata must stay denied:\n{sbpl}"
+        );
     }
 }
 
@@ -200,7 +216,7 @@ fn last_compiled_file_write_allows(profile: &str, path: &std::path::Path) -> boo
 /// `fixture`. Temp fixtures sit beneath the compiler's host scratch allows
 /// (`/tmp`, `/private/var/folders`), which never cover a real `~/.orbit`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn last_compiled_file_write_allows_under(
+pub(super) fn last_compiled_file_write_allows_under(
     profile: &str,
     path: &std::path::Path,
     fixture: &std::path::Path,

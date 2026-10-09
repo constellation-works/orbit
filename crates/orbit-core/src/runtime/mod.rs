@@ -27,7 +27,7 @@ pub(crate) mod cwd;
 pub mod engine;
 pub mod event_bus;
 pub(crate) mod friction;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod git_sandbox;
 pub mod host_resource;
 pub mod host_signal;
