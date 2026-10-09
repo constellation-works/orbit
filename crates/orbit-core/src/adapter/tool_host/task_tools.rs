@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{
     ContextCreationAuthorization, TaskAddParams, TaskEligibilityQuery, TaskUpdateParams,
-    compute_task_add_warnings,
+    compute_task_add_warnings, is_operator_rescue_close,
 };
 
 use super::input::{
@@ -383,6 +383,7 @@ pub(super) fn update(
     model: Option<String>,
     owner: Option<orbit_tools::ReservationOwnerContext>,
     origin: Option<orbit_types::task::ExecutionLocation>,
+    operator: bool,
 ) -> Result<TaskWriteOutput, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
@@ -408,7 +409,7 @@ pub(super) fn update(
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
         let current = runtime.get_task(&id)?;
-        if let Some(kind) = guarded_lifecycle_write(current.status, target, &input)? {
+        if let Some(kind) = guarded_lifecycle_write(current.status, target, &input, operator)? {
             let (task, unverified) = match kind {
                 GuardedLifecycleWrite::Approve => (
                     runtime.transition_task_to_backlog_with_identity(
@@ -535,18 +536,31 @@ const APPROVAL_ALLOWED_FIELDS: &[&str] = &[
 /// `proposed → backlog` is approval. Every `in-progress` write goes through
 /// `start_task` so crew resolution and `TaskStarted` survive, and so a
 /// non-pickup source is refused the same way with or without extra fields.
-/// Field edits on a start write are absorbed by the start body. Any other
-/// `backlog` combination — including `someday → backlog` plus a field edit —
-/// falls through to the ordinary governed update.
+/// Field edits on a start write are absorbed by the start body. The one
+/// exception is an operator's rescue close of a `blocked` task, which starts
+/// no work and takes the ordinary governed update. Any other `backlog`
+/// combination — including `someday → backlog` plus a field edit — falls
+/// through to the ordinary governed update.
 fn guarded_lifecycle_write(
     from: TaskStatus,
     to: TaskStatus,
     input: &Value,
+    operator: bool,
 ) -> Result<Option<GuardedLifecycleWrite>, OrbitError> {
     match (from, to) {
         (TaskStatus::Proposed, TaskStatus::Backlog) => {
             reject_fields_for_approval_transition(input)?;
             Ok(Some(GuardedLifecycleWrite::Approve))
+        }
+        (_, TaskStatus::InProgress)
+            if is_operator_rescue_close(
+                from,
+                to,
+                optional_raw_string(input, "execution_summary")?.as_deref(),
+                operator,
+            ) =>
+        {
+            Ok(None)
         }
         (_, TaskStatus::InProgress) => Ok(Some(GuardedLifecycleWrite::Start)),
         _ => Ok(None),

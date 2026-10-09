@@ -1,7 +1,6 @@
 //! A no-diff grant checks persistent holders while retaining no files.
 
 use super::*;
-use orbit_core::application::task::TaskUpdateParams;
 use orbit_store::contracts::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
@@ -206,9 +205,10 @@ fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
 }
 
 #[test]
-fn closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_overlapping_claim() {
+fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_while_another_run_holds_overlapping_claim()
+ {
     if !isolated(
-        "dispatch_admission::reservation_grants::closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_overlapping_claim",
+        "dispatch_admission::reservation_grants::closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_while_another_run_holds_overlapping_claim",
     ) {
         return;
     }
@@ -258,8 +258,16 @@ fn closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_o
             ],
         )
         .unwrap();
+    let assert_names_claim = |refusal: &OrbitError, case: &str| {
+        let message = refusal.to_string();
+        assert!(
+            message.contains("task footprint overlaps an execution claim")
+                && message.contains(&holder.id)
+                && message.contains("jrun-holder-42"),
+            "{case}: the refusal must name the overlapping claim's task and run: {message}"
+        );
+    };
 
-    // 1. A blocked task with no live run moves through in-progress -> review -> done without --force
     let rescued = seed(
         &runtime,
         Seed {
@@ -269,63 +277,53 @@ fn closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_o
             ..Seed::default()
         },
     );
-
-    // Blocked -> InProgress (starts no run, no --force)
-    let in_progress = runtime
-        .update_task_as_human(
-            &rescued.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::InProgress),
-                ..Default::default()
+    let summary = "rescued work already landed by hand";
+    let task_update = |capability, input: Value| {
+        runtime.run_tool_with_context_and_role(
+            "orbit.task.update",
+            input,
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([capability]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
             },
-            "human:operator".into(),
         )
-        .expect("operator moves blocked task to in-progress without --force");
-    assert_eq!(in_progress.status, TaskStatus::InProgress);
+    };
 
-    // Operator attaches execution summary
-    let summarized = runtime
-        .update_task_as_human(
-            &rescued.id,
-            TaskUpdateParams {
-                execution_summary: Some("rescued work already landed as PR #3853".to_string()),
-                ..Default::default()
-            },
-            "human:operator".into(),
-        )
-        .expect("operator updates execution summary on in-progress task");
-    assert_eq!(
-        summarized.execution_summary,
-        "rescued work already landed as PR #3853"
-    );
+    // Moving the blocked task into in-progress starts work on its files
+    // unless an operator, naming no agent identity, closes it out with an
+    // execution summary.
+    for (case, capability, input) in [
+        (
+            "an agent session closing out",
+            McpCapability::Agent,
+            json!({"id": rescued.id, "status": "in-progress", "execution_summary": summary, "model": "claude"}),
+        ),
+        (
+            "an operator session naming an agent model",
+            McpCapability::Operator,
+            json!({"id": rescued.id, "status": "in-progress", "execution_summary": summary, "model": "claude"}),
+        ),
+        (
+            "an operator restart without an execution summary",
+            McpCapability::Operator,
+            json!({"id": rescued.id, "status": "in-progress"}),
+        ),
+    ] {
+        let refusal = task_update(capability, input)
+            .expect_err("a start of work on an overlapping claim's files is refused");
+        assert_names_claim(&refusal, case);
+        assert_eq!(
+            runtime.get_task(&rescued.id).unwrap().status,
+            TaskStatus::Blocked,
+            "{case}: a refused start leaves the task blocked"
+        );
+    }
 
-    // InProgress -> Review (starts no run, no --force)
-    let review = runtime
-        .update_task_as_human(
-            &rescued.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Review),
-                ..Default::default()
-            },
-            "human:operator".into(),
-        )
-        .expect("operator moves task to review without --force");
-    assert_eq!(review.status, TaskStatus::Review);
-
-    // Review -> Done (no --force)
-    let done = runtime
-        .update_task_as_human(
-            &rescued.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Done),
-                ..Default::default()
-            },
-            "human:operator".into(),
-        )
-        .expect("operator moves task to done without --force");
-    assert_eq!(done.status, TaskStatus::Done);
-
-    // 2. An admission or claim that would start work on overlapping files is still refused
+    // A drain-side start of other work on the same files is refused too.
     let candidate = seed(
         &runtime,
         Seed {
@@ -338,20 +336,29 @@ fn closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_o
     let start_refusal = runtime
         .start_task(&candidate.id, None, None)
         .expect_err("start_task must be refused when footprint overlaps an active claim");
+    assert_names_claim(&start_refusal, "a drain-side start");
 
-    // 3. The refusal message names the overlapping claim's task id and run id
-    let refusal_msg = start_refusal.to_string();
+    // The operator's close-out: blocked -> in-progress -> review -> done
+    // through the registered tool, with no `force`.
+    for (input, status) in [
+        (
+            json!({"id": rescued.id, "status": "in-progress", "execution_summary": summary}),
+            "in-progress",
+        ),
+        (json!({"id": rescued.id, "status": "review"}), "review"),
+        (json!({"id": rescued.id, "status": "done"}), "done"),
+    ] {
+        let written = as_operator(&runtime, "orbit.task.update", input);
+        assert_eq!(written["status"], status, "{written}");
+    }
+    let closed = runtime.get_task(&rescued.id).unwrap();
+    assert_eq!(closed.execution_summary, summary);
     assert!(
-        refusal_msg.contains("task footprint overlaps an execution claim"),
-        "error message should contain base refusal: {refusal_msg}"
-    );
-    assert!(
-        refusal_msg.contains(&holder.id),
-        "refusal message should name overlapping claim's task id ({}): {refusal_msg}",
-        holder.id
-    );
-    assert!(
-        refusal_msg.contains("jrun-holder-42"),
-        "refusal message should name overlapping claim's run id (jrun-holder-42): {refusal_msg}"
+        !runtime
+            .get_task_history(&rescued.id)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event == "started" || entry.event == "forced"),
+        "a rescue close neither starts work nor overrides the lifecycle"
     );
 }
