@@ -19,7 +19,8 @@ pub struct DrainAdmissionsStop {
     pub stopped_at: DateTime<Utc>,
 }
 
-/// Why a follower cannot run a crew for the rest of its pull drain window.
+/// Why a follower cannot run a crew for the rest of its pull drain window, or
+/// until a provider usage limit lifts.
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
 )]
@@ -35,6 +36,11 @@ pub enum CrewExclusionSource {
     /// A claimed leaf on this crew was released for a failure class that
     /// [excludes its crew](crate::workflow::ClaimFailureClass::excludes_crew) [ORB-14257].
     LeafReleased,
+    /// The host's latest reading of the crew's provider usage window is at
+    /// or above the configured threshold, or exhausted. Unlike the other
+    /// sources it lasts only until the exclusion's `until`, so the crew is
+    /// runnable again within the same window.
+    ProviderLimit,
 }
 
 /// One crew a follower will not run, and why.
@@ -43,6 +49,11 @@ pub struct CrewExclusion {
     pub crew: String,
     pub source: CrewExclusionSource,
     pub reason: String,
+    /// When a [`CrewExclusionSource::ProviderLimit`] exclusion lifts; `None`
+    /// for an exclusion that lasts the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub until: Option<DateTime<Utc>>,
 }
 
 /// Operator-visible authentication exclusion for one provider on this host.

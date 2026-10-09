@@ -8,6 +8,7 @@ mod context_repair;
 mod context_widening;
 mod desktop;
 mod provider_hold;
+pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod helpers;

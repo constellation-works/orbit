@@ -396,6 +396,16 @@ pub fn explain_workspace_auto_readiness(
                         );
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    BacklogTaskExclusionReason::ProviderLimit => {
+                        // [ORB-14697] Lifts by itself at the reading's reset;
+                        // the detail names the provider, window, used
+                        // percent, threshold, reset and skipped crews.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("provider_limit".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));

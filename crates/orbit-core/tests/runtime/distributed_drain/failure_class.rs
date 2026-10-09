@@ -1099,8 +1099,9 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
 /// [ORB-14695] A claimed leaf whose provider account hit its usage limit
 /// releases the claim as a `provider` failure without spending the task's
 /// release budget: three in a day leave the task in the backlog, where the
-/// third release of any other kind blocks it. Each drain stops running every
-/// crew of that provider for its window and keeps the other provider's.
+/// third release of any other kind blocks it. [ORB-14697] The release itself
+/// excludes no crew: the follower's provider-limit store holds the reading
+/// that does, and only until it lapses (`provider_limit.rs`).
 #[test]
 fn a_provider_limit_releases_the_claim_outside_the_release_budget() {
     if !isolated(
@@ -1149,20 +1150,10 @@ model = \"claude-opus\"
             "the reason quotes the provider without Orbit's marker: {failure}"
         );
 
-        let excluded = window(&pair, &drain)
-            .excluded
-            .into_iter()
-            .map(|exclusion| exclusion.crew)
-            .collect::<Vec<_>>();
-        for crew in ["sol", "luna"] {
-            assert!(
-                excluded.iter().any(|excluded| excluded == crew),
-                "release {n}: every codex crew sits out the window: {excluded:?}"
-            );
-        }
+        let excluded = window(&pair, &drain).excluded;
         assert!(
-            !excluded.iter().any(|excluded| excluded == "opus"),
-            "release {n}: the claude crew still runs: {excluded:?}"
+            excluded.is_empty(),
+            "release {n}: a limit release excludes no crew for the window: {excluded:?}"
         );
     }
 

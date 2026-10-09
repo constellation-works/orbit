@@ -375,11 +375,13 @@ function buildClaimedLeaves(run, leaves) {
 const CREW_EXCLUSION_SOURCES = {
   provider_unavailable: "provider unavailable",
   leaf_released: "leaf released",
+  provider_limit: "provider limit",
 };
 
 // A pull drain's crew window: the crews its provider preflight found
 // runnable, and each crew it excluded for the window with the source and
-// reason. Mirrors the `Crews:` lines of `orbit run show`.
+// reason; a provider-limit exclusion lasts only until its `until`. Mirrors
+// the `Crews:` lines of `orbit run show`.
 function buildCrewWindow(window) {
   if (!window) return null;
   const excluded = Array.isArray(window.excluded) ? window.excluded : [];
@@ -393,8 +395,9 @@ function buildCrewWindow(window) {
   panel.appendChild(el("div", { class: "label", text: summary }));
   for (const exclusion of excluded) {
     const source = CREW_EXCLUSION_SOURCES[exclusion.source] || "preflight";
+    const until = exclusion.until ? ` until ${fmtAbsTime(exclusion.until)}` : "";
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
-      el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source}): ${exclusion.reason}` }),
+      el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source})${until}: ${exclusion.reason}` }),
     ]));
   }
   for (const exclusion of auth) {

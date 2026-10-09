@@ -122,6 +122,13 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// task on that crew instead. `detail` names the run, the failure, the
     /// excluded crews and the time.
     ProviderBackoff,
+    /// Every crew the task may run as belongs to a provider whose latest usage
+    /// reading on this host is exhausted, or at or above the configured
+    /// threshold, and the reading is still live [ORB-14697]. A crew left
+    /// unlimited takes the task instead. The exclusion lifts by itself once
+    /// the reading's reset passes; `detail` names the provider, window, used
+    /// percent, threshold, reset and the crews skipped.
+    ProviderLimit,
     /// A critical or high-priority task ranked ahead of this one waits only on
     /// context locks, and this task's surface overlaps the surface it reserves.
     /// Admitting this task would take a lock the reserving task needs as soon
@@ -628,6 +635,26 @@ fn backlog_snapshot_in_mode(
             }
         },
     );
+    // [ORB-14697] A task every crew of which is at its provider's usage
+    // limit on this host waits for the reading's reset; one with an
+    // unlimited crew left is admitted and drawn onto it.
+    backlog.retain(|task| match runtime.provider_limit_deferral(task, pools) {
+        Ok(None) => true,
+        Ok(Some(why)) => {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::ProviderLimit,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(why),
+            });
+            false
+        }
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
+            true
+        }
+    });
     // [ORB-14168] A task that cleared the per-task gates would still fail
     // closed at local-route admission while `review.before_pr` is on. Hold it
     // here so the drain does not spawn that delivery. Tasks already excluded

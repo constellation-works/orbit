@@ -331,6 +331,10 @@ impl DrainClaimedLeaf {
 /// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
 /// drain's run input and its own admission records, so it survives a follower
 /// restart and a resume, and ends with the drain.
+///
+/// [ORB-14697] Each pass also excludes the crews this host's provider-limit
+/// store finds at their usage limit, until the reading lapses, so they are
+/// runnable again within the same window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullCrewWindow {
     /// When the preflight ran; `None` while the drain has not taken one.
@@ -379,7 +383,12 @@ impl PullCrewWindow {
         AdmissionCrewCapability {
             runnable: self.reviewable.clone(),
             default_crew: None,
-            excluded: self.excluded.clone(),
+            excluded: self
+                .excluded
+                .iter()
+                .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
+                .cloned()
+                .collect(),
         }
         .unrunnable_reason(Some(crew))
     }
@@ -414,11 +423,20 @@ impl PullCrewWindow {
                 CrewExclusionSource::Preflight => "preflight",
                 CrewExclusionSource::ProviderUnavailable => "provider_unavailable",
                 CrewExclusionSource::LeafReleased => "leaf_released",
+                CrewExclusionSource::ProviderLimit => "provider_limit",
             };
-            format!(
-                "excluded {} ({source}): {}",
-                exclusion.crew, exclusion.reason
-            )
+            match exclusion.until {
+                Some(until) => format!(
+                    "excluded {} ({source}) until {}: {}",
+                    exclusion.crew,
+                    until.to_rfc3339(),
+                    exclusion.reason
+                ),
+                None => format!(
+                    "excluded {} ({source}): {}",
+                    exclusion.crew, exclusion.reason
+                ),
+            }
         }));
         lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
@@ -625,10 +643,12 @@ impl crate::OrbitRuntime {
             // released failure whose class blames this host excludes the crew
             // too. [ORB-14262] Authentication is the provider's login, not the
             // crew's model, so every configured crew of that provider is
-            // excluded, and so is a usage limit, which is the provider
-            // account's [ORB-14695]. Capacity stays on the named crew: another
-            // model may still have room. Provider labels are parsed, so
-            // `anthropic` groups with `claude`.
+            // excluded. Capacity stays on the named crew: another model may
+            // still have room. Provider labels are parsed, so `anthropic`
+            // groups with `claude`. [ORB-14697] A usage limit excludes nothing
+            // here: the leaf recorded it in this host's provider-limit store,
+            // whose reading excludes the provider's crews below until it
+            // lapses.
             let authentication = evidence.provider_unavailable.is_some()
                 && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
             if authentication
@@ -646,12 +666,10 @@ impl crate::OrbitRuntime {
             }
             let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
             {
-                (Some(unavailable), failure) => {
-                    let limit = failure
-                        .as_ref()
-                        .is_some_and(|failure| failure.provider_limit);
+                (Some(_), Some(failure)) if failure.provider_limit && !authentication => continue,
+                (Some(unavailable), _) => {
                     let crews = match unavailable.crew.as_deref() {
-                        Some(crew) if authentication || limit => self.crews_sharing_provider(crew),
+                        Some(crew) if authentication => self.crews_sharing_provider(crew),
                         Some(crew) => vec![crew.to_string()],
                         None => Vec::new(),
                     };
@@ -693,14 +711,43 @@ impl crate::OrbitRuntime {
                     crew,
                     source,
                     reason: reason.clone(),
+                    until: None,
                 });
             }
         }
+        // [ORB-14697] Recomputed on every pass, so a crew whose reading
+        // lapses is runnable again in the same window.
+        let gate = self.provider_limit_gate(Utc::now());
+        for crew in self.context.settings().crews().values() {
+            if excluded.iter().any(|exclusion| exclusion.crew == crew.name) {
+                continue;
+            }
+            if let Some(limit) = gate.limit_for(crew) {
+                excluded.push(CrewExclusion {
+                    crew: crew.name.clone(),
+                    source: CrewExclusionSource::ProviderLimit,
+                    reason: limit.describe(),
+                    until: Some(limit.until),
+                });
+            }
+        }
+        let limited = |crew: &str| {
+            excluded.iter().any(|exclusion| {
+                exclusion.crew == crew && exclusion.source == CrewExclusionSource::ProviderLimit
+            })
+        };
+        // Review is not delivery admission, so a provider limit does not
+        // keep the owner's reviewer from running here.
         let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
                 .runnable
                 .iter()
-                .filter(|crew| !excluded.iter().any(|exclusion| &exclusion.crew == *crew))
+                .filter(|crew| {
+                    !excluded.iter().any(|exclusion| {
+                        &exclusion.crew == *crew
+                            && exclusion.source != CrewExclusionSource::ProviderLimit
+                    })
+                })
                 .cloned()
                 .collect()
         });
@@ -714,9 +761,16 @@ impl crate::OrbitRuntime {
             .and_then(|run| run.input)
             .unwrap_or(serde_json::Value::Null);
         let allowlist = self.crew_allowlist_from_input(&input)?;
+        let unlimited = reviewable.as_ref().map(|crews| {
+            crews
+                .iter()
+                .filter(|crew| !limited(crew))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
         let runnable = match &allowlist {
-            None => reviewable.clone(),
-            Some(allowlist) => Some(match &reviewable {
+            None => unlimited,
+            Some(allowlist) => Some(match &unlimited {
                 Some(crews) => crews
                     .iter()
                     .filter(|crew| self.crew_allowlist_permits(allowlist, crew))

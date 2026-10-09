@@ -157,6 +157,7 @@ spec:
                 - inherited_only_epic_root
                 - local_route_before_pr
                 - provider_backoff
+                - provider_limit
                 - surface_reserved
                 - unassessed_complexity
                 - pilot_duplicate

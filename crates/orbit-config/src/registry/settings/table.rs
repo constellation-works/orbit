@@ -368,6 +368,24 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 80,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_provider_limit_explicit_crews: String => String {
+        key: "workflow.provider_limit_explicit_crews", value_type: "string",
+        description: "What delivery admission does with a task whose explicit crew is at its provider's usage limit: `wait` (default) keeps it in the backlog until the limit lifts; `pool` draws it from the unlimited members of its complexity pool.",
+        section: ConfigSection::Delivery, order: 108,
+        resolve: |raw: Option<String>| crate::provider_limit::admit_explicit_crews(raw),
+    },
+    workflow_provider_limit_max_used_pct: u8 => u8 {
+        key: "workflow.provider_limit_max_used_pct", value_type: "integer",
+        description: "Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion).",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<u8>| resolve_percent(raw, crate::provider_limit::DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, "workflow.provider_limit_max_used_pct"),
+    },
+    workflow_provider_limit_overrides: Vec<String> => Vec<String> {
+        key: "workflow.provider_limit_overrides", value_type: "array<string>",
+        description: "Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` with a percent in 1..=100 and each provider named once; aliases such as `anthropic` resolve to their provider.",
+        section: ConfigSection::Delivery, order: 107,
+        resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_overrides(raw),
+    },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
         description: "Commands every delivered candidate must pass: owner PR and local deliveries run them before push or merge, and a distributed execution claim must pass them before this owner accepts its handoff; empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs.",

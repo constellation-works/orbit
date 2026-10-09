@@ -317,6 +317,24 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.provider_limit_explicit_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.provider_limit_max_used_pct": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.provider_limit_overrides": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",

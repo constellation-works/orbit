@@ -70,6 +70,7 @@ mod operation;
 mod persistence;
 mod plugin_enablement;
 mod plugins;
+mod provider_limit;
 mod raw;
 mod registry;
 mod resolved;
@@ -101,6 +102,9 @@ pub use plugin_enablement::{
     load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
 };
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
+pub use provider_limit::{
+    DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
+};
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
     ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,

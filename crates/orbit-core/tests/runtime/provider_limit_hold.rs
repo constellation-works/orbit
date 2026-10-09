@@ -31,10 +31,13 @@ provider = "claude"
 model = "opus-model"
 "#;
 
-/// Two Codex crews on different models and a Claude default.
+/// Two Codex crews on different models and a Claude default. The fixture's
+/// tasks name their crew, so the `pool` policy lets a limit hold redirect
+/// them [ORB-14697].
 const CODEX_MODELS: &str = r#"[workflow]
 default_crew = "opus"
 medium_complexity_crews = ["sol", "luna"]
+provider_limit_explicit_crews = "pool"
 
 [crews.sol]
 provider = "codex"
@@ -87,7 +90,9 @@ fn resetting_at(resets_at: DateTime<Utc>) -> ProviderLimitFailure {
 /// The incident end to end: a fake Antigravity prints its quota error, the
 /// engine types it and skips both recoveries, and Core holds the task until
 /// the reported reset with every Antigravity crew excluded. The host's store
-/// holds the limit, and the next admission draws the Claude crew.
+/// holds the limit. The task names its crew, so under the default `wait`
+/// policy it waits out the hold rather than move to the Claude crew
+/// [ORB-14697].
 #[cfg(unix)]
 #[test]
 fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() {
@@ -185,10 +190,15 @@ fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() 
     assert_eq!(observation.resets_at, Some(resets_at));
     assert_eq!(observation.run_id.as_deref(), Some(run.as_str()));
 
-    assert!(fx.admitted(&task, &["opus"]), "the Claude crew takes it");
-    let excluded = fx.exclusion(&task, &["gemini-flash", "gemini-pro"]);
-    assert_eq!(excluded["reason"], "crew_not_allowed");
-    assert_eq!(excluded["crew"], "opus", "{excluded}");
+    assert!(!fx.admitted(&task, &[]), "the explicit crew waits");
+    let deferred = fx.exclusion(&task, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+    assert!(
+        deferred["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(&resets_at.to_rfc3339())),
+        "the deferral names the reset: {deferred}"
+    );
 }
 
 /// A limit that reported no reset backs off from 30 minutes, doubling with
