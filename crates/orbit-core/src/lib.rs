@@ -116,7 +116,7 @@ pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
-    reconcile_workspace_managed_artifacts,
+    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};

@@ -13,6 +13,7 @@ mod command;
 #[cfg(target_os = "linux")]
 mod linux_host;
 mod prompt_stdin;
+mod registered_workspaces;
 mod seed;
 
 pub use command::InitCommand;

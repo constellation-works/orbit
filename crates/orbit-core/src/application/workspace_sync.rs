@@ -109,66 +109,111 @@ pub fn reconcile_workspace_managed_artifacts(
     base_branch: &str,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
-    crate::bootstrap::product_profile::ProductProfile::Orbit
-        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mode = if check {
         ManagedAssetReconcileMode::Check
     } else {
         ManagedAssetReconcileMode::Apply
     };
+    reconcile_managed_artifacts(
+        global_root,
+        workspace_orbit_root,
+        routine_identity,
+        base_branch,
+        mode,
+        true,
+    )
+}
+
+/// Create the shipped workspace-local defaults (routines and auto-tasks) that
+/// are absent from one workspace, and nothing else.
+///
+/// Host-level `orbit init` calls this for every registered workspace after it
+/// has converged the host-global catalogs, so a release that ships a new
+/// workspace default reaches each workspace without a manual sync. It is
+/// create-only: a definition that exists — edited or user-authored — keeps its
+/// bytes and recorded provenance, and nothing is retired. A created routine
+/// takes the `enabled` value it ships with.
+pub fn seed_absent_workspace_managed_artifacts(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    routine_identity: &RoutineSeedIdentity,
+    base_branch: &str,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    reconcile_managed_artifacts(
+        global_root,
+        workspace_orbit_root,
+        Some(routine_identity),
+        base_branch,
+        ManagedAssetReconcileMode::CreateAbsent,
+        false,
+    )
+}
+
+fn reconcile_managed_artifacts(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    routine_identity: Option<&RoutineSeedIdentity>,
+    base_branch: &str,
+    mode: ManagedAssetReconcileMode,
+    host_global: bool,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    crate::bootstrap::product_profile::ProductProfile::Orbit
+        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mut report = WorkspaceManagedArtifactSyncReport {
-        check,
+        check: mode == ManagedAssetReconcileMode::Check,
         actions: Vec::new(),
         warnings: Vec::new(),
     };
 
-    let skills = reconcile_managed_assets_in_mode(
-        &global_root.join("skills"),
-        "skill",
-        ManagedAssetLayout::RelativePath,
-        &DEFAULT_SKILL_FILES,
-        false,
-        mode,
-        |_, content| {
-            Ok(Cow::Owned(inject_skill_template_tokens(
-                content,
-                global_root,
-            )))
-        },
-    )?;
-    append_actions(
-        &mut report,
-        ManagedArtifactScope::HostGlobal,
-        "skill",
-        skills,
-    );
+    if host_global {
+        let skills = reconcile_managed_assets_in_mode(
+            &global_root.join("skills"),
+            "skill",
+            ManagedAssetLayout::RelativePath,
+            &DEFAULT_SKILL_FILES,
+            false,
+            mode,
+            |_, content| {
+                Ok(Cow::Owned(inject_skill_template_tokens(
+                    content,
+                    global_root,
+                )))
+            },
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::HostGlobal,
+            "skill",
+            skills,
+        );
 
-    let activities = reconcile_managed_assets_in_mode(
-        &global_root.join("resources/activities"),
-        "activity",
-        ManagedAssetLayout::YamlStem,
-        DEFAULT_ACTIVITY_FILES,
-        false,
-        mode,
-        |_, content| Ok(Cow::Borrowed(content)),
-    )?;
-    append_actions(
-        &mut report,
-        ManagedArtifactScope::HostGlobal,
-        "activity",
-        activities,
-    );
+        let activities = reconcile_managed_assets_in_mode(
+            &global_root.join("resources/activities"),
+            "activity",
+            ManagedAssetLayout::YamlStem,
+            DEFAULT_ACTIVITY_FILES,
+            false,
+            mode,
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::HostGlobal,
+            "activity",
+            activities,
+        );
 
-    let jobs = reconcile_managed_assets_in_mode(
-        &global_root.join("resources/jobs"),
-        "job",
-        ManagedAssetLayout::YamlStem,
-        DEFAULT_JOB_FILES,
-        false,
-        mode,
-        |_, content| Ok(Cow::Borrowed(content)),
-    )?;
-    append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+        let jobs = reconcile_managed_assets_in_mode(
+            &global_root.join("resources/jobs"),
+            "job",
+            ManagedAssetLayout::YamlStem,
+            DEFAULT_JOB_FILES,
+            false,
+            mode,
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+    }
 
     let auto_tasks = reconcile_managed_assets_in_mode(
         &auto_tasks_dir(workspace_orbit_root),
