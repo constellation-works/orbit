@@ -1,6 +1,7 @@
 //! A no-diff grant checks persistent holders while retaining no files.
 
 use super::*;
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_store::contracts::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
@@ -202,4 +203,155 @@ fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
             "ordinary grants still exclude explicit files: {explicit}"
         );
     }
+}
+
+#[test]
+fn closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_overlapping_claim() {
+    if !isolated(
+        "dispatch_admission::reservation_grants::closing_rescued_blocked_task_succeeds_without_force_while_another_run_holds_overlapping_claim",
+    ) {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+
+    let holder = seed(
+        &runtime,
+        Seed {
+            title: "claim holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+
+    let claim = ExecutionClaim {
+        claim_id: "claim-active".into(),
+        task_id: holder.id.clone(),
+        request_id: "req-active".into(),
+        executed_on: ExecutionLocation {
+            machine_id: "machine-1".into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: "jrun-holder-42".into(),
+            job_name: "test-job".into(),
+            machine_name: None,
+        },
+        footprint: vec!["file:shared.txt".into()],
+        reservation_id: "res-active".into(),
+        reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        phase: ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    let workspace_id = runtime.workspace_id().unwrap();
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                workspace_id,
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+
+    // 1. A blocked task with no live run moves through in-progress -> review -> done without --force
+    let rescued = seed(
+        &runtime,
+        Seed {
+            title: "rescued task",
+            status: TaskStatus::Blocked,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+
+    // Blocked -> InProgress (starts no run, no --force)
+    let in_progress = runtime
+        .update_task_as_human(
+            &rescued.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .expect("operator moves blocked task to in-progress without --force");
+    assert_eq!(in_progress.status, TaskStatus::InProgress);
+
+    // Operator attaches execution summary
+    let summarized = runtime
+        .update_task_as_human(
+            &rescued.id,
+            TaskUpdateParams {
+                execution_summary: Some("rescued work already landed as PR #3853".to_string()),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .expect("operator updates execution summary on in-progress task");
+    assert_eq!(
+        summarized.execution_summary,
+        "rescued work already landed as PR #3853"
+    );
+
+    // InProgress -> Review (starts no run, no --force)
+    let review = runtime
+        .update_task_as_human(
+            &rescued.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .expect("operator moves task to review without --force");
+    assert_eq!(review.status, TaskStatus::Review);
+
+    // Review -> Done (no --force)
+    let done = runtime
+        .update_task_as_human(
+            &rescued.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .expect("operator moves task to done without --force");
+    assert_eq!(done.status, TaskStatus::Done);
+
+    // 2. An admission or claim that would start work on overlapping files is still refused
+    let candidate = seed(
+        &runtime,
+        Seed {
+            title: "candidate to start",
+            status: TaskStatus::Backlog,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let start_refusal = runtime
+        .start_task(&candidate.id, None, None)
+        .expect_err("start_task must be refused when footprint overlaps an active claim");
+
+    // 3. The refusal message names the overlapping claim's task id and run id
+    let refusal_msg = start_refusal.to_string();
+    assert!(
+        refusal_msg.contains("task footprint overlaps an execution claim"),
+        "error message should contain base refusal: {refusal_msg}"
+    );
+    assert!(
+        refusal_msg.contains(&holder.id),
+        "refusal message should name overlapping claim's task id ({}): {refusal_msg}",
+        holder.id
+    );
+    assert!(
+        refusal_msg.contains("jrun-holder-42"),
+        "refusal message should name overlapping claim's run id (jrun-holder-42): {refusal_msg}"
+    );
 }

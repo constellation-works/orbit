@@ -98,9 +98,11 @@ impl TaskCommitBoundary {
         status: TaskStatus,
         files: &[String],
     ) -> Result<(), OrbitError> {
-        if !matches!(status, TaskStatus::InProgress | TaskStatus::Review)
-            || self.execution_claims()?.is_empty()
-        {
+        if status != TaskStatus::InProgress {
+            return Ok(());
+        }
+        let claims = self.execution_claims()?;
+        if claims.is_empty() {
             return Ok(());
         }
         let checkout = self
@@ -111,10 +113,13 @@ impl TaskCommitBoundary {
             return Ok(());
         } // legacy no-context chore semantics
         let canonical = canonical_footprint(files, &checkout.repo_root)?;
-        if !self.frozen_claim_conflicts(&canonical)?.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "task footprint overlaps an execution claim".into(),
-            ));
+        if let Some(conflicting_claim) = claims.iter().find(|claim| {
+            claim.phase.protects_footprint() && overlaps(&canonical, &claim.footprint)
+        }) {
+            return Err(OrbitError::InvalidInput(format!(
+                "task footprint overlaps an execution claim (task {}, run {})",
+                conflicting_claim.task_id, conflicting_claim.run_context.run_id
+            )));
         }
         Ok(())
     }

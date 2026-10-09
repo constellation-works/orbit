@@ -160,9 +160,6 @@ impl TaskV2Store {
             if let Some(v) = p.status {
                 b.envelope.status = v;
             }
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(b.envelope.status, &b.envelope.context_files)?;
-            }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             if let Some(v) = &p.fields.description {
                 self.bundle_store
