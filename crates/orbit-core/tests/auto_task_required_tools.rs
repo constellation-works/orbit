@@ -1,6 +1,9 @@
 //! Contract checks for tool requirements in bundled auto-task definitions.
 
-use orbit_core::AutoTaskDefinition;
+use std::path::Path;
+
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::{AutoTaskDefinition, OrbitRuntime};
 use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
@@ -152,4 +155,71 @@ fn run_failure_fix_tasks_wait_for_human_approval() {
              approval, never promoted by an --approve-proposed drain"
         );
     }
+}
+
+/// Lint the criteria as a task minted from them would carry them, and return
+/// the `ac_specificity` findings. Going through `lint_task` keeps the check on
+/// the public surface the operator sees.
+fn ac_specificity_messages(criteria: &[String]) -> Vec<String> {
+    let runtime = OrbitRuntime::in_memory()
+        .unwrap_or_else(|error| panic!("build in-memory runtime: {error}"));
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Lint a shipped auto-task template".into(),
+            acceptance_criteria: criteria.to_vec(),
+            ..Default::default()
+        })
+        .unwrap_or_else(|error| panic!("mint a task from the template criteria: {error}"));
+    runtime
+        .lint_task(task.id.as_str())
+        .unwrap_or_else(|error| panic!("lint the minted task: {error}"))
+        .findings
+        .into_iter()
+        .filter(|finding| finding.check == "ac_specificity")
+        .map(|finding| finding.message)
+        .collect()
+}
+
+/// A shipped template whose criterion the lint flags makes every task minted
+/// from it look broken to the operator approving it (ORB-14893). Iterating the
+/// directory keeps a template added later under the same guard.
+#[test]
+fn shipped_template_criteria_pass_the_ac_specificity_lint() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auto_tasks");
+    let mut templates = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read auto-task directory entry: {error}"))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect::<Vec<_>>();
+    templates.sort();
+    assert!(
+        !templates.is_empty(),
+        "no shipped auto-task templates under {}",
+        dir.display()
+    );
+
+    let mut flagged = Vec::new();
+    for path in &templates {
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("template file name is not UTF-8: {}", path.display()));
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let definition = parse_template(name, &source);
+        flagged.extend(
+            ac_specificity_messages(&definition.template.acceptance_criteria)
+                .into_iter()
+                .map(|message| format!("{name}: {message}")),
+        );
+    }
+    assert!(
+        flagged.is_empty(),
+        "shipped auto-task templates have acceptance criteria the lint flags:\n{}",
+        flagged.join("\n")
+    );
 }
