@@ -9,6 +9,7 @@
 //! unresolvable host does; a routing mode can strip or alter the remote's
 //! discovery envelope to stand in for an older or skewed build.
 
+use std::collections::HashSet;
 use std::fs;
 
 use serde_json::{Value, json};
@@ -610,5 +611,67 @@ fn legacy_destinations_migrate_on_first_mutation_and_both_files_are_refused() {
             Some(edit),
             "a refused load keeps the bytes"
         );
+    }
+}
+
+#[test]
+fn legacy_rows_whose_machine_name_and_ssh_alias_collide_migrate_to_unique_names() {
+    // Three remotes report the same `machine.name`. One is reached through an
+    // SSH alias equal to this machine's own name, so its fallback collides with
+    // the local machine too. Both row orders must commit.
+    for reversed in [false, true] {
+        let fleet = Fleet::new();
+        let gpu = fleet.install("gpu", "ubuntu", "GP");
+        let ubuntu = fleet.install("ubuntu-box", "ubuntu", "UB");
+        let mini = fleet.install("mini", "ubuntu", "MI");
+        let delta = fleet.install("delta", "delta", "DE");
+        fleet.route("gpu", &gpu, "plain");
+        fleet.route("ubuntu", &ubuntu, "plain");
+        fleet.route("local-box", &mini, "plain");
+        fleet.route("delta", &delta, "plain");
+
+        let mut rows = [("gpu", &gpu), ("ubuntu", &ubuntu), ("local-box", &mini)];
+        if reversed {
+            rows.reverse();
+        }
+        let legacy: String = rows
+            .iter()
+            .map(|(ssh, install)| {
+                format!(
+                    "[[destinations]]\nssh = \"{ssh}\"\nmachine_id = \"{}\"\n\n",
+                    install.machine_id
+                )
+            })
+            .collect();
+        fs::write(fleet.legacy_file(), &legacy).expect("write legacy file");
+
+        fleet.json(&["host", "add", "delta", "--json"]);
+        assert!(!fleet.legacy_file().exists(), "the legacy file is retired");
+        let list = fleet.json(&["host", "list", "--no-probe", "--json"]);
+        let hosts = list["hosts"].as_array().expect("hosts array");
+        let remotes: Vec<&Value> = hosts
+            .iter()
+            .filter(|row| !row["local"].as_bool().unwrap_or_default())
+            .collect();
+        assert_eq!(remotes.len(), 4, "three migrated rows and delta: {list}");
+        let names: HashSet<String> = remotes
+            .iter()
+            .filter_map(|row| row["name"].as_str())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        assert_eq!(names.len(), 4, "entry names are unique: {list}");
+        assert!(
+            !names.contains("local-box"),
+            "no entry takes this machine's name: {list}"
+        );
+        for install in [&gpu, &ubuntu, &mini, &delta] {
+            assert!(
+                hosts
+                    .iter()
+                    .any(|row| row["machine_id"] == install.machine_id.as_str()),
+                "{} is listed: {list}",
+                install.machine_id
+            );
+        }
     }
 }
