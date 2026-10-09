@@ -567,8 +567,10 @@ owns delivery:
   route stamps on a call to the owner that never reached it — unreachable, owner unavailable,
   stale route or failed negotiation), `baseline_red` (the `[baseline_red]` failure with its hold,
   from `claim_validate`), `transient` (`[transient_failure]`, which `claim_validate` raises for a
-  required command still network-inconclusive after its reruns on a base that is not red, or a
-  leaf whose worker died and was reconciled `interrupted`) and `base_conflict` (a committed
+  required command still network-inconclusive after its reruns on a base that is not red, which
+  the worker route stamps on an owner call that lost only to the owner's lock-wait deadline
+  (`lock_busy`) [ORB-15088], or a leaf whose worker died and was reconciled `interrupted`) and
+  `base_conflict` (a committed
   candidate that `sync_base` and its conflict recovery could not carry onto a base that moved).
   The class is read from the last failed step's typed marker, then any provider or red-base
   failure the run recorded, then the terminalizing diagnostic, then the leaf's progress.
@@ -1091,6 +1093,7 @@ Acceptance criteria, not reported as passing.
 | Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
+| Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
 | Claimed agent's owner call from inside the sandbox | Only the claim-scoped owner calls cross the run's broker; another call, task or relation is refused before the owner; a missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
@@ -1172,6 +1175,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-14905] — carried a candidate an owner-local red-base, validation-environment or provider-failure hold kept to a durable ref on `origin`, and offered it to the task's next claim on any host.
 - [ORB-14439] — kept each claimed leaf's failure or release settlement on the owner's claim state and listed settled claims through `orbit run settlements`.
 - [ORB-14695] — released a claimed leaf whose provider account hit its usage limit as an unbudgeted `provider` failure that excludes every crew of that provider for the window.
+- [ORB-15088] — answered an owner's lock-wait timeout as the retryable `lock_busy`, retried a bound worker's owner reads on it, and settled a step it still fails as `transient`.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

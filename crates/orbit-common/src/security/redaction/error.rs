@@ -285,7 +285,7 @@ fn redact_file_lock_timeout(
 ) -> Box<crate::fs::io::FileLockTimeout> {
     timeout.lock_path = redact(&timeout.lock_path.to_string_lossy()).into();
     timeout.label = redact(&timeout.label);
-    if let Some(holder) = &mut timeout.holder {
+    for holder in timeout.holder.iter_mut().chain(&mut timeout.shared_holders) {
         holder.acquired_at = redact(&holder.acquired_at);
         holder.label = redact(&holder.label);
     }

@@ -1028,3 +1028,69 @@ async fn client_handshake_does_not_advertise_retired_desktop_tools() {
         server_task.await.unwrap();
     }
 }
+
+/// An owner whose task read timed out waiting on a store lock.
+struct LockBusyHost;
+impl McpHost for LockBusyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition("demo.echo")])
+    }
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        Err(OrbitError::FileLockTimeout(Box::new(
+            orbit_common::fs::io::FileLockTimeout {
+                lock_path: "/state/tasks/workspaces/ws/.task-commit.lock".into(),
+                label: "task commit boundary: recovery at src/task.rs:1".into(),
+                timeout_ms: 30_000,
+                holder: None,
+                shared_holders: Vec::new(),
+            },
+        )))
+    }
+}
+
+/// [ORB-15088] A call that lost only to a lock-wait deadline reaches its
+/// caller as the retryable `lock_busy`, not `internal_error`: a pull follower
+/// reads that code off the wire to retry its owner read and to keep the
+/// failure from settling as a fault of its candidate.
+#[tokio::test]
+async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
+    let server = OrbitToolServer::new_with_context(
+        Arc::new(LockBusyHost),
+        ToolSessionContext::trusted_local(None, None, None),
+    );
+    let (client_io, server_io) = duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        let service = server.serve(server_io).await.expect("serve");
+        service.waiting().await.expect("wait");
+    });
+    let mut info = ClientInfo::default();
+    info.meta = Some(Meta(
+        json!({ "orbit": { "workspace": "/tmp/owner" } })
+            .as_object()
+            .expect("initialize metadata")
+            .clone(),
+    ));
+    let client = info.serve(client_io).await.expect("client");
+
+    let busy = client
+        .peer()
+        .call_tool(call("demo_echo", json!({ "value": "ORB-1" })))
+        .await
+        .expect("a structured tool error");
+    assert_eq!(busy.is_error, Some(true));
+    let payload = busy.structured_content.expect("structured error");
+    assert_eq!(
+        payload["code"],
+        orbit_common::LOCK_BUSY_ERROR_CODE,
+        "{payload}"
+    );
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("timed out after 30000ms")),
+        "{payload}"
+    );
+
+    client.cancel().await.expect("cancel");
+    server_task.await.expect("server");
+}

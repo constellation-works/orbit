@@ -1,11 +1,19 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use orbit_common::OrbitError;
+use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError};
 use orbit_tools::OwnerCoordinator;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+
+/// Pauses before each retry of an owner read that lost only to a lock-wait
+/// deadline on the owner [ORB-15088]. Each attempt already waited out the
+/// owner's own 30 s lock deadline, so two retries outlast a drain-start burst
+/// without holding a step, or a final recovery's envelope load, for minutes.
+const OWNER_READ_LOCK_BUSY_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_secs(1), Duration::from_secs(3)];
 
 impl OrbitRuntime {
     pub fn current_worker_invocation(
@@ -84,11 +92,31 @@ impl OrbitRuntime {
         self.read_owner_request(serde_json::json!({"id": id, "_worker_read": projection}))
     }
 
+    /// Read a projection from the owner. A read decides nothing, so one the
+    /// owner could not serve only because a lock stayed held is retried, a
+    /// bounded number of times, before its caller sees the failure.
     pub(crate) fn read_owner_request<T: serde::de::DeserializeOwned>(
         &self,
         request: Value,
     ) -> Result<T, OrbitError> {
-        let value = self.route_worker_host_tool("orbit.task.show", request)?;
+        let mut delays = OWNER_READ_LOCK_BUSY_RETRY_DELAYS.iter();
+        let value = loop {
+            match self.route_worker_host_tool("orbit.task.show", request.clone()) {
+                Err(error) if error.is_lock_busy() => {
+                    let Some(delay) = delays.next() else {
+                        return Err(error);
+                    };
+                    tracing::warn!(
+                        target: "orbit.core.worker_coordination",
+                        delay_ms = delay.as_millis() as u64,
+                        error = %error,
+                        "owner read lost to a lock-wait deadline; retrying",
+                    );
+                    std::thread::sleep(*delay);
+                }
+                result => break result?,
+            }
+        };
         decode_owner_read(value)
     }
 
@@ -187,8 +215,11 @@ pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<
 /// Type a call the owner never answered as an owner-route failure
 /// [ORB-14257]: the step it fails carries the marker, so a claimed leaf that
 /// lost its route to the owner settles as a release rather than as a failure
-/// of its candidate. The variant is kept; a refusal, an ambiguous outcome and
-/// a local error are left as they are.
+/// of its candidate. A call the owner could not serve only because a lock
+/// stayed held is typed transient the same way [ORB-15088], so a step it
+/// fails — a rebase onto a moved base included — never settles as the
+/// candidate's failure or as a base conflict. The variant is kept; a refusal,
+/// an ambiguous outcome and a local error are left as they are.
 fn owner_route_failure(error: OrbitError) -> OrbitError {
     let typed = |message: String| {
         format!(
@@ -203,6 +234,18 @@ fn owner_route_failure(error: OrbitError) -> OrbitError {
         OrbitError::OwnerUnavailable(message) => OrbitError::OwnerUnavailable(typed(message)),
         OrbitError::StaleRoute(message) => OrbitError::StaleRoute(typed(message)),
         OrbitError::OwnerNegotiation(message) => OrbitError::OwnerNegotiation(typed(message)),
+        OrbitError::RemoteTool {
+            code,
+            message,
+            payload,
+        } if code == LOCK_BUSY_ERROR_CODE => OrbitError::RemoteTool {
+            code,
+            message: format!(
+                "{} {message}",
+                orbit_types::workflow::TRANSIENT_FAILURE_MARKER
+            ),
+            payload,
+        },
         error => error,
     }
 }

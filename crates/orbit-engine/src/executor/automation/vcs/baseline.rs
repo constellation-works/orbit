@@ -238,6 +238,7 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
         FileLockOptions {
             timeout: BASE_LOCK_TIMEOUT,
             warn_after: Duration::from_secs(30),
+            ..FileLockOptions::default()
         },
     ) {
         Ok(guard) => guard,

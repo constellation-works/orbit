@@ -1,8 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::with_shared_file_lock;
 
-use super::super::{COORDINATION_LOCK_LABEL, TaskCommitBoundary};
+use super::super::{Section, TaskCommitBoundary};
 use super::codec::{CLAIM, STATE};
 use super::{decode, invalid};
 use crate::contracts::*;
@@ -11,8 +10,9 @@ impl TaskCommitBoundary {
     /// Strictly read-only: an interrupted commit requires explicit journal recovery
     /// or an ordinary operational read first. Inspection never performs that repair.
     pub fn inspect_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
-        with_shared_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
-            with_shared_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
+        let section = Section::here("inspection");
+        self.shared(&self.host_lock_target(), section, || {
+            self.shared(&self.lock_target(), section, || {
                 if self.pending_marker_path().try_exists()? {
                     return Err(invalid(
                         "claim inspection unavailable until pending commit is recovered",

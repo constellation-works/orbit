@@ -92,6 +92,7 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
         FileLockOptions {
             timeout: waiter_wait,
             warn_after: waiter_wait,
+            ..FileLockOptions::default()
         },
         || Ok::<_, std::io::Error>(waited.elapsed()),
     )

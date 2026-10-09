@@ -1,4 +1,4 @@
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
@@ -136,6 +136,10 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
+        // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
+        // retries an owner read that lost only to a lock-wait deadline and
+        // never mistakes it for a failure of its candidate.
+        OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::Migration(_) => "migration_failed",

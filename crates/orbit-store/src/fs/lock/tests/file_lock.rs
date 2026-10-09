@@ -14,6 +14,7 @@ fn short_options(timeout_ms: u64) -> LockOptions {
         timeout: Duration::from_millis(timeout_ms),
         // Push the warn threshold out of the way unless a test wants it.
         warn_after: Duration::from_secs(3600),
+        ..LockOptions::default()
     }
 }
 
@@ -73,6 +74,7 @@ fn sigkilled_holder_releases_lock() {
         LockOptions {
             timeout: Duration::from_secs(10),
             warn_after: Duration::from_secs(3600),
+            ..LockOptions::default()
         },
     );
     let guard = guard.expect("lock released after holder was SIGKILLed");
