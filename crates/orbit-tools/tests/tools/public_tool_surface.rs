@@ -60,6 +60,12 @@ const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
     "github.pr.review",
     "github.pr.review.comment",
     "github.pr.view",
+    "orbit.adr.add",
+    "orbit.adr.show",
+    "orbit.adr.list",
+    "orbit.adr.restore",
+    "orbit.adr.update",
+    "orbit.adr.supersede",
     "orbit.state.get",
     "orbit.state.set",
 ];
@@ -171,8 +177,14 @@ fn retired_agent_tools_are_absent_from_every_registry_surface_and_dispatch() {
             .execute(retired, &ToolContext::default(), serde_json::json!({}))
             .expect_err("retired agent tool dispatch must fail");
         assert!(
-            error.to_string().contains(retired),
-            "dispatch error must name retired tool {retired}: {error}"
+            matches!(
+                &error,
+                orbit_common::OrbitError::NotFound {
+                    kind: orbit_common::NotFoundKind::Tool,
+                    id,
+                } if id == retired
+            ),
+            "retired tool must be refused as an unknown tool: {retired}: {error}"
         );
     }
 }

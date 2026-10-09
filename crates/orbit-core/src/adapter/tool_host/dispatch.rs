@@ -67,14 +67,6 @@ pub(super) fn execute(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrShow
-        | OrbitBuiltinAction::AdrList
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate
-        | OrbitBuiltinAction::AdrSupersede => Err(OrbitError::InvalidInput(
-            "ADR lifecycle tools have been retired; edit docs/design/**/4_decisions.md".to_string(),
-        )),
         OrbitBuiltinAction::AgentInvoke => {
             super::agent_tools::invoke(runtime, session_context, input, agent, model)
         }

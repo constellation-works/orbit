@@ -10,8 +10,7 @@
 //! operator escape hatch for a stale reservation that wedges a run. The
 //! underlying `orbit.task.locks` / `orbit.task.locks.reserve` /
 //! `orbit.task.locks.release` tools are inactive on the agent MCP surface, so
-//! all three reach them through the admin `runtime.run_tool` bypass (mirrors
-//! `orbit adr list`, ORB-00289).
+//! all three reach them through the admin `runtime.run_tool` bypass.
 //!
 //! `reserve` and `release` require the same `operator` or `runner`
 //! capability: a caller that can create a reservation — which blocks every

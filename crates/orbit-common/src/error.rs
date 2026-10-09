@@ -29,7 +29,6 @@ pub enum NotFoundKind {
     Job,
     JobRun,
     Activity,
-    Adr,
     DesignFeature,
     AgentSession,
     Workspace,
@@ -46,7 +45,6 @@ impl std::fmt::Display for NotFoundKind {
             Self::Job => "job",
             Self::JobRun => "job run",
             Self::Activity => "activity",
-            Self::Adr => "ADR",
             Self::DesignFeature => "design feature",
             Self::AgentSession => "agent session",
             Self::Workspace => "workspace",
@@ -360,8 +358,6 @@ pub enum OrbitError {
     /// that does not run one (macOS). Refused before anything runs.
     #[error("{0}")]
     PluginBuildFetchUnsupported(String),
-    #[error("Invalid ADR status transition: {0}")]
-    AdrInvalidTransition(String),
     #[error("{kind} artifact unavailable for {id}")]
     RemoteArtifactUnavailable {
         kind: NotFoundKind,
@@ -947,7 +943,6 @@ impl From<RecordError> for OrbitError {
     fn from(error: RecordError) -> Self {
         match error {
             RecordError::Invalid(message) => Self::InvalidInput(message),
-            RecordError::InvalidTransition(message) => Self::AdrInvalidTransition(message),
         }
     }
 }

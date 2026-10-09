@@ -88,10 +88,6 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::Job => "job_not_found",
             NotFoundKind::JobRun => "job_run_not_found",
             NotFoundKind::Activity => "activity_not_found",
-            // ADR reads expose the same stable distinction as the tool and
-            // federation contracts: absent allocations are `not_found`, while
-            // allocated-but-unreadable bodies are `remote_artifact_unavailable`.
-            NotFoundKind::Adr => "not_found",
             NotFoundKind::DesignFeature => "design_feature_not_found",
             NotFoundKind::AgentSession => "agent_session_not_found",
             NotFoundKind::Workspace => "workspace_not_found",
@@ -139,7 +135,6 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
-        OrbitError::AdrInvalidTransition(_) => "adr_invalid_transition",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",

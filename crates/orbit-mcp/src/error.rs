@@ -81,7 +81,6 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::Job
             | NotFoundKind::JobRun
             | NotFoundKind::Activity
-            | NotFoundKind::Adr
             | NotFoundKind::DesignFeature
             | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => "not_found",
@@ -109,9 +108,9 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-        OrbitError::TaskStatusTransition(_)
-        | OrbitError::JobRunStateTransition(_)
-        | OrbitError::AdrInvalidTransition(_) => "invalid_transition",
+        OrbitError::TaskStatusTransition(_) | OrbitError::JobRunStateTransition(_) => {
+            "invalid_transition"
+        }
         // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
