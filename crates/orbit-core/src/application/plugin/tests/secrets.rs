@@ -42,6 +42,11 @@ fn stored_names(fixture: &PluginFixture) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them",
+    ) {
+        return;
+    }
     if !super::fixture::enter_isolated_child(
         module_path!(),
         "a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them",

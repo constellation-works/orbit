@@ -35,7 +35,9 @@ fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_den
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers",
+    ) {
         return;
     }
 
@@ -91,7 +93,9 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_keeps_unknown_provider_keychain_access_denied",
+    ) {
         return;
     }
 
@@ -120,7 +124,9 @@ fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_codex_profile_reads_public_ca_material_but_not_private_credentials",
+    ) {
         return;
     }
 
@@ -245,7 +251,9 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
     // EX_DATAERR), killing every macOS CLI run before the agent started.
     use std::process::Command;
 
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec",
+    ) {
         return;
     }
 
@@ -306,7 +314,9 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
 fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token() {
     use std::process::Command;
 
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token",
+    ) {
         return;
     }
 
@@ -419,7 +429,9 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
 #[cfg(target_os = "macos")]
 #[test]
 fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec",
+    ) {
         return;
     }
     let parent = sandbox_test_parent("plugin-state");
@@ -474,7 +486,7 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
 #[cfg(target_os = "macos")]
 #[test]
 fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard("subpath_mask_hides_the_tree_from_a_sandboxed_child") {
         return;
     }
 

@@ -22,21 +22,15 @@ fn seed_grok_executor(runtime: &OrbitRuntime) {
         resource.spec.created_at,
         resource.spec.updated_at,
     );
-    if !sandbox_exec_can_apply() {
+    if !matches!(
+        orbit_exec::probe_sandbox_exec_apply(),
+        orbit_exec::SandboxExecApplyProbe::Applied
+    ) {
         def.sandbox = None;
     }
     runtime
         .upsert_executor_def(&def)
         .expect("seed grok executor");
-}
-
-fn sandbox_exec_can_apply() -> bool {
-    std::process::Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", "(version 1)\n(allow default)\n", "/usr/bin/true"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 #[test]

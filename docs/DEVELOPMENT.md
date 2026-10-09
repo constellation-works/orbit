@@ -79,6 +79,18 @@ through, and tests of the refusal set the marker on their own child. A focused
 `cargo test` inside a claimed executor needs the same treatment:
 `env -u ORBIT_WORKER_CONTEXT_REQUIRED cargo test ...`.
 
+Tests that launch real Seatbelt-confined children use
+`orbit_exec::macos_sandbox_test_guard(test_name)`. Its process-cached probe
+applies a permissive profile to `/usr/bin/true` through a trusted absolute
+`sandbox-exec`, under a bounded deadline. Only exit 71 with the `sandbox_apply`
+marker produces a named `SKIP:` line, as in a nested macOS executor. A missing
+binary, spawn error, timeout, or other child failure fails the test. Other
+platforms run normally. Production dispatch and sandbox grants are unchanged.
+macOS host coverage sets `ORBIT_REQUIRE_SANDBOX_EXEC=1`, which makes an apply
+refusal fail too; skipped runs never satisfy `host_sandbox_test` evidence.
+Tests of binary absence retain `sandbox_exec_available()` because that
+regression concerns wrapper discovery rather than kernel apply capability.
+
 Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and
 `cargo test` / `nextest`) one at a time when they share a target directory. To
 overlap gates, assign each a separate `CARGO_TARGET_DIR`. Concurrent gates in

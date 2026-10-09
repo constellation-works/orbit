@@ -1,7 +1,7 @@
 name: macOS Platform
 
 # The orbit-exec macOS sandbox tests (`#[cfg(target_os = "macos")]`, gated on
-# `sandbox_exec_can_apply()`) compile generated SBPL profiles through the real
+# `macos_sandbox_test_guard()`) compile generated SBPL profiles through the real
 # `/usr/bin/sandbox-exec`. The primary CI workflow runs on Linux, where those
 # tests are compiled out entirely — which is how ORB-00366's `(?i)` SBPL
 # breakage (ORB-00372) reached agent-main undetected. This leg runs them on a
@@ -169,12 +169,10 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
-      # Exercises the real-`sandbox-exec` regex regression test added by
-      # ORB-00372, the existing macOS sandbox suite, the compiled SBPL goldens
-      # and the `tests/sandbox/macos_sandbox.rs` enforcement test. The unit tests
-      # gated on `sandbox_exec_can_apply()` still self-skip if a runner forbids
-      # `sandbox-exec`; the enforcement test skips visibly elsewhere but fails
-      # here, where ORBIT_REQUIRE_SANDBOX_EXEC is set (STD-04 §R8).
+      # Exercises the real sandbox-exec profiles, compiled SBPL goldens and
+      # tests/sandbox/macos_sandbox.rs enforcement tests. The shared apply guard
+      # reports a nested sandbox_apply refusal elsewhere, but must fail here:
+      # ORBIT_REQUIRE_SANDBOX_EXEC=1 requires live kernel coverage.
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"

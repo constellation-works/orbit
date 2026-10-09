@@ -6,7 +6,8 @@
 //! [`append_macos_subpath_mask`], exactly as the spawn path builds it, and
 //! reports which reads, listings and writes the kernel let through.
 //!
-//! A host where `sandbox-exec` cannot apply a profile skips visibly. The macOS
+//! A nested sandbox apply refusal (exit 71 with `sandbox_apply`) skips visibly.
+//! Other probe failures fail the test. The macOS
 //! CI leg sets `ORBIT_REQUIRE_SANDBOX_EXEC=1`, which turns that skip into a
 //! failure (STD-04 §R8).
 
@@ -19,21 +20,18 @@ use std::time::Duration;
 
 use orbit_exec::{
     MacosSandboxSpawnRequest, append_macos_subpath_mask, compile_macos_sandbox_profile,
-    sandbox_exec_available, spawn_under_macos_sandbox,
+    macos_sandbox_test_guard, spawn_under_macos_sandbox,
 };
 use orbit_types::policy::ResolvedFsProfile;
 use wait_timeout::ChildExt;
 
-const REQUIRE_ENV: &str = "ORBIT_REQUIRE_SANDBOX_EXEC";
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
 fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
-    if let Err(reason) = sandbox_exec_can_apply() {
-        if std::env::var(REQUIRE_ENV).as_deref() == Ok("1") {
-            panic!("{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here: {reason}");
-        }
-        println!("SKIP: sandbox-exec cannot apply a profile on this host: {reason}");
+    if !macos_sandbox_test_guard(
+        "sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root",
+    ) {
         return;
     }
 
@@ -132,11 +130,7 @@ probe write-root ': > "$WRITE_ROOT/written"'
 /// original absent-root deny dynamically, rather than silently dropping it.
 #[test]
 fn sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots() {
-    if let Err(reason) = sandbox_exec_can_apply() {
-        if std::env::var(REQUIRE_ENV).as_deref() == Ok("1") {
-            panic!("{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here: {reason}");
-        }
-        println!("SKIP: sandbox-exec cannot apply a profile on this host: {reason}");
+    if !macos_sandbox_test_guard("sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots") {
         return;
     }
 
@@ -220,36 +214,6 @@ deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
                 "the agent must not create the absent deny root"
             );
         }
-    }
-}
-
-/// `Ok` when `sandbox-exec` runs a permissive profile; otherwise the reason it
-/// cannot, for the skip message.
-fn sandbox_exec_can_apply() -> Result<(), String> {
-    if !sandbox_exec_available() {
-        return Err("/usr/bin/sandbox-exec is not available".to_string());
-    }
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
-        profile_text: "(version 1)\n(allow default)\n",
-        program: "/usr/bin/true",
-        args: &[],
-        env: &[],
-        cwd: None,
-        stdin: Stdio::null(),
-        stdout: Stdio::null(),
-        stderr: Stdio::piped(),
-        inherited_fds: &[],
-    })
-    .map_err(|error| error.to_string())?;
-    let mut guard = ChildGuard(child);
-    match guard
-        .0
-        .wait_timeout(CHILD_DEADLINE)
-        .map_err(|error| error.to_string())?
-    {
-        Some(status) if status.success() => Ok(()),
-        Some(status) => Err(format!("a permissive profile exited with {status}")),
-        None => Err(format!("a permissive profile ran past {CHILD_DEADLINE:?}")),
     }
 }
 

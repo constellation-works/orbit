@@ -27,6 +27,7 @@
 //! The `spawn` submodule launches processes through trusted `sandbox-exec` paths.
 
 pub(crate) mod compile;
+mod probe;
 pub(crate) mod provider_dirs;
 pub(crate) mod sbpl_filter;
 pub(crate) mod spawn;
@@ -45,3 +46,5 @@ pub use spawn::{
     MacosSandboxSpawnRequest, sandbox_exec_available, sandbox_exec_path,
     sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
+
+pub use probe::{SandboxExecApplyProbe, macos_sandbox_test_guard, probe_sandbox_exec_apply};

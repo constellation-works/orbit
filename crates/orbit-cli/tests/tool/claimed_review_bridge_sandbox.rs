@@ -24,8 +24,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-#[cfg(target_os = "macos")]
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -65,16 +63,16 @@ const PRIVATE_KEY_SECRET: &str =
 
 #[test]
 fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
+    ) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
     if let Some(reason) = sandbox_unavailable() {
-        #[cfg(target_os = "linux")]
         orbit_exec::report_bwrap_deferral(
             "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
             &reason,
-        );
-        #[cfg(target_os = "macos")]
-        let _ = writeln!(
-            std::io::stderr(),
-            "skipped claimed-review bridge sandbox integration: {reason}"
         );
         return;
     }
@@ -125,11 +123,6 @@ fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
 fn sandbox_unavailable() -> Option<String> {
     let probe = orbit_exec::probe_bwrap();
     (!probe.available).then_some(probe.detail)
-}
-
-#[cfg(target_os = "macos")]
-fn sandbox_unavailable() -> Option<String> {
-    (!orbit_exec::sandbox_exec_available()).then(orbit_exec::sandbox_exec_unavailable_message)
 }
 
 /// One Orbit machine: its own home, global root and registered checkout.
