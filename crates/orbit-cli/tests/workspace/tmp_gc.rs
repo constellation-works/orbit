@@ -314,6 +314,19 @@ fn active_runs_refuse_without_reconciliation_and_workspace_selection_is_scoped()
 
 #[test]
 fn symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses() {
+    assert_symlink_gc_handles_non_utf8_name(|path| fs::write(path, b"bytes"));
+}
+
+#[test]
+fn symlink_gc_still_checks_symlinks_when_non_utf8_name_is_unsupported() {
+    assert_symlink_gc_handles_non_utf8_name(|_| {
+        Err(std::io::Error::from_raw_os_error(libc::EILSEQ))
+    });
+}
+
+fn assert_symlink_gc_handles_non_utf8_name(
+    create_non_utf8_entry: impl FnOnce(&PathBuf) -> std::io::Result<()>,
+) {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::symlink;
     let fixture = Fixture::new();
@@ -329,7 +342,12 @@ fn symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses() {
     .unwrap();
     symlink(outside.join("missing"), fixture.tmp().join("dangling")).unwrap();
     let byte_name = std::ffi::OsStr::from_bytes(b"non-utf8-\xff");
-    fs::write(fixture.tmp().join(byte_name), b"bytes").unwrap();
+    let byte_path = fixture.tmp().join(byte_name);
+    let has_non_utf8_entry = match create_non_utf8_entry(&byte_path) {
+        Ok(()) => true,
+        Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => false,
+        Err(error) => panic!("failed to probe non-UTF-8 filename support: {error}"),
+    };
     let expected_bytes: u64 = ["escape", "nested/file-link", "dangling"]
         .iter()
         .map(|name| {
@@ -338,15 +356,21 @@ fn symlinks_are_unlinked_without_traversal_and_a_linked_tmp_root_refuses() {
                 .len()
         })
         .sum::<u64>()
-        + 5;
+        + if has_non_utf8_entry { 5 } else { 0 };
     let preview = fixture.json(&["gc", "tmp", "--json"]);
     assert_eq!(preview["bytes_reclaimable"], expected_bytes);
-    assert!(preview["reports"].as_array().unwrap().iter().any(|report| {
-        report["path"] == fixture.tmp().join(byte_name).to_string_lossy().as_ref()
-            && report["bytes_reclaimable"] == 5
-    }));
+    assert_eq!(
+        preview["reports"].as_array().unwrap().iter().any(|report| {
+            report["path"] == byte_path.to_string_lossy().as_ref()
+                && report["bytes_reclaimable"] == 5
+        }),
+        has_non_utf8_entry
+    );
     let removed = fixture.json(&["gc", "tmp", "--confirm", "--json"]);
-    assert_eq!(removed["entries_removed"], 4);
+    assert_eq!(
+        removed["entries_removed"],
+        if has_non_utf8_entry { 4 } else { 3 }
+    );
     assert_eq!(removed["bytes_reclaimed"], expected_bytes);
     assert_eq!(fs::read_dir(fixture.tmp()).unwrap().count(), 0);
     assert_eq!(
