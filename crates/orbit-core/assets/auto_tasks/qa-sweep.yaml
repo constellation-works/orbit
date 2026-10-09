@@ -40,10 +40,15 @@ template:
     reported exit status.
 
     Before reporting anything, search the workspace's configured task or issue surface
-    for open work covering the same problem. For each real issue that is not already
-    filed, create a durable record on that surface. Give it severity-appropriate
-    priority and put the relevant commits, observed evidence, and exact
-    reproduction steps in its description. Skip duplicates.
+    for open work covering the same problem. File each confirmed finding with
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Give it severity-appropriate priority and put the relevant commits, observed
+    evidence, and exact reproduction steps in its description. Derive canonical
+    `file:` selectors from every evidenced source path, removing the line suffix,
+    and add the matching regression-test location. Use existing paths where
+    possible; for a test file that must be created, set
+    `allow_missing_context: true` and identify that intended path. Never file a
+    finding without context selectors. Skip duplicates.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when
