@@ -17,6 +17,13 @@ struct Fixture {
 
 impl Fixture {
     fn initialized() -> Self {
+        let fixture = Self::empty();
+        crate::git_repo::seal_lookup_boundary(&fixture.work);
+        fixture.initial_init();
+        fixture
+    }
+
+    fn empty() -> Self {
         let temp = tempdir().expect("fixture tempdir");
         let fixture = Self {
             home: temp.path().join("home"),
@@ -24,7 +31,11 @@ impl Fixture {
             _temp: temp,
         };
         fs::create_dir_all(&fixture.home).expect("fixture home");
-        crate::git_repo::seal_lookup_boundary(&fixture.work);
+        fixture
+    }
+
+    fn initial_init(&self) {
+        let fixture = self;
         let output = fixture.run(&[
             "--non-interactive",
             "--machine-name",
@@ -33,7 +44,6 @@ impl Fixture {
             "QA",
         ]);
         assert!(output.status.success(), "initial init: {output:?}");
-        fixture
     }
 
     fn root(&self) -> PathBuf {
@@ -41,6 +51,10 @@ impl Fixture {
     }
 
     fn run(&self, flags: &[&str]) -> Output {
+        self.run_command(&[&["init"], flags].concat())
+    }
+
+    fn run_command(&self, args: &[&str]) -> Output {
         let mut command = cargo_bin_cmd!("orbit");
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
@@ -52,10 +66,9 @@ impl Fixture {
             .env("ORBIT_SKIP_HOST_PREREQUISITES", "1")
             .env("PATH", self.work.join("empty-path"))
             .env_remove("RUST_LOG")
-            .arg("init")
-            .args(flags)
+            .args(args)
             .output()
-            .expect("run orbit init")
+            .expect("run orbit")
     }
 }
 
@@ -157,4 +170,36 @@ fn ordinary_reinit_still_ignores_identity_flags_and_preserves_the_identity() {
         load_machine_identity(&root).expect("existing identity"),
         before
     );
+}
+
+#[test]
+fn force_reset_may_choose_a_new_prefix_even_after_the_old_one_minted_task_ids() {
+    // The reset deletes the task registry, so ids minted under the old prefix
+    // cannot contradict the new identity.
+    let fixture = Fixture::empty();
+    crate::git_repo::init(&fixture.work);
+    fixture.initial_init();
+    let init = fixture.run_command(&["workspace", "init", "--name", "minted"]);
+    assert!(init.status.success(), "workspace init: {init:?}");
+    let add = fixture.run_command(&["task", "add", "--title", "first", "--complexity", "low"]);
+    assert!(add.status.success(), "task add: {add:?}");
+    assert!(
+        String::from_utf8_lossy(&add.stdout).contains("QA-"),
+        "ids mint under the original prefix: {add:?}"
+    );
+
+    let output = fixture.run(&[
+        "--force",
+        "--non-interactive",
+        "--machine-name",
+        "replacement-host",
+        "--task-prefix",
+        "ZZ",
+    ]);
+    assert!(
+        output.status.success(),
+        "force reset after minting: {output:?}"
+    );
+    let after = load_machine_identity(&fixture.root()).expect("valid replacement identity");
+    assert_eq!(after.task_prefix, "ZZ");
 }

@@ -255,6 +255,12 @@ fn reject_invalid_fresh_identity_inputs(
         return Ok(());
     }
     validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)?;
+    if force {
+        // The reset deletes the task registry that holds the minted ids, so
+        // they cannot contradict the replacement prefix; the identity-creation
+        // closure re-checks against the reseeded root.
+        return Ok(());
+    }
     reject_prefix_contradicting_minted_ids(&global_root, task_prefix)
 }
 
