@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn sbpl_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -24,6 +24,18 @@ pub(super) fn sbpl_filter_for_allow_rule(rule: &str) -> String {
         let regex = glob_rule_to_regex(&rule);
         format!("(regex \"{}\")", sbpl_escape(&regex))
     }
+}
+
+/// The physical directory every path an absolute `rule` matches sits at or
+/// beneath, and whether that directory is itself matched. A literal or
+/// trailing-`**` rule compiles to `(subpath ROOT)`, which matches `ROOT`; a
+/// glob rule's regex matches only entries strictly below its literal prefix.
+pub(super) fn rule_anchor(rule: &str) -> (PathBuf, bool) {
+    let rule = physical_rule(rule);
+    (
+        PathBuf::from(subpath_root(&rule)),
+        rule_can_use_subpath(&rule),
+    )
 }
 
 /// Whether the deny clause compiled from `rule` reaches `path` itself — that

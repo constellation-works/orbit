@@ -367,6 +367,15 @@ config, attributes, hooks and future metadata entries. They follow the active
 worktree re-allow as well as provider and runtime grants; recovery checkouts
 receive the same protection. macOS implementer profiles still anchor source
 grants at the registered checkout, independently of these metadata denies.
+Seatbelt matches pathnames and checks a rename against the moved entry only,
+never its descendants, so a checkout renamed aside would carry its `.git`
+pointer out of the deny. The SBPL compiler therefore also emits a terminal
+`deny file-write*` `literal` clause for each existing writable ancestor entry
+of every `modify` deny: beneath a positive `modify` rule or strictly beneath a
+host scratch root. The active worktree, recovery checkout and registered
+checkout can be neither renamed nor replaced, while new names beneath them stay
+writable. A glob deny such as `**/.env` pins only the directory above its first
+wildcard, so a subdirectory holding a match can still be moved out of its reach.
 
 On Linux, the private `/tmp` mount hides host scratch, including metadata for a
 primary repository located there. For linked checkouts the compiler resolves the

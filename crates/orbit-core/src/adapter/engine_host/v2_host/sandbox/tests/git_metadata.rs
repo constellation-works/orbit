@@ -10,7 +10,8 @@ use crate::adapter::engine_host::v2_host::test_support::{
 use super::resolve::last_compiled_file_write_allows_under;
 
 /// A security invariant at the resolver/compiler boundary: convenience grants
-/// for an implementer checkout must not reopen host-owned Git metadata.
+/// for an implementer checkout must not reopen host-owned Git metadata, either
+/// in place or by renaming a checkout holding a `.git` pointer aside.
 #[test]
 fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
     let (_fixture, runtime, repo) = runtime_with_workspace_layout();
@@ -72,6 +73,14 @@ fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
                     path.display()
                 );
             }
+            for root in [checkout, &repo] {
+                assert!(
+                    !last_compiled_file_write_allows_under(&sbpl, root, &repo),
+                    "{provider} from {} must not rename or replace {}:\n{sbpl}",
+                    checkout.display(),
+                    root.display()
+                );
+            }
             let source = checkout.join("source.rs");
             assert!(
                 last_compiled_file_write_allows_under(&sbpl, &source, &repo),
@@ -81,6 +90,7 @@ fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
                 "macos_implementer_worktree_denies_registered_and_linked_git_metadata",
             ) {
                 assert_native_writes(&sbpl, &source, &protected);
+                assert_native_checkout_rename_denied(&sbpl, checkout, &repo);
             }
         }
     }
@@ -119,4 +129,47 @@ fn assert_native_writes(profile: &str, source: &Path, protected: &[std::path::Pa
         );
         assert_eq!(std::fs::read(path).expect("metadata after"), before);
     }
+}
+
+/// Seatbelt checks a rename against the moved entry only, so moving the
+/// checkout aside would carry its `.git` pointer out of the pathname deny.
+fn assert_native_checkout_rename_denied(profile: &str, checkout: &Path, repo: &Path) {
+    let run = |script: &str, args: &[&Path]| {
+        let mut command = std::process::Command::new("/usr/bin/sandbox-exec");
+        command.args(["-p", profile, "/bin/sh", "-c", script, "git-rename-probe"]);
+        command.args(args);
+        orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(10),
+            64 * 1024,
+        )
+        .expect("run sandbox-exec rename probe")
+    };
+    let fresh = checkout.join("fresh-dir/file");
+    assert!(
+        run(
+            "mkdir -p \"$1\" && printf probe > \"$1/file\"",
+            &[&checkout.join("fresh-dir")]
+        )
+        .status
+        .success()
+            && fresh.exists(),
+        "a pinned checkout must still accept new entries beneath it"
+    );
+    let aside = repo.join("moved-checkout");
+    for (from, to) in [
+        (checkout, aside.as_path()),
+        (repo, &repo.with_extension("moved")),
+    ] {
+        let output = run("mv \"$1\" \"$2\"", &[from, to]);
+        assert!(
+            !output.status.success() && !to.exists(),
+            "renaming {} aside must be denied: {output:?}",
+            from.display()
+        );
+    }
+    assert!(
+        checkout.join(".git").is_file(),
+        "the checkout must stay in place"
+    );
 }
