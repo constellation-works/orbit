@@ -4,20 +4,11 @@ summary: Open causes of Orbit task-run failures and blocks, one entry per distin
 incident_date: 2026-09-27
 last_validated: 2026-10-09
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "scripts/build-budget.py", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/activity_job/job_executor/recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-exec/src/macos_sandbox/**"]
 related_artifacts:
-  - ORB-14873
   - ORB-14832
-  - ORB-14799
-  - ORB-14722
-  - ORB-14727
-  - ORB-14731
   - ORB-14740
-  - ORB-14696
   - ORB-14812
-  - ORB-14822
-  - ORB-14827
-  - ORB-14837
 ---
 
 # Run failure log
@@ -41,70 +32,6 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
-
-## 2026-10-09: Mac claimed leaves time out while queued for a build slot
-
-- **Where:** Mac follower `task_claimed_pr_pipeline`, `implement_one` step.
-- **Symptom:** "cli subprocess exceeded 10800s wall-clock timeout"
-  (`jrun-20261009-0106-c1`, `jrun-20261009-0106-c3`). Final recovery
-  escalated both, and the owner listed them as blocked.
-- **Cause:** The Mac drain ran 3 leaves against the host's default 2
-  build-budget slots, so one leaf was nearly always waiting in
-  `scripts/build-budget.py` admission. Single waits ran up to 82 minutes for
-  ORB-14812 and 35 minutes for ORB-14799. The activity wall clock counts that
-  queued time as agent runtime, so leaves that were still working timed out.
-- **Fix:** ORB-14873 (open): queued time does not advance the deadline, and
-  readiness and doctor warn when a drain's concurrency exceeds the build slots.
-  Until then, give the host at least as many slots as drain concurrency. The
-  Mac was raised to 3 slots on 10-09 (`~/.orbit/cache/build-budget/slots`).
-- **Tasks:** ORB-14812, ORB-14799.
-- **Final recovery:** `escalate` for both. The operator requeued them to
-  `backlog`.
-
-## 2026-10-09: A finished review batch without an execution summary fails the no-diff guard
-
-- **Where:** Owner `task_pr_pipeline`, `git_commit` step, for a
-  `delivery-code-review` batch.
-- **Symptom:** "task 'ORB-14827' requires a meaningful persisted
-  execution_summary before delivery; the implementing agent recorded none and
-  the worktree holds no uncommitted change to derive one from"
-  (`jrun-20261009-0150-c3`).
-- **Cause:** The reviewer (sonnet) examined the whole batch, wrote
-  `automation-coverage.json` with `examination_complete: true` and filed four
-  findings, then exited without persisting a summary. A review batch never has
-  a diff, so the guard had nothing to derive a summary from, and final recovery
-  could not read the coverage artifact. The task blocked and the after-landing
-  review consumer stalled behind it.
-- **Fix:** ORB-14837 (open): the guard accepts a complete coverage artifact bound
-  to the current batch as no-diff evidence and derives the summary from it.
-- **Tasks:** ORB-14827.
-- **Final recovery:** `escalate` (`jrun-20261009-0207-t2`). The operator wrote the
-  summary and resumed the run.
-
-## 2026-10-08: A validate-step recovery's repair cannot be committed
-
-- **Where:** Owner `task_pr_pipeline`, `validate` step and its
-  `step_failure_recovery`.
-- **Symptom:** `make ci-fast` failed on the candidate. Step recovery repaired it,
-  and in ORB-14727 the repair passed `ci-fast`. The run still ended `blocked`.
-  ORB-14731's recovery declared `git_metadata_read_only` ("git add/commit fails
-  with index.lock Read-only file system"). ORB-14727's final recovery escalated
-  because "both repairs remain uncommitted".
-- **Cause:** The pipeline expects validate-step recovery to commit its fix
-  before the retry. The recovery sandbox mounts the worktree's Git metadata
-  read-only by design, and no host step commits a recovery's working-tree
-  changes before the retry, so a validated repair is lost. In both runs the
-  failure being repaired was the unit-test ratchet.
-- **Fix:** ORB-14822 (open): host code commits the recovery's repair under the
-  `commit` step's rules. Recovery agents stay read-only on `.git`.
-- **Tasks:** ORB-14731 (`jrun-20261008-1426-c3`), ORB-14727
-  (`jrun-20261008-1421-c6`, blocked handoff PR #3825), ORB-14696
-  (`jrun-20261009-0105-c24`: a rebase onto ORB-14731's four-argument
-  `add_column_if_missing` broke the build; the uncommitted repair reached
-  handoff PR #3846).
-- **Final recovery:** ORB-14727 `escalate` (`jrun-20261008-1421-c6`); ORB-14696
-  `escalate` (`jrun-20261009-0105-c24`); ORB-14731 none, because the agent
-  blocker stopped the run first.
 
 ## 2026-10-08: macOS claimed executors cannot apply Seatbelt in affected tests
 
