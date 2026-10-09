@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 ---
 
 # Check Orbit Health
@@ -55,6 +55,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
 | `mcp-callers` | Retired destination-side caller-authorization files under the user's `~/.orbit` | `warning` when inert files remain; otherwise `ok`. Remove the obsolete files; SSH keys govern remote access. The row is omitted when the home directory cannot be resolved. |
 | `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, and `--version` | `skipped` when no unit is installed; `ok` when matching; `warning` for a different path, stale invocation, unrunnable program, or inspection failure; `error` for version mismatch. Follow the unit-file/access remedy or `orbit clock repair`; this row does not establish native timer readiness. |
+| `store-retention` | Reclaimable audit rows, terminal-run pipeline state, candidate audit blobs, and SQLite file/free-list space under configured retention windows | `ok` when measured; `warning` if inspection fails. This is a read-only estimate. Plan audit and run cleanup with `orbit gc audit` and `orbit gc runs`, then pass `--apply` to delete. The blob amount is an upper bound until the audit reference scan. |
 
 The state-permission probe checks the global and workspace Orbit roots themselves, then
 recurses through global `state/`, `tasks/`, `cache/`, `frictions/` and workspace `state/`,

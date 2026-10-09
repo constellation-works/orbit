@@ -5,7 +5,7 @@ tags: [operations, backup, restore, state, sqlite, task-publication]
 paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state/**"]
 related_features: [orbit-core, remote-access, task-publication]
 related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 ---
 
 # Inventory and Protect Orbit State
@@ -59,7 +59,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `config.toml` | global runtime config **and** this machine's stable identity in its `[machine]` table (`id`, `name`, `task_prefix`), both created by `orbit init` | authoritative |
 | `workspaces.json` | registry of workspaces on this machine (logical workspaces + local checkouts, including declared owner and `owner`/`replica` role) | authoritative |
 | `registry-cache.json` | legacy file from the removed fleet-registry path | inert; no live reader or refresher, so remove only after backup if cleanup is desired |
-| `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`, `job_run_states` holding each run's pipeline state, and `job_run_id_allocations`, which keeps archived and deleted run ids reserved), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
+| `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`, retained `job_run_states`, and `job_run_id_allocations`, which keeps archived and deleted run ids reserved), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for retained live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
 | `tasks/index.sqlite` | global task-ID allocator + registry index, plus `task_envelope_stamps`, a cache of which `task.yaml` files already match the index | regenerable (`orbit task reindex`); stamps are re-recorded by the next listing |
 | `tasks/workspaces/<ws-id>/<task-id>/` | canonical task bundles (survive repo moves) | **authoritative** |
 | `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
@@ -69,6 +69,15 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
+
+Store retention can remove old history from this database. `retention.audit_days` and
+`retention.runs_days` default to 60 days; they define eligibility but do not delete data
+by themselves. `orbit gc audit --apply` prunes old command-audit rows, this workspace's
+run-audit rows, and audit blobs no remaining row or pending write references.
+`orbit gc runs --apply` drops pipeline state for terminal runs past the run window while
+keeping their run and step rows. The seeded `store_gc` routine is disabled by default,
+so cleanup happens only after an operator applies a GC command or enables that routine.
+See [runtime configuration](../CONFIG.md) for the retention settings.
 
 Policy definitions under global or workspace `resources/policies/` may use
 `.yaml` or `.yml`. Named lookup, listing, and updates use the same file for a
