@@ -10,6 +10,8 @@
 
 #[path = "../support/git_authority.rs"]
 mod git_authority;
+#[path = "../support/fixture_crew.rs"]
+mod fixture_crew;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
