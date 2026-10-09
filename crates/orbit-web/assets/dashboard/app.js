@@ -318,7 +318,7 @@ function renderBodyBlock(body, fallbackClass) {
     view.textContent = body;
   }
   return el("div", { class: "field-block" }, [
-    el("h4", { text: "body" }),
+    el("h4", { class: "section-title", text: "Body" }),
     view,
   ]);
 }
@@ -428,7 +428,7 @@ function detailMetaRows(entries) {
 
 function detailGroup(title, content) {
   return el("div", { class: "knowledge-side-group" }, [
-    el("h4", { text: title }),
+    el("h4", { class: "section-title", text: title }),
     content || el("div", { class: "empty", text: "-" }),
   ]);
 }
@@ -605,16 +605,16 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
       markdownPanel(friction.body || friction.title, "friction-detail-body"),
     ]),
     el("aside", { class: "knowledge-side" }, [
-      detailGroup("metadata", detailMetaRows([
+      detailGroup("Metadata", detailMetaRows([
         ["id", friction.id],
         ["status", friction.status || "open"],
         ["model", friction.model],
         ["reported", fmtAbsTime(friction.created_at)],
         ["resolved", friction.resolved_at ? fmtAbsTime(friction.resolved_at) : "—"],
       ])),
-      detailGroup("triage", controls),
-      detailGroup("tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
-      friction.during_task ? detailGroup("during task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
+      detailGroup("Triage", controls),
+      detailGroup("Tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
+      friction.during_task ? detailGroup("During task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
     ].filter(Boolean)),
   ]);
 

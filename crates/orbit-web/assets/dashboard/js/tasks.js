@@ -1884,10 +1884,10 @@ function renderCommentsPanel(panel, task, context) {
   // The header also holds the order and collapse-all buttons, so the title and
   // count are the disclosure button rather than the whole header.
   const toggle = el("button", { class: "field-toggle" }, [
-    el("span", { class: "field-title", text: "comments" }),
+    el("span", { class: "field-title", text: "Comments" }),
     el("span", { class: "field-count", text: String(comments.length) }),
   ]);
-  const head = el("h4", {}, [toggle, actions]);
+  const head = el("h4", { class: "section-title" }, [toggle, actions]);
   makeDisclosure(head, toggle, {
     expanded: !isCollapsed,
     onToggle: (event) => {
@@ -1937,7 +1937,7 @@ function buildTaskDetail(task, context) {
     const heading = [el("span", { class: "field-title", text: title })];
     if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
     if (header.actions) heading.push(header.actions);
-    const h4 = el("h4", {}, heading);
+    const h4 = el("h4", { class: "section-title" }, heading);
     if (collapsible) {
       makeToggleRow(h4, {
         expanded: !collapsed,
@@ -1963,27 +1963,27 @@ function buildTaskDetail(task, context) {
     canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
 
   if (showsEditor("description")) {
-    addField(leftCol, "description", editor("description"));
+    addField(leftCol, "Description", editor("description"));
   }
 
   if (showsEditor("acceptance_criteria")) {
-    addField(leftCol, "acceptance criteria", editor("acceptance_criteria"), true, true);
+    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, true);
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(leftCol, "plan", markdownView(task.plan), true, true);
+    addField(leftCol, "Plan", markdownView(task.plan), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(leftCol, "execution summary", markdownView(task.execution_summary), true, true);
+    addField(leftCol, "Execution summary", markdownView(task.execution_summary), true, true);
   }
 
   if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
-    addField(leftCol, "artifacts", buildArtifacts(task), true, true);
+    addField(leftCol, "Artifacts", buildArtifacts(task), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
-    addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
+    addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
   }
 
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
@@ -2053,12 +2053,12 @@ function buildTaskDetail(task, context) {
     meta.appendChild(span);
     metaCount++;
   }
-  if (metaCount > 0) addField(rightCol, "details", meta);
+  if (metaCount > 0) addField(rightCol, "Details", meta);
 
   const readiness = readinessOf(task);
   if (readiness) {
     const count = readinessGaps(readiness).length;
-    addField(rightCol, "readiness", buildReadinessBlock(readiness), false, false, count > 0 ? { count } : {});
+    addField(rightCol, "Readiness", buildReadinessBlock(readiness), false, false, count > 0 ? { count } : {});
   }
 
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
@@ -2066,7 +2066,7 @@ function buildTaskDetail(task, context) {
   // show it in full here since the row only has room for the short name badge.
   if (task.workspace_root) {
     const loc = el("span", { class: "ws-location mono", text: task.workspace_root, title: task.workspace_root });
-    addField(rightCol, "location", loc);
+    addField(rightCol, "Location", loc);
   }
 
   // Complexity and tags are one card of properties: each is a label beside its
@@ -2080,22 +2080,22 @@ function buildTaskDetail(task, context) {
     if (showsEditor("tags")) {
       properties.appendChild(property("tags", editor("tags", actions)));
     }
-    addField(rightCol, "properties", properties, false, false, { actions });
+    addField(rightCol, "Properties", properties, false, false, { actions });
   }
 
   if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
-    addField(rightCol, "external refs", buildExternalRefs(task.external_refs));
+    addField(rightCol, "External refs", buildExternalRefs(task.external_refs));
   }
 
   if (Array.isArray(task.relations) && task.relations.length > 0) {
     const relations = buildRelations(task.relations, context);
-    if (relations.children.length > 0) addField(rightCol, "relations", relations);
+    if (relations.children.length > 0) addField(rightCol, "Relations", relations);
   }
 
   if (showsEditor("context_files")) {
     const actions = actionSlot();
     const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
-    addField(rightCol, "context files", editor("context_files", actions), false, false, { actions, count });
+    addField(rightCol, "Context files", editor("context_files", actions), false, false, { actions, count });
   }
 
   if (Array.isArray(task.history) && task.history.length > 0) {
@@ -2115,7 +2115,7 @@ function buildTaskDetail(task, context) {
         ]);
         wrap.appendChild(line);
       }
-      addField(rightCol, "recent history", wrap);
+      addField(rightCol, "Recent history", wrap);
     }
   }
 
@@ -3089,7 +3089,7 @@ export function renderTasks(tasks, context) {
 
   // Column header strip (once, before first group-header). Uses .row.header so grid
   // (and all @media overrides) are identical to data rows; labels sit over ID/Title/Status/Crew.
-  const colHeader = el("div", { class: "row header" }, [
+  const colHeader = el("div", { class: "row header col-head" }, [
     el("span", { class: "id", text: "ID" }),
     el("span", { class: "title", text: "Title" }),
     el("span", { class: "status-cell", text: "Status" }),

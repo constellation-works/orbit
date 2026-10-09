@@ -161,12 +161,6 @@
 }
 .handoff-panel h5 {
   margin: 0 0 6px 0;
-  font-size: 13px;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
-  font-family: var(--font-sans);
-  font-weight: 600;
 }
 .claim-actions {
   display: flex;
@@ -382,12 +376,6 @@
   border-bottom: 1px solid var(--border);
 }
 .gantt-panel .gantt-header {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
   margin-bottom: 10px;
 }
 .gantt-svg {
@@ -436,12 +424,6 @@
   border-bottom: 1px solid var(--border);
 }
 .knowledge-panel .knowledge-header {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
   margin-bottom: 10px;
 }
 .knowledge-grid {

@@ -167,7 +167,7 @@ function loadErrorBanner(payload) {
 }
 
 function headRow() {
-  const head = el("div", { class: "host-grid host-head" }, [
+  const head = el("div", { class: "host-grid host-head col-head" }, [
     "Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "",
   ].map((label) => el("span", { text: label })));
   head.setAttribute("role", "row");

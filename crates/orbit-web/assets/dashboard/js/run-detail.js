@@ -222,7 +222,7 @@ export function renderRunDetailEmpty(message, { preserveFeedback = true } = {}) 
     el("div", { class: "text", text: message }),
   ]), ...(feedback ? [feedback] : [])]);
   const title = $("run-detail-title");
-  if (title) title.textContent = "Run Detail";
+  if (title) title.textContent = "Run detail";
   const count = $("run-detail-count");
   if (count) count.textContent = "-";
   const steps = $("run-steps-body");
@@ -628,7 +628,7 @@ export function renderRunKnowledge() {
   panel.innerHTML = "";
   panel.style.display = km == null || Object.keys(km).length === 0 ? "none" : "block";
   if (panel.style.display === "none") return;
-  const header = el("div", { class: "knowledge-header", text: "Knowledge Pack" });
+  const header = el("div", { class: "knowledge-header section-title", text: "Knowledge pack" });
   panel.appendChild(header);
   const grid = el("div", { class: "knowledge-grid" });
   const baseline = Number(km.raw_read_token_baseline || 0);
@@ -686,7 +686,7 @@ export function renderRunGantt() {
   }
   panel.style.display = "block";
   panel.innerHTML = "";
-  panel.appendChild(el("div", { class: "gantt-header", text: "Step Timeline" }));
+  panel.appendChild(el("div", { class: "gantt-header section-title", text: "Step timeline" }));
 
   const startMs = run.started_at ? new Date(run.started_at).getTime() : null;
   let endMs = run.finished_at ? new Date(run.finished_at).getTime() : null;

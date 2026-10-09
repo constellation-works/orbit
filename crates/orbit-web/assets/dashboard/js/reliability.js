@@ -281,7 +281,7 @@ function renderBreakdown(payload) {
 
 function card(title, body, key) {
   const node = el("div", { class: "audit-summary-card rel-card" }, [
-    el("div", { class: "card-title", text: title }),
+    el("div", { class: "card-title section-title", text: title }),
     el("div", { class: "card-body" }, [body]),
   ]);
   node.dataset.key = key;

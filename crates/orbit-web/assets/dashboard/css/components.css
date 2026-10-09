@@ -2,10 +2,39 @@
    inputs, filter chips, empty and loading states, action buttons, status
    pills and state labels, and the shared data table (.scoreboard-table).
 
-   Section titles read as headings, not as shouted mono labels: a title that
-   names a whole section is 13px sans, weight 600, capitalized (its markup
-   text is often lowercase). The small uppercase overline style is for field
-   labels inside a section: rail groups, table heads, fact labels. */
+   Titles are sentence case and never CSS-capitalized: a panel header is 14px
+   sans, a section or card title inside a panel is `.section-title`. The
+   small uppercase overline (`th`, `.col-head`) is for column heads and field
+   labels inside a section. Prose is sans; mono is for ids, metrics,
+   timestamps, code and logs. See docs/design/user-interface/specs/theme.md. */
+
+/* Every column head, whether a real `<th>` or a grid header row, reads the
+   same: a quiet uppercase overline. Tables set only layout on their heads
+   (padding, alignment, stickiness), never font, case or tracking. */
+th,
+.col-head {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  text-align: left;
+}
+
+/* A titled section or card inside a panel. Generated titles are often
+   lowercase data (a label from the server, an actor name), so only the first
+   letter is raised; `capitalize` would also raise every later word. */
+.section-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
+}
+.section-title::first-letter { text-transform: uppercase; }
 
 .panel {
   background: var(--bg-elev);
@@ -125,7 +154,7 @@
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 48px 24px; color: var(--fg-dim); font-family: var(--font-mono); font-size: 13px;
+  padding: 48px 24px; color: var(--fg-dim); font-family: var(--font-sans); font-size: 13px;
 }
 .empty-state .icon { font-size: 24px; margin-bottom: 12px; filter: grayscale(100%) opacity(50%); }
 
@@ -472,12 +501,6 @@ table.scoreboard-table td {
 }
 
 table.scoreboard-table th {
-  text-align: left;
-  color: var(--fg-dim);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   position: sticky;
   top: 0;
   background: var(--bg-elev);
@@ -487,8 +510,8 @@ table.scoreboard-table th {
 table.scoreboard-table td.num,
 table.scoreboard-table th.num {
   text-align: right;
-  font-family: var(--font-mono);
 }
+table.scoreboard-table td.num { font-family: var(--font-mono); }
 
 table.scoreboard-table td.zero { color: var(--border); }
 
@@ -553,7 +576,7 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
 .panel-placeholder {
   padding: 10px 16px;
   color: var(--fg-dim);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 12px;
   font-style: italic;
 }

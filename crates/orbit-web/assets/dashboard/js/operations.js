@@ -401,7 +401,7 @@ function operationGroup(tone, title, count, hint) {
 }
 
 function operationColumns(labels) {
-  const row = el("div", { class: "operation-columns" }, labels.map((label) => el("span", { text: label })));
+  const row = el("div", { class: "operation-columns col-head" }, labels.map((label) => el("span", { text: label })));
   row.setAttribute("aria-hidden", "true");
   return row;
 }

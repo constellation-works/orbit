@@ -992,7 +992,7 @@ export function renderRuns(runs) {
     runHeaderCell("Duration", "duration", { class: "duration", style: { textAlign: "right" } }),
     el("span", { class: "run-actions-header", text: "Actions", style: { textAlign: "right" } }),
   ];
-  const header = el("div", { class: `runs-row runs-header${attributed ? " workspace-attributed" : ""}` }, headerCells);
+  const header = el("div", { class: `runs-row runs-header col-head${attributed ? " workspace-attributed" : ""}` }, headerCells);
   header.dataset.key = "runs-header";
   header.dataset.hash = `header-${runSort.key}-${runSort.dir}-${attributed ? "workspace" : "scoped"}`;
   frag.appendChild(header);

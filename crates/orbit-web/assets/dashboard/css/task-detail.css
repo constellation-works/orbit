@@ -303,19 +303,13 @@
 }
 
 .field-block h4 {
-  font-size: 13px;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
   margin: 0 0 12px 0;
-  font-weight: 600;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding-bottom: 8px;
   transition: color 0.2s ease;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-sans);
 }
 
 /* The header holds the title, an optional count, and the field's own

@@ -151,7 +151,7 @@
 .config-entry-remove:hover { color: var(--state-failed); }
 .config-field { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .config-field-label { color: var(--fg-dim); font-size: 11px; min-width: 84px; }
-.config-row-error { color: var(--state-failed); font: 11px/1.5 var(--font-mono); padding: 0 14px 8px; overflow-wrap: anywhere; }
+.config-row-error { color: var(--state-failed); font: 12px/1.5 var(--font-sans); padding: 0 14px 8px; overflow-wrap: anywhere; }
 
 .config-crew-cells {
   display: grid;
@@ -159,8 +159,7 @@
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
 .config-crew-head {
-  align-items: center; border-bottom: 1px solid var(--hair); color: var(--fg-dim);
-  background: var(--bg); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  align-items: center; border-bottom: 1px solid var(--hair); background: var(--bg);
 }
 .config-crew-head [role="columnheader"] { min-width: 0; }
 .config-crew-cell { min-width: 0; }
@@ -213,7 +212,7 @@
   display: grid; grid-template-columns: minmax(90px, 0.8fr) minmax(140px, 1fr) minmax(180px, 1.4fr) minmax(180px, 1.4fr);
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
-.config-sys-head { color: var(--fg-dim); font-size: 11px; border-bottom: 1px solid var(--hair); }
+.config-sys-head { border-bottom: 1px solid var(--hair); }
 .config-sys-resource { border-bottom: 1px solid var(--hair); }
 .config-sys-resource:last-child { border-bottom: none; }
 .config-sys-cell { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -232,7 +231,7 @@
    with its live identity, and the inline add, rename and remove editors.
    Reachability and skew carry text as well as colour. */
 .host-notice:empty { display: none; }
-.host-notice { color: var(--state-success); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.host-notice { color: var(--state-success); font: 12px/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .host-add { display: flex; flex-direction: column; gap: 8px; }
 .host-add > .config-action { align-self: flex-start; }
 .host-add .host-editor, .host-row .host-editor {
@@ -247,7 +246,7 @@
   display: grid; align-items: start; gap: 6px 12px; padding: 8px 12px;
   grid-template-columns: minmax(200px, 2.2fr) minmax(110px, 1fr) minmax(70px, 0.8fr) minmax(90px, 0.8fr) minmax(80px, 0.9fr) minmax(140px, 1.6fr) auto;
 }
-.host-head { color: var(--fg-mute); font-size: 11px; border-bottom: 1px solid var(--hair); }
+.host-head { border-bottom: 1px solid var(--hair); }
 .host-row + .host-row { border-top: 1px solid var(--hair); }
 .host-row.local { background: var(--bg); }
 .host-identity, .host-workspaces { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -261,7 +260,7 @@
 .host-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
 .host-error {
   margin: 0 12px 8px; padding: 6px 8px; border-left: 3px solid var(--state-failed);
-  color: var(--fg-dim); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere;
+  color: var(--fg-dim); font: 12px/1.5 var(--font-sans); overflow-wrap: anywhere;
 }
 .host-dependents { margin: 0; padding-left: 18px; color: var(--fg); font-size: 11px; }
 .config-action.danger { color: var(--state-failed); border-color: var(--state-failed); }

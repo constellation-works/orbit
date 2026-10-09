@@ -112,23 +112,8 @@ tr.audit-detail-row td {
 }
 .policy-cell h5,
 .policy-section h5 {
-  margin: 0;
   padding: 10px 16px;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-dim);
   border-bottom: 1px solid var(--border);
-}
-.policy-section h5 {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: capitalize;
-  color: var(--fg);
 }
 table.policy-table {
   width: 100%;
@@ -142,12 +127,6 @@ table.policy-table td {
   white-space: nowrap;
 }
 table.policy-table th {
-  text-align: left;
-  color: var(--fg-dim);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   cursor: pointer;
   user-select: none;
 }
@@ -213,12 +192,6 @@ table.policy-table.policy-cause-table td {
   flex-shrink: 0;
 }
 .audit-summary-card .card-title {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
@@ -234,11 +207,7 @@ table.policy-table.policy-cause-table td {
   font-size: 11px;
 }
 .summary-table th {
-  text-align: left;
-  color: var(--fg-dim);
-  font-weight: normal;
   padding: 6px;
-  font-family: var(--font-sans);
   overflow-wrap: anywhere;
   border-bottom: 1px solid var(--border);
 }
@@ -269,12 +238,6 @@ table.policy-table.policy-cause-table td {
   padding: 16px;
 }
 .summary-title {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
   margin: 0 0 14px 0;
 }
 .tool-health-grid {
@@ -323,7 +286,7 @@ table.policy-table.policy-cause-table td {
 .health-card.warning  .status-badge { color: #ffb74d; }
 .health-card.normal   .status-badge { color: var(--fg-dim); }
 .health-card .metric-trend {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--fg-dim);
 }

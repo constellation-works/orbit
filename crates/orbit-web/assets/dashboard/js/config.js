@@ -932,7 +932,7 @@ function systemPanel(payload) {
       : [],
   ]));
   body.appendChild(systemVerdict(host, verdict, rows, payload));
-  const head = el("div", { class: "config-sys-grid config-sys-head" }, [
+  const head = el("div", { class: "config-sys-grid config-sys-head col-head" }, [
     el("span", { text: "resource" }),
     el("span", { text: "live reading" }),
     el("span", { text: "throttle at" }),
@@ -1046,7 +1046,7 @@ function crewsPanel(payload, { standalone }) {
     ]),
   );
   const body = el("div", { class: "config-section-body" });
-  const head = el("div", { class: "config-crew-cells config-crew-head" });
+  const head = el("div", { class: "config-crew-cells config-crew-head col-head" });
   head.setAttribute("role", "row");
   for (const label of CREW_COLUMNS) {
     const cell = el("span", { text: label });
