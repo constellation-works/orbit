@@ -265,6 +265,23 @@ impl OrbitRuntime {
         })
     }
 
+    /// Required-tool warnings for a definition that an update just returned.
+    ///
+    /// A waiver is persisted before this check runs, so on the waive path a
+    /// tool problem is reported as a warning: the waiver stands and the command
+    /// must not fail on it.
+    pub fn auto_task_update_tool_warnings(
+        &self,
+        definition: &AutoTaskDefinition,
+        waived: bool,
+    ) -> Result<Vec<String>, OrbitError> {
+        match self.validate_required_tools(&definition.template.required_tools) {
+            Ok(warnings) => Ok(warnings),
+            Err(error) if waived => Ok(vec![error.to_string()]),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Enable or disable a definition (the kill-switch). Disabling pauses an
     /// auto-task and preserves the definition; `auto_task_delete` removes it.
     pub fn auto_task_toggle(
