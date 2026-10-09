@@ -320,6 +320,72 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
 }
 
 #[test]
+fn every_shipped_body_history_source_is_recognized_by_workspace_sync() {
+    let fixture = Fixture::new();
+    let history: Value = serde_json::from_str(include_str!(
+        "../../../orbit-core/assets/auto_tasks/body-history.json"
+    ))
+    .unwrap();
+    let sources: Value = serde_json::from_str(include_str!(
+        "../fixtures/auto-task-body-history/sources.json"
+    ))
+    .unwrap();
+    assert!(!history.as_object().unwrap().is_empty());
+
+    for (name, records) in history.as_object().unwrap() {
+        let path = definition_path(&fixture, name);
+        let bundled = fs::read(&path).unwrap();
+        let dir = path.parent().unwrap();
+        assert!(!records.as_array().unwrap().is_empty(), "{name}");
+        for record in records.as_array().unwrap() {
+            let revision = record["revision"].as_str().unwrap();
+            let raw = sources[name][revision]
+                .as_str()
+                .unwrap_or_else(|| panic!("missing shipped source: {name} at {revision}"));
+            let backlog_regression = name == "backlog-hygiene" && revision.starts_with("4c84ad7a6");
+            let mut variants = vec![raw.to_string()];
+            if backlog_regression {
+                let duplicated = raw.replacen(
+                    "  - orbit.task.list\n",
+                    "  - orbit.task.list\n  - orbit.task.list\n",
+                    1,
+                );
+                assert_ne!(duplicated, raw, "required-tools regression fixture");
+                variants.push(duplicated);
+            }
+            for raw in variants {
+                // Each source starts untracked, without overrides left by a
+                // previous migration. The compiled Rust classifier must prove
+                // provenance rather than trusting the manifest's byte digest.
+                fs::write(
+                    dir.join(SETTINGS_FILE),
+                    r#"{"schemaVersion":1,"definitions":{}}"#,
+                )
+                .unwrap();
+                fs::write(&path, &raw).unwrap();
+                set_manifest_digest(dir, name, None);
+                if backlog_regression {
+                    let row = auto_task_doctor_row(&fixture);
+                    let message = row["message"].as_str().unwrap();
+                    assert!(
+                        message.contains("`backlog-hygiene` has a stale shipped body"),
+                        "{revision}: {message}"
+                    );
+                    assert!(!message.contains("body fork"), "{revision}: {message}");
+                }
+                let sync = fixture.json(&["workspace", "sync", "--json"]);
+                let outcome = sync_outcome(&sync, name);
+                assert!(
+                    matches!(outcome.as_str(), "migrated" | "unchanged"),
+                    "shipped source must be recognized: {name} at {revision}: {outcome}"
+                );
+                assert_eq!(fs::read(&path).unwrap(), bundled, "{name} at {revision}");
+            }
+        }
+    }
+}
+
+#[test]
 fn older_shipped_body_keeps_explicit_settings_and_their_edit_stamp() {
     let fixture = Fixture::new();
     let path = definition_path(&fixture, "run-failure-patterns");

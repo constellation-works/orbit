@@ -6,7 +6,7 @@
         "## Output",
         "## Safety and evidence"
       ],
-      "digest": "36512484292b8469b06a5b2d97e6ef15a2f3e4d791e87f6ad05cd44702d1f39b",
+      "digest": "745705a6a5dd80671f318841e44059c9f6e4f2e3ba68c0c726079195ee22eb93",
       "revision": "d234353fd8393b0d2e7a448bb3cf1bf82bbbfa3f",
       "settings": {
         "complexity": "medium",
@@ -29,7 +29,7 @@
         "## Output",
         "## Safety and evidence"
       ],
-      "digest": "43aa10937c333cce33ae062f9069b337403dbfbe82b36094d24c50b67c1559f2",
+      "digest": "e699e80599ff59dd8bd4d75eca2af57ff02e2a34951f67d045bfff96577dbeb2",
       "revision": "4c84ad7a63527d297d01ba42b3bf25b523f80074",
       "settings": {
         "complexity": "medium",
@@ -980,6 +980,33 @@
         "## Pin the commit",
         "## Rules and command surfaces"
       ],
+      "digest": "2deb9fb38d46b785141d23721faa37f87a801035af82e27986f9dcee3c7a3463",
+      "revision": "d5ea406418e5807a41b76afce204c3d145ec0a6c",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
       "digest": "4280e63896fa68a7c2040a040f60dd9ceaff28577b12489f4db8637f52cc8586",
       "revision": "d2f135df250447cf03c7a80bce81a28b98edbc4f",
       "settings": {
@@ -1009,33 +1036,6 @@
       ],
       "digest": "6903d40d87c7734dd4634db8c6631ca9c06a929b1bd5dd44efe00cc6ff4a4030",
       "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
-      "settings": {
-        "complexity": "medium",
-        "crew": "system",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "medium",
-        "schedule": {
-          "cron": "0 6 1 * *"
-        },
-        "tags": [
-          "full-code-review",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "# The portable system lane is seeded per machine and compatibility-aliased",
-        "# for configs written before that crew existed.",
-        "## File one area review per area",
-        "## Finish",
-        "## Partition the tree",
-        "## Pin the commit",
-        "## Rules and command surfaces"
-      ],
-      "digest": "ab5d4ed0209f0e832dd1e41299b58d1a13c5ca5da3b8e44a75e9751e194f7a32",
-      "revision": "d5ea406418e5807a41b76afce204c3d145ec0a6c",
       "settings": {
         "complexity": "medium",
         "crew": "system",
