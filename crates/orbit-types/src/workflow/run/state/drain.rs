@@ -271,6 +271,11 @@ pub struct DrainAdmissionPass {
     /// The subset of `queued` a lock conflict kept out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deferred: Vec<DrainWaitingTask>,
+    /// The full count behind `deferred`. A pull drain bounds that list; a
+    /// record that predates this field reads 0, so readers take the larger of
+    /// the two.
+    #[serde(default)]
+    pub deferred_total: u64,
     /// Backlog tasks the drain could not admit at all (bounded list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<DrainWaitingTask>,

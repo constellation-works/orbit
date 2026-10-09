@@ -780,6 +780,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 recorded_at: now,
                 queued: 0,
                 deferred: vec![],
+                deferred_total: 0,
                 excluded: vec![],
                 excluded_total: 0,
                 waiting_recorded_at: None,

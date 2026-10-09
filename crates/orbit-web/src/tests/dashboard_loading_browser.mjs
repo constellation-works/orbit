@@ -551,7 +551,7 @@ async function assertStillWaiting(page) {
     if (!(await panel.isVisible())) throw new Error(`Still-waiting panel invisible at ${width}px`);
     const text = await panel.textContent();
     for (const expected of [
-      'still waiting: 9 admissible and 2 excluded backlog task(s)',
+      'still waiting: 9 admissible, 1 deferred and 2 excluded backlog task(s)',
       'Task ORB-101: context_lock_conflict blocked-by=ORB-900',
       'Task ORB-103: dependency_not_done blocked-by=ORB-901',
       'Task ORB-104: host_os_mismatch (waits for a linux host',
