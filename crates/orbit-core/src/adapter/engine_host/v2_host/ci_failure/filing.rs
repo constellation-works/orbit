@@ -405,13 +405,16 @@ where
                     })],
                 )
             })?;
-            if !operator.failed_covers.is_empty()
-                && existing.as_ref().is_some_and(|matched| {
-                    lookup
-                        .get_task(&matched.task_id)
-                        .is_ok_and(|task| task.status == TaskStatus::Done)
-                })
-            {
+            // Only the disproven cover (or its owner) loses coverage. A
+            // later completed repair remains a valid duplicate owner.
+            if existing.as_ref().is_some_and(|matched| {
+                operator.failed_covers.iter().any(|cover| {
+                    cover["cover"].as_str() == Some(matched.task_id.as_str())
+                        || cover["task_id"].as_str() == Some(matched.task_id.as_str())
+                }) && lookup
+                    .get_task(&matched.task_id)
+                    .is_ok_and(|task| task.status == TaskStatus::Done)
+            }) {
                 existing = None;
             }
             if existing.is_some() {
@@ -435,10 +438,7 @@ where
         .zip(&duplicate_matches)
         .zip(&operator_assessments)
         .map(|((cluster, duplicate_match), operator)| {
-            if duplicate_match.is_some()
-                || operator.withheld.is_some()
-                || !operator.failed_covers.is_empty()
-            {
+            if duplicate_match.is_some() || operator.withheld.is_some() {
                 return Ok(None);
             }
             landed_repairs.find(cluster, &lookup).map_err(|error| {

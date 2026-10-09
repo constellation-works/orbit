@@ -212,6 +212,105 @@ fn ci_operator_task_cover_holds_until_a_checkout_contains_the_landing() {
     assert!(task.description.contains(&commits[1]));
 }
 
+/// A failed operator cover must not erase a later repair's ownership or
+/// prevent stale failures from waiting on that repair's landing.
+#[test]
+fn ci_operator_failed_cover_preserves_a_second_landed_repair() {
+    if !isolated("ci_operator_failed_cover_preserves_a_second_landed_repair") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_types::task::TaskStatus;
+
+    // Exercise a Done repair match, a cross-job descendant landing, and a
+    // Done failed cover that matches first but must yield to the later repair.
+    for (cover_matches, other_job) in [(false, false), (false, true), (true, false)] {
+        let (_root, runtime, mut commits) = operator_fixture("");
+        commits.extend(commit_chain(&runtime.paths().repo_root, 2));
+        let log = "error: store GC invariant broken";
+        let original = file(&runtime, vec![failure(log, 0, &commits[0])]);
+        let owner = original["filed"][0]["task_id"].as_str().unwrap();
+        let cover = runtime
+            .add_task(TaskAddParams {
+                title: "Hand fix".into(),
+                description: if cover_matches {
+                    runtime.get_task(owner).unwrap().description
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        archive_owner(&runtime, owner, TaskStatus::Archived, Some(&cover.id));
+        runtime
+            .apply_task_automation_update(
+                &cover.id,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        record_landing(&runtime, &cover.id, &commits[0], &commits[1]);
+
+        let reproduced = file(&runtime, vec![failure(log, 1, &commits[2])]);
+        assert_eq!(reproduced["filed_count"], 1, "{reproduced}");
+        assert_eq!(
+            reproduced["filed"][0]["failed_covers"][0]["cover"],
+            cover.id
+        );
+        let repair = reproduced["filed"][0]["task_id"].as_str().unwrap();
+        runtime
+            .apply_task_automation_update(
+                repair,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        record_landing(&runtime, repair, &commits[2], &commits[3]);
+
+        let mut stale_run = failure(log, 2, &commits[2]);
+        if other_job {
+            stale_run["failed_jobs"][0]["name"] = json!("Coverage");
+        }
+        let stale = file(&runtime, vec![stale_run.clone()]);
+        assert_eq!(stale["filed_count"], 0, "{stale}");
+        assert_eq!(stale["pilot_candidate_count"], 0, "{stale}");
+        assert_eq!(stale["withheld"], json!([]), "{stale}");
+        if other_job || cover_matches {
+            assert_eq!(stale["skipped_existing"], json!([]), "{stale}");
+            let pending = &stale["pending_supersession"][0];
+            assert_eq!(
+                pending["reason"], "repaired_by_descendant_landing",
+                "{stale}"
+            );
+            assert_eq!(pending["task_id"], repair);
+            assert_eq!(pending["landed_commit"], commits[3]);
+            assert_eq!(pending["tested_commit"], commits[2]);
+            assert_eq!(stale["audit"]["pending_supersession_run_ids"], json!([12]));
+        } else {
+            assert_eq!(stale["pending_supersession"], json!([]), "{stale}");
+            assert_eq!(stale["skipped_existing"][0]["task_id"], repair, "{stale}");
+            assert_eq!(
+                stale["skipped_existing"][0]["match_kind"],
+                "material_coverage"
+            );
+        }
+        // Repeated sweeps of the same stale observation remain idempotent.
+        assert_eq!(file(&runtime, vec![stale_run])["filed_count"], 0);
+
+        // A different job reproducing after both fixes still needs a repair.
+        let mut after = failure(log, 3, &commits[4]);
+        after["failed_jobs"][0]["name"] = json!("Coverage");
+        let fresh = file(&runtime, vec![after]);
+        assert_eq!(fresh["filed_count"], 1, "{fresh}");
+        assert_eq!(fresh["pending_supersession"], json!([]));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn ci_operator_pr_cover_reports_open_landed_closed_and_unavailable_states() {
