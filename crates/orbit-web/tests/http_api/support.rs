@@ -12,6 +12,7 @@ use orbit_types::workspace::{
 };
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
+use tracing_subscriber::prelude::*;
 
 const CHILD_TEST: &str = "ORBIT_HTTP_TEST_CHILD";
 const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
@@ -472,12 +473,17 @@ pub(super) fn json_ok(response: Response) -> Value {
 pub(super) fn serve_fixture() {
     if let Some(path) = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE") {
         // Count real store operations across the server's blocking threads.
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter("orbit.store.task_query=trace")
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
-            .with_span_list(false)
-            .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+                    .with_span_list(false)
+                    .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
+                    .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                        metadata.is_span() && metadata.target() == "orbit.store.task_query"
+                    })),
+            )
             .init();
     }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));

@@ -103,8 +103,8 @@ impl TaskV2Store {
     /// Each registered task costs one metadata probe. Its envelope is parsed
     /// again only when neither the in-process [`EnvelopeCache`] nor a stamp
     /// recorded in the registry proves the file is one already compared with
-    /// this index row (see the cache's freshness policy); each new proof is
-    /// recorded for later scans in any process. Reuse never replaces the index
+    /// this index row (see the cache's freshness policy); writable scans record
+    /// each new proof for later scans in any process. Reuse never replaces the index
     /// comparison — a reused envelope that disagrees with its index row still
     /// sends the caller to a rebuild.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
@@ -114,10 +114,34 @@ impl TaskV2Store {
             workspace_id = %self.workspace_id,
         )
         .entered();
+        // The index snapshot precedes the envelope probes. A writer can
+        // finish publishing between them, so confirm a mismatch once against
+        // a new snapshot before paying for a workspace-wide bundle scan.
+        for _ in 0..2 {
+            if let Some(unsettled) = self.validate_index_once()? {
+                orbit_common::tracing::debug!(
+                    target: "orbit.store.task_query",
+                    workspace_id = %self.workspace_id,
+                    path = "index",
+                    "task index freshness accepted",
+                );
+                return Ok(Some(unsettled));
+            }
+        }
+        Ok(None)
+    }
+
+    fn validate_index_once(&self) -> Result<Option<Vec<String>>, OrbitError> {
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
             .registry
             .indexed_task_rows_for_workspace(&self.workspace_id)?;
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_query",
+            workspace_id = %self.workspace_id,
+            indexed_tasks = indexed.len(),
+            "task index snapshot loaded",
+        );
         if registered.len() != indexed.len() {
             return Ok(None);
         }
@@ -143,11 +167,12 @@ impl TaskV2Store {
                 None => unsettled.push(binding.task_id.clone()),
             }
         }
-        // Best effort: the proofs only spare later scans a parse, and a
-        // registry on read-only media cannot take them.
-        if let Err(error) = self
-            .registry
-            .record_envelope_stamps(&self.workspace_id, &proofs)
+        // Proofs only spare later scans a parse. Observation-only reads must
+        // not even attempt to persist them through a read-only connection.
+        if !self.registry.is_read_only()?
+            && let Err(error) = self
+                .registry
+                .record_envelope_stamps(&self.workspace_id, &proofs)
         {
             orbit_common::tracing::debug!(
                 target: "orbit.store.task_bundle_v2",
@@ -256,7 +281,8 @@ impl TaskV2Store {
     }
 
     /// Read every settled bundle for a read the index cannot serve, and
-    /// rebuild the index from them when the [`RepairGate`] admits it.
+    /// rebuild the index from them when the registry is writable and the
+    /// [`RepairGate`] admits it. Read-only registries never consult the gate.
     ///
     /// The scan is strict: a task-field error in any bundle fails the read
     /// rather than hiding behind a degraded index. Only the rebuild is
@@ -268,6 +294,14 @@ impl TaskV2Store {
         reason: &str,
     ) -> Result<Vec<TaskBundleV2>, OrbitError> {
         let ticket = self.admit_index_repair()?;
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_query",
+            workspace_id = %self.workspace_id,
+            path = "bundle_scan",
+            repair_admitted = ticket.is_some(),
+            reason,
+            "task index fallback",
+        );
         let bundles = self.bundle_store.list_bundles()?;
         if let Some(ticket) = ticket {
             self.attempt_index_repair(ticket, &bundles, reason);
@@ -280,6 +314,9 @@ impl TaskV2Store {
     /// read; a recorded failure's unresolved targets are re-resolved so that
     /// restoring one re-admits the repair.
     fn admit_index_repair(&self) -> Result<Option<RepairTicket>, OrbitError> {
+        if self.registry.is_read_only()? {
+            return Ok(None);
+        }
         let gate = self.repair_gate();
         let mut evidence = RepairEvidence::default();
         for binding in self.registry.tasks_for_workspace(&self.workspace_id)? {

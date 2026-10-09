@@ -74,6 +74,8 @@ use tempfile::TempDir;
 mod dependencies;
 #[path = "allocation_admission/reservation_grants.rs"]
 mod reservation_grants;
+#[path = "allocation_admission/task_index.rs"]
+mod task_index;
 
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
