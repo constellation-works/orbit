@@ -254,8 +254,10 @@ it — see [friction.md](friction.md). Then:
   `delivery-code-review` or `code-review` task may also give each finding a
   `regression_from` relation to its culprit. `orbit.search` does not reach the
   owner, so skip the duplicate search and say so; the owner's triage dedupes.
-  Return a finding the owner still refuses in `unfiled_findings`; the handoff
-  attaches it to the claimed task as `unfiled-findings.json`.
+  Return a finding the owner still refuses in `unfiled_findings` as
+  `{title, description}` objects (plain strings fail the implement step before
+  anything is committed or pushed); the handoff attaches it to the claimed task
+  as `unfiled-findings.json`.
 - **Direct execution** (no envelope): persist the summary *and* move to `review`
   via `orbit.task.update`.
 

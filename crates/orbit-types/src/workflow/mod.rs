@@ -128,8 +128,9 @@ pub use run::{
     agent_blocker_from_output, failed_provider, is_baseline_red_failure, is_forge_unavailable,
     is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
     is_provider_limit, is_provider_refusal, is_provider_unavailable, is_task_blocked_by_agent,
-    is_validation_environment_failure, provider_failure_text, run_id_candidate, run_id_minute_stem,
-    run_id_role, task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    is_validation_environment_failure, normalize_unfiled_findings, provider_failure_text,
+    run_id_candidate, run_id_minute_stem, run_id_role, task_blocked_by_agent_kind,
+    task_blocked_by_agent_message, unfiled_findings_shape_error,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

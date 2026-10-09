@@ -534,7 +534,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   findings without a duplicate search, and the owner's triage dedupes them.
   A finding the owner still refuses arrives as the claimed task's
   `unfiled-findings.json` artifact: file each entry on the owner, keeping its
-  relations.
+  relations. The implement step refuses `unfiled_findings` that is not an array
+  of `{title, description}` objects, before the commit, push or PR-open steps
+  run; its retry and recovery are the repair attempt. A candidate already
+  published with plain-string entries (or a replay of its failed
+  `claim_handoff`) still hands off: the handoff rewrites each non-blank string
+  as `{title: <first sentence>, description: <the whole string>,
+  normalized_from: "string"}`, sets `normalized_string_entries` in the
+  artifact, and says so in the execution summary. Any other malformed entry, a
+  blank string or a non-array field, is still refused.
 - If the coordinator is missing or gone, the call fails as
   `owner_route_unavailable` and the agent ends its step on that code. The
   run skips step and final recovery, and the leaf releases its claim with the

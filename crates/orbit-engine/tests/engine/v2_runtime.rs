@@ -1293,6 +1293,81 @@ fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
     );
 }
 
+/// An implementer whose `unfiled_findings` are plain strings, not the declared
+/// `{title, description}` objects, fails at `implement_one` [ORB-14927]. The
+/// delivery steps after it never run, so nothing is committed, pushed or
+/// opened for a handoff that cannot be accepted. Well-formed findings, and
+/// output with no findings, still deliver.
+#[test]
+fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
+    let malformed = [
+        json!(["The owner refused this. It needs a follow-up."]),
+        json!("not an array"),
+        json!([{ "title": "No description" }]),
+        json!([{ "title": "  ", "description": "blank title" }]),
+        json!([42]),
+    ];
+    for findings in malformed {
+        let host = ScriptedHost {
+            implement_output: json!({ "summary": "done", "unfiled_findings": findings }),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, events) = try_run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        let actions = host.actions();
+
+        // The step fails, retries and recovers like any failed step; the job
+        // ends in error once those are spent.
+        let failure = match outcome {
+            Ok(outcome) => {
+                assert!(
+                    !outcome.success,
+                    "{findings}: malformed findings do not deliver: {outcome:?}"
+                );
+                outcome.message.unwrap_or_default()
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            failure.contains("unfiled_findings"),
+            "{findings}: the failure names the field: {failure}"
+        );
+        assert!(
+            !actions.iter().any(|action| action == "commit"),
+            "{findings}: no delivery step runs for the attempt: {actions:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::StepFinished { step_id, outcome, .. }
+                    if step_id == "implement_one" && outcome == "error"
+            )),
+            "{findings}: implement_one itself ends in error"
+        );
+    }
+
+    for output in [
+        json!({ "unfiled_findings": [{
+            "title": "A finding",
+            "description": "Its detail.",
+            "relations": [{ "type": "spawned_from", "target": "ORB-1" }],
+        }] }),
+        json!({ "unfiled_findings": [] }),
+        json!({ "unfiled_findings": null }),
+        json!({ "summary": "no findings" }),
+    ] {
+        let host = ScriptedHost {
+            implement_output: output.clone(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, _) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        assert!(
+            outcome.success,
+            "{output}: a valid output delivers: {outcome:?}"
+        );
+        assert!(host.actions().iter().any(|action| action == "commit"));
+    }
+}
+
 struct ScriptedHost {
     implement_output: Value,
     calls: Mutex<Vec<(String, Value)>>,
@@ -1351,6 +1426,14 @@ fn scripted_activity(action: &str) -> ActivityV2 {
 }
 
 fn run_blocker_job(host: &ScriptedHost, input: Value) -> (JobOutcome, Vec<V2AuditEvent>) {
+    let (outcome, events) = try_run_blocker_job(host, input);
+    (outcome.expect("the blocker job runs to an outcome"), events)
+}
+
+fn try_run_blocker_job(
+    host: &ScriptedHost,
+    input: Value,
+) -> (Result<JobOutcome, DispatchError>, Vec<V2AuditEvent>) {
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",
@@ -1388,8 +1471,7 @@ fn run_blocker_job(host: &ScriptedHost, input: Value) -> (JobOutcome, Vec<V2Audi
     resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog()).expect("resolve hooks");
     let audit = tempfile::tempdir().expect("audit tempdir");
     let (writer, _, _) = build_writer_and_sinks(audit.path(), "blocker-run");
-    let outcome = execute_job_with_resume(&job, input, "blocker-run", writer.clone(), host, None)
-        .expect("the blocker job runs to an outcome");
+    let outcome = execute_job_with_resume(&job, input, "blocker-run", writer.clone(), host, None);
     let events = writer.events_snapshot().expect("persisted audit events");
     (outcome, events)
 }

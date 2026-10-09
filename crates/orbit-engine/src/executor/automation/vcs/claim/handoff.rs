@@ -64,10 +64,20 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     let mut execution_summary =
         handoff_execution_summary(input, &candidate, !validation.is_empty())?;
     let unfiled = attach_unfiled_findings(host, &context, input)?;
-    if unfiled > 0 {
+    if unfiled.attached > 0 {
         execution_summary.push_str(&format!(
-            "\n\nThe claimed worker could not file {unfiled} finding(s) on the owner; they are \
-             attached to this task as `{UNFILED_FINDINGS_ARTIFACT}` for the owner to file."
+            "\n\nThe claimed worker could not file {} finding(s) on the owner; they are \
+             attached to this task as `{UNFILED_FINDINGS_ARTIFACT}` for the owner to file.",
+            unfiled.attached
+        ));
+    }
+    if unfiled.normalized > 0 {
+        execution_summary.push_str(&format!(
+            "\n\n{} of those findings were plain strings, not the declared \
+             `{{title, description}}` objects; the handoff kept each string whole as the \
+             description, derived the title from its first sentence, and marked the entry \
+             `normalized_from: \"string\"`.",
+            unfiled.normalized
         ));
     }
     let review = handoff_review(input, &candidate)?;
@@ -112,47 +122,66 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
 /// file on the owner [ORB-14792].
 const UNFILED_FINDINGS_ARTIFACT: &str = "unfiled-findings.json";
 
+/// What [`attach_unfiled_findings`] recorded.
+#[derive(Debug, Default, Clone, Copy)]
+struct UnfiledFindings {
+    /// Findings written to the artifact.
+    attached: usize,
+    /// Of those, plain strings rewritten as finding objects.
+    normalized: usize,
+}
+
 /// Attach the implementer's `unfiled_findings` output, if any, to the claimed
-/// task on the owner, through the claim, and return how many it holds.
+/// task on the owner, through the claim, and report how many it holds.
 ///
 /// A claimed worker files its findings through the run's coordinator. When
 /// the owner still refuses one, the worker returns it in this output field
 /// instead, so it reaches the owner as a structured record on the task that
 /// found it rather than only as prose in a reply nobody reads.
+///
+/// The implement step refuses a malformed field before delivery
+/// ([`unfiled_findings_shape_error`](orbit_types::workflow::unfiled_findings_shape_error)).
+/// A candidate that was published before that check, or by a run that
+/// predates it, can still carry plain-string entries, and no replay of the
+/// handoff would ever pass. So a string entry is rewritten as a finding object
+/// with its full text kept as the description, and the rewrite is recorded in
+/// the artifact and the owner's summary [ORB-14927]. Any other defect, such as
+/// a non-array field or a non-object, non-string entry, is still refused.
 fn attach_unfiled_findings<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &crate::context::ClaimExecutionContext,
     input: &Value,
-) -> Result<usize, OrbitError> {
+) -> Result<UnfiledFindings, OrbitError> {
     let Some(findings) = implementation_output(input)
         .and_then(|output| output.get("unfiled_findings"))
         .filter(|findings| !findings.is_null())
     else {
-        return Ok(0);
+        return Ok(UnfiledFindings::default());
     };
-    let findings = findings
-        .as_array()
-        .filter(|findings| findings.iter().all(Value::is_object))
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "the implementer's `unfiled_findings` must be an array of finding objects"
-                    .to_string(),
-            )
+    let (findings, normalized) = orbit_types::workflow::normalize_unfiled_findings(findings)
+        .map_err(|defect| {
+            OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
         })?;
     if findings.is_empty() {
-        return Ok(0);
+        return Ok(UnfiledFindings::default());
     }
-    let record = json!({
+    let mut record = json!({
         "schema_version": 1,
         "task_id": context.task_id,
         "claim_id": context.claim_id,
         "run_id": context.run_id,
         "findings": findings,
     });
+    if normalized > 0 {
+        record["normalized_string_entries"] = json!(normalized);
+    }
     let content = serde_json::to_vec_pretty(&record)
         .map_err(|error| OrbitError::Execution(format!("unfiled findings: {error}")))?;
     host.attach_claim_validation_log(UNFILED_FINDINGS_ARTIFACT, content)?;
-    Ok(findings.len())
+    Ok(UnfiledFindings {
+        attached: findings.len(),
+        normalized,
+    })
 }
 
 /// The review disposition the handoff reports. A leaf that ran the before-PR
