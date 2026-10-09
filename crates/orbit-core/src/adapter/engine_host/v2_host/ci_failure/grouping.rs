@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::Value;
 
 use super::cluster::{FailureCluster, job_log_source};
@@ -32,9 +33,10 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         let workflow = value_string(failure, "workflow");
         let (job, step) = failing_job_and_step(failure);
-        let log_excerpt = selected_diagnostic(failure)
+        let raw_excerpt = selected_diagnostic(failure)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| value_string(failure, "log_excerpt"));
+        let log_excerpt = strip_ansi_sequences(&raw_excerpt);
         let signature = error_signature(&log_excerpt, &step);
         let test_names = failure_test_names(failure);
         let test_identity = test_names.join("\u{1f}");
@@ -187,6 +189,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
             excerpt
         }
     };
+    let log = strip_ansi_sequences(&log);
     let mut after_failures_header = false;
     for line in log.lines() {
         let payload = signature_payload(line);

@@ -1,5 +1,6 @@
 //! Job-bound diagnostic and checkout evidence for current CI failures.
 
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
 use super::collect::{Bounds, investigation_slots, push_retryable_error};
@@ -275,7 +276,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
             }
             failure["log_source_complete"] = json!(log.source_complete);
             failure["diagnostic_unit"] = diagnostic.unwrap_or(Value::Null);
-            failure["log_excerpt"] = json!(log.text);
+            failure["log_excerpt"] = json!(strip_ansi_sequences(&log.text));
             failure["log_truncated"] = json!(log.truncated);
             failure["log_total_bytes"] = json!(log.total_bytes);
             failure["log_returned_bytes"] = json!(log.returned_bytes);
@@ -475,7 +476,8 @@ pub(super) fn bound_diagnostic(
         return None;
     }
     let mut unit = if let Some(text) = &log.diagnostic {
-        json!({"kind": "runner_command", "complete": true, "text": text, "returned_bytes": text.len()})
+        let clean = strip_ansi_sequences(text);
+        json!({"kind": "runner_command", "complete": true, "text": clean, "returned_bytes": clean.len()})
     } else {
         log.failure_regions.clone()?
     };
