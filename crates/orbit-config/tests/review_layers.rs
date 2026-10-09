@@ -139,6 +139,33 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
 }
 
 #[test]
+fn global_review_conflict_without_workspace_file_names_global_layer() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let global_path = global.path().join("config.toml");
+    write_config(global.path(), "[review]\nbefore_pr = true\n");
+    assert!(
+        !workspace.path().join("config.toml").exists(),
+        "the fixture must have no workspace config"
+    );
+
+    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
+    store
+        .set_value("review.before_landing", "true")
+        .expect("stage global set");
+    let error = store
+        .validate_global_for_set("review.before_landing", workspace.path())
+        .expect_err("a global-only review conflict is refused")
+        .to_string();
+
+    assert!(
+        error.contains("review.before_pr (global)")
+            && error.contains("review.before_landing (global)"),
+        "{error}"
+    );
+}
+
+#[test]
 fn global_set_that_breaks_a_cross_layer_throttle_rule_is_refused_before_saving() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");

@@ -167,6 +167,7 @@ impl ResolvedConfig {
         raw: &str,
         config_path: &Path,
         persistence: PersistenceConfig,
+        operation_layer_source: OperationLayerSource,
     ) -> Result<Self, OrbitError> {
         let mut document = toml::from_str::<toml::Value>(raw).map_err(|err| {
             OrbitError::InvalidInput(format!(
@@ -182,9 +183,10 @@ impl ResolvedConfig {
             persistence,
             true,
             false,
+            operation_layer_source,
         )?;
         // A merged layered document is checked once its layers resolve, with
-        // each switch's real source; one file is its own workspace layer.
+        // each switch's real source; store validation uses the store's scope.
         resolved.operation.ensure_one_review_layer()?;
         Ok(resolved)
     }
@@ -208,6 +210,7 @@ impl ResolvedConfig {
             persistence,
             false,
             false,
+            OperationLayerSource::Workspace,
         )
     }
 
@@ -226,6 +229,7 @@ impl ResolvedConfig {
             persistence,
             false,
             true,
+            OperationLayerSource::Workspace,
         )
     }
 
@@ -236,6 +240,7 @@ impl ResolvedConfig {
         persistence: PersistenceConfig,
         emit_compatibility_warnings: bool,
         scoped: bool,
+        operation_layer_source: OperationLayerSource,
     ) -> Result<Self, OrbitError> {
         let parsed = document
             .clone()
@@ -268,11 +273,10 @@ impl ResolvedConfig {
             ConfigSnapshot::admit(&document, config_path, &crews)?
         };
         // One document is one layer. The layered loader replaces this with
-        // the exact global/workspace resolution; a single file (or the
-        // store's pre-write validation) resolves it as the workspace layer.
+        // the exact global/workspace resolution; a store passes the scope of
+        // its file so pre-write validation reports accurate provenance.
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
-        let operation =
-            OperationPolicy::resolve(&[(OperationLayerSource::Workspace, &operation_layer)]);
+        let operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
         let system_crew_alias = alias_system_crew(
             &mut crews,
             &snapshot.workflow_system_crew,
