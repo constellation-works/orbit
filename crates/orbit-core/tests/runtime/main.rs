@@ -15,6 +15,7 @@ orbit_common::isolate_test_process!();
 
 mod actor_identity;
 mod artifact_tools;
+mod auto_task_update;
 mod baseline_hold_tick;
 mod config_settings;
 mod dispatch_admission;

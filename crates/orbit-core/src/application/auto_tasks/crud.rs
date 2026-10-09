@@ -26,7 +26,9 @@ use std::path::{Component, Path, PathBuf};
 use orbit_automation::auto_tasks::settings::load_settings_table;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
-use orbit_types::task::{Task, normalize_required_tools};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskPriority, TaskStatus, TaskType, normalize_required_tools,
+};
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
     is_valid_auto_task_name,
@@ -58,8 +60,85 @@ pub struct AutoTaskUpdateParams {
     pub description: Option<String>,
     pub schedule: Option<AutoTaskSchedule>,
     pub dedupe: Option<DedupePolicy>,
-    pub template: Option<AutoTaskTemplate>,
+    pub template: Option<AutoTaskTemplatePatch>,
     pub enabled: Option<bool>,
+}
+
+/// Present-field template patch, merged with the latest definition under the
+/// cursor lock. Absent fields are unchanged; present collections replace them.
+#[derive(Debug, Clone, Default)]
+pub struct AutoTaskTemplatePatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub acceptance_criteria: Option<Vec<String>>,
+    pub task_type: Option<TaskType>,
+    pub tags: Option<Vec<String>>,
+    pub required_tools: Option<Vec<String>>,
+    pub context_files: Option<Vec<String>>,
+    pub priority: Option<TaskPriority>,
+    /// `Some(None)` clears the assessment; `None` leaves it unchanged.
+    pub complexity: Option<Option<TaskComplexity>>,
+    /// `Some(None)` clears the override; `None` leaves it unchanged.
+    pub crew: Option<Option<String>>,
+    pub status: Option<TaskStatus>,
+}
+
+impl AutoTaskTemplatePatch {
+    fn apply(self, template: &mut AutoTaskTemplate) {
+        if let Some(title) = self.title {
+            template.title = title;
+        }
+        if let Some(description) = self.description {
+            template.description = description;
+        }
+        if let Some(acceptance_criteria) = self.acceptance_criteria {
+            template.acceptance_criteria = acceptance_criteria;
+        }
+        if let Some(task_type) = self.task_type {
+            template.task_type = task_type;
+        }
+        if let Some(tags) = self.tags {
+            template.tags = tags;
+        }
+        if let Some(required_tools) = self.required_tools {
+            template.required_tools = normalize_required_tools(required_tools);
+        }
+        if let Some(context_files) = self.context_files {
+            template.context_files = context_files;
+        }
+        if let Some(priority) = self.priority {
+            template.priority = priority;
+        }
+        if let Some(complexity) = self.complexity {
+            template.complexity = complexity;
+        }
+        if let Some(crew) = self.crew {
+            template.crew = crew;
+        }
+        if let Some(status) = self.status {
+            template.status = status;
+        }
+    }
+}
+
+/// A full template names every field, retaining whole-template replacement
+/// semantics for registry-tool callers, including clearing optional fields.
+impl From<AutoTaskTemplate> for AutoTaskTemplatePatch {
+    fn from(template: AutoTaskTemplate) -> Self {
+        Self {
+            title: Some(template.title),
+            description: Some(template.description),
+            acceptance_criteria: Some(template.acceptance_criteria),
+            task_type: Some(template.task_type),
+            tags: Some(template.tags),
+            required_tools: Some(template.required_tools),
+            context_files: Some(template.context_files),
+            priority: Some(template.priority),
+            complexity: Some(template.complexity),
+            crew: Some(template.crew),
+            status: Some(template.status),
+        }
+    }
 }
 
 /// A lookup may name only one definition stem. Absolute paths, `..`, and
@@ -255,9 +334,8 @@ impl OrbitRuntime {
             if let Some(dedupe) = params.dedupe {
                 definition.dedupe = dedupe;
             }
-            if let Some(mut template) = params.template {
-                template.required_tools = normalize_required_tools(template.required_tools);
-                definition.template = template;
+            if let Some(template) = params.template {
+                template.apply(&mut definition.template);
             }
             if let Some(enabled) = params.enabled {
                 definition.enabled = enabled;

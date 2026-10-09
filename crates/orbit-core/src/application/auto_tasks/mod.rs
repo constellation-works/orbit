@@ -33,7 +33,7 @@ pub mod scheduler;
 pub mod settings;
 pub mod state;
 
-pub use crud::{AutoTaskAddParams, AutoTaskUpdateParams};
+pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,

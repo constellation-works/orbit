@@ -272,7 +272,11 @@ toggle re-read the definition and write it while holding the cursor sidecar
 lock (without loading the cursor, so a malformed cursor cannot block the
 kill-switch). Scheduler admission revalidates under the same lock, and
 concurrent edits each patch the latest committed definition instead of
-overwriting one another. Both surfaces validate the schedule
+overwriting one another. CLI template flags are passed as a per-field patch
+and merged only after the lock is acquired, so unnamed fields retain edits
+committed while the command was waiting. The registry tool's `template`
+object remains a full replacement: omitted fields take the template defaults,
+including clearing optional crew and complexity. Both surfaces validate the schedule
 (cron parse / interval > 0) and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
