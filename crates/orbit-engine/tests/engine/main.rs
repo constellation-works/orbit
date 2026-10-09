@@ -21,6 +21,7 @@ mod dependabot_collect;
 mod final_recovery;
 #[cfg(unix)]
 mod forge_hold;
+mod git_fixture;
 mod handoff_landing;
 mod history_note;
 mod pr_landing;

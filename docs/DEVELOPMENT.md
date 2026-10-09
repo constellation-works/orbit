@@ -459,6 +459,25 @@ node crates/orbit-web/src/tests/dashboard_provider_limits_browser.mjs \
 
 ## Safe Mutable CLI Fixtures
 
+Engine fixtures that publish Git branches create their repositories from
+scratch and verify the repository root before writing. Their isolated child
+sets `GIT_ALLOW_PROTOCOL=file` and a file-only protocol policy in its disposable
+`HOME/.gitconfig`: the engine's VCS adapter clears Git environment variables
+but retains `HOME`. Before each fixture push, the shared
+[`git_fixture.rs`](../crates/orbit-engine/tests/engine/git_fixture.rs) helper
+checks every effective origin push URL, including rewrite rules and multiple
+push URLs, and refuses any URL that is not an absolute local path.
+Fetch failure fixtures use local upload-pack programs rather than network
+transports. Preserve this policy when a test replaces its global Git config.
+Forge-outage fixtures install their Git wrapper only inside a re-executed
+child. A scoped PATH guard in the parallel parent does not isolate siblings
+that read PATH: another fixture can resolve that temporary wrapper as its
+real Git, then delegate to it after its directory has been dropped. The
+wrapper's canned outage diagnostic uses a fixture URL and verifies local
+push URLs before each simulated refusal or real push.
+The runtime log-capture fixture uses the same child boundary for tracing's
+shared callsite-interest cache; parent libtest bodies remain parallel.
+
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,
 or registry state must be isolated from the process that launches them. This is
 separate from authorized operator or production CLI work, which should retain

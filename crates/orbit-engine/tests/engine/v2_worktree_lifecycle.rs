@@ -2783,7 +2783,7 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
             for (index, settings) in cases.iter().enumerate() {
                 // This HOME belongs only to the isolated child. Each case
                 // starts without any settings from the preceding case.
-                fs::write(&global_config, "").unwrap();
+                fs::write(&global_config, super::git_fixture::FILE_ONLY_CONFIG).unwrap();
                 for (key, value) in *settings {
                     git(&fixture.repo, &["config", "--global", key, value]);
                     assert_eq!(
@@ -3493,7 +3493,7 @@ impl Fixture {
         let root = TempDir::new().unwrap();
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init"]);
+        super::git_fixture::init(&repo);
         git(&repo, &["checkout", "-b", BASE]);
         git(&repo, &["config", "user.name", "Orbit Test"]);
         git(
@@ -4384,19 +4384,7 @@ fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(current_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {} failed in {}:\n{}",
-        args.join(" "),
-        current_dir.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    super::git_fixture::run(current_dir, args)
 }
 
 #[cfg(unix)]
@@ -4454,6 +4442,7 @@ fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
             command.env_remove(name.as_ref());
         }
     }
+    super::git_fixture::configure_child(&mut command, &home, sandbox.path());
     command
         .env(CHILD_ENV, "1")
         .env("HOME", &home)

@@ -7,6 +7,8 @@
 //! command to the real Git. The job is `implement → review → push → open_pull_request`
 //! with a step recovery on `push`, a failure activity and a final recovery
 //! activity, all scripted, so the test sees whether any of them ran.
+//! Each body runs in an isolated child so its PATH wrapper cannot be borrowed
+//! by a sibling fixture while libtest runs them concurrently.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^forge_hold::/)'`.
 
@@ -35,9 +37,9 @@ const ALWAYS: usize = 1_000_000;
 
 /// What GitHub printed for every push during the outage.
 const INTERNAL_SERVER_ERROR: &str = "remote: Internal Server Error\n\
-To https://github.com/constellation-works/orbit.git\n \
+To https://fixture.invalid/orbit.git\n \
 ! [remote rejected]     candidate -> candidate (Internal Server Error)\n\
-error: failed to push some refs to 'https://github.com/constellation-works/orbit.git'";
+error: failed to push some refs to 'https://fixture.invalid/orbit.git'";
 
 /// A checkout of a bare remote, with a candidate commit on [`BRANCH`] and a
 /// `git` wrapper that refuses the next `refusals` pushes.
@@ -96,6 +98,7 @@ impl ForgeFixture {
         let state = root.path().display().to_string();
         let wrapper = format!(
             r#"#!/bin/sh
+export GIT_ALLOW_PROTOCOL=file
 command=
 skip=
 for argument in "$@"; do
@@ -105,6 +108,14 @@ for argument in "$@"; do
   break
 done
 if [ "$command" = push ]; then
+  # Check every effective push URL before even simulating a forge refusal.
+  urls=$('{real_git}' remote get-url --push --all origin) || exit 1
+  [ -n "$urls" ] || exit 1
+  printf '%s\n' "$urls" | while IFS= read -r url; do
+    case "$url" in
+      //*|\\\\*|[!/]*) echo "refusing fixture push to non-local origin: $url" >&2; exit 1 ;;
+    esac
+  done || exit 1
   count=$(($(cat '{state}/pushes') + 1))
   printf '%s\n' "$count" > '{state}/pushes'
   if [ "$count" -le "$(cat '{state}/refusals')" ]; then
@@ -172,17 +183,7 @@ exec '{real_git}' "$@"
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    super::git_fixture::run(dir, args)
 }
 
 /// Plays every scripted activity, and checkpoints completed steps the way
@@ -309,6 +310,7 @@ fn delivery(fixture: &ForgeFixture, max_attempts: u32) -> JobV2 {
 /// [`delivery`] whose push keeps retrying past its budget for `window_ms`
 /// after the forge first refuses it, as a claimed leaf's does [ORB-14634].
 fn delivery_within(fixture: &ForgeFixture, max_attempts: u32, window_ms: Option<u64>) -> JobV2 {
+    super::git_fixture::assert_local_push_remote(&fixture.workspace());
     let stub = |id: &str| json!({ "id": id, "spec": { "type": "deterministic", "action": id, "config": {} } });
     let asset = json!({
         "schemaVersion": 2,
@@ -370,102 +372,154 @@ fn execute(job: &JobV2, host: &ForgeHost, resume: Option<&PipelineState>) -> Job
     .expect("the run ends with an outcome, not a dispatch error")
 }
 
+/// A contaminated origin must be rejected before the wrapper simulates a
+/// forge response, increments push attempts, or delegates to real Git.
+#[test]
+fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
+    super::git_fixture::isolated(
+        module_path!(),
+        "a_forge_wrapper_refuses_a_non_local_origin_before_pushing",
+        || {
+            let fixture = ForgeFixture::new();
+            let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("https://{}/remote.git", listener.local_addr().unwrap());
+            git(&fixture.workspace(), &["remote", "set-url", "origin", &url]);
+            let output = Command::new("git")
+                .args(["-c", "core.hooksPath=/dev/null", "push", "origin", BRANCH])
+                .current_dir(fixture.workspace())
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("refusing fixture push to non-local origin"),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                fixture.pushes(),
+                0,
+                "refusal happens before any push attempt"
+            );
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "the fixture wrapper must not open a network connection"
+            );
+        },
+    );
+}
+
 #[test]
 fn an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure() {
-    let fixture = ForgeFixture::new();
-    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
-    fixture.refuse(3);
-    let job = delivery(&fixture, 4);
-    let host = ForgeHost::default();
+    super::git_fixture::isolated(
+        module_path!(),
+        "an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure",
+        || {
+            let fixture = ForgeFixture::new();
+            let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+            fixture.refuse(3);
+            let job = delivery(&fixture, 4);
+            let host = ForgeHost::default();
 
-    let outcome = execute(&job, &host, None);
+            let outcome = execute(&job, &host, None);
 
-    assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(outcome.forge_hold, None);
-    assert_eq!(fixture.pushes(), 4, "three refusals, then the push lands");
-    assert_eq!(
-        fixture.remote_head().as_deref(),
-        Some(fixture.head.as_str())
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert_eq!(outcome.forge_hold, None);
+            assert_eq!(fixture.pushes(), 4, "three refusals, then the push lands");
+            assert_eq!(
+                fixture.remote_head().as_deref(),
+                Some(fixture.head.as_str())
+            );
+            assert_eq!(host.actions(), ["implement", "review", "open_pull_request"]);
+            let push = host.checkpoint("push").expect("push is checkpointed");
+            assert_eq!(push["push_attempts"], 4, "{push}");
+            // Three waits, each within half to all of its capped step (20, 40, 40).
+            let waited = push["push_waited_ms"]
+                .as_u64()
+                .expect("the wait is recorded");
+            assert!((50..=100).contains(&waited), "waited {waited} ms: {push}");
+        },
     );
-    assert_eq!(host.actions(), ["implement", "review", "open_pull_request"]);
-    let push = host.checkpoint("push").expect("push is checkpointed");
-    assert_eq!(push["push_attempts"], 4, "{push}");
-    // Three waits, each within half to all of its capped step (20, 40, 40).
-    let waited = push["push_waited_ms"]
-        .as_u64()
-        .expect("the wait is recorded");
-    assert!((50..=100).contains(&waited), "waited {waited} ms: {push}");
 }
 
 #[test]
 fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
-    let fixture = ForgeFixture::new();
-    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
-    fixture.refuse(ALWAYS);
-    let job = delivery(&fixture, 3);
-    let held = ForgeHost::default();
+    super::git_fixture::isolated(
+        module_path!(),
+        "an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head",
+        || {
+            let fixture = ForgeFixture::new();
+            let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+            fixture.refuse(ALWAYS);
+            let job = delivery(&fixture, 3);
+            let held = ForgeHost::default();
 
-    let outcome = execute(&job, &held, None);
+            let outcome = execute(&job, &held, None);
 
-    assert!(!outcome.success);
-    let hold = outcome.forge_hold.clone().expect("a typed forge hold");
-    assert_eq!(hold.step_id, "push");
-    assert_eq!(hold.head_sha, fixture.head);
-    assert_eq!(hold.target_ref, format!("refs/heads/{BRANCH}"));
-    assert_eq!(hold.attempts, 3);
-    assert!(
-        hold.diagnostic.contains("(Internal Server Error)"),
-        "{hold:?}"
-    );
-    assert_eq!(fixture.pushes(), 3);
-    assert_eq!(fixture.remote_head(), None);
-    assert_eq!(
-        held.actions(),
-        ["implement", "review"],
-        "no step recovery, failure handoff, final recovery or pull request"
-    );
-    assert!(held.final_recovery_requests.lock().unwrap().is_empty());
-    assert_eq!(
-        outcome.pipeline["push"]["forge_hold"]["head_sha"],
-        fixture.head.as_str(),
-        "the run state names the held push"
-    );
+            assert!(!outcome.success);
+            let hold = outcome.forge_hold.clone().expect("a typed forge hold");
+            assert_eq!(hold.step_id, "push");
+            assert_eq!(hold.head_sha, fixture.head);
+            assert_eq!(hold.target_ref, format!("refs/heads/{BRANCH}"));
+            assert_eq!(hold.attempts, 3);
+            assert!(
+                hold.diagnostic.contains("(Internal Server Error)"),
+                "{hold:?}"
+            );
+            assert_eq!(fixture.pushes(), 3);
+            assert_eq!(fixture.remote_head(), None);
+            assert_eq!(
+                held.actions(),
+                ["implement", "review"],
+                "no step recovery, failure handoff, final recovery or pull request"
+            );
+            assert!(held.final_recovery_requests.lock().unwrap().is_empty());
+            assert_eq!(
+                outcome.pipeline["push"]["forge_hold"]["head_sha"],
+                fixture.head.as_str(),
+                "the run state names the held push"
+            );
 
-    // The forge is still down when the clock first resumes: the resumed run
-    // holds again and keeps the lineage's first hold time.
-    let mut state = held.persisted_state(&outcome);
-    state.forge_hold.as_mut().unwrap().held_since = hold.held_at - TimeDelta::minutes(30);
-    fixture.refuse(ALWAYS);
-    let still_down = ForgeHost::default();
-    let again = execute(&job, &still_down, Some(&state));
-    let again_hold = again.forge_hold.expect("still held");
-    assert_eq!(again_hold.held_since, hold.held_at - TimeDelta::minutes(30));
-    assert!(again_hold.held_at >= hold.held_at);
-    assert!(
-        still_down.actions().is_empty(),
-        "{:?}",
-        still_down.actions()
-    );
+            // The forge is still down when the clock first resumes: the resumed run
+            // holds again and keeps the lineage's first hold time.
+            let mut state = held.persisted_state(&outcome);
+            state.forge_hold.as_mut().unwrap().held_since = hold.held_at - TimeDelta::minutes(30);
+            fixture.refuse(ALWAYS);
+            let still_down = ForgeHost::default();
+            let again = execute(&job, &still_down, Some(&state));
+            let again_hold = again.forge_hold.expect("still held");
+            assert_eq!(again_hold.held_since, hold.held_at - TimeDelta::minutes(30));
+            assert!(again_hold.held_at >= hold.held_at);
+            assert!(
+                still_down.actions().is_empty(),
+                "{:?}",
+                still_down.actions()
+            );
 
-    // The forge accepts again: the resume pushes the same head and opens the
-    // PR without implementing or reviewing again.
-    fixture.refuse(0);
-    let state = held.persisted_state(&outcome);
-    let resumed = ForgeHost::default();
-    let delivered = execute(&job, &resumed, Some(&state));
+            // The forge accepts again: the resume pushes the same head and opens the
+            // PR without implementing or reviewing again.
+            fixture.refuse(0);
+            let state = held.persisted_state(&outcome);
+            let resumed = ForgeHost::default();
+            let delivered = execute(&job, &resumed, Some(&state));
 
-    assert!(delivered.success, "{:?}", delivered.message);
-    assert_eq!(delivered.forge_hold, None);
-    assert_eq!(
-        fixture.remote_head().as_deref(),
-        Some(fixture.head.as_str())
+            assert!(delivered.success, "{:?}", delivered.message);
+            assert_eq!(delivered.forge_hold, None);
+            assert_eq!(
+                fixture.remote_head().as_deref(),
+                Some(fixture.head.as_str())
+            );
+            assert_eq!(resumed.actions(), ["open_pull_request"]);
+            assert_eq!(
+                resumed.inputs("open_pull_request")[0]["head_sha"],
+                fixture.head.as_str()
+            );
+            assert!(Utc::now() >= hold.held_at);
+        },
     );
-    assert_eq!(resumed.actions(), ["open_pull_request"]);
-    assert_eq!(
-        resumed.inputs("open_pull_request")[0]["head_sha"],
-        fixture.head.as_str()
-    );
-    assert!(Utc::now() >= hold.held_at);
 }
 
 /// [ORB-14634] A claimed leaf cannot be resumed the way the clock resumes a
@@ -474,54 +528,66 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
 /// pull request without implementing or reviewing again.
 #[test]
 fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
-    let fixture = ForgeFixture::new();
-    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
-    fixture.refuse(5);
-    let job = delivery_within(&fixture, 2, Some(60_000));
-    let host = ForgeHost::default();
+    super::git_fixture::isolated(
+        module_path!(),
+        "a_push_window_retries_past_the_budget_and_lands_the_same_head",
+        || {
+            let fixture = ForgeFixture::new();
+            let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+            fixture.refuse(5);
+            let job = delivery_within(&fixture, 2, Some(60_000));
+            let host = ForgeHost::default();
 
-    let outcome = execute(&job, &host, None);
+            let outcome = execute(&job, &host, None);
 
-    assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(outcome.forge_hold, None);
-    assert_eq!(fixture.pushes(), 6, "five refusals past a budget of two");
-    assert_eq!(
-        fixture.remote_head().as_deref(),
-        Some(fixture.head.as_str())
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert_eq!(outcome.forge_hold, None);
+            assert_eq!(fixture.pushes(), 6, "five refusals past a budget of two");
+            assert_eq!(
+                fixture.remote_head().as_deref(),
+                Some(fixture.head.as_str())
+            );
+            assert_eq!(
+                host.actions(),
+                ["implement", "review", "open_pull_request"],
+                "no step recovery, failure handoff or final recovery"
+            );
+            assert_eq!(
+                host.inputs("open_pull_request")[0]["head_sha"],
+                fixture.head.as_str()
+            );
+            assert_eq!(host.checkpoint("push").expect("push")["push_attempts"], 6);
+        },
     );
-    assert_eq!(
-        host.actions(),
-        ["implement", "review", "open_pull_request"],
-        "no step recovery, failure handoff or final recovery"
-    );
-    assert_eq!(
-        host.inputs("open_pull_request")[0]["head_sha"],
-        fixture.head.as_str()
-    );
-    assert_eq!(host.checkpoint("push").expect("push")["push_attempts"], 6);
 }
 
 /// [ORB-14634] Past its window the push holds as before, and the hold dates
 /// from the forge's first refusal rather than from the last.
 #[test]
 fn a_push_window_that_closes_holds_since_the_first_refusal() {
-    let fixture = ForgeFixture::new();
-    let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
-    fixture.refuse(ALWAYS);
-    let job = delivery_within(&fixture, 2, Some(300));
-    let host = ForgeHost::default();
+    super::git_fixture::isolated(
+        module_path!(),
+        "a_push_window_that_closes_holds_since_the_first_refusal",
+        || {
+            let fixture = ForgeFixture::new();
+            let _path = orbit_common::test_env::scoped([("PATH", Some(fixture.path.as_str()))]);
+            fixture.refuse(ALWAYS);
+            let job = delivery_within(&fixture, 2, Some(300));
+            let host = ForgeHost::default();
 
-    let outcome = execute(&job, &host, None);
+            let outcome = execute(&job, &host, None);
 
-    assert!(!outcome.success);
-    let hold = outcome.forge_hold.expect("a typed forge hold");
-    assert_eq!(hold.head_sha, fixture.head);
-    assert!(hold.attempts > 2, "retried past the budget: {hold:?}");
-    assert_eq!(fixture.pushes(), hold.attempts as usize);
-    assert!(
-        hold.held_at - hold.held_since >= TimeDelta::milliseconds(300),
-        "{hold:?}"
+            assert!(!outcome.success);
+            let hold = outcome.forge_hold.expect("a typed forge hold");
+            assert_eq!(hold.head_sha, fixture.head);
+            assert!(hold.attempts > 2, "retried past the budget: {hold:?}");
+            assert_eq!(fixture.pushes(), hold.attempts as usize);
+            assert!(
+                hold.held_at - hold.held_since >= TimeDelta::milliseconds(300),
+                "{hold:?}"
+            );
+            assert_eq!(fixture.remote_head(), None);
+            assert_eq!(host.actions(), ["implement", "review"]);
+        },
     );
-    assert_eq!(fixture.remote_head(), None);
-    assert_eq!(host.actions(), ["implement", "review"]);
 }

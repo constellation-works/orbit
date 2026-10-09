@@ -53,6 +53,8 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use super::git_fixture;
+
 /// Names the test whose body this process runs as the isolated child.
 const CHILD_ENV: &str = "ORBIT_PR_LANDING_CHILD";
 /// The parent-owned directory holding the substitute `gh` and its pointer to
@@ -2921,6 +2923,128 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
 // Fixtures
 // ---------------------------------------------------------------------------
 
+/// Both the fixture guard and Git itself refuse HTTPS before opening a socket,
+/// including the engine's VCS child that clears GIT_ALLOW_PROTOCOL.
+#[test]
+fn fixture_push_refuses_non_file_transports_without_network() {
+    isolated(
+        "fixture_push_refuses_non_file_transports_without_network",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("https://{}/remote.git", listener.local_addr().unwrap());
+            git(&fx.repo, &["remote", "set-url", "origin", &url]);
+            let refused = std::panic::catch_unwind(|| git(&fx.repo, &["push", "origin", BRANCH]));
+            let refusal = refused
+                .expect_err("fixture helper must refuse a non-local push")
+                .downcast::<String>()
+                .expect("fixture guard reports the refused origin URL");
+            assert!(
+                refusal.starts_with("refusing fixture push to non-local origin"),
+                "the fixture guard must refuse before invoking Git: {refusal}"
+            );
+
+            for clear_policy_variable in [false, true] {
+                let mut command = Command::new("git");
+                command
+                    .args(["push", "origin", BRANCH])
+                    .current_dir(&fx.repo);
+                if clear_policy_variable {
+                    command.env_remove("GIT_ALLOW_PROTOCOL");
+                }
+                let output = command.output().unwrap();
+                assert!(!output.status.success());
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("transport 'https' not allowed"),
+                    "Git must refuse before resolving or connecting: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let error = execute_deterministic_action(
+                &host,
+                "git_push",
+                &json!({}),
+                &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+                false,
+                &HashMap::new(),
+                None,
+            )
+            .expect_err("the production adapter must inherit the HOME transport policy");
+            assert!(
+                error.to_string().contains("transport 'https' not allowed"),
+                "{error}"
+            );
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "refused HTTPS pushes must never attempt a network connection"
+            );
+        },
+    );
+}
+
+/// Check effective push URLs, including a second pushurl and rewrite rules,
+/// rather than trusting a local fetch URL.
+#[test]
+fn fixture_push_guard_checks_all_effective_push_urls() {
+    isolated(
+        "fixture_push_guard_checks_all_effective_push_urls",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let remote = fx.forge.join("remote.git");
+            for case in ["second_pushurl", "rewrite"] {
+                if case == "second_pushurl" {
+                    git(
+                        &fx.repo,
+                        &[
+                            "config",
+                            "--add",
+                            "remote.origin.pushurl",
+                            path_str(&remote),
+                        ],
+                    );
+                    git(
+                        &fx.repo,
+                        &[
+                            "config",
+                            "--add",
+                            "remote.origin.pushurl",
+                            "https://fixture.invalid/remote.git",
+                        ],
+                    );
+                } else {
+                    git(
+                        &fx.repo,
+                        &["config", "--unset-all", "remote.origin.pushurl"],
+                    );
+                    git(
+                        &fx.repo,
+                        &[
+                            "config",
+                            "url.https://fixture.invalid/.pushInsteadOf",
+                            path_str(&remote),
+                        ],
+                    );
+                }
+                let refused =
+                    std::panic::catch_unwind(|| git(&fx.repo, &["push", "origin", BRANCH]));
+                let refusal = refused
+                    .expect_err("effective non-local push URL must be refused")
+                    .downcast::<String>()
+                    .expect("fixture guard reports the refused origin URL");
+                assert!(
+                    refusal.starts_with("refusing fixture push to non-local origin"),
+                    "{case} must refuse before starting git push: {refusal}"
+                );
+                assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+            }
+        },
+    );
+}
+
 /// ORB-14717: a silent origin must not turn reviewed work into a candidate
 /// failure. Only a cached ref sharing ancestry can complete the handoff.
 #[test]
@@ -2930,14 +3054,15 @@ fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base() {
         |sandbox| {
             for cache in ["related", "missing", "unrelated"] {
                 let fx = Fixture::new(sandbox);
-                // Keeping the listener alive makes the origin accept TCP
-                // connections without ever answering the Git protocol.
-                let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                let origin = format!(
-                    "git://{}/owner/repository.git",
-                    silent.local_addr().unwrap()
+                // A local upload-pack stalls without permitting any network
+                // transport from this test process.
+                let silent = fx._root.path().join("silent-upload-pack");
+                fs::write(&silent, "#!/bin/sh\nexec sleep 30\n").unwrap();
+                fs::set_permissions(&silent, fs::Permissions::from_mode(0o755)).unwrap();
+                git(
+                    &fx.repo,
+                    &["config", "remote.origin.uploadpack", path_str(&silent)],
                 );
-                git(&fx.repo, &["remote", "set-url", "origin", &origin]);
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 let mut input = json!({
                     "workspace_path": fx.repo,
@@ -3018,7 +3143,7 @@ fn claimed_handoff_missing_remote_ref_never_uses_the_cached_base() {
     );
 }
 
-/// Drive real Git's SSH transport: temporary connection failures retry and
+/// Drive real Git's local upload-pack: temporary connection failures retry and
 /// can recover; access refusals stay untyped and never retry or use the cache.
 #[test]
 fn remote_base_transport_retries_preserve_access_refusals() {
@@ -3044,23 +3169,16 @@ fn remote_base_transport_retries_preserve_access_refusals() {
             ] {
                 let fx = Fixture::new(sandbox);
                 let count = fx._root.path().join("fetch-attempts");
-                let ssh = fx._root.path().join("ssh");
+                let upload_pack = fx._root.path().join("upload-pack");
                 fs::write(&count, "0").unwrap();
-                fs::write(&ssh, format!(
+                fs::write(&upload_pack, format!(
                     "#!/bin/sh\nn=$(cat '{}')\nn=$((n + 1))\necho $n > '{}'\nif [ '{}' = true ] && [ $n -gt 1 ]; then exec git-upload-pack '{}'; fi\necho '{}' >&2\nexit 1\n",
                     count.display(), count.display(), recovery, fx.forge.join("remote.git").display(), diagnostic,
                 )).unwrap();
-                fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
-                git(&fx.repo, &["config", "core.sshCommand", path_str(&ssh)]);
-                git(&fx.repo, &["config", "ssh.variant", "ssh"]);
+                fs::set_permissions(&upload_pack, fs::Permissions::from_mode(0o755)).unwrap();
                 git(
                     &fx.repo,
-                    &[
-                        "remote",
-                        "set-url",
-                        "origin",
-                        "ssh://fixture.invalid/owner/repository.git",
-                    ],
+                    &["config", "remote.origin.uploadpack", path_str(&upload_pack)],
                 );
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 if !transient && !recovery {
@@ -3128,7 +3246,8 @@ impl Fixture {
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
         git(root.path(), &["init", "--bare", path_str(&remote)]);
-        git(&repo, &["init"]);
+        git_fixture::init(&repo);
+        git(&repo, &["remote", "add", "origin", path_str(&remote)]);
         git(&repo, &["checkout", "-b", BASE]);
         git(&repo, &["config", "user.name", "Orbit Test"]);
         git(
@@ -3138,7 +3257,6 @@ impl Fixture {
         fs::write(repo.join("README.md"), "base\n").unwrap();
         git(&repo, &["add", "README.md"]);
         git(&repo, &["commit", "-m", "base"]);
-        git(&repo, &["remote", "add", "origin", path_str(&remote)]);
         git(&repo, &["push", "-u", "origin", BASE]);
         git(&repo, &["checkout", "-b", BRANCH]);
         let repo = repo.canonicalize().unwrap();
@@ -3448,6 +3566,9 @@ impl Fixture {
 }
 
 fn action(host: &DeliveryHost, name: &str, input: &Value) -> Result<Value, OrbitError> {
+    if matches!(name, "git_push" | "pr_complete" | "pr_failure_handoff") {
+        git_fixture::assert_local_push_remote(&host.repo);
+    }
     execute_deterministic_action(host, name, &json!({}), input, false, &HashMap::new(), None)
 }
 
@@ -3907,19 +4028,7 @@ impl RuntimeHost for DeliveryHost {
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(current_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {} failed in {}:\n{}",
-        args.join(" "),
-        current_dir.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    git_fixture::run(current_dir, args)
 }
 
 fn path_str(path: &Path) -> &str {
@@ -4169,6 +4278,7 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
             command.env_remove(name.as_ref());
         }
     }
+    git_fixture::configure_child(&mut command, &home, sandbox.path());
     command
         .args([&qualified, "--exact", "--nocapture", "--test-threads=1"])
         .current_dir(sandbox.path())
