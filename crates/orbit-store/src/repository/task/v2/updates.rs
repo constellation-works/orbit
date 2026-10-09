@@ -45,9 +45,6 @@ impl TaskV2Store {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
 
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(fields.status, &fields.context_files)?;
-            }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
             for entry in &fields.append_history {
@@ -257,12 +254,6 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
 
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(
-                    bundle.envelope.status,
-                    &bundle.envelope.context_files,
-                )?;
-            }
             if relations_changed {
                 self.registry.validate_task_relations(
                     &self.workspace_id,
@@ -433,7 +424,12 @@ impl TaskV2Store {
                 )));
             }
             let target_status = fields.status.unwrap_or(current_status);
-            if let Some(boundary) = &self.coordination {
+            let work_starting = target_status == TaskStatus::InProgress
+                && matches!(
+                    fields.status_event.as_deref(),
+                    Some("started" | "pulled_by" | "resume_readmitted")
+                );
+            if work_starting && let Some(boundary) = &self.coordination {
                 boundary.guard_ordinary_footprint(target_status, &bundle.envelope.context_files)?;
             }
             let status_transition =
