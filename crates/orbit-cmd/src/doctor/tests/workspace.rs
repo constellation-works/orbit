@@ -1,5 +1,6 @@
 use super::*;
 use crate::doctor::commands::WorkspaceDoctorStatus;
+#[cfg(unix)]
 use orbit_types::workflow::JobRunState;
 
 pub(super) fn workspace_runtime(temp: &tempfile::TempDir) -> OrbitRuntime {

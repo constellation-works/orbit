@@ -54,7 +54,7 @@ fn installed_verification_failures_preserve_both_causes_when_restore_fails() {
                 true,
             );
             let backup = crate::update::flow::backup_path(&fixture.executable);
-            let restore_failure = std::io::Error::from_raw_os_error(libc::ENOSPC).to_string();
+            let restore_failure = std::io::Error::from(std::io::ErrorKind::StorageFull).to_string();
             let mut restore_attempted = false;
             let error =
                 run_update_with_restore(&fixture.environment(), &request(), |dest, from| {
@@ -71,7 +71,7 @@ fn installed_verification_failures_preserve_both_causes_when_restore_fails() {
                     );
                     restore_backup_with_rename(dest, from, |staged, installed| {
                         if restore_fails {
-                            Err(std::io::Error::from_raw_os_error(libc::ENOSPC))
+                            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
                         } else {
                             std::fs::rename(staged, installed)
                         }
