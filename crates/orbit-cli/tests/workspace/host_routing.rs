@@ -498,9 +498,13 @@ fn local_task_commands_refuse_remote_selection_without_delivering_or_mutating() 
             let (code, message) = routed.refused(&args);
             assert_eq!(code, "usage_error", "{args:?}: {message}");
             assert!(message.contains("--host"), "the refusal names the flag");
-            assert!(
-                message.contains("ssh bravo orbit task"),
-                "the refusal gives a command on the registered host: {message}"
+            let mut expected = vec!["orbit"];
+            expected.extend(command.iter().copied());
+            expected.extend(["--workspace", "bravo-ws", "--json"]);
+            assert_eq!(
+                ssh_hint_remote_argv(&message),
+                expected,
+                "the refusal gives the original command on the registered host: {message}"
             );
         }
 
@@ -672,6 +676,105 @@ fn host_flag_resolves_to_the_selector_that_host_lists() {
         "--json",
     ]);
     assert_eq!(code, "unreachable_destination", "{message}");
+}
+
+/// Parse a command string using POSIX shell word splitting and quote removal.
+fn posix_shell_split(command: &str) -> Vec<String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("eval \"set -- $1\"; for arg in \"$@\"; do printf '%s\\0' \"$arg\"; done")
+        .arg("sh")
+        .arg(command)
+        .output()
+        .expect("run sh to split words");
+    assert!(output.status.success(), "sh split failed: {output:?}");
+    let slice = output
+        .stdout
+        .strip_suffix(&[0])
+        .expect("shell emits NUL-terminated words");
+    slice
+        .split(|&b| b == 0)
+        .map(|chunk| String::from_utf8(chunk.to_vec()).expect("argv is UTF-8"))
+        .collect()
+}
+
+fn ssh_hint_remote_argv(message: &str) -> Vec<String> {
+    let hint_prefix = "run it on that host: `";
+    let start = message
+        .find(hint_prefix)
+        .expect("error contains host suggestion")
+        + hint_prefix.len();
+    let end = message[start..]
+        .rfind('`')
+        .expect("closing backtick for suggestion")
+        + start;
+    let local_words = posix_shell_split(&message[start..end]);
+    assert_eq!(&local_words[..2], &["ssh", "bravo"]);
+    // SSH joins the local command arguments with spaces before the remote
+    // login shell parses them. Both shell boundaries must preserve the argv.
+    posix_shell_split(&local_words[2..].join(" "))
+}
+
+#[test]
+fn host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv() {
+    let routed = Routed::new();
+    let marker = routed.fleet.temp.path().join("injected_marker");
+    let titles = [
+        format!("fix Daniel's build; touch {}", marker.display()),
+        format!("fix the build; touch {}", marker.display()),
+        format!(
+            "literal $HOME $(touch {}) `touch {}` * \"quoted\"",
+            marker.display(),
+            marker.display()
+        ),
+        "".to_string(),
+        "~/build # comment".to_string(),
+        "修复 build".to_string(),
+    ];
+
+    for title in titles {
+        let output = routed.fleet.orbit(
+            &routed.fleet.local_repo,
+            &[
+                "task",
+                "add",
+                "--title",
+                &title,
+                "--complexity",
+                "low",
+                "--host",
+                "bravo",
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "a host-local command takes no --host"
+        );
+        assert!(
+            !marker.exists(),
+            "shell metacharacters must not execute when constructing the command"
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            ssh_hint_remote_argv(&stderr),
+            &[
+                "orbit",
+                "task",
+                "add",
+                "--title",
+                &title,
+                "--complexity",
+                "low"
+            ],
+            "hint round-trips through POSIX shell word splitting to the original argv"
+        );
+        assert!(
+            !marker.exists(),
+            "evaluating the hint through a POSIX shell must not execute embedded metacharacters"
+        );
+    }
 }
 
 /// A line-delimited MCP client over a spawned server's stdio.
