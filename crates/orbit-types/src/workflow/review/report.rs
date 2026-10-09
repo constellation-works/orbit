@@ -64,6 +64,27 @@ pub struct ReviewReport {
 }
 
 impl ReviewReport {
+    /// Validate a live reviewer's attachment before storing it. Persisted
+    /// reports still use [`Self::parse`] so settlement can diagnose legacy
+    /// or incomplete evidence without discarding it.
+    pub fn parse_attachment(content: &[u8]) -> Result<Self, ReviewReportError> {
+        let report = Self::parse(content)?;
+        if report.schema_version != REVIEW_CONTRACT_VERSION {
+            return Err(ReviewReportError::Contract {
+                detail: format!(
+                    "schema_version {}; the review report contract is version {REVIEW_CONTRACT_VERSION}",
+                    report.schema_version
+                ),
+            });
+        }
+        if report.attempt_id.trim().is_empty() {
+            return Err(ReviewReportError::Contract {
+                detail: "must name the admitted attempt_id".to_string(),
+            });
+        }
+        Ok(report)
+    }
+
     /// Read a persisted report, tolerating benign shape drift that leaves its
     /// meaning unambiguous: a bare-string `disposition`, enum labels in other
     /// case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes,

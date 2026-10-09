@@ -92,8 +92,8 @@ pub use review::{
     ReviewConsumption, ReviewFinding, ReviewInvalidation, ReviewLanding, ReviewLedger,
     ReviewManifest, ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewReservation,
     ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict, ReviewerIdentity,
-    ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome, ValidationRole, record_gap,
-    seconds_between,
+    ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
+    is_reserved_review_artifact, record_gap, seconds_between,
 };
 pub use review_evidence::{
     HostEvidenceRule, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,

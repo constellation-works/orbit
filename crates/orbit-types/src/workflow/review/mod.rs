@@ -23,6 +23,7 @@ pub use admission::{
     CommitIdentity, DEFAULT_REVIEW_MINUTES, REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT,
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewBudget, ReviewTiming,
+    is_reserved_review_artifact,
 };
 pub use certificate::{
     LandingTransformation, ReviewCertificate, ReviewConsumption, ReviewInvalidation, ReviewLanding,
