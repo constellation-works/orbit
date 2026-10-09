@@ -210,13 +210,15 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     &on_disk,
                     tracked.get(name),
                     auto_task_settings.get(name),
+                    runtime.workspace_base_branch(),
                 )
             {
                 findings.push(auto_task_fork_finding(
                     name,
                     path,
                     tracked.contains_key(name),
-                    &overrides,
+                    &overrides.overrides,
+                    overrides.stale_shipped_body,
                 ));
                 continue;
             }
@@ -305,6 +307,7 @@ fn auto_task_fork_finding(
     path: PathBuf,
     tracked: bool,
     overrides: &AutoTaskOverrides,
+    stale_shipped_body: bool,
 ) -> ArtifactFinding {
     let kind = ArtifactKind::AutoTask;
     let provenance = if tracked {
@@ -325,10 +328,14 @@ fn auto_task_fork_finding(
             path,
             condition: ArtifactCondition::Stale,
             provenance,
-            detail: format!(
-                "`{name}` differs from its bundled default only in settings{settings_clause}, \
-                 so Orbit stopped refreshing its body"
-            ),
+            detail: if stale_shipped_body {
+                format!("`{name}` has a stale shipped body (will upgrade on sync){settings_clause}")
+            } else {
+                format!(
+                    "`{name}` differs from its bundled default only in settings{settings_clause}, \
+                     so Orbit stopped refreshing its body"
+                )
+            },
             remediation: format!(
                 "Run `{}` to move the settings into the auto-task settings table and manage the bundled body again.",
                 init_command(kind)
