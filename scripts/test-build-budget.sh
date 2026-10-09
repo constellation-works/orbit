@@ -33,8 +33,6 @@ cleanup() {
       kill "$pid" 2>/dev/null || true
     done
   fi
-  rm -f "$ROOT/target/release/orbit" "$ROOT/target/debug/orbit"
-  rmdir "$ROOT/target/release" "$ROOT/target/debug" 2>/dev/null || true
   rm -rf "$TMP"
   exit "$status"
 }
@@ -761,20 +759,24 @@ REDIRECTED_DEBUG="$REDIRECTED_TARGET/debug"
 FAKE_INSTALL_BIN_DIR="$TMP/installed-bin"
 FAKE_HOME="$TMP/fake-home"
 mkdir -p "$REDIRECTED_RELEASE" "$REDIRECTED_DEBUG" "$FAKE_INSTALL_BIN_DIR" "$FAKE_HOME"
-mkdir -p "$ROOT/target/release" "$ROOT/target/debug"
+# Run the consumers from a scratch copy of the Makefile so the stale default-target
+# binaries live in the scratch tree and never touch the checkout's real target/.
+CONSUMER_ROOT="$TMP/consumer-root"
+mkdir -p "$CONSUMER_ROOT/target/release" "$CONSUMER_ROOT/target/debug"
+cp "$ROOT/Makefile" "$CONSUMER_ROOT/Makefile"
 
 # Populate default targets with stale binaries.
-cat >"$ROOT/target/release/orbit" <<'SH'
+cat >"$CONSUMER_ROOT/target/release/orbit" <<'SH'
 #!/usr/bin/env bash
 printf 'stale-default-release-target\n'
 SH
-chmod +x "$ROOT/target/release/orbit"
+chmod +x "$CONSUMER_ROOT/target/release/orbit"
 
-cat >"$ROOT/target/debug/orbit" <<'SH'
+cat >"$CONSUMER_ROOT/target/debug/orbit" <<'SH'
 #!/usr/bin/env bash
 printf 'stale-default-debug-target\n'
 SH
-chmod +x "$ROOT/target/debug/orbit"
+chmod +x "$CONSUMER_ROOT/target/debug/orbit"
 
 # Populate redirected targets with fresh binaries.
 cat >"$REDIRECTED_RELEASE/orbit" <<'SH'
@@ -801,7 +803,7 @@ export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
   HOME="$FAKE_HOME" timeout 5 \
-  make -s -C "$ROOT" install CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
+  make -s -C "$CONSUMER_ROOT" install CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install build was not admitted"
 grep -Fxq -- '-p' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit-cli' "$FAKE_BUILD_ARGS" \
@@ -821,7 +823,7 @@ rm -f "$FAKE_INSTALL_BIN_DIR/orbit"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install-dbg" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
   HOME="$FAKE_HOME" timeout 5 \
-  make -s -C "$ROOT" install INSTALL_PROFILE=debug CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
+  make -s -C "$CONSUMER_ROOT" install INSTALL_PROFILE=debug CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install debug build was not admitted"
 [[ -x "$FAKE_INSTALL_BIN_DIR/orbit" ]] || fail "make install debug did not create installed binary"
@@ -850,7 +852,7 @@ chmod +x "$REDIRECTED_DEBUG/orbit"
 export FAKE_DEV_ARGS FAKE_DEV_STARTED FAKE_DEV_RELEASE
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-dev" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" \
-  make -s -C "$ROOT" dev CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  make -s -C "$CONSUMER_ROOT" dev CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
   ARGS='dev-arg1 dev-arg2' >"$TMP/make-dev.out" 2>"$TMP/make-dev.err" &
 DEV_PID=$!
 BACKGROUND_PIDS+=("$DEV_PID")
@@ -906,7 +908,7 @@ chmod +x "$REDIRECTED_RELEASE/orbit"
 export FAKE_SOAK_LOG
 PATH="$FAKE_BIN_DIR:$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-soak" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" \
-  make -s -C "$ROOT" web-memory-soak CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  make -s -C "$CONSUMER_ROOT" web-memory-soak CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
   SOAK_FLAGS='--rounds 3'
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "web-memory-soak build was not admitted"
@@ -926,7 +928,7 @@ for target_name in install dev web-memory-soak; do
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
     HOME="$FAKE_HOME" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-err" ORBIT_BUILD_SLOTS=1 \
     PATH="$FAKE_BIN_DIR:$PATH" \
-    make -s -C "$ROOT" "$target_name" CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+    make -s -C "$CONSUMER_ROOT" "$target_name" CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
     >"$TMP/make-$target_name-err.out" 2>"$TMP/make-$target_name-err.err"
   status=$?
   set -e
@@ -934,10 +936,6 @@ for target_name in install dev web-memory-soak; do
   grep -Fq "make $target_name: cargo did not report an executable" "$TMP/make-$target_name-err.err" \
     || fail "make $target_name did not report target-specific missing executable error"
 done
-
-# Clean up temporary test binaries in ROOT/target.
-rm -f "$ROOT/target/release/orbit" "$ROOT/target/debug/orbit"
-rmdir "$ROOT/target/release" "$ROOT/target/debug" 2>/dev/null || true
 
 TEST_COMPLETE=1
 printf 'test-build-budget: ok\n'
