@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -239,10 +239,12 @@ function renderScopeChips() {
     host.appendChild(chip);
   }
   if (auditFilter.role) {
-    host.appendChild(scopeChip("actor", auditFilter.role, () => {
+    const chip = scopeChip("actor", auditActorLabel(auditFilter.role), () => {
       auditFilter.role = null;
       window.location.hash = buildAuditHash();
-    }));
+    });
+    chip.title = `Recorded role: ${auditFilter.role}`;
+    host.appendChild(chip);
   }
   if (auditFilter.agent_family) {
     host.appendChild(scopeChip("agent family", auditFilter.agent_family, () => {
@@ -507,6 +509,7 @@ function renderAuditSummary(data, ctx) {
             return `${col.title || col.label}: ${value ?? "-"}`;
           }).join("; ");
           const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
+          if (c.render) td.textContent = c.render(item[c.key], item, td);
           td.dataset.column = c.key;
           row.appendChild(td);
         }
@@ -581,7 +584,10 @@ function renderAuditSummary(data, ctx) {
     const card = createCard(
       `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
-        { key: "label", label: "class", title: "Failure classification" },
+        { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
+          td.title = value;
+          return incidentClassLabel(row.key, value);
+        } },
         { key: "incidents", label: "inc.", num: true, title: "Incidents" },
         { key: "raw_events", label: "events", num: true, title: "Raw events" },
         { key: "affected_runs", label: "runs", num: true, title: "Affected runs" },
@@ -676,7 +682,10 @@ function renderAuditSummary(data, ctx) {
     addCard("role-split", createCard("Role split", renderTable(
       data.role_split,
       [
-        { key: "label", label: "role" },
+        { key: "label", label: "role", render: (value, _row, td) => {
+          td.title = `Recorded role: ${value}`;
+          return auditActorLabel(value);
+        } },
         { key: "count", label: "events", num: true, title: "All audit events in the window" },
         { key: "mcp", label: "mcp", num: true, title: "Tool calls via MCP (subcommand = run-mcp)" },
         { key: "cli", label: "cli", num: true, title: "Tool calls via CLI (subcommand = run)" },
@@ -1116,7 +1125,7 @@ function renderAudit(events, ctx) {
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: "c-role", text: ev.role || "-" }));
+    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
     tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: cmd || "" }));
     tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));

@@ -316,4 +316,34 @@ refusedEnable.resolve(response({ error: 'plugin write refused' }, 403));
 await rejectedAction;
 assert.equal(pluginCard().querySelector('.plugin-change-error')?.textContent, 'plugin write refused', 'a rejected mutation remains visible on its plugin card');
 
+// Certification warnings use host SemVer precedence and disappear on refresh.
+for (const [certified, host, behind] of [
+  ['0.24.0', '0.28.0', true],
+  ['0.9.0', '0.10.0', true],
+  ['0.28.0', '0.28.0', false],
+  ['0.29.0', '0.28.0', false],
+  ['0.28.0-rc.1', '0.28.0', true],
+  ['0.28.0', '0.28.0-rc.1', false],
+  ['0.28.0-rc.2', '0.28.0-rc.10', true],
+  ['0.28.0-alpha', '0.28.0-beta', true],
+  ['0.28.0-1', '0.28.0-alpha', true],
+  ['0.28.0-alpha', '0.28.0-alpha.1', true],
+  ['0.28.0+build.1', '0.28.0+build.2', false],
+  ['0.28.0-01', '0.28.0', false],
+  ['unknown', '0.28.0', false],
+  ['0.24.0', undefined, false],
+  [undefined, '0.28.0', false],
+]) {
+  const refresh = plugins.fetchAndRenderPlugins();
+  pending.at(-1).resolve(response([{
+    name: 'example', status: 'active', version: '1',
+    certified_orbit_version: certified, host_orbit_version: host,
+  }]));
+  await refresh;
+  const chip = pluginCard().querySelector('.plugin-certification');
+  assert.equal(Boolean(chip?.classList.contains('plugin-chip-warn')), behind,
+    `certification ${certified} against host ${host} warns only for an older known version`);
+  assert.equal(Boolean(chip), Boolean(certified), 'uncertified plugins have no certification chip');
+}
+
 console.log('audit, policy, scoreboard, and plugin panel behaviors passed');

@@ -174,27 +174,25 @@ const OPERATIONS_SCOREBOARD_COLUMNS = [
   },
   {
     key: "tools",
-    label: "tool fail/all",
+    label: "failed / total calls",
     num: true,
     format: "pair",
     left: "failed_tool_calls",
     right: "tool_calls",
-    title: "raw failed tool calls over total tool calls",
-    help: "raw events",
+    title: "tool fail/all: failed tool calls / all tool calls (each call counted separately)",
   },
   // ORB-10871: the same failures, grouped. A repeated burst is one incident
   // with its raw event count beside it, so the left number answers "how many
   // things went wrong" and the right one "how much evidence there is".
   {
     key: "failure_incidents",
-    label: "fail inc/events",
+    label: "incidents / failure events",
     num: true,
     format: "pair",
     left: "failure_incidents",
     right: "failure_incident_events",
     tone: "warn",
-    title: "grouped failure incidents / raw failed events they collapsed",
-    help: "grouped",
+    title: "fail inc/events: repeated failures grouped into incidents / the audit events in those incidents",
     // ORB-11207: names the `coverage.failure_incidents` note so an
     // unavailable source keeps this row visible instead of reading as a
     // filtered-out measured zero.

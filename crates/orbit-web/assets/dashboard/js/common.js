@@ -620,10 +620,23 @@ export function detailsPanel(key, opts = {}) {
   return panel;
 }
 
+export function normalizeTaskStatus(status) {
+  return String(status || "unknown").replaceAll("_", "-");
+}
+
 export function statusPill(status) {
+  status = normalizeTaskStatus(status);
   const pill = el("span", { class: "pill", text: status });
   pill.dataset.status = status;
   return pill;
+}
+
+export function auditActorLabel(role) {
+  return role === "unverified" ? "Unconfirmed caller" : role || "-";
+}
+
+export function incidentClassLabel(key, label) {
+  return key === "expected" ? "Expected refusal" : label || key || "failure";
 }
 
 export function priorityCell(p) {

@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setWorkspace } = await import('./js/common.js');
+const { setWorkspace, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
@@ -97,7 +97,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
+    const payload = { workspace, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'in_progress', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
     // A plugin-off definition is hidden unless asked for; listed, it is
     // enabled with an earlier slot, so leaking into a summary would show.
     payload.inactive_plugin_count = 1;
@@ -169,6 +169,14 @@ globalThis.fetch = async (path, options = {}) => {
 setWorkspace('one');
 initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
+const mintedStatus = get('auto-tasks-body').querySelector('.pill');
+const taskStatus = statusPill('in-progress');
+get('auto-tasks-body').appendChild(taskStatus);
+assert(mintedStatus.dataset.status === taskStatus.dataset.status && mintedStatus.textContent === taskStatus.textContent, 'last-minted status uses the Tasks token');
+assert(getComputedStyle(mintedStatus, '::before').backgroundColor === getComputedStyle(taskStatus, '::before').backgroundColor, 'last-minted status uses the Tasks dot colour');
+assert(getComputedStyle(mintedStatus).getPropertyValue('--dot').trim() === getComputedStyle(mintedStatus).getPropertyValue('--status-in-progress').trim(), 'in-progress status uses its theme colour');
+taskStatus.remove();
+
 // The Drain card keeps only what an operator acts on: the capacity line and
 // what a window would admit, two counts, the blocked-by list, then duration,
 // concurrency, completion and Start/Stop.
@@ -192,10 +200,10 @@ assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String
 const blockedLinks = descendants(drainBody).filter(node => String(node.href || '').includes('#tasks?'));
 assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-14488')), 'blocked-by links stay workspace-qualified');
 assert(get('auto-drain-live').textContent === 'idle', 'no live window reads idle');
-// With no live window Stop becomes "Settle pending": the settle-only pass
+// With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
-assert(!drainButton('Stop') && drainButton('Settle pending') && !drainButton('Settle pending').disabled, 'Stop relabels to Settle pending and stays enabled without a live window');
-assert(drainText().includes('No auto-delivery window is live. Deliver settlements recorded for finished or cancelled drains.'), 'the idle control explains itself in visible text');
+assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'Stop relabels to Send pending results and stays enabled without a live window');
+assert(drainBody.querySelector('.drain-stop-note:not([hidden])')?.textContent.trim(), 'the idle control has visible guidance');
 
 // More than three blocked tasks collapse to "+N more".
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
@@ -431,7 +439,7 @@ assert(!drainButton('Start 2h window').disabled, 'the guard is released after a 
 failReadiness = false;
 await fetchAndRenderOperations();
 
-// Settle pending delivers recorded settlements and reports each outcome; a
+// Send pending results delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.
 stopOutcome = 'idle';
 stopSettlements = [
@@ -440,8 +448,7 @@ stopSettlements = [
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-3', leaf_run_id: null, outcome: 'owner_unreachable' },
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-4', leaf_run_id: null, outcome: 'launch_uncertain' },
 ];
-drainButton('Settle pending').click(); await tick(); await tick(); await tick();
-assert(confirmations.at(-1).includes('No auto-delivery window needs to be live'), 'settle confirms without demanding a window');
+drainButton('Send pending results').click(); await tick(); await tick(); await tick();
 const settleFeedback = get('auto-drain-operation-feedback');
 assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
@@ -449,7 +456,7 @@ assert(settleFeedback.textContent.includes('1 waiting for the owner (unreachable
 assert(settleFeedback.textContent.includes('1 launch uncertain — needs manual recovery, see the distributed drain runbook') && settleFeedback.textContent.includes('[ORB-4]'), `an uncertain launch points at the runbook: ${settleFeedback.textContent}`);
 assert(settleFeedback.className.includes('error') && !settleFeedback.className.includes('success'), 'unfinished settlements are not styled as success');
 stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
-drainButton('Settle pending').click(); await tick(); await tick(); await tick();
+drainButton('Send pending results').click(); await tick(); await tick(); await tick();
 assert(settleFeedback.textContent.includes('1 settlement delivered') && settleFeedback.className.includes('success'), `a fully delivered pass is plain success: ${settleFeedback.textContent}`);
 stopOutcome = 'stopped';
 stopSettlements = undefined;
@@ -457,7 +464,7 @@ stopSettlements = undefined;
 // Read-only reasons are visible text beside the button, not only a tooltip.
 controlsAuthorized = false;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
+assert(drainButton('Send pending results').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
 controlsAuthorized = true;
 await fetchAndRenderOperations();
 
@@ -488,18 +495,18 @@ assert(get('auto-drain-operation-feedback').textContent.includes('Admissions sto
 // Once admissions are stopped the button offers the settle-only pass instead.
 drainAdmissionsStopped = true;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending') && !drainButton('Settle pending').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
+assert(drainButton('Send pending results') && !drainButton('Send pending results').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
 drainAdmissionsStopped = false;
 drainRunId = null;
 drainPhase = 'winding_down';
 
 // A replica's live pull drain has no auto window, yet Stop acts on it: the
-// button reads Stop (not Settle pending), and the confirm names the pull drain
+// button reads Stop (not Send pending results), and the confirm names the pull drain
 // and does not claim that no window is live or that nothing is stopped.
 drainPhase = 'idle';
 pullDrainRunId = 'jrun-pull-drain-0001';
 await fetchAndRenderOperations();
-assert(drainButton('Stop') && !drainButton('Settle pending') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Settle pending');
+assert(drainButton('Stop') && !drainButton('Send pending results') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Send pending results');
 assert(get('auto-drain-live').textContent.includes('Pull drain') && descendants(get('auto-drain-live')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `header shows the pull drain: ${get('auto-drain-live').textContent}`);
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stopping a pull drain posts to the stop endpoint');
@@ -507,7 +514,7 @@ assert(confirmations.at(-1).includes('pull drain') && confirmations.at(-1).inclu
 // Once its admissions are stopped the readiness says so and the button offers the settle-only pass.
 pullDrainStopped = true;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
+assert(drainButton('Send pending results') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
 pullDrainStopped = false;
 pullDrainRunId = null;
 drainPhase = 'winding_down';

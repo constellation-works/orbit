@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime, listItems } from './common.js';
+import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime, listItems } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -266,7 +266,7 @@ function incidentSummaryNode(payload, ctx) {
       type: "button",
       "aria-pressed": incidentClass === key ? "true" : "false",
       title: `${labels[key] || key}: ${key === "all" ? incidents : count} incidents (window ${window})`,
-      text: key === "all" ? `All: ${incidents}` : `${labels[key] || key}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
+      text: key === "all" ? `All: ${incidents}` : `${incidentClassLabel(key, labels[key])}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
     });
     chip.dataset.class = key;
     chip.addEventListener("click", () => {
@@ -338,13 +338,13 @@ function incidentDetailNode(incident, ctx) {
   const detail = el("div", { class: "incident-detail" });
 
   const facts = el("dl", { class: "incident-facts" });
-  const fact = (label, value) => {
+  const fact = (label, value, title = "") => {
     facts.appendChild(el("dt", { text: label }));
-    facts.appendChild(el("dd", { class: "mono", text: value }));
+    facts.appendChild(el("dd", { class: "mono", text: value, title }));
   };
   fact("grouping signature", incident.signature || "-");
-  fact("classification", incident.class_label || incident.class || "-");
-  fact("actor", incident.actor || "-");
+  fact("classification", incidentClassLabel(incident.class, incident.class_label), incident.class_label || incident.class);
+  fact("actor", auditActorLabel(incident.actor), incident.actor);
   fact("surface", incident.surface || "-");
   if (incident.activity_id) fact("step", incident.activity_id);
   fact("first seen", ctx.fmtAbsTime ? ctx.fmtAbsTime(incident.first_ts) : incident.first_ts || "-");
@@ -442,9 +442,9 @@ function incidentRowNode(incident, ctx) {
     title: "Show the exact audit events behind this incident",
   }, [
     el("span", { class: "incident-caret", text: expanded ? "▾" : "▸" }),
-    el("span", { class: `incident-class ${incident.class || "unexpected"}`, text: incident.class_label || incident.class || "failure" }),
+    el("span", { class: `incident-class ${incident.class || "unexpected"}`, text: incidentClassLabel(incident.class, incident.class_label), title: incident.class_label || incident.class }),
     el("span", { class: "incident-surface mono", text: incident.surface || "-" }),
-    el("span", { class: "incident-actor", text: incident.actor || "unknown actor" }),
+    el("span", { class: "incident-actor", text: incident.actor ? auditActorLabel(incident.actor) : "unknown actor", title: incident.actor }),
     el("span", {
       class: "incident-count",
       title: `${asCount(incident.event_count)} raw audit events collapsed into this incident`,

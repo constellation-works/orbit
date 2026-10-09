@@ -1264,7 +1264,7 @@ function buildWorkspaceSelector() {
 
   const note = el("span", {
     class: "workspace-scope-note",
-    text: "Fleet-wide on Reliability",
+    text: "Workspace filter inactive",
   });
   note.id = "workspace-scope-note";
   note.hidden = true;
