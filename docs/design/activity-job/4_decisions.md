@@ -1560,7 +1560,7 @@ Every shipped `agent_loop` activity names the exact Orbit tools its agent may ca
 ## Final recovery decides; a deterministic applier acts
 
 **Recorded:** 2026-10-04 · [ORB-13897]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-types/src/workflow/final_recovery.rs`, `crates/orbit-core/src/application/task/final_recovery.rs`, `crates/orbit-core/src/application/job/crew_pools.rs`, `crates/orbit-config/src/registry/settings.rs`, `crates/orbit-core/assets/activities/step_failure_recovery.yaml`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-types/src/workflow/final_recovery.rs`, `crates/orbit-core/src/application/task/final_recovery.rs`, `crates/orbit-core/src/application/job/crew_pools.rs`, `crates/orbit-config/src/registry/settings/table.rs`, `crates/orbit-core/assets/activities/step_failure_recovery.yaml`
 
 ### Context
 

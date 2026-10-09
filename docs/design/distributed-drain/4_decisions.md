@@ -537,7 +537,7 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
 **Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
 **Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff.rs::accept_typed_handoff`,
 `crates/orbit-core/src/application/distributed/contract.rs::owner_completion_authority`,
-`crates/orbit-config/src/registry/settings.rs` (`workflow.distributed_completion`)
+`crates/orbit-config/src/registry/settings/table.rs` (`workflow.distributed_completion`)
 
 ### Context
 
