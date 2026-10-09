@@ -106,6 +106,7 @@ impl ReviewedLeaf {
                 &format!("https://github.com/{REPOSITORY}.git"),
             ],
         );
+        git(&repo, &["config", "credential.interactive", "never"]);
         let base = revision(&repo, "HEAD");
         git(&repo, &["checkout", "-q", "-b", &format!("orbit/{task}")]);
         std::fs::write(repo.join("src/f0.rs"), "fn work() { todo!() }\n").unwrap();

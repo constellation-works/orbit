@@ -121,3 +121,76 @@ fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
         "the sol task is claimed: {lapsed:#}"
     );
 }
+
+/// [ORB-14902] An allowlist-restricted drain whose permitted crew cannot run
+/// for a permanent reason (preflight failure) refuses with the allowlist
+/// message even when an unrelated crew is excluded by a provider usage limit,
+/// rather than advising the operator that this drain will admit again.
+#[test]
+fn an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist() {
+    if !isolated(
+        module_path!(),
+        "an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist",
+    ) {
+        return;
+    }
+    let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
+    pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
+    let resets_at = Utc::now() + Duration::hours(2);
+    pair.follower
+        .record_provider_limit(&codex_reading(95.0, resets_at))
+        .expect("seed the follower's reading");
+    let drain = pair
+        .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["opus"]}));
+
+    let pass = pair.pass(&drain);
+
+    let refusal = pass["refusal"].as_str().unwrap_or_default();
+    assert!(
+        refusal.starts_with("no_runnable_crew:") && refusal.contains("--allow-crew"),
+        "expected allow-crew refusal, got: {refusal}"
+    );
+    assert!(
+        !refusal.contains("provider_limit") && !refusal.contains("provider usage limit"),
+        "did not expect provider limit refusal: {refusal}"
+    );
+    assert_eq!(pass["admitting"], false, "{pass}");
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    assert!(pair.owner_claims().is_empty());
+}
+
+/// [ORB-14902] An allowlist-restricted drain whose permitted crew is held by a
+/// provider usage limit reports the provider limit refusal without literal
+/// whitespace padding.
+#[test]
+fn an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal() {
+    if !isolated(
+        module_path!(),
+        "an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal",
+    ) {
+        return;
+    }
+    let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
+    pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
+    let resets_at = Utc::now() + Duration::hours(2);
+    pair.follower
+        .record_provider_limit(&codex_reading(95.0, resets_at))
+        .expect("seed the follower's reading");
+    let drain = pair
+        .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["sol"]}));
+
+    let pass = pair.pass(&drain);
+
+    let refusal = pass["refusal"].as_str().unwrap_or_default();
+    assert!(
+        refusal.starts_with("no_runnable_crew:") && refusal.contains("provider usage limit"),
+        "expected provider usage limit refusal, got: {refusal}"
+    );
+    assert!(
+        !refusal.contains("          "),
+        "refusal must not contain runs of stray spaces: {refusal}"
+    );
+    assert_eq!(pass["admitting"], false, "{pass}");
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    assert!(pair.owner_claims().is_empty());
+}
