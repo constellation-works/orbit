@@ -395,6 +395,19 @@ node crates/orbit-web/src/tests/dashboard_host_switch_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/host-switch
 ```
 
+The doctor browser fixture serves the Health › Doctor panel from a fake
+serving host and two remotes behind a fake forward. It checks the error and
+warning rows with their full messages, the copyable remediation commands, the
+age of a cached report, that Refresh runs doctor again while the dashboard's
+own refresh only reads the cache, the Health rail count, the host forward, and
+the state shown for a host too old to have the panel. It saves 1440px and
+768px screenshots and `doctor-assertions.json`:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_doctor_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/doctor-browser
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

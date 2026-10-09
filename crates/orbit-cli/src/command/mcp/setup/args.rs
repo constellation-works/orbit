@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
+use orbit_cmd::mcp_clients::{McpClient, McpClientScope};
 use orbit_core::OrbitError;
 
 use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
@@ -31,16 +32,29 @@ pub(super) enum McpProvider {
 }
 
 impl McpProvider {
-    pub(super) fn label(self) -> &'static str {
+    pub(super) fn client(self) -> McpClient {
         match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Gemini => "gemini",
-            Self::Antigravity => "antigravity",
-            Self::Grok => "grok",
-            Self::Cursor => "cursor",
-            Self::Vscode => "vscode",
-            Self::Windsurf => "windsurf",
+            Self::Claude => McpClient::Claude,
+            Self::Codex => McpClient::Codex,
+            Self::Gemini => McpClient::Gemini,
+            Self::Antigravity => McpClient::Antigravity,
+            Self::Grok => McpClient::Grok,
+            Self::Cursor => McpClient::Cursor,
+            Self::Vscode => McpClient::Vscode,
+            Self::Windsurf => McpClient::Windsurf,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        self.client().label()
+    }
+}
+
+impl ScopeArg {
+    pub(super) fn client_scope(self) -> McpClientScope {
+        match self {
+            Self::Home => McpClientScope::Home,
+            Self::Workspace => McpClientScope::Workspace,
         }
     }
 }

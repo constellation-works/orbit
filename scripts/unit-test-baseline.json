@@ -7,10 +7,10 @@
       "test_functions": 36
     },
     "orbit-cli": {
-      "test_functions": 30
+      "test_functions": 28
     },
     "orbit-cmd": {
-      "test_functions": 27
+      "test_functions": 29
     },
     "orbit-common": {
       "test_functions": 39

@@ -1,4 +1,4 @@
-use orbit_cmd::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
+use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::OrbitRuntime;
 
 /// Report Orbit-owned state directories whose write bits let another local

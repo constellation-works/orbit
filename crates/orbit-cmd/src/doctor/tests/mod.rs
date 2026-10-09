@@ -10,6 +10,7 @@ use orbit_core::OrbitRuntime;
 use crate::doctor::DoctorCommands;
 
 mod automation;
+mod permissions;
 mod task;
 mod workspace;
 

@@ -67,6 +67,9 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
+    /// Per-server cache of the last `orbit doctor` report for each workspace
+    /// runtime, behind `/api/doctor`.
+    doctor_reports: DoctorReports,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -406,6 +409,7 @@ impl DashboardState {
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
+                doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
@@ -492,6 +496,11 @@ impl DashboardState {
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
     pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<(String, usize)> {
         &self.inner.diagnostics_errors
+    }
+
+    /// Process-local `orbit doctor` report cache for this server instance.
+    pub(crate) fn doctor_reports(&self) -> &DoctorReports {
+        &self.inner.doctor_reports
     }
 
     /// Process-local `/api/diagnostics/friction` memo for this server instance.

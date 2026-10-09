@@ -3,7 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use super::super::doctor_permissions::scan_with_hook;
+use crate::doctor::permissions::scan_with_hook;
 
 #[test]
 fn ownership_scan_never_visits_or_reports_worktree_or_target_contents() {

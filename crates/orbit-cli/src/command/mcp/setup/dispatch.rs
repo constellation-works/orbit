@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use orbit_cmd::mcp_clients::{self, require_home_dir, vscode_home_user_dir};
 use orbit_core::OrbitError;
 
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
@@ -116,50 +117,6 @@ fn is_legacy_orbit_grok_entry(entry: &toml::Value, server_id: &str) -> bool {
     }
 }
 
-/// Grok stops reading project `.mcp.json` after Claude import, and its
-/// `~/.claude.json` reader can be disabled separately. Use Grok's native
-/// config when the shared reader is unavailable or cannot be checked.
-fn grok_reads_shared_location(scope: ScopeArg, home_dir: Option<&Path>) -> bool {
-    let Some(home) = home_dir else {
-        return false;
-    };
-    let path = home.join(".grok").join("config.toml");
-    let raw = match fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
-        Err(_) => return false,
-    };
-    let Ok(config) = raw.parse::<toml::Value>() else {
-        return false;
-    };
-    if config
-        .get("claude_compat")
-        .and_then(|compat| compat.get("imported"))
-        .and_then(toml::Value::as_bool)
-        == Some(true)
-    {
-        return false;
-    }
-    if scope == ScopeArg::Home {
-        if config
-            .get("compat")
-            .and_then(|compat| compat.get("claude"))
-            .and_then(|claude| claude.get("mcps"))
-            .and_then(toml::Value::as_bool)
-            == Some(false)
-        {
-            return false;
-        }
-        if std::env::var("GROK_CLAUDE_MCPS_ENABLED")
-            .ok()
-            .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false"))
-        {
-            return false;
-        }
-    }
-    true
-}
-
 pub(super) fn run_action(
     action: McpAction<'_>,
     repo_root: &Path,
@@ -248,185 +205,19 @@ impl ConfigTarget {
         repo_root: &Path,
         home_dir: Option<&Path>,
     ) -> Result<Self, OrbitError> {
-        match (scope, provider) {
-            (ScopeArg::Home, McpProvider::Claude) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home.join(".claude.json"),
-                    legacy_mcp_path: Some(home.join(".claude").join(".mcp.json")),
-                    settings_path: Some(home.join(".claude").join("settings.json")),
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Claude) => Ok(Self {
-                mcp_path: repo_root.join(".mcp.json"),
-                legacy_mcp_path: Some(repo_root.join(".claude.json")),
-                settings_path: Some(repo_root.join(".claude").join("settings.json")),
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Codex) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home.join(".codex").join("config.toml"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Codex) => Ok(Self {
-                mcp_path: repo_root.join(".codex").join("config.toml"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Gemini) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home.join(".gemini").join("settings.json"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Gemini) => Ok(Self {
-                mcp_path: repo_root.join(".gemini").join("settings.json"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Antigravity) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home.join(".gemini").join("config").join("mcp_config.json"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Antigravity) => Ok(Self {
-                mcp_path: repo_root.join(".agents").join("mcp_config.json"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Grok) => {
-                let home = require_home_dir(home_dir)?;
-                if !grok_reads_shared_location(scope, Some(home)) {
-                    return Ok(Self {
-                        mcp_path: home.join(".grok").join("config.toml"),
-                        legacy_mcp_path: None,
-                        settings_path: None,
-                        scope,
-                    });
-                }
-                Ok(Self {
-                    mcp_path: home.join(".claude.json"),
-                    legacy_mcp_path: Some(home.join(".grok").join("config.toml")),
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Grok) => {
-                let shared = grok_reads_shared_location(scope, home_dir);
-                Ok(Self {
-                    mcp_path: if shared {
-                        repo_root.join(".mcp.json")
-                    } else {
-                        repo_root.join(".grok").join("config.toml")
-                    },
-                    legacy_mcp_path: shared.then(|| repo_root.join(".grok").join("config.toml")),
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Home, McpProvider::Cursor) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home.join(".cursor").join("mcp.json"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Cursor) => Ok(Self {
-                mcp_path: repo_root.join(".cursor").join("mcp.json"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Vscode) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: vscode_home_user_dir(home).join("mcp.json"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Vscode) => Ok(Self {
-                mcp_path: repo_root.join(".vscode").join("mcp.json"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-            (ScopeArg::Home, McpProvider::Windsurf) => {
-                let home = require_home_dir(home_dir)?;
-                Ok(Self {
-                    mcp_path: home
-                        .join(".codeium")
-                        .join("windsurf")
-                        .join("mcp_config.json"),
-                    legacy_mcp_path: None,
-                    settings_path: None,
-                    scope,
-                })
-            }
-            (ScopeArg::Workspace, McpProvider::Windsurf) => Ok(Self {
-                mcp_path: repo_root
-                    .join(".codeium")
-                    .join("windsurf")
-                    .join("mcp_config.json"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
-        }
+        let paths = mcp_clients::client_config_paths(
+            scope.client_scope(),
+            provider.client(),
+            repo_root,
+            home_dir,
+        )?;
+        Ok(Self {
+            mcp_path: paths.mcp_path,
+            legacy_mcp_path: paths.legacy_mcp_path,
+            settings_path: paths.settings_path,
+            scope,
+        })
     }
-}
-
-/// Resolve the platform-specific VS Code "User" config directory under `home`.
-///
-/// VS Code stores its global `mcp.json` in this user-config folder, which
-/// differs across operating systems. Centralizing the branching here keeps
-/// `cfg(target_os = ...)` out of `ConfigTarget::resolve`.
-fn vscode_home_user_dir(home: &Path) -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        home.join("Library")
-            .join("Application Support")
-            .join("Code")
-            .join("User")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return home
-            .join("AppData")
-            .join("Roaming")
-            .join("Code")
-            .join("User");
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        home.join(".config").join("Code").join("User")
-    }
-}
-
-fn require_home_dir(home_dir: Option<&Path>) -> Result<&Path, OrbitError> {
-    home_dir.ok_or_else(|| {
-        OrbitError::InvalidInput(
-            "cannot resolve HOME/USERPROFILE for MCP integration files".to_string(),
-        )
-    })
 }
 
 fn resolve_providers(
@@ -438,111 +229,6 @@ fn resolve_providers(
         ProviderSelectionMode::Explicit(providers) => providers,
         ProviderSelectionMode::Auto => auto_detected_providers(repo_root, home_dir),
     }
-}
-
-/// Return client registrations for Orbit's MCP server in this workspace.
-/// Reuse the same paths that `mcp init` writes, including
-/// user-level registrations, without starting a client or touching its files.
-pub(crate) fn registered_clients_for_workspace(
-    repo_root: &Path,
-    workspace_id: Option<&str>,
-    home_dir: Option<&Path>,
-) -> Vec<String> {
-    const CLIENTS: [McpProvider; 8] = [
-        McpProvider::Claude,
-        McpProvider::Codex,
-        McpProvider::Gemini,
-        McpProvider::Antigravity,
-        McpProvider::Grok,
-        McpProvider::Cursor,
-        McpProvider::Vscode,
-        McpProvider::Windsurf,
-    ];
-    let mut found = Vec::new();
-    for scope in [ScopeArg::Workspace, ScopeArg::Home] {
-        for client in CLIENTS {
-            let Ok(target) = ConfigTarget::resolve(scope, &client, repo_root, home_dir) else {
-                continue;
-            };
-            if [Some(target.mcp_path), target.legacy_mcp_path]
-                .into_iter()
-                .flatten()
-                .any(|path| registration_matches(&path, client, workspace_id, repo_root))
-            {
-                found.push(format!(
-                    "{} ({})",
-                    client.label(),
-                    if scope == ScopeArg::Home {
-                        "home"
-                    } else {
-                        "workspace"
-                    }
-                ));
-            }
-        }
-    }
-    found
-}
-
-fn registration_matches(
-    path: &Path,
-    client: McpProvider,
-    workspace_id: Option<&str>,
-    repo_root: &Path,
-) -> bool {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return false;
-    };
-    let entry = if client == McpProvider::Codex
-        || (client == McpProvider::Grok && path.extension().is_some_and(|ext| ext == "toml"))
-    {
-        let Ok(doc) = contents.parse::<toml::Value>() else {
-            return false;
-        };
-        doc.get("mcp_servers")
-            .and_then(|servers| servers.get(ORBIT_MCP_SERVER_ID))
-            .and_then(|server| serde_json::to_value(server).ok())
-    } else {
-        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&contents) else {
-            return false;
-        };
-        let key = if client == McpProvider::Vscode {
-            "servers"
-        } else {
-            "mcpServers"
-        };
-        doc.get(key)
-            .and_then(|servers| servers.get(ORBIT_MCP_SERVER_ID))
-            .cloned()
-    };
-    let Some(entry) = entry else {
-        return false;
-    };
-    if entry.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
-        return false;
-    }
-    // A client may launch Orbit through a wrapper or connect to a remote
-    // server. This row checks registration, not whether the launch succeeds.
-    let has_launch = ["command", "url"].into_iter().any(|key| {
-        entry
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
-    });
-    if !has_launch {
-        return false;
-    }
-    let bound = entry
-        .get("args")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|args| {
-            args.windows(2).find_map(|pair| {
-                (pair[0].as_str() == Some("--workspace"))
-                    .then(|| pair[1].as_str())
-                    .flatten()
-            })
-        });
-    bound.is_none_or(|bound| workspace_id == Some(bound) || bound == repo_root.to_string_lossy())
 }
 
 pub(super) fn auto_detected_providers(

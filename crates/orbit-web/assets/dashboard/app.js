@@ -6,6 +6,7 @@ import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copy
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
+import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
 import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
@@ -208,6 +209,8 @@ function routerContext() {
     // refresh tick (and without the aggregate-view guard the other diagnostics
     // fetches need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
+    // ORB-14830: Doctor reads its report when the view opens, never per tick.
+    openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     showDrainDock: () => setDockMode("drain"),
 
@@ -1297,6 +1300,9 @@ function activeRefreshJobs() {
   // but a stalled /api/host/resources must not leave the status line on
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
   void fetchAndRenderHostResources().catch(error => console.error(error));
+  // The Health rail's doctor count comes from the server's cached report;
+  // the poll never runs doctor itself (ORB-14830).
+  void peekDoctor().catch(error => console.error(error));
   const jobs = [];
   const add = (panel, request) => jobs.push({ panel, request });
   const subpanel = (group, name) => {
@@ -1377,6 +1383,12 @@ function activeRefreshJobs() {
     // ahead of the guard below rather than being placeheld with the rest.
     if (activeDiagSubtab === "reliability") {
       add("Health › Reliability", fetchAndRenderReliability());
+      return jobs;
+    }
+    // Doctor runs on open and on its own Refresh button, never on this tick;
+    // the tick only repaints the report's age (or reads it the first time).
+    if (activeDiagSubtab === "doctor") {
+      add("Health › Doctor", openDoctor());
       return jobs;
     }
     if (aggregate && activeDiagSubtab === "runs") {
@@ -1736,6 +1748,7 @@ wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
 wireReliabilityWindowSelector();
+wireDoctorPanel();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();

@@ -11,6 +11,7 @@ mod crews;
 mod denials;
 mod diagnostics;
 mod distributed;
+mod doctor;
 mod forward;
 mod frictions;
 mod helpers;

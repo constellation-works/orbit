@@ -44,11 +44,12 @@ function markWorkspaceSelectorScope(fleetWide) {
 // mode (ORB-12898). The retired `#auto-drain` and older
 // `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
 const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
-const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
+const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "doctor", "reliability", "scoreboard"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
+  doctor: "diagnostics-doctor-main",
   scoreboard: "diagnostics-scoreboard-main",
   reliability: "diagnostics-reliability-main",
 };
@@ -196,6 +197,10 @@ function setDiagSubtabImpl(ctx, name) {
     if (name === "scoreboard" && isAggregateView()) renderPanelPlaceholder("scoreboard-body");
     if (name === "reliability" && ctx.fetchReliability) {
       ctx.fetchReliability();
+    }
+    // Doctor runs on open, not on the poll: show the cached report or read one.
+    if (name === "doctor" && ctx.openDoctor) {
+      ctx.openDoctor();
     }
     return;
   }

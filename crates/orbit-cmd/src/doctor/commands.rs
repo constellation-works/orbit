@@ -115,6 +115,119 @@ pub(super) const DISK_WARN_PCT: f64 = 5.0;
 /// Fail when less than this percentage of the volume is free.
 pub(super) const DISK_FAIL_PCT: f64 = 1.0;
 
+/// One read-only doctor check. The check is a plain function, so a caller can
+/// run each probe on its own thread and bound its time, as the dashboard does.
+#[derive(Clone, Copy)]
+pub struct DoctorProbe {
+    /// The check name its row carries, or the shared prefix of a probe that
+    /// expands into several rows. Names the probe when it cannot report.
+    pub name: &'static str,
+    check: ProbeCheck,
+}
+
+#[derive(Clone, Copy)]
+enum ProbeCheck {
+    One(fn(&OrbitRuntime, bool) -> WorkspaceDoctorResult),
+    Many(fn(&OrbitRuntime, bool) -> Vec<WorkspaceDoctorResult>),
+}
+
+impl DoctorProbe {
+    pub(crate) const fn one(
+        name: &'static str,
+        check: fn(&OrbitRuntime, bool) -> WorkspaceDoctorResult,
+    ) -> Self {
+        Self {
+            name,
+            check: ProbeCheck::One(check),
+        }
+    }
+
+    pub(crate) const fn many(
+        name: &'static str,
+        check: fn(&OrbitRuntime, bool) -> Vec<WorkspaceDoctorResult>,
+    ) -> Self {
+        Self {
+            name,
+            check: ProbeCheck::Many(check),
+        }
+    }
+
+    /// Run the check and time it. `deep` scans every database page; only the
+    /// database probe reads it.
+    pub fn run(&self, runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoctorResult> {
+        match self.check {
+            ProbeCheck::One(check) => vec![WorkspaceDoctorResult::timed(|| check(runtime, deep))],
+            ProbeCheck::Many(check) => WorkspaceDoctorResult::timed_many(|| check(runtime, deep)),
+        }
+    }
+}
+
+/// The workspace checks, in report order. Individual checks never abort the
+/// diagnosis: probe failures surface as `Warning`/`Error` rows and absent
+/// subsystems as `Skipped`.
+pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
+    DoctorProbe::many("config", |runtime, _| doctor_check_config(runtime)),
+    DoctorProbe::one("database", doctor_check_database),
+    DoctorProbe::one("disk-space", |runtime, _| doctor_check_disk_space(runtime)),
+    DoctorProbe::one("search-index", |runtime, _| {
+        doctor_check_search_index(runtime)
+    }),
+    DoctorProbe::one("stale-locks", |runtime, _| {
+        doctor_check_stale_locks(runtime)
+    }),
+    DoctorProbe::one("job-runs", |runtime, _| doctor_check_job_runs(runtime)),
+    DoctorProbe::one("pull-settlements", |runtime, _| {
+        doctor_check_pull_settlements(runtime)
+    }),
+    DoctorProbe::one("pull-protocol", |runtime, _| {
+        doctor_check_pull_protocol(runtime)
+    }),
+    DoctorProbe::one("task-reservations", |runtime, _| {
+        doctor_check_task_reservations(runtime)
+    }),
+    DoctorProbe::one("task-relations", |runtime, _| {
+        doctor_check_task_relations(runtime)
+    }),
+    DoctorProbe::one("infra-blocked-tasks", |runtime, _| {
+        doctor_check_infra_blocked_tasks(runtime)
+    }),
+    DoctorProbe::one("blocked-task-recovery", |runtime, _| {
+        doctor_check_blocked_task_recovery(runtime)
+    }),
+    DoctorProbe::one("automation-consumers", |runtime, _| {
+        doctor_check_stalled_automation(runtime)
+    }),
+    DoctorProbe::one("review", |runtime, _| doctor_check_review(runtime)),
+    DoctorProbe::one("forge-remote", |runtime, _| {
+        doctor_check_forge_remote(runtime)
+    }),
+    DoctorProbe::one("host-shutdown", |runtime, _| {
+        doctor_check_host_shutdown(runtime)
+    }),
+    DoctorProbe::one("env-pass", |runtime, _| doctor_check_env_pass(runtime)),
+    DoctorProbe::one("validation-env", |runtime, _| {
+        doctor_check_validation_env(runtime)
+    }),
+    DoctorProbe::one("orphan-task-stores", |runtime, _| {
+        doctor_check_orphan_task_stores(runtime)
+    }),
+    DoctorProbe::one("tracked-orbit-files", |runtime, _| {
+        doctor_check_tracked_orbit_files(runtime)
+    }),
+    DoctorProbe::one("plugin-builds", |runtime, _| {
+        doctor_check_plugin_builds(runtime)
+    }),
+    DoctorProbe::one("store-retention", |runtime, _| {
+        doctor_check_store_retention(runtime)
+    }),
+    DoctorProbe::many("task-bundles", |runtime, _| {
+        doctor_check_unpublished_bundle_dirs(runtime).into()
+    }),
+    DoctorProbe::many("artifacts", |runtime, _| {
+        doctor_check_definition_artifacts(runtime)
+    }),
+];
+
 /// Workspace doctor / health-probe command surface for [`OrbitRuntime`]
 /// (extension trait — the implementation moved out of orbit-core in
 /// [ORB-10016]).
@@ -173,37 +286,10 @@ impl DoctorCommands for OrbitRuntime {
         &self,
         deep: bool,
     ) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
-        let mut results = WorkspaceDoctorResult::timed_many(|| doctor_check_config(self));
-        results.extend([
-            WorkspaceDoctorResult::timed(|| doctor_check_database(self, deep)),
-            WorkspaceDoctorResult::timed(|| doctor_check_disk_space(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_search_index(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_stale_locks(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_job_runs(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_pull_settlements(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_pull_protocol(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_task_reservations(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_task_relations(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_infra_blocked_tasks(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_blocked_task_recovery(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_stalled_automation(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_review(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_forge_remote(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_host_shutdown(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_env_pass(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_validation_env(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_orphan_task_stores(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_tracked_orbit_files(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_plugin_builds(self)),
-            WorkspaceDoctorResult::timed(|| doctor_check_store_retention(self)),
-        ]);
-        results.extend(WorkspaceDoctorResult::timed_many(|| {
-            doctor_check_unpublished_bundle_dirs(self)
-        }));
-        results.extend(WorkspaceDoctorResult::timed_many(|| {
-            doctor_check_definition_artifacts(self)
-        }));
-        Ok(results)
+        Ok(WORKSPACE_PROBES
+            .iter()
+            .flat_map(|probe| probe.run(self, deep))
+            .collect())
     }
 
     fn remove_stale_lock_files(&self) -> Result<usize, OrbitError> {

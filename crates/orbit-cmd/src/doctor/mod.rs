@@ -20,6 +20,15 @@
 //! diagnosis. The cheap probes shared with the dashboard's
 //! `/healthz?detailed=true` ([`DoctorCommands::health_check_store_writable`])
 //! also live here.
+//!
+//! The full read-only report — the workspace checks plus the host rows
+//! (state-directory permissions, providers, MCP registration, clock unit,
+//! hosts) — is one ordered table of [`DoctorProbe`]s
+//! ([`doctor_report_probes`]). `orbit doctor` runs it after any requested
+//! repair, and the dashboard's Health › Doctor panel runs each probe under
+//! its own time bound, so both surfaces report the same checks with the same
+//! fields ([`doctor_row_json`]). Repairs stay on [`DoctorCommands`] and are
+//! never part of the report.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -37,6 +46,8 @@ use crate::task_store;
 
 mod automation;
 mod commands;
+mod permissions;
+mod report;
 mod system;
 mod task;
 mod workspace;
@@ -44,8 +55,10 @@ mod workspace;
 use automation::*;
 use commands::*;
 pub use commands::{
-    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+    DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, WorkspaceDoctorResult,
+    WorkspaceDoctorStatus,
 };
+pub use report::{doctor_report_probes, doctor_row_json, run_doctor_report};
 pub(crate) use system::{collect_lock_files, disk_space_check, process_is_alive};
 use task::*;
 use workspace::*;

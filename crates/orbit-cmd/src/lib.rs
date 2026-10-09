@@ -24,6 +24,7 @@ pub mod agent_rules;
 mod diagnostics;
 mod doctor;
 pub mod hosts;
+pub mod mcp_clients;
 mod migrate;
 mod registry;
 mod task;
@@ -37,7 +38,8 @@ mod tests;
 
 pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{
-    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+    DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, WorkspaceDoctorResult,
+    WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{
