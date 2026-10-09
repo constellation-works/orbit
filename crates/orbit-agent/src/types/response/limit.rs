@@ -208,7 +208,7 @@ fn nearest_explicit_date(date: &str, today: NaiveDate) -> Option<NaiveDate> {
 /// `3pm`, `3:30pm`, `10 am`.
 fn parse_clock(text: &str) -> Option<NaiveTime> {
     let compact = text.replace(' ', "");
-    let (clock, meridiem) = compact.split_at(compact.len().checked_sub(2)?);
+    let (clock, meridiem) = compact.split_at_checked(compact.len().checked_sub(2)?)?;
     if meridiem != "am" && meridiem != "pm" {
         return None;
     }
