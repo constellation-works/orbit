@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 
+use clap::Args;
 use orbit_core::application::job::run_error_step;
-use orbit_core::{OrbitError, OrbitRuntime, find_workflow};
+use orbit_core::{JobRunState, OrbitError, OrbitRuntime, PipelineWaitEntry, find_workflow};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -10,12 +11,58 @@ use crate::command::{CommandOut, Payload};
 pub(super) const FAILED_WAIT_STATUSES: [&str; 4] =
     ["failed", "timeout", "cancelled", "interrupted"];
 
+#[derive(Args)]
+pub(super) struct WaitArgs {
+    /// Wait for a terminal run state for up to 3600 seconds by default.
+    /// Exit nonzero on wait expiry or an unsuccessful run; expiry reports
+    /// wait_timeout=true with the actual run state and leaves the run active.
+    #[arg(long)]
+    wait: bool,
+    /// Wait deadline in seconds (0..=21600); requires --wait.
+    #[arg(long, requires = "wait")]
+    timeout_seconds: Option<u64>,
+}
+
+impl WaitArgs {
+    /// Validate before submission so an invalid deadline cannot start work.
+    pub(super) fn timeout_seconds(&self) -> Result<Option<u64>, OrbitError> {
+        let seconds = OrbitRuntime::normalize_pipeline_wait_timeout(self.timeout_seconds)?;
+        Ok(self.wait.then_some(seconds))
+    }
+}
+
+/// Keep the core wait-envelope timeout separate from the durable run state.
+pub(super) fn wait_for_run(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    timeout_seconds: u64,
+) -> Result<(PipelineWaitEntry, bool), OrbitError> {
+    let wait = runtime.wait_pipeline_runs(
+        &[run_id.to_string()],
+        timeout_seconds,
+        OrbitRuntime::normalize_pipeline_wait_poll_interval(None),
+        None,
+    )?;
+    let mut entry = wait
+        .results
+        .into_iter()
+        .find(|entry| entry.run_id == run_id)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!("wait returned no result for run '{run_id}'"))
+        })?;
+    let run = runtime.show_job_run(run_id)?;
+    let wait_timeout = entry.status == "timeout" && run.state != JobRunState::Timeout;
+    entry.status = run.state.to_string();
+    Ok((entry, wait_timeout))
+}
+
 #[derive(Clone)]
 pub(crate) struct WorkflowDispatchResult {
     pub workflow_alias: &'static str,
     pub job_id: String,
     pub run_id: String,
     pub state: String,
+    pub wait_timeout: bool,
     pub attempt: u32,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -26,7 +73,7 @@ pub(crate) fn dispatch_workflow(
     workflow_alias: &'static str,
     input: &Value,
     debug: bool,
-    wait_for_completion: bool,
+    timeout_seconds: Option<u64>,
     loop_count: u32,
 ) -> Result<Vec<WorkflowDispatchResult>, OrbitError> {
     let workflow = find_workflow(workflow_alias)
@@ -40,51 +87,39 @@ pub(crate) fn dispatch_workflow(
     let mut results = Vec::with_capacity(loop_count as usize);
     for _ in 0..loop_count {
         let invoke = runtime.submit_pipeline_run(workflow.job_id, input.clone(), None, None)?;
-        if !wait_for_completion {
+        let Some(timeout_seconds) = timeout_seconds else {
             let state = if invoke.queued { "queued" } else { "submitted" };
             results.push(WorkflowDispatchResult {
                 workflow_alias,
                 job_id: invoke.job_name,
                 run_id: invoke.run_id,
                 state: state.to_string(),
+                wait_timeout: false,
                 attempt: 1,
                 error_code: None,
                 error_message: None,
             });
             continue;
-        }
+        };
 
-        let timeout_seconds = OrbitRuntime::normalize_pipeline_wait_timeout(None)?;
-        let poll_interval_seconds = OrbitRuntime::normalize_pipeline_wait_poll_interval(None);
-        let wait = runtime.wait_pipeline_runs(
-            std::slice::from_ref(&invoke.run_id),
-            timeout_seconds,
-            poll_interval_seconds,
-            None,
-        )?;
+        let (wait_entry, wait_timeout) = wait_for_run(runtime, &invoke.run_id, timeout_seconds)?;
         let run = runtime.show_job_run(&invoke.run_id)?;
         let run_details = runtime
             .job_history(workflow.job_id)?
-            .into_iter()
-            .find(|entry| entry.run_id == run.run_id);
-        let wait_entry = wait
-            .results
             .into_iter()
             .find(|entry| entry.run_id == run.run_id);
         results.push(WorkflowDispatchResult {
             workflow_alias,
             job_id: run.job_id,
             run_id: run.run_id,
-            state: wait_entry
-                .as_ref()
-                .map(|entry| entry.status.clone())
-                .unwrap_or_else(|| run.state.to_string()),
+            state: wait_entry.status,
+            wait_timeout,
             attempt: run.attempt,
             error_code: run_details
                 .as_ref()
                 .and_then(run_error_step)
                 .and_then(|step| step.error_code.clone()),
-            error_message: wait_entry.and_then(|entry| entry.error).or_else(|| {
+            error_message: wait_entry.error.or_else(|| {
                 run_details
                     .as_ref()
                     .and_then(run_error_step)
@@ -109,7 +144,7 @@ pub(crate) fn warn_unset_env_pass(runtime: &OrbitRuntime) {
 }
 
 /// Render dispatched workflow runs, failing the command when any waited run
-/// ended in a non-success terminal state. Submitted and queued runs report no
+/// ended in a non-success terminal state or its wait expired. Submitted and queued runs report no
 /// outcome yet, so they keep a zero exit.
 pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
@@ -167,7 +202,7 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs
         .iter()
-        .any(|run| FAILED_WAIT_STATUSES.contains(&run.state.as_str()))
+        .any(|run| run.wait_timeout || FAILED_WAIT_STATUSES.contains(&run.state.as_str()))
     {
         return Ok(payload.with_exit_code(1).into());
     }
@@ -180,6 +215,7 @@ pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> 
         "job_id": run.job_id,
         "run_id": run.run_id,
         "state": run.state,
+        "wait_timeout": run.wait_timeout,
         "attempt": run.attempt,
         "error_code": run.error_code,
         "error_message": run.error_message,
@@ -216,6 +252,9 @@ fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
         single_line(&error_code),
         error_message
     );
+    if run.wait_timeout {
+        first.push_str(";wait_timeout=true");
+    }
 
     vec![first]
 }
