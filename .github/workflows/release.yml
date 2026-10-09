@@ -270,7 +270,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          prerelease: ${{ needs.publish-release.outputs.prerelease }}
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
           files: |
             dist/orbit-aarch64-apple-darwin.tar.gz
             dist/orbit-aarch64-unknown-linux-gnu.tar.gz

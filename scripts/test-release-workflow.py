@@ -91,8 +91,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
                        if step.get("name") == "Create GitHub Release")
         self.assertEqual(self.jobs["publish-release"]["outputs"].get("prerelease"),
                          "${{ steps.metadata.outputs.prerelease }}")
+        # The release step runs inside publish-release, where the job's own
+        # `needs` context is unavailable and would resolve to an empty flag.
         self.assertEqual(release["with"].get("prerelease"),
-                         "${{ needs.publish-release.outputs.prerelease }}")
+                         "${{ steps.metadata.outputs.prerelease }}",
+                         "prerelease tags must create a GitHub Release flagged prerelease")
         self.assertEqual(self.tap.get("if"),
                          "${{ needs.publish-release.outputs.prerelease == 'false' }}",
                          "Homebrew formula must not be rewritten for prerelease tags")
