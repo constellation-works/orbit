@@ -20,8 +20,12 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use orbit_common::fs::git::{GitCommandOutput, run_git};
+use orbit_common::fs::git::{
+    GIT_BULK_COPY_TIMEOUT, GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GitCommandOutput, run_git,
+    run_git_within,
+};
 use orbit_common::fs::io::atomic_write_text;
 use serde_json::Value;
 
@@ -79,10 +83,17 @@ impl SourceInspection {
             ));
         }
         let source = source.ok_or_else(|| permanent("source inspection requires a workspace"))?;
-        Self::create(source, revision).map(Some)
+        Self::create(source, revision, GIT_BULK_COPY_TIMEOUT).map(Some)
     }
 
-    fn create(source: &Path, revision: &str) -> Result<Self, DispatchError> {
+    /// Lease a slot and materialize `revision` in it. `copy_deadline` bounds
+    /// the full-ancestry fetch; a copy that overruns it fails the lease and
+    /// drops the half-built checkout, leaving the slot free for the next lease.
+    pub(super) fn create(
+        source: &Path,
+        revision: &str,
+        copy_deadline: Duration,
+    ) -> Result<Self, DispatchError> {
         require_commit(source, revision)?;
         let common = git(
             source,
@@ -150,9 +161,11 @@ impl SourceInspection {
             // more than the pinned commit itself. The fetch still copies
             // objects into this repository's own store rather than linking
             // alternates, so sandboxed Git stays independent from the primary
-            // object database.
-            git(
+            // object database. The copy is bulk work, so it runs under its
+            // own deadline rather than the local one.
+            git_within(
                 &inspection.root,
+                copy_deadline,
                 &[
                     "-c",
                     "protocol.file.allow=always",
@@ -163,8 +176,9 @@ impl SourceInspection {
                     revision,
                 ],
             )?;
-            git(
+            git_within(
                 &inspection.root,
+                GIT_CHECKOUT_TIMEOUT,
                 &["checkout", "--quiet", "--detach", revision],
             )?;
             inspection.verify()?;
@@ -378,7 +392,13 @@ fn reject_symlink(path: &Path) -> io::Result<()> {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
-    let output = git_output(root, args)?;
+    git_within(root, GIT_LOCAL_TIMEOUT, args)
+}
+
+/// [`git`] under an explicit `deadline`, for a command that copies or
+/// materializes a whole checkout.
+fn git_within(root: &Path, deadline: Duration, args: &[&str]) -> Result<String, DispatchError> {
+    let output = git_output(root, deadline, args)?;
     if !output.success {
         return Err(retryable(format!(
             "git {}: {}",
@@ -394,7 +414,11 @@ fn git(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
 /// transiently, and those errors stay retryable.
 fn require_commit(source: &Path, revision: &str) -> Result<(), DispatchError> {
     let spec = format!("{revision}^{{commit}}");
-    let output = git_output(source, &["rev-parse", "--verify", "-q", &spec])?;
+    let output = git_output(
+        source,
+        GIT_LOCAL_TIMEOUT,
+        &["rev-parse", "--verify", "-q", &spec],
+    )?;
     if output.success {
         return Ok(());
     }
@@ -433,10 +457,14 @@ fn missing_commit(output: &GitCommandOutput) -> bool {
     stderr.contains("expected commit type") || stderr.contains("not a valid object name")
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Result<GitCommandOutput, DispatchError> {
+fn git_output(
+    root: &Path,
+    deadline: Duration,
+    args: &[&str],
+) -> Result<GitCommandOutput, DispatchError> {
     let mut argv = vec!["-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0"];
     argv.extend_from_slice(args);
-    run_git(root, &argv).map_err(|error| retryable(error.to_string()))
+    run_git_within(root, &argv, deadline).map_err(|error| retryable(error.to_string()))
 }
 
 fn permanent(message: impl std::fmt::Display) -> DispatchError {

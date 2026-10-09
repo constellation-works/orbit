@@ -9,9 +9,12 @@
 //! task-pilot dispatch runs again.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
+use orbit_common::process::shell::quote_posix_arg;
+use orbit_common::test_env::{assert_child_test_passed, run_child_test};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2Spec, BackoffStrategy, JobKind, JobV2, JobV2Step, JobV2StepBody, RetrySpec,
@@ -313,6 +316,106 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
             .all(|event| !matches!(event.kind, V2AuditEventKind::StepRetry { .. })),
         "a permanent inspection failure emits no step retry"
     );
+}
+
+/// Set in the re-executed child to the directory holding the stub `git`.
+const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
+const SLOW_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";
+const STALLED_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::stalled_full_ancestry_copy_leaves_a_reusable_slot";
+
+/// [ORB-14806] A full-ancestry copy that runs past the 10 s local deadline
+/// still seeds the slot, so the copy runs under its bulk bound. Admitted under
+/// test_strategy criterion 2: the stub git injects a latency that only a unit
+/// test can place inside the copy.
+#[test]
+fn slow_full_ancestry_copy_outlasts_the_local_deadline() {
+    if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
+        // Every fetch now waits 11 s, longer than the local default.
+        set_fetch_delay(Path::new(&stub_dir), 11);
+        let temp = tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let revision = init_repo(&repo);
+        let inspection = SourceInspection::from_input(
+            &json!({"inspection_revision": revision, "source_revision": revision}),
+            Some(&repo),
+            Some("reviewer"),
+        )
+        .expect("a copy under the bulk bound seeds the slot")
+        .expect("inspection checkout");
+        assert_eq!(git(inspection.root(), &["rev-parse", "HEAD"]), revision);
+        return;
+    }
+    run_child_with_stub_git(SLOW_COPY_CHILD);
+}
+
+/// [ORB-14806] A full-ancestry copy that stalls past its bulk deadline fails
+/// the lease and is killed, and the next lease reuses the slot. Admitted under
+/// test_strategy criterion 2: `create` takes the copy deadline as a seam, so a
+/// stall can be injected without waiting out the production bound.
+#[test]
+fn stalled_full_ancestry_copy_leaves_a_reusable_slot() {
+    if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
+        let stub_dir = Path::new(&stub_dir);
+        let temp = tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let revision = init_repo(&repo);
+        let input = json!({"inspection_revision": revision, "source_revision": revision});
+
+        set_fetch_delay(stub_dir, 600);
+        let error = SourceInspection::create(&repo, &revision, Duration::from_millis(500))
+            .err()
+            .expect("a copy that outlasts its deadline fails the lease");
+        assert_retryable_error(&error, "process timed out");
+
+        set_fetch_delay(stub_dir, 0);
+        let inspection = SourceInspection::from_input(&input, Some(&repo), Some("reviewer"))
+            .expect("the next lease reuses the slot")
+            .expect("inspection checkout");
+        inspection.verify().expect("the reused slot verifies");
+        return;
+    }
+    run_child_with_stub_git(STALLED_COPY_CHILD);
+}
+
+/// Re-executes `test` in a child whose `git` is a stub: it sleeps for the
+/// seconds in `fetch-delay` before each fetch, then runs the real Git. PATH is
+/// process-global, so the stub is installed only in the child.
+fn run_child_with_stub_git(test: &str) {
+    let stub_dir = tempdir().expect("stub dir");
+    set_fetch_delay(stub_dir.path(), 0);
+    let delay = quote_posix_arg(&stub_dir.path().join("fetch-delay").display().to_string());
+    let git_path = quote_posix_arg(&real_git_path().display().to_string());
+    write_executable(
+        &stub_dir.path().join("git"),
+        &format!(
+            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\nesac\nexec {git_path} \"$@\"\n"
+        ),
+    );
+    let mut paths = vec![stub_dir.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+
+    let output_dir = tempdir().expect("child output dir");
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args(["--exact", test, "--nocapture"])
+        .env(STUB_GIT_DIR_ENV, stub_dir.path())
+        .env("PATH", std::env::join_paths(paths).expect("stub PATH"));
+    let output = run_child_test(&mut command, test, output_dir.path());
+    assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
+}
+
+fn set_fetch_delay(stub_dir: &Path, seconds: u64) {
+    fs::write(stub_dir.join("fetch-delay"), seconds.to_string()).expect("fetch delay");
+}
+
+/// The `git` this process resolves, found before the stub shadows it.
+fn real_git_path() -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH")
 }
 
 fn assert_permanent(result: Result<Option<SourceInspection>, DispatchError>, needle: &str) {
