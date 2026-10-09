@@ -40,6 +40,7 @@ run_version_assertion_test() {
 }
 
 if [[ "$#" -eq 1 && "$1" == "--local-package-check" ]]; then
+  "$(dirname "$0")/require-python.sh"
   exec python3 "$(dirname "$0")/check_npm_package.py"
 fi
 if [[ "$#" -eq 1 && "$1" == "--dry-run-version-assertion" ]]; then

@@ -1372,7 +1372,7 @@ def npm_package_self_test():
             candidate = temp / case
             shutil.copytree(repo / "npm", candidate / "npm")
             (candidate / "scripts").mkdir()
-            for script in ("smoke-npm-install.sh", "check_npm_package.py"):
+            for script in ("smoke-npm-install.sh", "check_npm_package.py", "require-python.sh"):
                 shutil.copy2(repo / "scripts" / script, candidate / "scripts" / script)
             for path in ("Cargo.toml", "server.json"):
                 shutil.copyfile(repo / path, candidate / path)

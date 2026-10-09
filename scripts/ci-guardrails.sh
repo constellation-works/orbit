@@ -22,6 +22,10 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
+# The guardrails below import `tomllib` (Python >= 3.11); stop before any gate
+# runs rather than die in a traceback partway through.
+"$repo_root/scripts/require-python.sh"
+
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
 cargo fmt --all -- --check
