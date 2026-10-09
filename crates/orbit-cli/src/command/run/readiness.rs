@@ -86,6 +86,9 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             ));
         }
     }
+    if let Some(error) = capacity["build_budget_error"].as_str() {
+        lines.push(format!("Build-budget error: {error}"));
+    }
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }

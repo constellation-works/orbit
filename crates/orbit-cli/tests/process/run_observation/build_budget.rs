@@ -94,7 +94,77 @@ fn readiness_and_doctor_warn_for_local_and_pull_drain_capacity() {
             snapshot["capacity"]["build_budget_warnings"],
             serde_json::json!([])
         );
+        assert_eq!(
+            snapshot["capacity"]["build_budget_error"],
+            serde_json::Value::Null
+        );
     }
+}
+
+#[test]
+fn invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor() {
+    if !isolated_run_observation(
+        "run_observation::build_budget::invalid_build_slots_setting_surfaces_as_advisory_in_readiness_and_doctor",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let output = fixture
+        .orbit()
+        .env("ORBIT_BUILD_SLOTS", "invalid")
+        .args(["run", "readiness", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let snapshot: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        snapshot["capacity"]["build_budget_warnings"],
+        serde_json::json!([])
+    );
+    let error = snapshot["capacity"]["build_budget_error"]
+        .as_str()
+        .expect("build_budget_error string");
+    assert!(
+        error.contains("ORBIT_BUILD_SLOTS"),
+        "error names invalid setting: {error}"
+    );
+    assert!(snapshot["capacity"]["free_slots"].is_number());
+    assert!(snapshot["capacity"]["max_active_leaf_runs"].is_number());
+
+    let text = fixture
+        .orbit()
+        .env("ORBIT_BUILD_SLOTS", "invalid")
+        .args(["run", "readiness"])
+        .output()
+        .unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains(error),
+        "text output surfaces setting error: {text}"
+    );
+
+    let doctor = fixture
+        .orbit()
+        .env("ORBIT_BUILD_SLOTS", "invalid")
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let warnings = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["check"] == "build-budget")
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["status"], "warning");
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ORBIT_BUILD_SLOTS")
+    );
 }
 
 #[test]
