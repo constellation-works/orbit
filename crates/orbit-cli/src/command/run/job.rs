@@ -11,8 +11,6 @@ use clap::Args;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
-use super::support::FAILED_WAIT_STATUSES;
-
 #[derive(Args)]
 #[command(
     after_help = "Examples:\n  orbit run job task_auto_pipeline\n  orbit run job task_auto_pipeline --input mode=local\n  orbit run job crates/orbit-core/assets/jobs/task_pipeline.yaml --input task_id=T123\n  orbit run job task_pilot_pipeline --wait\n  orbit run job task_pilot_pipeline --input crew=luna --json\n\nThere is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.\nThat picks this run's resolved crew; an activity with an explicit `crew` or\n`system_crew: true` still routes there instead. Check `activity_provenance` in\n`orbit run show <RUN_ID> --json` for what actually dispatched.\n\nThe run is submitted to a detached worker and the command returns as soon as it is durable.\nInspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`."
@@ -98,7 +96,8 @@ fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Comm
         "pipeline": entry.pipeline,
     });
     let payload = Payload::detail(doc, wait_lines(invoke, entry).join("\n"));
-    if FAILED_WAIT_STATUSES.contains(&entry.status.as_str()) {
+    // Match core's canonical success token and its legacy wait-envelope alias.
+    if !matches!(entry.status.as_str(), "success" | "succeeded") {
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())
@@ -179,7 +178,11 @@ impl Execute for JobReplayArgs {
             "pipeline: {}",
             serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
         ));
-        Ok(Payload::detail(doc, lines.join("\n")).into())
+        let payload = Payload::detail(doc, lines.join("\n"));
+        if !result.success {
+            return Ok(payload.with_exit_code(1).into());
+        }
+        Ok(payload.into())
     }
 }
 

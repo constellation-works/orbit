@@ -488,6 +488,11 @@ When checkpoint outputs are invalid or the run must start from step zero:
 orbit job replay <run_id>
 ```
 
+Replay runs in the foreground and exits nonzero unless the new run succeeds.
+For `orbit run job` and `orbit job resume`, add `--wait` to wait for the terminal
+outcome and exit nonzero unless it succeeds. A run that ends `held` exits nonzero
+because delivery is still waiting on evidence or the forge.
+
 ## Verification
 
 Use `orbit run show <new_run_id>` and `orbit run events <new_run_id>` to confirm the new
