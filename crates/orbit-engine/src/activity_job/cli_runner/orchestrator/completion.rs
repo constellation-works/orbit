@@ -10,6 +10,7 @@ use orbit_agent::{
     provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
     provider_usage_limit,
 };
+use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{ProviderFailureClass, ProviderLimitFailure, provider_failure_text};
@@ -67,6 +68,7 @@ pub(super) struct ProviderExit<'a> {
     /// The `CODEX_HOME` a Codex child ran with, where its session rollout
     /// holds the usage windows. [ORB-14696]
     pub(super) codex_home: Option<PathBuf>,
+    pub(super) build_budget_waits: BuildBudgetWaits,
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -96,6 +98,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         timed_out,
         print_timeout,
         codex_home,
+        build_budget_waits,
     } = exit;
 
     // Provider output is not the system of record for artifact-backed
@@ -496,6 +499,10 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     } else {
         Value::Null
     };
+    output.insert(
+        "build_budget_waits".to_string(),
+        serde_json::json!(build_budget_waits),
+    );
     let (final_message_text, final_message_truncated, final_message_bytes) = match final_message {
         Some(BoundedMessage {
             text,

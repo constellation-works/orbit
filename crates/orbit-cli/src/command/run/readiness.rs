@@ -74,6 +74,18 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    for warning in capacity["build_budget_warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(message) = warning["message"].as_str() {
+            lines.push(format!(
+                "Build-budget warning ({}): {message}",
+                warning["run_id"].as_str().unwrap_or("drain")
+            ));
+        }
+    }
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }

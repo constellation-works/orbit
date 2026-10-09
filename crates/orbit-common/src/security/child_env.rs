@@ -64,6 +64,8 @@ pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
 /// so a nested `proc.spawn` can run as long as the activity has left, under the
 /// configured ceiling, instead of the 60 s unscoped ceiling.
 pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
+/// Original activity budget, bounding build-admission deadline credit.
+pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
 
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
@@ -89,6 +91,8 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_TOOLS_DENY_ENV,
     ACTIVITY_NAME_ENV,
     ACTIVITY_DEADLINE_ENV,
+    ACTIVITY_TIMEOUT_ENV,
+    crate::process::build_budget::WAIT_DIRECTORY_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",

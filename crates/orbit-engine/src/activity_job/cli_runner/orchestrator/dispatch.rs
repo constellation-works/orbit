@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
+use orbit_common::process::build_budget::{BuildBudgetWaits, WAIT_DIRECTORY_ENV, read_waits};
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_descendant_threshold};
 use orbit_common::security::child_env::{
@@ -267,8 +268,11 @@ pub(crate) fn run_cli_backend_for_step(
     // Combined executor + transport argv is the only place that can honor a
     // custom `--print-timeout` without duplicating it, and the remaining
     // spawn deadline is known here. [ORB-11337]
-    let print_timeout =
-        apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+    let print_timeout = apply_provider_runtime_arg_fixups(
+        &provider,
+        &mut subprocess_args,
+        wall_clock_timeout.saturating_mul(2),
+    );
     if let Some(tools) = inspection_tools {
         subprocess_args.extend(tools.args);
     }
@@ -385,6 +389,28 @@ pub(crate) fn run_cli_backend_for_step(
     // supervisor's clock starts at spawn, a moment after this, so the stamped
     // deadline never outlasts the provider.
     dispatch_env.extend(activity_deadline_env(wall_clock_timeout));
+    dispatch_env.push((
+        orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV.to_string(),
+        timeout_seconds.saturating_mul(1000).to_string(),
+    ));
+    let scratch_root = subprocess_cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| {
+            DispatchError::CliInvocationPermanent("cannot locate invocation scratch root".into())
+        })?;
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let build_wait_directory = tempfile::Builder::new()
+        .prefix("build-waits-")
+        .tempdir_in(&scratch)
+        .map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!("create build wait channel: {error}"))
+        })?;
+    dispatch_env.push((
+        WAIT_DIRECTORY_ENV.to_string(),
+        build_wait_directory.path().display().to_string(),
+    ));
     dispatch_env.extend(activity_policy_env(
         spec,
         activity_name,
@@ -535,6 +561,13 @@ pub(crate) fn run_cli_backend_for_step(
     let progress_provider = provider.clone();
     let reported_bytes = Cell::new(0usize);
     let report_progress = |progress: &OutputProgress| {
+        let waits = read_waits(
+            build_wait_directory.path(),
+            timeout_seconds.saturating_mul(1000),
+        );
+        if waits.count > 0 {
+            emit_build_waits(&progress_audit, &progress_provider, &waits);
+        }
         if progress.observed_bytes == reported_bytes.replace(progress.observed_bytes) {
             return;
         }
@@ -689,6 +722,11 @@ pub(crate) fn run_cli_backend_for_step(
 
     let stdout_blob_ref = audit.write_blob(stdout.bytes());
     let stderr_blob_ref = audit.write_blob(stderr.bytes());
+    let build_budget_waits = read_waits(
+        build_wait_directory.path(),
+        timeout_seconds.saturating_mul(1000),
+    );
+    emit_build_waits(&audit, &provider, &build_budget_waits);
     audit.emit_lossy(V2AuditEventKind::CliInvocationFinished {
         provider: provider.clone(),
         exit_code,
@@ -734,6 +772,7 @@ pub(crate) fn run_cli_backend_for_step(
         timed_out,
         print_timeout,
         codex_home,
+        build_budget_waits,
     });
     step_error_after_provider_evidence(
         completion,
@@ -741,6 +780,17 @@ pub(crate) fn run_cli_backend_for_step(
         &stdout_blob_ref,
         &stderr_blob_ref,
     )
+}
+
+fn emit_build_waits(audit: &V2AuditWriter, provider: &str, waits: &BuildBudgetWaits) {
+    audit.emit_lossy(V2AuditEventKind::CliInvocationBuildBudget {
+        provider: provider.to_string(),
+        count: waits.count,
+        total_ms: waits.total_ms,
+        longest_ms: waits.longest_ms,
+        queued_wall_ms: waits.queued_wall_ms,
+        deadline_extension_ms: waits.deadline_extension_ms,
+    });
 }
 
 /// The `CODEX_HOME` a Codex child resolves from its environment: the

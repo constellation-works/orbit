@@ -529,6 +529,7 @@ pub fn explain_workspace_auto_readiness(
             "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
         },
         "capacity": {
+            "build_budget_warnings": runtime.build_budget_capacity_warnings()?,
             "max_active_leaf_runs": max_active_leaf_runs,
             "active_leaf_runs": shared_occupancy.occupied,
             // [ORB-12617] The wrapper subset of that occupancy, and what the

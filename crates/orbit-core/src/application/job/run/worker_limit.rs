@@ -232,7 +232,7 @@ impl OrbitRuntime {
 
     /// The ceiling this run was submitted with: its own input when it carries
     /// one, otherwise its drain job's declared default.
-    fn submitted_max_active_leaf_runs(&self, run: &JobRun) -> Result<u32, OrbitError> {
+    pub(super) fn submitted_max_active_leaf_runs(&self, run: &JobRun) -> Result<u32, OrbitError> {
         if let Some(submitted) = run
             .input
             .as_ref()

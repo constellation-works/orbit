@@ -13,6 +13,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 
+use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
 use orbit_common::process::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
 use wait_timeout::ChildExt;
 
@@ -241,6 +242,21 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     });
 
     let deadline = started + timeout;
+    let wait_directory = env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == WAIT_DIRECTORY_ENV)
+        .map(|(_, value)| Path::new(value));
+    let extended_deadline = || {
+        let credit = wait_directory.map_or(0, |directory| {
+            read_waits(
+                directory,
+                timeout.as_millis().try_into().unwrap_or(u64::MAX),
+            )
+            .deadline_extension_ms
+        });
+        deadline + Duration::from_millis(credit)
+    };
     let sample_progress = || {
         if let Some(progress) = on_progress.as_ref()
             && let Ok(capture) = stdout_buf.lock()
@@ -265,6 +281,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             .as_ref()
             .map(|progress| (progress.interval, &sample_progress as &dyn Fn())),
         stopped_watch.as_mut(),
+        wait_directory.map(|_| &extended_deadline as &dyn Fn() -> Instant),
     );
     // `wait` failures are host-side and not clearly deterministic — leave
     // them retryable after the common cleanup below.
@@ -331,10 +348,15 @@ fn wait_until_exit_or_deadline(
     wait: Option<WaitHook<'_>>,
     progress: Option<(Duration, &dyn Fn())>,
     mut stopped: Option<&mut StoppedWatch<'_>>,
+    extended_deadline: Option<&dyn Fn() -> Instant>,
 ) -> io::Result<Option<ExitStatus>> {
     let mut next_sample = progress.map(|(interval, _)| Instant::now() + interval);
     loop {
+        let deadline = extended_deadline.map_or(deadline, |read| read());
         let mut slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
+        if extended_deadline.is_some() {
+            slice_end = slice_end.min(Instant::now() + Duration::from_millis(100));
+        }
         if let Some(stopped) = stopped.as_ref() {
             slice_end = slice_end.min(stopped.watch.next_sample_at());
         }
@@ -347,7 +369,7 @@ fn wait_until_exit_or_deadline(
             Ok(Some(status)) => return Ok(Some(status)),
             Ok(None) => {
                 let now = Instant::now();
-                if now >= deadline {
+                if now >= extended_deadline.map_or(deadline, |read| read()) {
                     return Ok(None);
                 }
                 if let (Some((interval, sample)), Some(next)) = (progress, next_sample)

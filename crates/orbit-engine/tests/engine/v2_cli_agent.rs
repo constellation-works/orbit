@@ -49,6 +49,9 @@ use tempfile::TempDir;
 
 const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}"#;
 
+#[cfg(unix)]
+mod build_budget;
+
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
 #[cfg(unix)]

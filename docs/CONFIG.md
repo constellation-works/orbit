@@ -439,7 +439,7 @@ Pi has no MCP client, and `orbit mcp init` offers none. Keep Pi's `bash` tool av
 | Install | See the [Antigravity CLI docs](https://www.antigravity.google/docs/cli/headless/), then `agy --version` and `agy models`. Init prefers it over `gemini` when both are present. |
 | Auth | One interactive `agy` login, cached under `~/.gemini/antigravity-cli/`. An unauthenticated headless run exits with `authentication required`. |
 | Model | A slug from `agy models`. `effort` accepts `low`/`medium`/`high` only. To migrate a `provider = "gemini"` crew, change the provider and switch to an `agy models` slug. |
-| Flags | `--input-format stream-json --output-format stream-json --dangerously-skip-permissions`, plus `--print-timeout` set to the activity deadline minus 30 s (a shorter custom value is kept). Don't add `agy --sandbox` or Gemini CLI flags. |
+| Flags | `--input-format stream-json --output-format stream-json --dangerously-skip-permissions`, plus `--print-timeout` set to the activity's maximum deadline (runtime plus capped build-admission credit) minus 30 s. A shorter custom value is kept; Orbit still enforces the actual runtime and earned queue credit. Don't add `agy --sandbox` or Gemini CLI flags. |
 | Sandbox | Write: `~/.gemini` (shared with the Gemini CLI). macOS: read `~/Library/Keychains`. |
 | MCP | `~/.gemini/config/mcp_config.json` or `.agents/mcp_config.json`, not `.gemini/settings.json`. |
 

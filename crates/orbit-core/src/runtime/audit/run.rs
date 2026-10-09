@@ -189,6 +189,9 @@ pub struct RunProviderProcess {
     /// The complete captured stdout, once the child finished. Readable after a
     /// failed step too, whose output never reaches the pipeline state.
     pub stdout_blob_ref: Option<String>,
+    /// Cumulative admission waits, including a timed-out invocation whose
+    /// failed step never checkpointed an output.
+    pub build_budget_waits: Option<orbit_common::process::build_budget::BuildBudgetWaits>,
     /// Descendants the supervisor found stopped past its threshold, from
     /// `cli.invocation.stopped_descendant` events, oldest first.
     pub stopped_descendants: Vec<RunStoppedDescendant>,
@@ -264,6 +267,7 @@ impl RunProviderProcess {
             "latest_message": self.latest_message,
             "latest_message_truncated": self.latest_message_truncated,
             "stdout_blob_ref": self.stdout_blob_ref,
+            "build_budget_waits": self.build_budget_waits,
             "stopped_descendants": self
                 .stopped_descendants
                 .iter()

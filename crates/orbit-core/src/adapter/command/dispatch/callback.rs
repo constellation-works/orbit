@@ -375,11 +375,25 @@ pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
 /// deadline its CLI runner stamped, under the operator's per-call ceiling.
 /// A missing or malformed deadline keeps the unscoped ceiling.
 pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<ProcSpawnBudget> {
-    let deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
+    let mut deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
         .ok()?
         .trim()
         .parse::<u64>()
         .ok()?;
+    // A fresh call gets the activity's admission credit accumulated so far;
+    // the operator's per-call ceiling remains independent and unchanged.
+    if let (Ok(directory), Some(timeout_ms)) = (
+        std::env::var(orbit_common::process::build_budget::WAIT_DIRECTORY_ENV),
+        std::env::var(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok()),
+    ) {
+        let waits = orbit_common::process::build_budget::read_waits(
+            std::path::Path::new(&directory),
+            timeout_ms,
+        );
+        deadline_ms = deadline_ms.saturating_add(waits.deadline_extension_ms);
+    }
     Some(ProcSpawnBudget {
         deadline: std::time::UNIX_EPOCH + std::time::Duration::from_millis(deadline_ms),
         max_timeout_ms,

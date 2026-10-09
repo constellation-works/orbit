@@ -179,6 +179,16 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    for process in &provider_processes {
+        if let Some(waits) = &process.build_budget_waits {
+            header.push_str(&format!(
+                "\nBuild-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
+                process.step_id.as_deref().unwrap_or("agent"), waits.count,
+                waits.total_ms as f64 / 1000.0, waits.longest_ms as f64 / 1000.0,
+                waits.queued_wall_ms as f64 / 1000.0, waits.deadline_extension_ms as f64 / 1000.0,
+            ));
+        }
+    }
     for id in orbit_core::application::job::job_run_task_ids(&run) {
         let title = match runtime.get_task(&id) {
             Ok(task) => Some(task.title),

@@ -90,6 +90,33 @@ wrapper is waiting for admission before Cargo starts. A long-running build has a
 acquired a slot and will not produce these wait messages, so use its process and build logs
 to diagnose a possible hung compile or test.
 
+Managed provider invocations export an invocation-private
+`ORBIT_ACTIVITY_BUILD_BUDGET_DIR` beneath the checkout's `.orbit/tmp`. The wrapper
+heartbeats admission waits there every 100 ms, independently of provider output
+buffering. Completed waits keep their measured duration; a killed wrapper stops
+heartbeating and earns no further credit. Orbit adds the union of queued intervals
+to the activity deadline, capped at the original activity timeout. Even a slot
+that never frees cannot keep the provider alive beyond twice its original timeout
+(process teardown follows that deadline). Overlapping queued commands earn credit
+once, while each command contributes to the wait count and total. Wrapper calls
+outside a managed invocation retain ordinary admission behavior.
+
+`orbit run show <RUN_ID>` prints each invocation's wait count, total and longest
+seconds, queued wall time and deadline credit. JSON exposes these millisecond
+statistics under `provider_processes[].build_budget_waits`; agent step output also
+keeps `build_budget_waits`. The audit retains metrics after a timeout or failed
+step, when no step output was checkpointed. Live metrics refresh on the provider's
+10-second supervision observation interval.
+
+`orbit run readiness` and `orbit doctor` warn when a running local or pull drain's
+effective concurrency exceeds the host build slots, including a resized ceiling.
+The warning names both counts, `ORBIT_BUILD_SLOTS` and the resolved `slots` file.
+These diagnostics do not change capacity or admission; a drain may deliberately
+run more agents than build slots. Disabled admission produces no mismatch warning.
+Fresh managed `proc.spawn` calls include accumulated queue credit in the activity's
+remaining budget, while their configured per-call timeout still applies. Prefer
+the provider's native long-running shell transport for build validation.
+
 ## Verification
 
 Run the deterministic process test without compiling the workspace:
