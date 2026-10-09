@@ -4,7 +4,7 @@ type: design
 title: "Task Search — Overview"
 owner: codex
 last_updated: 2026-09-23
-last_validated: 2026-09-23
+last_validated: 2026-10-09
 status: Accepted
 feature: orbit-search
 doc_role: overview
