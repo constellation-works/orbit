@@ -318,7 +318,7 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
 /// Run one git command in the fixture repository, isolated from the caller's
 /// configuration, and return its trimmed stdout.
 pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
-    let result = std::process::Command::new("git")
+    let result = crate::git_repo::command()
         .args([
             "-c",
             "core.hooksPath=/dev/null",
@@ -333,9 +333,6 @@ pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
         .current_dir(&fixture.repo)
         .env("HOME", &fixture.home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_CONFIG_GLOBAL")
         .env_remove("GIT_CONFIG_SYSTEM")
         .output()
@@ -346,6 +343,30 @@ pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
         String::from_utf8_lossy(&result.stderr)
     );
     String::from_utf8_lossy(&result.stdout).trim().to_string()
+}
+
+// Also re-executed by the decoy regression: avoid opening an in-process runtime
+// so the hostile environment reaches only these fixture command builders.
+#[test]
+#[ignore = "child entry point for the Git authority decoy regression"]
+fn fixture_git_commits_and_refs_stay_in_the_fixture() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join("fixture.txt"), "initial\n").unwrap();
+    git(&fixture, &["add", "fixture.txt"]);
+    git(&fixture, &["commit", "-m", "Fixture initial"]);
+    let initial = git(&fixture, &["rev-parse", "HEAD"]);
+    let pin = "refs/fixture/pin";
+    git(&fixture, &["update-ref", pin, "HEAD"]);
+    assert_eq!(git(&fixture, &["rev-parse", pin]), initial);
+    fs::write(fixture.repo.join("fixture.txt"), "updated\n").unwrap();
+    git(&fixture, &["commit", "-am", "Fixture update"]);
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), initial);
+    assert_eq!(git(&fixture, &["show", "HEAD:fixture.txt"]), "updated");
+    assert_eq!(git(&fixture, &["rev-parse", pin]), initial);
+    assert_eq!(
+        git(&fixture, &["for-each-ref", "--format=%(refname)", pin]),
+        pin
+    );
 }
 
 #[test]
@@ -741,7 +762,7 @@ fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
     };
     fs::create_dir_all(&fixture.home).unwrap();
     fs::create_dir_all(&fixture.repo).unwrap();
-    let output = std::process::Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&fixture.repo)
         .output()

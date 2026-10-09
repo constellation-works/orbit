@@ -29,7 +29,7 @@ impl Fixture {
         };
         fs::create_dir_all(&fixture.home).unwrap();
         fs::create_dir_all(&fixture.repo).unwrap();
-        let output = std::process::Command::new("git")
+        let output = crate::git_repo::command()
             .args(["init", "--quiet"])
             .current_dir(&fixture.repo)
             .output()

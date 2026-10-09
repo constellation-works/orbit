@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -236,7 +235,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

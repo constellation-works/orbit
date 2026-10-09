@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command as StdCommand, Output};
+use std::process::Output;
 
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -437,7 +437,7 @@ fn on_path(program: &str) -> bool {
 }
 
 fn git_stdout(workspace: &Path, args: &[&str]) -> String {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(workspace)
         .args(args)
@@ -526,7 +526,7 @@ fn init_git_repo(workspace: &Path) {
 }
 
 fn run_git(workspace: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(workspace)
         .args(args)

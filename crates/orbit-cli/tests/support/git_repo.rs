@@ -18,6 +18,16 @@ use std::process::Command;
 use orbit_common::test_env;
 use tempfile::{TempDir, tempdir_in};
 
+/// Build a fixture Git command without inherited repository or Orbit authority.
+/// Apply deliberate fixture environment settings after calling this helper.
+pub(crate) fn command() -> Command {
+    let mut git = Command::new("git");
+    test_env::clear_inherited_authority(|name| {
+        git.env_remove(name);
+    });
+    git
+}
+
 /// Create `path` and initialize it as a Git repository on branch `main`,
 /// whatever the host's `init.defaultBranch`, because `workspace init` records
 /// the checked-out branch as the workspace base branch.
@@ -27,11 +37,7 @@ use tempfile::{TempDir, tempdir_in};
 /// repository instead of the fixture.
 pub(crate) fn init(path: &Path) {
     std::fs::create_dir_all(path).expect("create fixture checkout");
-    let mut git = Command::new("git");
-    test_env::clear_inherited_authority(|name| {
-        git.env_remove(name);
-    });
-    let output = git
+    let output = command()
         .args(["init", "--quiet", "--initial-branch=main"])
         .current_dir(path)
         .output()

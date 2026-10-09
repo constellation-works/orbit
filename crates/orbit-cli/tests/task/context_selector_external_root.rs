@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, Output};
+use std::process::Output;
 
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -364,7 +364,7 @@ fn linked_worktree_of_an_external_root_checkout_can_declare_its_own_file() {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)
