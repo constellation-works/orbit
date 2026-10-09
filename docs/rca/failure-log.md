@@ -53,27 +53,6 @@ entries.
 - **Final recovery:** could not run: its own invocation was refused by the same
   check, so it escalated.
 
-## 2026-10-09: claim handoff rejects string `unfiled_findings` after the PR is open
-
-- **Where:** Mac claimed PR leaf, `claim_handoff`, after commit, rebase,
-  `make ci-fast`, push and `pr_open` had all succeeded.
-- **Symptom:** The task goes `blocked` with a clean, published candidate and an
-  open PR. The handoff error says `unfiled_findings` must be an array of
-  finding objects.
-- **Cause:** The implementer returned its unfiled findings as plain strings.
-  The `agent_implement.yaml` contract declares objects with `title` and
-  `description`, but nothing checks the shape until `attach_unfiled_findings`
-  in `claim/handoff.rs`, which runs after every delivery side effect. Replaying
-  the step fails the same way, so the claim cannot recover itself.
-- **Fix:** ORB-14927 (open): validate structured implementer output at the
-  implement step, and give a published candidate an audited handoff recovery
-  that keeps the findings.
-- **Tasks:** ORB-14849 (`jrun-20261009-1037-c2`, PR #3924). The operator merged
-  PR #3924 on green CI, closed the task, and filed the three dropped findings
-  (ORB-14924, ORB-14925, ORB-14926) from the run JSON.
-- **Final recovery:** escalated (`jrun-20261009-1037-c2`, friction
-  F2026-10-202): replaying the preserved output would fail identically.
-
 ## Operational causes (no code defect)
 
 - **A task that offers alternative fixes without choosing one.** An implementer
