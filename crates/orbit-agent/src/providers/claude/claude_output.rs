@@ -99,6 +99,7 @@ pub(crate) fn claude_usage_windows(
             used_percent: Some(used_percent),
             window_minutes: window_minutes(window),
             gating: !window.contains("overage"),
+            partial: false,
         })
     };
 

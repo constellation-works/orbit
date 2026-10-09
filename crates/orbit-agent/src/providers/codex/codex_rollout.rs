@@ -140,6 +140,7 @@ pub(crate) fn codex_usage_windows(
                 .and_then(Value::as_u64)
                 .and_then(|minutes| u32::try_from(minutes).ok()),
             gating: true,
+            partial: false,
         })
     };
     ["primary", "secondary"]

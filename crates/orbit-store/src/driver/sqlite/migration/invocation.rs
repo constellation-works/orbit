@@ -171,3 +171,15 @@ pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), Orb
     }
     Ok(())
 }
+
+/// v42 `invocation_provider` [ORB-14699]: the canonical provider an
+/// invocation ran on, so a provider budget can read its spend from the
+/// ledger. `agent` is the model's family, which is not the provider for
+/// every lane (an Antigravity run is attributed to its Gemini model).
+///
+/// A nullable column only: an older binary keeps inserting without it, and a
+/// reader attributes such a row, and every row recorded before this
+/// migration, by its `agent`.
+pub(super) fn apply_invocation_provider(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "invocations", "provider", "TEXT")
+}

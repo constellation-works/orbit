@@ -30,6 +30,7 @@ use orbit_types::task::Task;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
+use super::provider_limit_ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
 use crate::runtime::run_input::non_empty;
@@ -46,6 +47,8 @@ pub(crate) struct ProviderLimit {
     model: Option<String>,
     window: Option<String>,
     used_percent: Option<f64>,
+    /// Whether the reading undercounts (a ledger budget missing costs).
+    partial: bool,
     threshold: u8,
     /// When the reading stops counting.
     pub(crate) until: DateTime<Utc>,
@@ -71,6 +74,7 @@ impl ProviderLimit {
             model: observation.model.clone(),
             window: observation.window.clone(),
             used_percent: observation.used_percent,
+            partial: observation.partial,
             threshold,
             until,
         })
@@ -92,8 +96,13 @@ impl ProviderLimit {
         let usage = self
             .used_percent
             .map_or_else(|| "exhausted".to_string(), |used| format!("at {used}%"));
+        let partial = if self.partial {
+            format!(" ({PARTIAL_NOTE})")
+        } else {
+            String::new()
+        };
         format!(
-            "{} {window} {usage} (limit {}%) until {}",
+            "{} {window} {usage}{partial} (limit {}%) until {}",
             self.provider,
             self.threshold,
             self.until.to_rfc3339()
@@ -209,7 +218,7 @@ impl OrbitRuntime {
     /// logged and gates nothing: the limits are advisory, and the provider
     /// still refuses a run past its real limit.
     pub(crate) fn provider_limit_gate(&self, now: DateTime<Utc>) -> ProviderLimitGate {
-        match self.provider_limits() {
+        match self.provider_limit_observations(now) {
             Ok(observations) => {
                 ProviderLimitGate::new(&observations, self.context.settings().provider_limit(), now)
             }

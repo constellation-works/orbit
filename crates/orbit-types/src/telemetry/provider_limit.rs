@@ -3,7 +3,10 @@
 //! A usage limit belongs to the provider login on one host, so each host keeps
 //! its own record. Every limit failure writes an observation, and so does
 //! every Codex or Claude run that reported its usage windows [ORB-14696]; the
-//! latest per provider, model scope and window stands.
+//! latest per provider, model scope and window stands. A provider that reports
+//! nothing can instead be given an operator-declared budget, which the host
+//! reads from its invocation ledger as a `ledger` observation [ORB-14699];
+//! those are computed when asked for and never stored.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,6 +27,10 @@ pub enum ProviderLimitSource {
     /// The provider reported a window's usage in its own telemetry after a
     /// run, whether or not the run failed [ORB-14696].
     Event,
+    /// The operator's declared budget for a provider that reports no usage,
+    /// read from this host's invocation ledger [ORB-14699]. Computed, never
+    /// stored.
+    Ledger,
 }
 
 impl ProviderLimitSource {
@@ -33,6 +40,7 @@ impl ProviderLimitSource {
         match self {
             Self::Error => "error",
             Self::Event => "event",
+            Self::Ledger => "ledger",
         }
     }
 
@@ -42,6 +50,7 @@ impl ProviderLimitSource {
         match value {
             "error" => Some(Self::Error),
             "event" => Some(Self::Event),
+            "ledger" => Some(Self::Ledger),
             _ => None,
         }
     }
@@ -77,6 +86,10 @@ pub struct ProviderLimitObservation {
     /// window is recorded for display but does not gate.
     #[serde(default = "gating_default")]
     pub gating: bool,
+    /// Whether the reading undercounts: a `usd` budget's ledger sum leaves
+    /// out invocations that recorded no cost [ORB-14699].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub partial: bool,
     pub observed_at: DateTime<Utc>,
     /// The run that observed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +104,10 @@ pub struct ProviderLimitObservation {
 
 fn gating_default() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ProviderLimitObservation {

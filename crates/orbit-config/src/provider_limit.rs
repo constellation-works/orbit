@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_types::workflow::Provider;
 
-use crate::ConfigSnapshot;
+use crate::{ConfigSnapshot, ProviderLimitBudget};
 
 /// `workflow.provider_limit_max_used_pct` when unset.
 pub const DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT: u8 = 90;
@@ -56,7 +56,7 @@ impl ProviderLimitExplicitCrews {
 }
 
 /// The admitted `workflow.provider_limit_*` settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderLimitPolicy {
     /// The used percent at or above which a provider's crews are skipped.
     pub max_used_pct: u8,
@@ -64,6 +64,9 @@ pub struct ProviderLimitPolicy {
     pub overrides: BTreeMap<String, u8>,
     /// What an explicitly crewed task does when its crew is limited.
     pub explicit_crews: ProviderLimitExplicitCrews,
+    /// Operator-declared budgets for providers that report no usage, by
+    /// canonical provider [ORB-14699].
+    pub budgets: Vec<ProviderLimitBudget>,
 }
 
 impl Default for ProviderLimitPolicy {
@@ -72,6 +75,7 @@ impl Default for ProviderLimitPolicy {
             max_used_pct: DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT,
             overrides: BTreeMap::new(),
             explicit_crews: ProviderLimitExplicitCrews::Wait,
+            budgets: Vec::new(),
         }
     }
 }
@@ -107,6 +111,7 @@ impl ConfigSnapshot {
                 &self.workflow_provider_limit_explicit_crews,
             )
             .unwrap_or_default(),
+            budgets: self.provider_limit_budgets(),
         }
     }
 }

@@ -119,6 +119,7 @@ pub(super) fn record_limit(
         used_percent: None,
         window_minutes: None,
         gating: true,
+        partial: false,
     };
     record(host, &observation);
 }

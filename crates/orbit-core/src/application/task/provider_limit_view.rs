@@ -18,6 +18,7 @@ use orbit_types::workflow::Provider;
 use serde::{Deserialize, Serialize};
 
 use super::provider_limit::{reading_at_limit, reading_covers, reading_lifetime};
+use super::provider_limit_ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 
 /// One live reading of a provider usage window.
@@ -42,6 +43,9 @@ pub struct ProviderLimitReading {
     /// Whether reaching this window stops the account's runs; an overage
     /// window is shown but never gates.
     pub gating: bool,
+    /// Whether the reading undercounts: a `usd` budget read from the ledger
+    /// leaves out invocations that recorded no cost.
+    pub partial: bool,
     /// The used percent at or above which the provider's crews are skipped
     /// (`workflow.provider_limit_*`).
     pub threshold: u8,
@@ -87,16 +91,33 @@ impl ProviderLimitReading {
                 Some(used) => format!("exhausted at {used}%"),
                 None => "exhausted".to_string(),
             };
-            return format!("{label} {usage} until {}", short_time(self.until, now));
+            return format!(
+                "{label} {usage}{} until {}",
+                self.partial_note(),
+                short_time(self.until, now)
+            );
         }
         let usage = self.used_percent.map_or_else(
             || "usage not reported".to_string(),
             |used| format!("{used}%"),
         );
         if self.gating {
-            format!("{label} {usage} (limit {}%)", self.threshold)
+            format!(
+                "{label} {usage}{} (limit {}%)",
+                self.partial_note(),
+                self.threshold
+            )
         } else {
             format!("{label} {usage} (overage window; never gates)")
+        }
+    }
+
+    /// ` (partial: ...)` for a reading that undercounts, else nothing.
+    fn partial_note(&self) -> String {
+        if self.partial {
+            format!(" ({PARTIAL_NOTE})")
+        } else {
+            String::new()
         }
     }
 
@@ -207,6 +228,7 @@ impl ProviderLimitsView {
                     source: observation.source,
                     observed_at: observation.observed_at,
                     gating: observation.gating,
+                    partial: observation.partial,
                     threshold,
                     gated: observation.gating && reading_at_limit(observation, threshold),
                     until,
@@ -319,7 +341,7 @@ impl OrbitRuntime {
     /// admission treats it.
     #[must_use]
     pub fn provider_limits_view(&self, now: DateTime<Utc>) -> ProviderLimitsView {
-        match self.provider_limits() {
+        match self.provider_limit_observations(now) {
             Ok(observations) => ProviderLimitsView::build(self, &observations, now),
             Err(error) => ProviderLimitsView {
                 error: Some(error.to_string()),

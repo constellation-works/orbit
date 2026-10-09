@@ -38,6 +38,7 @@ fn record(store: &Store, workspace_id: &str, run_id: &str, activity_id: &str) {
                 job_run_id: run_id.to_string(),
                 activity_id: activity_id.to_string(),
                 agent: "claude".to_string(),
+                provider: None,
                 model: None,
                 task_ids: Vec::new(),
                 trace: InvocationTrace::default(),

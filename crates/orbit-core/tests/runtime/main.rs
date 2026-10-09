@@ -54,6 +54,7 @@ mod plugin_inspection;
 mod pr_forge_admission;
 mod provider_failure_hold;
 mod provider_limit_admission;
+mod provider_limit_budget;
 mod provider_limit_hold;
 
 mod run_history;

@@ -103,6 +103,7 @@ impl ProviderLimitStoreBackend for Store {
                     used_percent: row.get(10)?,
                     window_minutes: row.get(11)?,
                     gating: row.get(12)?,
+                    partial: false,
                 })
             })
             .map_err(|error| OrbitError::Store(error.to_string()))?;

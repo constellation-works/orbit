@@ -374,6 +374,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 80,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_provider_limit_budgets: Vec<String> => Vec<String> {
+        key: "workflow.provider_limit_budgets", value_type: "array<string>",
+        description: "Operator-declared rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` such as `grok:30usd/5h`, with each provider named once. Orbit reads this host's spend from its invocation ledger and treats the provider as used `spent / budget`; none by default.",
+        section: ConfigSection::Delivery, order: 109,
+        resolve: |raw: Option<Vec<String>>| crate::provider_limit_budget::admit_budgets(raw),
+    },
     workflow_provider_limit_explicit_crews: String => String {
         key: "workflow.provider_limit_explicit_crews", value_type: "string",
         description: "What delivery admission does with a task whose explicit crew is at its provider's usage limit: `wait` (default) keeps it in the backlog until the limit lifts; `pool` draws it from the unlimited members of its complexity pool.",

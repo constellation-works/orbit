@@ -232,6 +232,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         used_percent: Some(used_percent),
         window_minutes: Some(300),
         gating: true,
+        partial: false,
         observed_at: Utc::now(),
         run_id: None,
         crew: None,
