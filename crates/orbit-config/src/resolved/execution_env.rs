@@ -6,6 +6,11 @@ use orbit_common::security::child_env::{
 
 use crate::registry::ConfigSnapshot;
 
+// The shipped config template includes this for macOS, where CoreFoundation
+// needs it. Keep treating it as a default on other platforms too, where it is
+// normally absent from the launching environment.
+const PLATFORM_SPECIFIC_TEMPLATE_PASS_NAMES: &[&str] = &["__CF_USER_TEXT_ENCODING"];
+
 /// Codex sandbox and approval policy resolved from `[execution.codex]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexExecutionPolicy {
@@ -101,8 +106,8 @@ impl ExecutionEnvPolicy {
     /// holds no value for, so no agent it starts receives them [ORB-14777].
     ///
     /// The built-in defaults (`HOME`, `PATH`, `CODEX_HOME`, and the
-    /// macOS-only `__CF_USER_TEXT_ENCODING`, …) are not reported: they can
-    /// legitimately be absent on a host, and warning on each would fire on
+    /// platform-specific `__CF_USER_TEXT_ENCODING`, …) are not reported: they
+    /// can legitimately be absent on a host, and warning on each would fire on
     /// every drain start. A name the operator added is a statement that agents
     /// need it. Empty when the policy inherits the whole environment.
     pub fn unset_pass_names(&self) -> Vec<String> {
@@ -118,7 +123,10 @@ impl ExecutionEnvPolicy {
         let added: Vec<String> = self
             .pass
             .iter()
-            .filter(|name| !defaults.contains(name))
+            .filter(|name| {
+                !defaults.contains(name)
+                    && !PLATFORM_SPECIFIC_TEMPLATE_PASS_NAMES.contains(&name.as_str())
+            })
             .cloned()
             .collect();
         unset_pass_names_from(parent, &added)
