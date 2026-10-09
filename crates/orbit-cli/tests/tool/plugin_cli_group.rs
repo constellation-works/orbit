@@ -829,6 +829,81 @@ fn enable_records_bare_fs_roots_that_load_as_the_same_roots() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn enable_accepts_grants_with_host_scope_and_refuses_workspace_scope() {
+    let fixture = Fixture::new();
+    let source = fixture.source("grantable");
+    write_status_plugin(&source, "grantable", "  permissions:\n    network: any\n");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+
+    let implicit_host = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--grant",
+            "network",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("enable with implicit host scope");
+    assert!(implicit_host.status.success(), "{implicit_host:?}");
+    let implicit_host = stdout_json(&implicit_host);
+
+    let explicit_host = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--scope",
+            "host",
+            "--grant",
+            "network",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("enable with explicit host scope");
+    assert!(explicit_host.status.success(), "{explicit_host:?}");
+    let explicit_host = stdout_json(&explicit_host);
+    assert_eq!(explicit_host, implicit_host);
+    assert_eq!(
+        explicit_host["granted"],
+        json!(["network"]),
+        "{explicit_host}"
+    );
+
+    let workspace = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--scope",
+            "workspace",
+            "--grant",
+            "network",
+        ])
+        .output()
+        .expect("refuse grants with workspace scope");
+    assert!(!workspace.status.success(), "{workspace:?}");
+    let message = String::from_utf8_lossy(&workspace.stderr);
+    assert!(message.contains("--grant"), "{message}");
+    assert!(message.contains("host scope"), "{message}");
+    assert!(
+        message.contains("workspace scope never records grants"),
+        "{message}"
+    );
+}
+
 #[test]
 fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
     let fixture = Fixture::new();
