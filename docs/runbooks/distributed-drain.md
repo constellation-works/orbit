@@ -600,7 +600,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   offering that crew for the rest of its window. After
   `provider`, an authentication failure stops every crew of that provider
   (an `anthropic` crew is the same provider as `claude`); a capacity failure
-  stops only the crew the leaf ran.
+  stops only the crew the leaf ran. A usage limit stops no crew by itself:
+  the reading the leaf recorded on this host excludes the provider's crews as
+  `provider_limit` until it lapses.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
   `crews.host_suppressed`); fix the host and start a new drain. In either
@@ -644,9 +646,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   unresolved, or CLI not found), `provider_unavailable` (a claimed leaf's
   provider could not authenticate, which lists every crew of that provider,
   or reported its selected model at capacity, which lists that crew, with
-  the task and error) or `leaf_released` (a claimed leaf was
+  the task and error), `leaf_released` (a claimed leaf was
   released for a `transient` failure other than a forge outage, with the
-  task, class and reason). Each iteration's output carries
+  task, class and reason) or `provider_limit` (this host's latest reading of
+  the crew's provider usage window is at or over its threshold, with the
+  reading and an `until`; it lifts at `until` within the same drain, see
+  [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).
   Doctor warns about these on live drains; the dashboard shows the same data.

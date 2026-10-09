@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::provider_limit::ProviderLimit;
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
@@ -246,7 +247,9 @@ impl OrbitRuntime {
     ///
     /// [ORB-14266] A standing provider failure hold removes the crews it
     /// excludes from the draw, falling back to the complexity pool and then
-    /// the default. An explicit crew is the caller's decision and ignores it.
+    /// the default. [ORB-14697] This host's provider limits then remove the
+    /// limited crews, falling back to the complexity pool only. An explicit
+    /// crew is the caller's decision and ignores both.
     pub(crate) fn auto_task_crew_candidates(
         &self,
         task: &Task,
@@ -261,8 +264,7 @@ impl OrbitRuntime {
                 "explicit".to_string(),
             ));
         }
-        let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
-        self.apply_provider_hold(task, pools, candidates, source)
+        self.admissible_crew_candidates(task, pools)
     }
 
     /// The task's validated pool assignment or explicit pin, else its complexity
@@ -516,6 +518,13 @@ impl OrbitRuntime {
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = weighted_draw(&candidates, &source, random)?;
+        // [ORB-14697] An explicit run crew is not gated; the selection
+        // records the provider limit it runs against.
+        let provider_limit = explicit.and_then(|_| {
+            self.provider_limit_gate(chrono::Utc::now())
+                .limit_for(&selected.crew)
+                .map(ProviderLimit::describe)
+        });
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
             "crew": selected.crew.name,
@@ -528,6 +537,9 @@ impl OrbitRuntime {
                 .map(|candidate| json!({"name": candidate.crew.name, "weight": candidate.weight}))
                 .collect::<Vec<_>>(),
         });
+        if let Some(limit) = provider_limit {
+            input[SELECTION_KEY]["provider_limit"] = json!(limit);
+        }
         input["crew"] = json!(selected.crew.name);
         Ok(())
     }

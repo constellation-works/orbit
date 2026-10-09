@@ -74,6 +74,7 @@ mod landing_attribution;
 mod landing_repair;
 mod no_diff;
 mod pilot;
+mod provider_limit;
 mod recovery;
 mod settlement;
 mod single_pass;

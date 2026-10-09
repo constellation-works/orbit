@@ -37,7 +37,7 @@ use crate::runtime::run_input::non_empty;
 /// not transient: another provider may take the task at once, and the
 /// refusing one is not asked again for a day. A usage limit that reported its
 /// reset is held until then instead.
-fn base_backoff(class: ProviderFailureClass) -> Duration {
+pub(crate) fn base_backoff(class: ProviderFailureClass) -> Duration {
     match class {
         ProviderFailureClass::Capacity => Duration::minutes(15),
         ProviderFailureClass::Unavailable | ProviderFailureClass::Limit => Duration::minutes(30),
@@ -210,7 +210,7 @@ impl OrbitRuntime {
 
 /// Whether two provider labels parse to the same provider; unparsable
 /// labels compare as written.
-fn same_provider(left: Option<&str>, right: Option<&str>) -> bool {
+pub(crate) fn same_provider(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
         (Some(left), Some(right)) => match (Provider::parse(left), Provider::parse(right)) {
             (Ok(left), Ok(right)) => left == right,

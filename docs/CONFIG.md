@@ -90,6 +90,9 @@ medium_complexity_crews = []
 hard_complexity_crews = []
 xhard_complexity_crews = []
 final_recovery_crews = ["sol:100", "opus:20"]
+provider_limit_max_used_pct = 90
+provider_limit_overrides = []
+provider_limit_explicit_crews = "wait"
 ```
 
 | Key | Default | What it does |
@@ -99,6 +102,9 @@ final_recovery_crews = ["sol:100", "opus:20"]
 | `workflow.system_crew` | `system` | Crew for runtime-synthesized system work such as step-failure recovery. |
 | `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to `["sol:100", "opus:20"]`, keeping only the members the crew registry defines; `[]` disables final recovery. See [final recovery pool](#final-recovery-pool). |
+| `workflow.provider_limit_max_used_pct` | `90` | Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `1`–`100`; `100` skips only on exhaustion. See [provider usage limits](#provider-usage-limits). |
+| `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing `provider_limit_max_used_pct`, each `provider:percent` (for example `["claude:80", "grok:100"]`). Each provider is named once, the percent is `1`–`100`, and an alias such as `anthropic` is stored as its provider. |
+| `workflow.provider_limit_explicit_crews` | `wait` | What happens to a task whose explicit crew is limited: `wait` keeps it in the backlog until the limit lifts; `pool` draws it from the unlimited members of its complexity pool. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command. While `false`, that command skips the workspace with `auto_ship_disabled`. The seeded `ship-sweep` routine does not read this key; its own `enabled:` flag is its only switch. Neither path grants `--complete` or `--approve-proposed`; a task tagged `no-auto-approve` is never approved automatically by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery, except a [missing tool](#workflowvalidation_env--the-toolchain-required-validation-runs-with) or a failure the base shares, which holds the task until the command passes on a new base tip. Network-inconclusive failures are rerun first. Distributed handoffs must carry exact-candidate validation matching the owner's required list. Before-PR claims also freeze that list in the owner's review contract at admission; a later owner command-list change refuses their handoff rather than replacing the snapshot. A re-run of a task whose failed run preserved a candidate from `commit` or later also runs them on that candidate applied to the new base, to decide whether the implementation step runs at all. A candidate preserved from the implementation step, or from any step before `commit`, always returns to the implementer and these commands are not what decides that ([re-running a task](../crates/orbit-core/assets/skills/orbit-orchestrate/references/workflows.md#re-running-a-task-with-a-preserved-candidate)). An explicit empty list runs no required check, including on claimed handoffs; the other handoff guards still apply. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -496,7 +502,7 @@ xhard_complexity_crews = ["fable", "astra"]
 - **Complexity changes redraw automatic assignments.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another complexity pool or from the `default` fallback is redrawn for the new tier in the same mutation. A `crew_redrawn` history entry names the previous and new sources and crews. Explicit crews stay pinned, including when an update explicitly names the crew already selected by a pool. Status transitions alone preserve the selection. An explicit `task update --crew <name>` pins the selection; [`task update --crew ""`](#setting-taskcrew) draws again. Every stored crew change records the actor, prior and new crew, and whether it came from an explicit name or a pool draw.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. A pool whose members are all [disabled](#disabled-crews) is treated the same way; disabled members of a mixed pool are skipped. Blank entries and unknown crew names fail before dispatch.
-- **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name. The one exception is a standing [provider failure hold](#provider-failure-holds), which redirects a task-crew draw away from the crews it excludes.
+- **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name. The exceptions are a standing [provider failure hold](#provider-failure-holds), which redirects a task-crew draw away from the crews it excludes, and a [provider usage limit](#provider-usage-limits), which removes the limited crews from the draw.
 - **Admission and legacy tasks.** At admission (drain or ship), a pool-sourced crew is checked against the current tier and its enabled, positive-weight pool members. A stale pool assignment or a `default`-sourced fallback draws from the current pool, falling back to the current default chain when no pool is available. A default fallback is never an explicit pin. Legacy assignment history recovers provenance when `crew_source` is absent; a crew with no assignment evidence is treated as explicit. Tasks without a crew also use the current pool. Admission does not write back to the task.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that one pool for one drain, and the flag with no names disables it. `orbit run ship` has no override flags.
 
@@ -555,9 +561,41 @@ After every Codex or Claude run, whether it succeeded or failed, the host also r
 
 `crew_selection.source` names the hold. When every one of those crews is excluded, the local drain defers the task, and `orbit run readiness --json` reports it with `reason: "provider_backoff"` and the release time. A hold can exclude no crew at all, when the failed run resolved none; the task still defers until `not_before`. An explicit run-input `crew` ignores the hold.
 
+A usage-limit hold on a task whose crew is explicit (`crew_source` `explicit`, or a legacy pin) follows [`workflow.provider_limit_explicit_crews`](#provider-usage-limits). Under the default `wait`, the hold does not redirect the task when its own crew is excluded: the task waits with `provider_backoff` instead. Under `pool`, the draw falls back as listed above.
+
 Once `not_before` passes, or any later status change happens, the hold no longer applies. The next run resumes the committed candidate.
 
-Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider. A declared executor `auth_probe` can re-admit them in the same drain window after credentials recover. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room. A usage limit releases the claim with failure class `provider`. Its settlement sets `provider_limit: true`, and that release does not count against the task's release budget. The drain also excludes every crew of that provider for the rest of its window.
+Pull drains and claimed leaves keep their own handling. An authentication failure there releases the claim and excludes every crew of that provider. A declared executor `auth_probe` can re-admit them in the same drain window after credentials recover. Provider labels are parsed first, so a crew configured as `anthropic` is the same provider as `claude`. A capacity failure excludes only the crew the leaf ran: another model on that provider may still have room. A usage limit releases the claim with failure class `provider`. Its settlement sets `provider_limit: true`, and that release does not count against the task's release budget. The release itself excludes no crew. The leaf recorded the limit in the follower's store, and that reading excludes the provider's crews until it lapses (see [provider usage limits](#provider-usage-limits)).
+
+### Provider usage limits
+
+A hold learns about a usage limit only after a run has failed on it. Delivery admission also reads this host's [limit record](#provider-failure-holds) before dispatch. It stops routing work to a crew whose provider account, as logged in on this host, is at or near a window's limit.
+
+```toml
+[workflow]
+provider_limit_max_used_pct = 90            # default
+provider_limit_overrides = ["claude:80", "grok:100"]
+provider_limit_explicit_crews = "wait"      # or "pool"
+```
+
+**When a crew is limited.** A crew is limited while a live, gating reading of its provider is exhausted or used at or above the provider's threshold. The threshold is the provider's `provider_limit_overrides` entry, else `provider_limit_max_used_pct`.
+
+- A reading that names a model (Claude's `seven_day_opus`, say) limits only the crews whose model contains it, compared case-insensitively. Any other reading limits every crew of the provider. Provider labels are parsed, so a crew configured as `anthropic` counts as `claude`.
+- A threshold of `100` gates only an exhausted window, so a reading at 99% gates nothing.
+- An overage window (`gating` off) never gates.
+
+**When a reading lapses.** A reading counts until its `resets_at`, and is ignored after it. The crew is eligible again at the next admission pass, without probing the provider. A reading with no reset counts for its window's length, or 60 minutes when that is unknown. An exhausted error reading with no reset counts for the first usage-limit backoff, 30 minutes.
+
+**Which draws are gated.** Only delivery admission: the crew draw of drains and `orbit run ship`, and the pull window. System, review, final-recovery and task-pilot crews are not gated.
+
+- **Pool and default tasks** (`crew_source` `pool:<tier>` or `default`, or no crew): limited members are removed before the weighted draw, and the remaining weights are renormalized, as `--allow-crew` does. If the task's assigned crew is limited, admission draws from the unlimited members of its current complexity pool. The task record is not rewritten.
+- **No default fallback.** When every member is limited, the task waits. Limit filtering never falls through to `workflow.default_crew`, which is usually the most expensive crew and often shares a provider with the pool.
+- **Explicit crews** (`crew_source` `explicit`, or a legacy pin): under `provider_limit_explicit_crews = "wait"` (the default), the task stays in the backlog. Under `"pool"`, it is drawn from the unlimited members of its complexity pool.
+- **Explicit run crews.** A run-input `crew` (`orbit run ship --crew`) is the operator's decision. It is not gated, and `crew_selection.provider_limit` records the limit it ran against.
+
+A redrawn task's `crew_selection.source` names the limit. A task left with no unlimited crew waits, and the local drain reports it with `reason: "provider_limit"` in `orbit run readiness --json`. The detail reads `<provider> <window> at <used>% (limit <threshold>%) until <reset>; crews <list> skipped`. The wait lifts by itself after the reset. As under a hold, an `orbit run ship` that names such a task still runs it on its usual draw. A task whose standing [provider failure hold](#provider-failure-holds) leaves no crew reports `provider_backoff` first.
+
+**Pull drains.** Each pass of a follower's pull drain re-reads its own store. It excludes each limited crew from its crew window with source `provider_limit` and an `until` time. Unlike the window's other exclusions, this one lifts at `until` within the same drain. The owner never hands the follower a task on that crew in the meantime. The owner's before-PR reviewer is not gated.
 
 ### Final recovery pool
 

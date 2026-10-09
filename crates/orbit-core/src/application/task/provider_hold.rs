@@ -6,10 +6,15 @@
 //! its complexity pool, then the workspace default. When the hold excludes
 //! every one, the local drain's backlog snapshot defers the task until the
 //! hold's `not_before`.
+//!
+//! [ORB-14697] A usage-limit hold on a task whose crew is its explicit choice
+//! follows `workflow.provider_limit_explicit_crews`: under `wait` it does not
+//! redirect the task, which waits out the hold instead.
 
 use orbit_common::OrbitError;
+use orbit_config::ProviderLimitExplicitCrews;
 use orbit_types::task::Task;
-use orbit_types::workflow::ProviderFailureHold;
+use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
@@ -49,6 +54,13 @@ impl OrbitRuntime {
         let own = permitted(candidates);
         if drawable(&own) {
             return Ok(Some((own, held(source))));
+        }
+        if hold.class == ProviderFailureClass::Limit
+            && self.context.settings().provider_limit().explicit_crews
+                == ProviderLimitExplicitCrews::Wait
+            && self.explicit_task_crew(task)?
+        {
+            return Ok(None);
         }
         if let Some((pool, pool_source)) =
             self.complexity_pool_candidates(task.complexity, pools)?
@@ -110,22 +122,21 @@ impl OrbitRuntime {
         )))
     }
 
-    /// The crews `task` is drawn from, honouring a standing provider hold
-    /// when it leaves any. A hold that excludes them all is reported by
-    /// [`Self::provider_backoff_deferral`]; the draw then stays as it was,
-    /// so an operator's explicit ship still runs.
-    pub(crate) fn apply_provider_hold(
+    /// The crews `task` is drawn from before this host's provider limits:
+    /// its unheld draw, narrowed by a standing provider hold when the hold
+    /// leaves any crew, and that hold.
+    pub(crate) fn held_crew_candidates(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,
-        candidates: Vec<CrewCandidate>,
-        source: String,
-    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
+        let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
         let Some(hold) = self.admission_provider_hold(task) else {
-            return Ok((candidates, source));
+            return Ok((candidates, source, None));
         };
-        Ok(self
+        let (candidates, source) = self
             .provider_held_candidates(task, pools, &hold, &candidates, &source)?
-            .unwrap_or((candidates, source)))
+            .unwrap_or((candidates, source));
+        Ok((candidates, source, Some(hold)))
     }
 }

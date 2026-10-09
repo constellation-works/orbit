@@ -423,6 +423,23 @@ provider keeps refusing the content, pin the task to a crew on another
 provider. See
 [CONFIG.md](../CONFIG.md#provider-failure-holds).
 
+## A task waiting on a provider usage limit
+
+`orbit run readiness --json` reports `reason: "provider_limit"` when every crew
+the task may run as belongs to a provider this host reads at or above its
+usage threshold, or exhausted. The detail names the provider, window, used
+percent, threshold, reset and the crews skipped. Nothing failed and nothing
+needs repair: the wait lifts by itself at the next admission pass after the
+reset.
+
+To run it sooner, give the pool an unlimited member, set the task's `crew` to
+a crew on another provider, or raise the threshold
+(`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
+for that provider). An explicitly crewed task waits by default; with
+`workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
+complexity pool instead. See
+[CONFIG.md](../CONFIG.md#provider-usage-limits).
+
 ## A delivery held for the forge
 
 Sometimes GitHub refuses every push for a while: `! [remote rejected] <branch> ->

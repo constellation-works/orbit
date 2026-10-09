@@ -396,6 +396,16 @@ pub(crate) fn pull_refill(
             "host_suppressed: this drain claims no more work on this host for its window \
              because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
         )
+    } else if crews.as_ref().is_some_and(|window| {
+        window
+            .excluded
+            .iter()
+            .any(|exclusion| exclusion.source == CrewExclusionSource::ProviderLimit)
+    }) {
+        // [ORB-14697] A usage limit lifts by itself, so this drain admits
+        // again once one does.
+        "no_runnable_crew: no crew this drain may run is free on this host right now, and at          least one is held by a provider usage limit; see `crews.excluded`: each          `provider_limit` exclusion lifts at its `until` and this drain admits again"
+            .to_string()
     } else if crews
         .as_ref()
         .is_some_and(|window| window.allowed.is_some())
@@ -677,6 +687,7 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
                 crew: crew.name.clone(),
                 source: CrewExclusionSource::Preflight,
                 reason,
+                until: None,
             }),
         }
     }
