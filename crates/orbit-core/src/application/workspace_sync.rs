@@ -15,6 +15,7 @@ use super::managed_assets::{
 use super::routines::materialize::reconcile_default_routines;
 use super::routines::seed::RoutineSeedIdentity;
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
     DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, render_default_auto_task,
 };
@@ -215,8 +216,17 @@ fn reconcile_managed_artifacts(
         append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
     }
 
-    let auto_tasks = reconcile_managed_assets_in_mode(
-        &auto_tasks_dir(workspace_orbit_root),
+    // A fork that differs from its bundled body only in operator settings is
+    // moved into the settings table first, so reconciliation below finds the
+    // restored body managed instead of preserving the fork [ORB-14909].
+    let auto_tasks_root = auto_tasks_dir(workspace_orbit_root);
+    let migrated = if mode.creates_only() {
+        Vec::new()
+    } else {
+        migrate_settings_only_forks(&auto_tasks_root, base_branch, mode)?
+    };
+    let mut auto_tasks = reconcile_managed_assets_in_mode(
+        &auto_tasks_root,
         "auto_task",
         ManagedAssetLayout::YamlStem,
         DEFAULT_AUTO_TASK_FILES,
@@ -239,6 +249,22 @@ fn reconcile_managed_artifacts(
             Ok(rendered)
         },
     )?;
+    // One row per migrated definition: in `Check` mode reconciliation still
+    // sees the fork and would also report it preserved.
+    let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
+        .into_iter()
+        .partition(|action| {
+            migrated
+                .iter()
+                .any(|migration| migration.name == action.name)
+        });
+    auto_tasks.warnings.retain(|warning| {
+        !superseded
+            .iter()
+            .any(|action| action.detail.as_ref() == Some(warning))
+    });
+    kept.extend(migrated);
+    auto_tasks.actions = kept;
     append_actions(
         &mut report,
         ManagedArtifactScope::WorkspaceLocal,

@@ -124,6 +124,15 @@ orbit auto-task delete <name> --reason "<why>"   # remove it for good
 orbit auto-task restore <name>          # reinstate a deleted shipped default
 ```
 
+On a shipped default, `toggle` and `update` of settings fields — `enabled`,
+the schedule, dedupe, and the template's crew, priority, complexity, and added
+tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and
+applied over the bundled body, which keeps receiving upstream fixes on
+`orbit workspace sync`. Changing any other field forks the definition: Orbit
+then preserves the file as written and stops refreshing it, and `show` reports
+`body: forked` with the differing fields. `orbit workspace sync` moves an older
+fork that differs only in settings back under management.
+
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
 `show` first; mint only when creating that task is intended. Over MCP:

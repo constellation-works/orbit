@@ -83,6 +83,10 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     // A definition listings hide still resolves here, marked inactive.
     let listed = runtime.listed_auto_task(definition);
     let mut value = listed_json(runtime, &listed)?;
+    match runtime.auto_task_layering(&name) {
+        Ok(layering) => value["layering"] = json!(layering),
+        Err(error) => value["layering_error"] = json!(error.to_string()),
+    }
     let definition = listed.definition;
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input

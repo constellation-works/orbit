@@ -15,6 +15,7 @@ mod isolated_cli_fixture;
 
 mod audit_cli;
 mod auto_task_lifecycle_cli;
+mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
 mod context_selector_external_root;
 mod context_selector_worktree;

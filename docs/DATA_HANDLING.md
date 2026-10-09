@@ -46,7 +46,7 @@ data-handling review:
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
-| Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. |
+| Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. Operator settings for shipped auto-tasks live in `auto_tasks/.orbit-auto-task-settings.json`. |
 
 Nothing in this table is synchronised anywhere by default. If you want task
 history to leave the machine, you opt in explicitly through

@@ -18,6 +18,8 @@
 //! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
+//! - [`settings`] — operator settings layered over bundled bodies, and the
+//!   sync migration of settings-only forks.
 
 use std::borrow::Cow;
 
@@ -27,6 +29,7 @@ pub mod delete;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
+pub mod settings;
 pub mod state;
 
 pub use crud::{AutoTaskAddParams, AutoTaskUpdateParams};
@@ -40,6 +43,7 @@ pub use scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, ListedAutoTask, SchedulerOptions,
     open_auto_task_instance, run_auto_task_scheduler_at,
 };
+pub use settings::{AutoTaskBody, AutoTaskLayering};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 
 /// Default definitions embedded in the Orbit binary and materialized into a
