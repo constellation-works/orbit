@@ -23,6 +23,7 @@ fn config(pool: &str, extra: &str) -> String {
         "[workflow]\ndefault_crew = \"sol\"\nhard_complexity_crews = {pool}\n{extra}\n\n\
          [crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n\n\
          [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+         [crews.flash]\nprovider = \"antigravity\"\nmodel = \"flash-model\"\n\n\
          [review]\nbefore_pr = false\n"
     )
 }
@@ -67,13 +68,18 @@ impl Fixture {
 
     /// An admissible hard backlog task, on `crew` when one is named.
     fn task(&self, crew: Option<&str>) -> String {
+        self.task_of(crew, TaskComplexity::Hard)
+    }
+
+    /// An admissible backlog task of `complexity`, on `crew` when one is named.
+    fn task_of(&self, crew: Option<&str>, complexity: TaskComplexity) -> String {
         self.runtime()
             .add_task(TaskAddParams {
                 title: "Provider limit fixture".into(),
                 description: "A task whose crew's provider is near its limit.".into(),
                 acceptance_criteria: vec!["Delivered.".into()],
                 plan: "1. Deliver it.".into(),
-                complexity: TaskComplexity::Hard,
+                complexity,
                 context_files: vec!["dir:.".into()],
                 task_type: Some(orbit_core::TaskType::Chore),
                 status: Some(TaskStatus::Backlog),
@@ -102,6 +108,30 @@ impl Fixture {
                 run_id: None,
                 crew: None,
                 detail: String::new(),
+            })
+            .unwrap();
+    }
+
+    /// The observation a run records when Antigravity fails on its quota
+    /// (exit 0 or not): exhausted, no window, from an error, resetting at
+    /// `resets_at`.
+    fn read_antigravity_quota(&self, resets_at: DateTime<Utc>) {
+        self.runtime()
+            .record_provider_limit(&ProviderLimitObservation {
+                provider: "antigravity".into(),
+                model: None,
+                window: None,
+                exhausted: true,
+                source: ProviderLimitSource::Error,
+                resets_at: Some(resets_at),
+                used_percent: None,
+                window_minutes: None,
+                gating: true,
+                partial: false,
+                observed_at: Utc::now(),
+                run_id: Some("jrun-quota".into()),
+                crew: Some("flash".into()),
+                detail: "Individual quota reached. Resets in 20h52m17s.".into(),
             })
             .unwrap();
     }
@@ -266,4 +296,48 @@ fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
     fx.read_claude(100.0, true, Utc::now() + Duration::hours(2));
     let entry = fx.readiness(&task);
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
+}
+
+/// [ORB-15102] The observation a quota failure records keeps a low-complexity
+/// task off the Antigravity crew until the reset it named.
+#[test]
+fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset() {
+    if !isolated(
+        "provider_limit_admission::a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset",
+    ) {
+        return;
+    }
+    substitute_worker();
+    let low_config = |pool: &str| config(r#"["opus"]"#, &format!("low_complexity_crews = {pool}"));
+    let fx = Fixture::new(&low_config(r#"["flash"]"#));
+    let task = fx.task_of(None, TaskComplexity::Low);
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "no quota is known yet: {entry}");
+
+    let reset = (Utc::now() + Duration::hours(20) + Duration::minutes(52)).trunc_subsecs(6);
+    fx.read_antigravity_quota(reset);
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+    let detail = entry["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("antigravity ") && detail.contains(&reset.to_rfc3339()),
+        "the detail names the provider and the reset: {detail}"
+    );
+
+    // Past the reset the crew is drawable again.
+    fx.read_antigravity_quota(Utc::now() - Duration::seconds(1));
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    fx.read_antigravity_quota(reset);
+
+    // With another crew in the low pool, the task draws it, not `flash`.
+    fx.configure(&low_config(r#"["flash", "sol"]"#));
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+    let source = admitted["crew_selection"]["source"].as_str().unwrap();
+    assert!(
+        source.contains("provider limit: antigravity") && source.ends_with("crews flash skipped"),
+        "the selection names the limit: {source}"
+    );
 }
