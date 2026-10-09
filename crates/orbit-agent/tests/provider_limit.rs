@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use chrono::{FixedOffset, TimeZone, Utc};
-use orbit_agent::provider_usage_limit_details;
+use orbit_agent::{provider_usage_limit, provider_usage_limit_details};
 
 #[test]
 fn january_reset_seen_in_late_december_holds_until_next_january() {
@@ -29,6 +29,18 @@ fn explicit_reset_already_passed_today_rolls_to_tomorrow_not_next_year() {
     // is tomorrow's, and it must not be pushed a year ahead.
     let expected = Utc.with_ymd_and_hms(2026, 10, 9, 10, 0, 0).unwrap();
     assert_eq!(limit.resets_at, Some(expected));
+}
+
+#[test]
+fn multibyte_text_before_the_zone_holds_by_default_without_panicking() {
+    // `1é2` is four bytes, so the two-byte meridiem split lands inside `é`.
+    let now = Utc.with_ymd_and_hms(2026, 10, 8, 20, 0, 0).unwrap();
+    let text = "You've hit your limit · resets 1é2 (America/Los_Angeles)";
+
+    assert!(provider_usage_limit(text));
+    let limit = provider_usage_limit_details(text, now, utc());
+
+    assert_eq!(limit.resets_at, None);
 }
 
 fn utc() -> FixedOffset {
