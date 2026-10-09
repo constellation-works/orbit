@@ -1,0 +1,13 @@
+# Non-interactive store retention target, run daily by the seeded
+# `store_gc` routine once a workspace opts in.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: store_gc_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: sweep
+      target: activity:store_gc

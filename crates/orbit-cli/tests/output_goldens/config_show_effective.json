@@ -189,6 +189,18 @@
       "path": null,
       "shadowed_by": []
     },
+    "retention.audit_days": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "retention.runs_days": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "review.baseline_commands": {
       "scope": "built-in",
       "state": "default",

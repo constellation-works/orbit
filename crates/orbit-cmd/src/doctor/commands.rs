@@ -195,6 +195,7 @@ impl DoctorCommands for OrbitRuntime {
             WorkspaceDoctorResult::timed(|| doctor_check_orphan_task_stores(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_tracked_orbit_files(self)),
             WorkspaceDoctorResult::timed(|| doctor_check_plugin_builds(self)),
+            WorkspaceDoctorResult::timed(|| doctor_check_store_retention(self)),
         ]);
         results.extend(WorkspaceDoctorResult::timed_many(|| {
             doctor_check_unpublished_bundle_dirs(self)

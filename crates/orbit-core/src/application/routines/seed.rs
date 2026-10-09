@@ -67,6 +67,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
+    (
+        "store_gc",
+        include_str!("../../../assets/routines/store_gc.yaml"),
+    ),
 ];
 
 /// Default routines a prior release seeded that this Orbit no longer ships,

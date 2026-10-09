@@ -735,6 +735,8 @@ the sweep succeeded.
 | `runtime.log_retention_days` | `7` | Delete archives of both `orbit.jsonl` and `orbit-agent.jsonl` older than N days (≥ 1). |
 | `runtime.log_max_total_mb` | `500` | Operational `orbit.jsonl` archive budget in MiB, pruned oldest first (≥ 1). |
 | `runtime.log_max_file_mb` | `100` | Roll the active operational log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
+| `retention.audit_days` | `60` | Days `orbit gc audit` keeps audit rows (1..=36500). Older command-audit rows (host-wide) and this workspace's run-audit rows are reclaimable, with the audit blobs no remaining row or pending write names. Nothing is deleted until an operator runs `orbit gc audit --apply` or enables the `store-gc` routine. |
+| `retention.runs_days` | `60` | Days after a terminal run finishes before `orbit gc runs` may drop its pipeline state (1..=36500). The run row, its steps and its summary stay; held and non-terminal runs are never selected. |
 | `plugin.legacy_callback_identity` | `false` | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential. Removed next release. |
 
 Agent relay output lives beside the operational feed in `orbit-agent.jsonl`, with an independent 200 MiB archive budget and 50 MiB active-file limit. The dashboard and `orbit log tail` merge both active feeds. Agent volume cannot consume the operational size budget; each feed is still pruned when its own size or age budget is exceeded.

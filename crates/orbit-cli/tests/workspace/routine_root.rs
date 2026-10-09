@@ -218,6 +218,7 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
         "ci-failure-sweep-",
         "dependabot-alert-sweep-",
         "ship-sweep-",
+        "store-gc-",
         "task-pilot-",
         "worktree-gc-",
     ];

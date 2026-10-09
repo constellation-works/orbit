@@ -223,6 +223,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/task_complete.yaml"),
     ),
     (
+        "store_gc",
+        include_str!("../../assets/activities/store_gc.yaml"),
+    ),
+    (
         "task_pilot",
         include_str!("../../assets/activities/task_pilot.yaml"),
     ),
@@ -312,6 +316,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_review_reconciliation_pipeline",
         include_str!("../../assets/jobs/task_review_reconciliation_pipeline.yaml"),
+    ),
+    (
+        "store_gc_pipeline",
+        include_str!("../../assets/jobs/store_gc_pipeline.yaml"),
     ),
     (
         "workspace_ship_pipeline",

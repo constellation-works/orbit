@@ -34,8 +34,8 @@ is host-local and never synced, so each owner checkout is an independent schedul
 > catalog from `orbit-registry` with registered runtimes; Core keeps the registry-neutral
 > scheduler, validation, and dispatch kernels.
 
-`orbit workspace init` seeds five default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `ship_sweep`, and `worktree_gc`) under
+`orbit workspace init` seeds six default routine templates (`ci_failure_sweep`,
+`dependabot_alert_sweep`, `task_pilot`, `ship_sweep`, `worktree_gc`, and `store_gc`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). Every default is `enabled: false`:
 scheduled execution is an explicit, versioned opt-in made by changing the reviewed

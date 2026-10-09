@@ -596,6 +596,18 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator, McpCapability::Runner],
         rationale: "collection permanently deletes workspace scratch contents",
     },
+    GovernedOperation {
+        id: "gc audit",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "applying audit retention permanently deletes audit history and blobs",
+    },
+    GovernedOperation {
+        id: "gc runs",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "applying run retention permanently drops old runs' pipeline state",
+    },
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,

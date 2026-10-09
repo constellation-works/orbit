@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests."
-last_updated: 2026-10-03
+last_updated: 2026-10-08
 last_validated: 2026-10-03
 ---
 
@@ -10,7 +10,7 @@ last_validated: 2026-10-03
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 17 jobs;
+[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 19 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 
@@ -28,6 +28,7 @@ relative to `crates/orbit-engine/src/`.
 | `agent_invoke_pipeline` | Graph through MCP stdio: `a_remote_operator_session_invokes_an_agent_end_to_end` submits an invocation, polls terminal success and verifies the completed envelope plus persisted trusted-host admission. Provider executables return planted responses; the shipped graph is not replaced. Refusal: `a_remote_agent_session_cannot_invoke_an_agent`. Core admission refusals: `a_runs_own_runner_grant_cannot_admit_an_invocation`, `an_admitted_run_cannot_be_resumed`, `an_unauthorized_keyed_submission_claims_nothing`. | `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs`; Core `application/job/tests/agent_invoke.rs` |
 | `ci_failure_sweep_pipeline` | Boundary: `ci_failure_fixture_goldens` drives `file_ci_failure_tasks` through `OrbitRuntime::run_deterministic` over captured log shapes, including rustfmt diffs ending in punctuation, symbols-only excerpts falling back to the step, and unusable signatures retaining exact-key deduplication without aborting unrelated filings. It reads the filed tasks back and reruns scenarios to verify persisted deduplication; `ci_failure_predating_a_landed_repair_is_held_not_refiled` holds a failure tested before a done repair of the same signature landed and files one tested after it. Collection's in-flight-descendant hold is covered by `orbit-engine`'s `executor::automation::ci::tests::pending`. Filing only; pilot admission and the shipped graph have no current test. | `crates/orbit-core/tests/ci_failure_goldens.rs` |
 | `dependabot_alert_sweep_pipeline` | Boundary: `sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields` files from a collected snapshot and checks that a credential never reaches output or task fields. Per-file grouping, unavailable families and the collector have no current test. | Core `adapter/engine_host/v2_host/dependabot/tests/filing.rs` |
+| `store_gc_pipeline` | Graph through CLI: `audit_retention_plans_then_prunes_rows_and_unreferenced_blobs` runs the shipped job with `orbit job run --wait` after seeding the store, and verifies terminal success with both applied reports in its pipeline state. The same test proves the `gc audit` apply it wraps. | `crates/orbit-cli/tests/workspace/store_gc.rs` |
 | `task_auto_pipeline` | Boundary: `backlog_admission_orders_critical_then_corrective_then_priority_then_age`, `backlog_admission_waits_for_every_dependency_to_be_done` and `backlog_admission_excludes_work_locked_by_an_active_task` exercise the backlog selection every drain runs. Child dispatch, linking and the success guard have no current test. | `crates/orbit-core/tests/runtime/dispatch_admission.rs` |
 | `task_claimed_local_pipeline` | No graph, boundary or refusal evidence. | — |
 | `task_claimed_pr_pipeline` | Boundary: `distributed_drain/` claims this job as its leaf, but the leaf launch is refused there, so the graph never runs. Claimed-PR binding has no current test. | `crates/orbit-core/tests/runtime/distributed_drain/` |
@@ -65,6 +66,7 @@ tests is not evidence. Coordinate Cargo target use before running them.
 ```sh
 cargo test -p orbit-cli --test mcp mcp_roundtrip::
 cargo test -p orbit-cli --test workspace worktree_gc_routing::
+cargo test -p orbit-cli --test workspace store_gc::
 cargo test -p orbit-core --test ci_failure_goldens
 cargo test -p orbit-core --test runtime dispatch_admission::
 cargo test -p orbit-core --test runtime distributed_drain::
@@ -74,7 +76,7 @@ cargo test -p orbit-engine --test engine v2_worktree_lifecycle::
 cargo test -p orbit-store --test allocation_admission
 ```
 
-Only `agent_invoke_pipeline` and `worktree_gc_pipeline` have shipped-graph
+Only `agent_invoke_pipeline`, `store_gc_pipeline` and `worktree_gc_pipeline` have shipped-graph
 execution evidence. Full shipped-graph fixtures remain a coverage opportunity
 for every other job; report the action and admission tests above at their
 actual boundary.

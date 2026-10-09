@@ -27,6 +27,10 @@ pub enum GcTarget {
     Worktrees(WorktreeGcArgs),
     /// Reclaim this workspace checkout's scratch contents when no job runs are active
     Tmp(TmpGcArgs),
+    /// Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
+    Audit(AuditGcArgs),
+    /// Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
+    Runs(RunGcArgs),
 }
 
 impl Execute for GcTarget {
@@ -34,6 +38,8 @@ impl Execute for GcTarget {
         match self {
             Self::Worktrees(args) => args.execute(runtime),
             Self::Tmp(args) => args.execute(runtime),
+            Self::Audit(args) => args.execute(runtime),
+            Self::Runs(args) => args.execute(runtime),
         }
     }
 }
@@ -82,6 +88,134 @@ impl Execute for TmpGcArgs {
         ));
         Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
     }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Without --apply this only reports. The command audit (`audit_events`) is \
+                  host-wide; run audit rows and blobs are this workspace's. A blob is kept while \
+                  any remaining run audit row, run step or pipeline state names it, while a \
+                  pending-publication marker newer than the cutoff names it, and for 24 hours \
+                  after it was last written. Deletes run in batches of 1,000 rows, each its own \
+                  write transaction. Freed pages stay in the store file; VACUUM it while Orbit \
+                  is idle to return them to the filesystem.\n\nExamples:\n  orbit gc audit\n  \
+                  orbit gc audit --older-than-days 30 --apply --json"
+)]
+pub struct AuditGcArgs {
+    /// Delete what the plan lists; without this flag the command only reports
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Retention window in days, overriding `retention.audit_days` (default 60)
+    #[arg(long, value_name = "DAYS")]
+    pub older_than_days: Option<u32>,
+
+    /// Emit the complete report as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl Execute for AuditGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let report = runtime.gc_audit(self.apply, self.older_than_days)?;
+        let doc = serde_json::to_value(&report).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize audit GC report: {error}"))
+        })?;
+        let mut lines: Vec<_> = report
+            .tables
+            .iter()
+            .map(|table| {
+                format!(
+                    "table={} scope={} rows={} bytes={} rows_removed={}",
+                    table.table, table.scope, table.rows, table.bytes, table.rows_removed
+                )
+            })
+            .collect();
+        let blobs = &report.blobs;
+        lines.push(format!(
+            "blobs={} blob_bytes={} unreferenced={} unreferenced_bytes={} pending={} recent={} \
+             stale_markers={} removed={} removed_bytes={}",
+            blobs.blobs,
+            blobs.bytes,
+            blobs.unreferenced,
+            blobs.unreferenced_bytes,
+            blobs.pending,
+            blobs.recent,
+            blobs.stale_markers,
+            blobs.removed,
+            blobs.removed_bytes,
+        ));
+        lines.push(summary_line(&doc));
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Without --apply this only reports. Only success, failed, timeout, cancelled and \
+                  interrupted runs of this workspace are selected; a held run, which review \
+                  evidence can still resume, and every non-terminal run are never touched. The \
+                  run row, its steps and its summary stay, so `orbit run show` and run history \
+                  keep working, and `archived_at` records when the state was dropped.\n\n\
+                  Examples:\n  orbit gc runs\n  orbit gc runs --apply"
+)]
+pub struct RunGcArgs {
+    /// Drop what the plan lists; without this flag the command only reports
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Retention window in days, overriding `retention.runs_days` (default 60)
+    #[arg(long, value_name = "DAYS")]
+    pub older_than_days: Option<u32>,
+
+    /// Emit the complete report as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl Execute for RunGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let report = runtime.gc_runs(self.apply, self.older_than_days)?;
+        let doc = serde_json::to_value(&report).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize run GC report: {error}"))
+        })?;
+        let lines = [
+            format!(
+                "table=job_run_states scope=workspace runs={} bytes={} runs_archived={}",
+                report.runs, report.state_bytes, report.runs_archived
+            ),
+            summary_line(&doc),
+        ];
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+/// The mode, window, write batches and store pages shared by both reports.
+fn summary_line(doc: &serde_json::Value) -> String {
+    let field = |pointer: &str| {
+        doc.pointer(pointer)
+            .map(|value| {
+                value
+                    .as_str()
+                    .map_or_else(|| value.to_string(), str::to_string)
+            })
+            .unwrap_or_default()
+    };
+    format!(
+        "mode={} retention_days={} cutoff={} batches={} max_batch_ms={} store_bytes={} \
+         freelist_bytes={}",
+        if doc["apply"] == true {
+            "apply"
+        } else {
+            "plan"
+        },
+        field("/retention_days"),
+        field("/cutoff"),
+        field("/writes/batches"),
+        field("/writes/max_batch_ms"),
+        field("/store/file_bytes"),
+        field("/store/freelist_bytes"),
+    )
 }
 
 #[derive(Args)]

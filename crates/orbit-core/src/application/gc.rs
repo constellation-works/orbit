@@ -8,9 +8,14 @@ use serde_json::{Value, json};
 use crate::{OrbitError, OrbitRuntime};
 
 mod scratch;
+mod store;
 #[cfg(test)]
 mod tests;
 mod tmp;
+pub use store::{
+    AuditGcReport, BatchReport, BlobSweepReport, RetentionTableReport, RunGcReport,
+    StoreRetentionOverview, StoreSpaceReport,
+};
 pub use tmp::{TmpGcReport, TmpGcResult};
 
 impl OrbitRuntime {
