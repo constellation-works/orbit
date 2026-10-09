@@ -54,7 +54,7 @@ fn check_concurrent_update(action: McpAction<'static>) {
     let worker = std::thread::spawn(move || {
         run_action(
             action,
-            &worker_repo,
+            Some(&worker_repo),
             &worker_orbit_root,
             ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
             Some(worker_home),
