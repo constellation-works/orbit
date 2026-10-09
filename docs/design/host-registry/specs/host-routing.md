@@ -143,7 +143,10 @@ Commands that open a host-local runtime directly reject `--host` at parse time. 
 `run logs`, `run show`, `doctor`, `workspace …`, `config …`, `update` and the deploy targets.
 Pass `--host` after the routable task subcommand, rather than on the `task` group.
 The error gives the command to run on that host:
-`ssh <entry ssh target> orbit …`. Other host-local commands read files and process state the
+`ssh <entry ssh target> orbit …`. Arguments containing whitespace or shell metacharacters
+are quoted for the remote login shell, and the remote command is quoted as one SSH argument
+so those quotes survive pasting the hint into a local POSIX shell.
+Other host-local commands read files and process state the
 tool surface does not expose, and relaying them would make the CLI a remote shell.
 Local-only task commands also refuse a remote-qualified `--workspace` before opening a
 runtime. For remote task listing or creation, use `orbit tool run orbit.task.list` or
