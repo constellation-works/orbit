@@ -265,6 +265,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0040".to_string(),
                 "provider_limit_observations".to_string()
             ),
+            (
+                "migration.v0041".to_string(),
+                "provider_limit_readings".to_string()
+            ),
         ]
     );
 }

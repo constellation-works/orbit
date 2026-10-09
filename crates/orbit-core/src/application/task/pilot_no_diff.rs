@@ -16,19 +16,29 @@
 //! `already_landed`). A citation is a whole 7-40 character lowercase hex
 //! token holding at least one digit and one letter, which leaves out decimal
 //! run IDs and English words. Every citation must name a commit in this
-//! repository, and at least one must be an ancestor of the base branch;
-//! anything less is not proof.
+//! repository, and at least one must be an ancestor of the base branch.
+//!
+//! A commit on the base branch is not yet a fix: the commit that introduced
+//! the finding is on the base branch by construction. The commits the finding
+//! itself names (any commit in its description, and the landed commit of each
+//! `regression_from` target) never count as covering. When such a commit is
+//! known, a covering commit must also be a strict descendant of every one of
+//! them, and when the task declares path selectors it must touch one of those
+//! paths. A finding that names no commit and declares no path has nothing to
+//! relate a citation to, so it is never proven; anything less is not proof.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, TaskStatus,
+    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, Task,
+    TaskRelationType, TaskStatus,
 };
-use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
+use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, LandingObservationStatus};
 use serde_json::{Value, json};
 
 use super::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::search::task_selectors_contain_path;
 
 /// The hold reason, and the admission classification, for a proposed task
 /// whose latest pilot assessment is `verified_no_diff`.
@@ -54,6 +64,10 @@ pub(crate) fn auto_minted(tags: &[String]) -> bool {
 pub(crate) struct VerifiedNoDiff {
     pub(crate) evidence: String,
     pub(crate) cited_commits: Vec<String>,
+    /// The selectors the task held when the pilot assessed it. A
+    /// `verified_no_diff` assessment clears the task's own, so these are the
+    /// paths the finding named.
+    context_files_before: Vec<String>,
 }
 
 impl VerifiedNoDiff {
@@ -76,18 +90,10 @@ impl VerifiedNoDiff {
                 collect_strings(value, &mut texts);
             }
         }
-        let mut cited_commits = Vec::new();
-        for token in texts
-            .iter()
-            .flat_map(|text| text.split(|c: char| !c.is_ascii_alphanumeric()))
-        {
-            if commit_citation(token) && !cited_commits.iter().any(|cited| cited == token) {
-                cited_commits.push(token.to_string());
-            }
-        }
         Some(Self {
             evidence,
-            cited_commits,
+            cited_commits: commit_citations(texts),
+            context_files_before: Vec::new(),
         })
     }
 
@@ -119,10 +125,16 @@ impl VerifiedNoDiff {
         })
     }
 
-    /// The cited commits git proves are on `base`, or why there is no proof.
-    /// Every citation must resolve to a commit, and at least one must be an
-    /// ancestor of the local or `origin` branch. Nothing is fetched.
-    pub(crate) fn covering_proof(&self, runtime: &OrbitRuntime) -> Result<Vec<String>, String> {
+    /// The cited commits git proves are on `base` and relate to `task`'s
+    /// finding, or why there is no proof. Every citation must resolve to a
+    /// commit, and at least one must be an ancestor of the local or `origin`
+    /// branch, differ from every commit the finding names, descend from all of
+    /// them, and touch the task's context paths. Nothing is fetched.
+    pub(crate) fn covering_proof(
+        &self,
+        runtime: &OrbitRuntime,
+        task: &Task,
+    ) -> Result<Vec<String>, String> {
         if self.cited_commits.is_empty() {
             return Err("the assessment cites no commit".into());
         }
@@ -133,43 +145,54 @@ impl VerifiedNoDiff {
             format!("refs/remotes/origin/{base}"),
         ]
         .into_iter()
-        .filter(|reference| {
-            source
-                .git(&[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{reference}^{{commit}}"),
-                ])
-                .is_ok()
-        })
+        .filter(|reference| resolve_commit(&source, reference).is_some())
         .collect::<Vec<_>>();
         if base_refs.is_empty() {
             return Err(format!("base branch {base} does not resolve"));
         }
-        if let Some(unknown) = self.cited_commits.iter().find(|sha| {
-            source
-                .git(&["cat-file", "-e", &format!("{sha}^{{commit}}")])
-                .is_err()
-        }) {
-            return Err(format!(
-                "cited {unknown} is not a commit in this repository"
-            ));
+        let mut cited = Vec::with_capacity(self.cited_commits.len());
+        for sha in &self.cited_commits {
+            let Some(full) = resolve_commit(&source, sha) else {
+                return Err(format!("cited {sha} is not a commit in this repository"));
+            };
+            cited.push((sha, full));
         }
-        let covering = self
-            .cited_commits
-            .iter()
-            .filter(|sha| {
-                base_refs.iter().any(|reference| {
-                    source
-                        .git(&["merge-base", "--is-ancestor", sha, reference])
-                        .is_ok()
-                })
+        let on_base = cited
+            .into_iter()
+            .filter(|(_, full)| {
+                base_refs
+                    .iter()
+                    .any(|reference| is_ancestor(&source, full, reference))
             })
-            .cloned()
+            .collect::<Vec<_>>();
+        if on_base.is_empty() {
+            return Err(format!("no cited commit is on {base}"));
+        }
+
+        let named = named_commits(runtime, &source, task);
+        let mut paths = task.context_files.clone();
+        paths.extend(self.context_files_before.iter().cloned());
+        if named.is_empty() && paths.is_empty() {
+            return Err(
+                "the finding names no commit and no path to relate a cited commit to".into(),
+            );
+        }
+        let covering = on_base
+            .into_iter()
+            .filter(|(_, full)| {
+                !named.contains(full)
+                    && named
+                        .iter()
+                        .all(|culprit| is_ancestor(&source, culprit, full))
+                    && (paths.is_empty() || touches_paths(&source, full, &paths))
+            })
+            .map(|(sha, _)| sha.clone())
             .collect::<Vec<_>>();
         if covering.is_empty() {
-            return Err(format!("no cited commit is on {base}"));
+            return Err(format!(
+                "no cited commit on {base} is a later change to the finding's paths; \
+                 the commits the finding names do not count"
+            ));
         }
         Ok(covering)
     }
@@ -231,10 +254,29 @@ impl OrbitRuntime {
         let Ok(audit) = serde_json::from_str::<Value>(audit) else {
             return Ok(None);
         };
+        let context_files_before = audit
+            .get("context_files_before")
+            .and_then(Value::as_array)
+            .map(|selectors| {
+                selectors
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(audit
             .get("assessment")
             .and_then(VerifiedNoDiff::from_assessment)
-            .map(|finding| (operation_id, finding)))
+            .map(|finding| {
+                (
+                    operation_id,
+                    VerifiedNoDiff {
+                        context_files_before,
+                        ..finding
+                    },
+                )
+            }))
     }
 
     /// Archive a proposed task Orbit automation filed when its current
@@ -264,7 +306,7 @@ impl OrbitRuntime {
                 } else if task.tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG) {
                     held(finding, "tagged no-auto-approve; a person decides")
                 } else {
-                    match finding.covering_proof(self) {
+                    match finding.covering_proof(self, &task) {
                         Err(reason) => held(finding, &reason),
                         Ok(covering_commits) => {
                             let comment = format!(
@@ -303,6 +345,85 @@ fn collect_strings<'a>(value: &'a Value, texts: &mut Vec<&'a str>) {
             .for_each(|value| collect_strings(value, texts)),
         _ => {}
     }
+}
+
+/// The distinct commit citations in `texts`, in first-seen order.
+fn commit_citations<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut commits = Vec::new();
+    for token in texts
+        .into_iter()
+        .flat_map(|text| text.split(|c: char| !c.is_ascii_alphanumeric()))
+    {
+        if commit_citation(token) && !commits.iter().any(|seen| seen == token) {
+            commits.push(token.to_string());
+        }
+    }
+    commits
+}
+
+/// The full SHAs of the commits the finding itself names: every commit that
+/// resolves from its description, and the landed commit of each
+/// `regression_from` target that delivery observed as merged.
+fn named_commits(runtime: &OrbitRuntime, source: &Source, task: &Task) -> Vec<String> {
+    let mut named = commit_citations([task.description.as_str()])
+        .iter()
+        .filter_map(|sha| resolve_commit(source, sha))
+        .collect::<Vec<_>>();
+    for relation in &task.relations {
+        if relation.relation_type != TaskRelationType::RegressionFrom {
+            continue;
+        }
+        let landed = runtime
+            .observe_task_delivery(relation.target.as_str(), None)
+            .ok()
+            .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
+            .and_then(|observation| observation.landing.landed_commit)
+            .and_then(|sha| resolve_commit(source, &sha));
+        named.extend(landed);
+    }
+    named.sort();
+    named.dedup();
+    named
+}
+
+fn resolve_commit(source: &Source, revision: &str) -> Option<String> {
+    source
+        .git(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{revision}^{{commit}}"),
+        ])
+        .ok()
+        .filter(|sha| !sha.is_empty())
+}
+
+fn is_ancestor(source: &Source, ancestor: &str, descendant: &str) -> bool {
+    source
+        .git(&["merge-base", "--is-ancestor", ancestor, descendant])
+        .is_ok()
+}
+
+/// Whether `commit` changes a path any of the task's selectors cover. A merge
+/// commit is judged by its change against the first parent.
+fn touches_paths(source: &Source, commit: &str, selectors: &[String]) -> bool {
+    source
+        .git_preserving_output(&[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            "-z",
+            "--root",
+            "-m",
+            commit,
+        ])
+        .is_ok_and(|changed| {
+            changed
+                .split('\0')
+                .filter(|path| !path.is_empty())
+                .any(|path| task_selectors_contain_path(selectors, path))
+        })
 }
 
 fn commit_citation(token: &str) -> bool {

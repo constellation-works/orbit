@@ -903,6 +903,17 @@ window (see [Provider failure holds](../CONFIG.md#provider-failure-holds)). The
 migration is additive: it creates an empty table and rewrites nothing, so
 older binaries keep reading and writing and it waits for nothing.
 
+## Provider usage-window readings (schema v41)
+
+Store schema v41 adds `used_percent`, `window_minutes` and `gating` (default 1)
+to `provider_limit_observations`. After every Codex or Claude run, the run
+records the provider's own usage-window readings there, with source `event`.
+The migration is additive: it adds nullable or defaulted columns and rewrites
+nothing, so older binaries keep writing and it waits for nothing. An older
+binary that updates an existing row leaves these columns from the earlier
+reading, so trust them only on a row whose `source` is `event`. An older binary
+cannot read a row whose `source` is `event`.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when

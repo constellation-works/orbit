@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
+use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome,
@@ -152,6 +153,9 @@ pub(super) struct CapacityHost {
     pub(super) final_recovery_admissions: Mutex<usize>,
     /// [ORB-14695] The provider limits the runs recorded.
     pub(super) limits: Mutex<Vec<ProviderLimitObservation>>,
+    /// [ORB-14696] Entries `[execution.env]` adds to the provider child's
+    /// environment.
+    pub(super) agent_env: Vec<(String, String)>,
 }
 
 impl CapacityHost {
@@ -162,6 +166,7 @@ impl CapacityHost {
             actions: Mutex::new(Vec::new()),
             final_recovery_admissions: Mutex::new(0),
             limits: Mutex::new(Vec::new()),
+            agent_env: Vec::new(),
         }
     }
 
@@ -211,6 +216,12 @@ impl RuntimeHost for CapacityHost {
             "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
             _ => json!({ "action": action }),
         })
+    }
+
+    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
+        let mut env = allowlisted_child_env(&[], required_env_vars);
+        env.extend(self.agent_env.iter().cloned());
+        env
     }
 
     fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {

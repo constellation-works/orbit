@@ -15,6 +15,7 @@ pub(crate) mod mock_agent;
 pub(crate) mod ollama;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+mod usage_window;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ pub use antigravity::{
     antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
     apply_antigravity_print_timeout,
 };
+pub use usage_window::provider_usage_windows;
 
 use std::borrow::Cow;
 
@@ -63,6 +65,11 @@ pub(crate) fn build_invocation_spec(
 /// default of "read stdout as-is" is what every other provider needs.
 pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8]> {
     match provider {
+        // [ORB-14696] Claude's message stream reduces to its terminal
+        // `result`, the document `--output-format json` printed, so per-message
+        // usage is never summed into the run's totals.
+        "claude" => claude::project_claude_response(stdout)
+            .map_or_else(|| Cow::Borrowed(stdout), Cow::Owned),
         "copilot" => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
         "cursor" => Cow::Owned(cursor::normalize_cursor_stdout(stdout)),
         "pi" => Cow::Owned(pi::normalize_pi_stdout(stdout)),
@@ -98,12 +105,21 @@ pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
 /// The newest assistant message `stdout` carries, or `None` when it has none.
 ///
 /// Starts from the provider's answer projection, so tool traffic, reasoning,
-/// and input echoes never count as a message. Within it, the newest recognized
+/// and input echoes never count as a message. Claude's message stream is the
+/// exception: it is read whole, since only its `assistant` text and `result`
+/// frames are recognized. Within it, the newest recognized
 /// frame wins: an Orbit response envelope (returned verbatim), a `result`
 /// wrapper, or an `assistant` message's text blocks. Output that is not JSON
 /// at all is itself the message. The text is unbounded; callers bound it.
 pub fn latest_assistant_message(provider: &str, stdout: &[u8]) -> Option<String> {
-    let answer = project_cli_response(provider, stdout);
+    // [ORB-14696] Claude's answer projection keeps only the terminal `result`,
+    // which a running agent has not written yet; its assistant messages are
+    // the newest text until then.
+    let answer = if provider == "claude" {
+        Cow::Borrowed(stdout)
+    } else {
+        project_cli_response(provider, stdout)
+    };
     let text = String::from_utf8_lossy(answer.as_ref());
     let text = text.trim();
     if text.is_empty() {

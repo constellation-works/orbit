@@ -407,3 +407,39 @@ fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
         _ => None,
     }
 }
+
+/// Retention is deterministic, so it runs on a host whose default crew is
+/// disabled (a host with no provider CLI seeds every crew disabled) and
+/// records no crew for the run. A crew lookup still guards misconfiguration.
+#[test]
+fn retention_job_runs_when_the_default_crew_is_disabled() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[workflow]\ndefault_crew = \"parked\"\n\n[crews.parked]\nenabled = false\n\
+         provider = \"claude\"\nmodel = \"test-model\"\n",
+    )
+    .unwrap();
+
+    let completed = fixture.json(&["job", "run", "store_gc_pipeline", "--wait", "--json"]);
+    assert_eq!(completed["state"], "success", "{completed}");
+    let run_id = completed["run_id"].as_str().unwrap();
+    let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
+    assert!(
+        shown["run"].get("resolved_crew").is_none_or(Value::is_null),
+        "{shown}"
+    );
+
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[workflow]\ndefault_crew = \"missing\"\n",
+    )
+    .unwrap();
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["job", "run", "store_gc_pipeline", "--wait", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("crew 'missing' is not defined"));
+}
