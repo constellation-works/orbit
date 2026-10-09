@@ -26,10 +26,6 @@ pub struct RunSettlementsArgs {
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Report stored claim records as-is: skip recovery of an interrupted
     /// coordination commit, and fail instead while one is pending
     #[arg(long)]

@@ -106,9 +106,6 @@ pub struct AuditGcArgs {
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
 
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AuditGcArgs {
@@ -164,9 +161,6 @@ pub struct RunGcArgs {
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
 
-    /// Emit the complete report as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for RunGcArgs {
