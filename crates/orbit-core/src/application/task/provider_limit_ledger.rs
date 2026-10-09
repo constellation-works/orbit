@@ -48,7 +48,10 @@ pub(crate) fn ledger_observation(
     let partial = budget.unit == ProviderLimitBudgetUnit::Usd
         && in_window.iter().any(|entry| entry.cost_usd.is_none());
     let used_pct = |spent: f64| spent * 100.0 / budget.amount;
-    let spent: f64 = in_window.iter().map(|entry| amount_of(entry)).sum();
+    let spent = in_window
+        .iter()
+        .map(|entry| amount_of(entry))
+        .fold(0.0, |total, amount| total + amount);
     let used = used_pct(spent);
 
     // The reading stops gating once enough of the oldest spend ages out.

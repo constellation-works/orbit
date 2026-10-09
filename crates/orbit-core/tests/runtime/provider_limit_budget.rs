@@ -240,6 +240,43 @@ fn spend_below_the_threshold_gates_nothing() {
 }
 
 #[test]
+fn an_empty_budget_window_reports_positive_zero() {
+    if !isolated("provider_limit_budget::an_empty_budget_window_reports_positive_zero") {
+        return;
+    }
+    let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
+
+    let [reading] = fx.readings("grok").try_into().unwrap();
+    let used = reading.used_percent.unwrap();
+    assert_eq!(
+        used, 0.0,
+        "an empty ledger window has no spend: {reading:?}"
+    );
+    assert!(
+        used.is_sign_positive(),
+        "zero spend must not be negative zero: {reading:?}"
+    );
+    let description = reading.describe(Utc::now());
+    assert!(description.contains("0%"), "{description}");
+    assert!(!description.contains("-0%"), "{description}");
+
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let json_reading = readiness["provider_limits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == "grok")
+        .unwrap();
+    let json_used = json_reading["used_percent"].as_f64().unwrap();
+    assert_eq!(json_used, 0.0, "{json_reading}");
+    assert!(json_used.is_sign_positive(), "{json_reading}");
+    assert_eq!(json_reading["used_percent"].to_string(), "0.0");
+}
+
+#[test]
 fn a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest() {
     if !isolated(
         "provider_limit_budget::a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest",
