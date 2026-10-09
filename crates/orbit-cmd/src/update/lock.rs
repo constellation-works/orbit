@@ -45,12 +45,19 @@ impl UpdateLock {
                     path.display()
                 ))
             })?;
-        file.try_lock_exclusive().map_err(|_| {
-            OrbitError::Execution(format!(
-                "another orbit update is already running for '{}'; wait for it to finish, \
-                 then re-run `orbit update` (it is idempotent and will resume)",
-                install_dir.display()
-            ))
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                OrbitError::Execution(format!(
+                    "another orbit update is already running for '{}'; wait for it to finish, \
+                     then re-run `orbit update` (it is idempotent and will resume)",
+                    install_dir.display()
+                ))
+            } else {
+                OrbitError::Io(format!(
+                    "failed to acquire the update lock '{}': {error}",
+                    path.display()
+                ))
+            }
         })?;
         Ok(Self { file, path })
     }
