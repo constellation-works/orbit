@@ -3,11 +3,14 @@
 //!
 //! `sync_base` is the shipped `git_rebase` action, recovered by a substitute
 //! `pr_conflict_recovery` provider that resolves the conflict to the base's
-//! side, so the continued rebase drops the candidate's only pick. The job's
-//! `decide` final recovery and `handoff` failure activity are host stubs that
-//! record whether they ran. The neighbours keep the certified absorbed
-//! checkpoint but change what final recovery re-observes, and each must reach
-//! the agent with its typed refusal instead of settling.
+//! side. When the base already holds the candidate's content, the continued
+//! rebase drops every pick and the candidate settles as absorbed. When the
+//! base holds different content for the same path, the resolution discarded
+//! the candidate and the continuation is refused. The job's `decide` final
+//! recovery and `handoff` failure activity are host stubs that record
+//! whether they ran. The neighbours keep the certified absorbed checkpoint
+//! but change what final recovery re-observes, and each must reach the agent
+//! with its typed refusal instead of settling.
 
 use orbit_engine::{JobOutcome, V2SqliteSink, execute_job_with_resume};
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
@@ -66,7 +69,7 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
         module_path!(),
         "an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent",
         || {
-            let prepared = PreparedRebase::new("jrun-absorbed", "README.md", "README.md");
+            let prepared = absorbed_rebase("jrun-absorbed");
             let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
             stub_pipeline_steps(&host, &prepared);
 
@@ -140,9 +143,75 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
     );
 }
 
-/// The resolution keeps a candidate commit on the pin, but the base advanced
-/// with that same change meanwhile: following the tip drops the pick, and the
-/// candidate is certified absorbed on the tip it followed.
+/// The base changed the candidate's lines to different content, and the
+/// resolution took the base's side: the conflicting commit touched the
+/// candidate's path, but the base does not hold the candidate's change. The
+/// continuation is refused with its typed reason and the final-recovery agent
+/// decides, rather than the task settling as delivered by that commit.
+#[test]
+fn a_discarded_candidate_reaches_the_final_recovery_agent() {
+    isolated_in(
+        module_path!(),
+        "a_discarded_candidate_reaches_the_final_recovery_agent",
+        || {
+            let prepared = PreparedRebase::new("jrun-discarded", "README.md", "README.md");
+            let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
+            stub_pipeline_steps(&host, &prepared);
+            host.stub(
+                "decide",
+                Ok(json!({
+                    "decision": "escalate",
+                    "diagnosis": "the resolution discarded the candidate",
+                    "human_action": "restore the candidate's change",
+                })),
+            );
+
+            let run = execute(&host, &prepared, &pipeline(git_rebase_step()));
+
+            assert!(
+                run.result.is_err(),
+                "a discarded candidate does not complete"
+            );
+            assert!(host.checkpoints().is_empty(), "nothing is certified");
+            assert_eq!(run.recovery_attempts(), vec![false]);
+
+            let decided = host.stub_calls_of("decide");
+            let [input] = decided.as_slice() else {
+                panic!("the final recovery agent runs once, got {decided:#?}");
+            };
+            let attempts = input["step_recovery_attempts"]
+                .as_array()
+                .expect("step recovery evidence");
+            assert!(
+                attempts.iter().any(|attempt| attempt["phase"] == "recovery"
+                    && attempt["outcome"] == "failed"
+                    && attempt["error_message"]
+                        .as_str()
+                        .is_some_and(|message| message
+                            .contains("absorbed_candidate_refused: no_covering_commit"))),
+                "the agent reads the typed refusal: {input:#}"
+            );
+            assert!(
+                host.final_recovery_applications.lock().unwrap().iter().all(
+                    |application| !matches!(
+                        application.decision,
+                        FinalRecoveryDecision::CompleteNoDiff { .. }
+                    )
+                ),
+                "nothing settles as no-diff"
+            );
+            assert_eq!(
+                run.final_recovery(),
+                vec![("escalated".to_string(), Some("escalate".to_string()))]
+            );
+            assert_eq!(host.stub_calls_of("handoff").len(), 1);
+        },
+    );
+}
+
+/// The resolution keeps the candidate's commit on the pin, but the base
+/// advanced with that same content meanwhile: following the tip drops the
+/// pick, and the candidate is certified absorbed by the advanced commit.
 #[test]
 fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
     isolated_in(
@@ -150,9 +219,9 @@ fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
         "a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip",
         || {
             let prepared = PreparedRebase::new("jrun-advanced", "README.md", "README.md");
-            let host = resolving_host(&prepared, "printf 'resolved\\n' > README.md");
+            let host = resolving_host(&prepared, "printf 'candidate\\n' > README.md");
             let conflict = stopped_conflict(&prepared);
-            let advanced = commit_file(&prepared.fixture.repo, "README.md", "resolved\n");
+            let advanced = commit_file(&prepared.fixture.repo, "README.md", "candidate\n");
 
             let outcome = recover(
                 &host,
@@ -167,10 +236,7 @@ fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
             assert_eq!(checkpoint["target_base_sha"], prepared.target);
             assert_eq!(checkpoint["base_sha"], advanced);
             assert_eq!(checkpoint["head_sha"], advanced);
-            assert!(
-                checkpoint["absorbed"]["covering_commit"].is_string(),
-                "{checkpoint:#}"
-            );
+            assert_eq!(checkpoint["absorbed"]["covering_commit"], advanced);
             let retried = prepared
                 .rebase_on(&host, &prepared.prepared)
                 .expect_err("an absorbed candidate fails its step")
@@ -325,7 +391,7 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                 ),
             ];
             for (case, change, reason) in cases {
-                let prepared = PreparedRebase::new("jrun-neighbour", "README.md", "README.md");
+                let prepared = absorbed_rebase("jrun-neighbour");
                 let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
                 let conflict = stopped_conflict(&prepared);
                 let outcome = recover(
@@ -394,6 +460,17 @@ fn certified(host: &LifecycleHost) -> Value {
         .expect("a certified recovery")
         .2
         .clone()
+}
+
+/// A candidate the base genuinely absorbed: its first commit conflicts with
+/// the base's, and its second ends on the base's content. Resolving the
+/// conflict to the base's side leaves the candidate's final content in place.
+fn absorbed_rebase(run_id: &str) -> PreparedRebase {
+    PreparedRebase::with_commits(
+        run_id,
+        &[("README.md", "draft\n"), ("README.md", "target\n")],
+        &[("README.md", "target\n")],
+    )
 }
 
 /// `prepared`'s host, with a conflict-recovery provider that runs `body`.
