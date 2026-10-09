@@ -328,7 +328,10 @@ orbit tool run orbit.auto_task.update --input '{"name":"delivery-code-review","w
 Only the current settled failed/exhausted batch may be waived. The archived
 disposition removes its landings from threshold eligibility, retains the full
 code gap and never advances coverage. A later examination can still cover that
-code as neighboring context.
+code as neighboring context. The waiver is recorded before the response is built,
+so the command exits zero even when the definition's `required_tools` names a
+tool that is no longer registered; that problem is reported as a `warnings`
+entry, not a failure.
 
 ### Recovering a consumer stalled by a settings change [ORB-12295]
 

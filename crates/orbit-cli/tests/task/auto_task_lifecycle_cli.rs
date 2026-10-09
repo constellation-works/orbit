@@ -315,6 +315,129 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
 }
 
+#[test]
+fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
+    use chrono::Utc;
+    use orbit_core::application::automation::consumer_key;
+    use orbit_types::workflow::automation::{
+        BatchAttempt, BatchState, CoverageBatch, CoverageClass,
+    };
+
+    const UNREGISTERED: &str = "orbit.fixture_unregistered_tool";
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let name = definition.name.as_str();
+    let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+
+    // Name a tool the registry does not hold. The definition write is refused
+    // by the edit path, so the file is changed directly, as an operator would
+    // after a plugin was removed.
+    let shown = fixture.json(&["auto-task", "show", name, "--json"]);
+    let path = PathBuf::from(shown["definition_source"]["path"].as_str().unwrap());
+    let mut edited =
+        orbit_common::protocol::yaml::parse_auto_task_yaml(&fs::read_to_string(&path).unwrap())
+            .unwrap();
+    edited.template.required_tools.push(UNREGISTERED.into());
+    fs::write(&path, serde_yaml::to_string(&edited).unwrap()).unwrap();
+
+    // Settle a failed active batch: the only state a waiver can apply to. A
+    // real batch needs observed commits, so the consumer row is written
+    // directly, as the tick fixtures do.
+    let fail_active_batch = |batch_id: &str| {
+        let mut state = store.automation_state(&consumer).unwrap().unwrap();
+        state.active = Some(BatchAttempt {
+            batch: CoverageBatch {
+                schema_version: 1,
+                id: batch_id.into(),
+                consumer: consumer.clone(),
+                epoch: state.epoch.clone(),
+                repository: state.repository.clone(),
+                branch: "fixture-delivery".into(),
+                coverage: CoverageClass::LandedCodeReviewV1,
+                from_exclusive: state.baseline.clone(),
+                through_inclusive: state.observed.clone(),
+                commits: vec![],
+                deliveries: vec![],
+                exclusions: vec![],
+                created_at: Utc::now(),
+                max_attempts: 1,
+                retry_until: Utc::now(),
+            },
+            input_digest: format!("{batch_id}-input"),
+            attempt: 1,
+            action_key: format!("{batch_id}-action"),
+            action_id: None,
+            state: BatchState::Failed,
+            reason: Some("fixture failure".into()),
+            retry_after: None,
+            reissue: None,
+        });
+        let raw = serde_json::to_string(&state).unwrap();
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .with_transaction(|tx| {
+                tx.connection()
+                    .execute(
+                        "UPDATE automation_consumers SET state_json=?1 WHERE consumer=?2",
+                        [raw.as_str(), consumer.as_str()],
+                    )
+                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                Ok(())
+            })
+            .unwrap();
+    };
+    let assert_waived_with_warning = |output: &serde_json::Value, batch_id: &str| {
+        let warnings = output["warnings"]
+            .as_array()
+            .expect("the unregistered tool is reported as a warning");
+        assert!(
+            warnings.iter().any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains(UNREGISTERED))),
+            "{warnings:?}"
+        );
+        let waivers = store.automation_waivers(&consumer, 100).unwrap();
+        assert!(
+            waivers.iter().any(|waiver| waiver.batch_id == batch_id),
+            "the waiver is recorded even though the command reports a warning"
+        );
+    };
+
+    // CLI: the waiver exits zero and carries the tool problem as a warning.
+    fail_active_batch("fixture-failed-batch");
+    let cli = fixture.json(&[
+        "auto-task",
+        "update",
+        name,
+        "--waive-batch",
+        "fixture-failed-batch",
+        "--waiver-reason",
+        "Fixture waiver",
+        "--json",
+    ]);
+    assert_waived_with_warning(&cli, "fixture-failed-batch");
+
+    // MCP adapter, reached through the same tool host: same behaviour.
+    fail_active_batch("fixture-failed-batch-mcp");
+    let input = serde_json::json!({
+        "name": name,
+        "waive_batch": {"batch_id": "fixture-failed-batch-mcp", "reason": "Fixture waiver"},
+    });
+    let mcp = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.auto_task.update",
+        "--input",
+        &input.to_string(),
+        "--format",
+        "json",
+    ]);
+    assert_waived_with_warning(&mcp, "fixture-failed-batch-mcp");
+}
+
 /// Run one git command in the fixture repository, isolated from the caller's
 /// configuration, and return its trimmed stdout.
 pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {

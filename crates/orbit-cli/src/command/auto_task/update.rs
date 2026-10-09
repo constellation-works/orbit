@@ -130,6 +130,7 @@ impl Execute for AutoTaskUpdateArgs {
             None
         };
 
+        let waived = self.waive_batch.is_some();
         let definition = runtime.auto_task_update(
             &self.name,
             AutoTaskUpdateParams {
@@ -147,8 +148,7 @@ impl Execute for AutoTaskUpdateArgs {
             },
         )?;
 
-        let required_tool_warnings =
-            runtime.validate_required_tools(&definition.template.required_tools)?;
+        let required_tool_warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
         let mut document = definition_to_json(&definition);
         if !required_tool_warnings.is_empty()
             && let Some(object) = document.as_object_mut()

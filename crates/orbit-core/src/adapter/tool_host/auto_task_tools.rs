@@ -123,10 +123,11 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         template: parse_field(&input, "template", false)?,
         enabled: parse_field(&input, "enabled", false)?,
     };
+    let waived = params.waive_batch.is_some();
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
     response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
-    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    let warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
     if !warnings.is_empty()
         && let Some(object) = response.as_object_mut()
     {
