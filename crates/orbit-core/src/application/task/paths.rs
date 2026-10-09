@@ -566,14 +566,18 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
 
 pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
     let mut paths = std::collections::BTreeSet::new();
+    let is_wrapper = |ch: char| {
+        matches!(
+            ch,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
+        )
+    };
     for raw in text.split_whitespace() {
-        let trimmed = raw.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
-            )
-        });
-        let trimmed = trimmed.trim_end_matches(&['.', '!', '?'][..]);
+        // Sentence punctuation and closing wrappers interleave at the end of a
+        // token (`(see crates/a.rs).`), so strip them together, not in turn.
+        let trimmed = raw
+            .trim_start_matches(is_wrapper)
+            .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
         if let Some(path) = normalize_path_token(trimmed) {
             paths.insert(path);
         }

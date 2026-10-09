@@ -713,6 +713,35 @@ fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
     );
 }
 
+/// [ORB-14825] A path cited at the end of a parenthesised sentence
+/// (`(see src/cited.rs).`) is the existing file, not `src/cited.rs)`.
+#[test]
+fn lint_reads_a_path_closed_by_a_parenthesis_and_full_stop_as_the_file() {
+    let workspace = TestWorkspace::new();
+    fs::create_dir_all(workspace.work.join("src")).expect("create src");
+    fs::write(workspace.work.join("src/cited.rs"), "// cited\n").expect("write cited file");
+    let id = workspace.add_task("Cites a path inside parentheses");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--description",
+            "The closed case (in src/cited.rs). Also [src/cited.rs]!",
+        ],
+        "set description",
+    );
+
+    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
+    let findings = single["findings"].as_array().expect("findings");
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["check"] == json!("path_validity")),
+        "{single}"
+    );
+}
+
 #[test]
 fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     let ambient = TestWorkspace::new();
