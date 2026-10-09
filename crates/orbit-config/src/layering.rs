@@ -264,7 +264,7 @@ pub(crate) struct LoadedResolvedConfig {
 pub(crate) fn load_layered_resolved(
     roots: &ConfigRoots,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
-    load_layered_resolved_with_workspace(roots, None)
+    load_layered_resolved_with_staged(roots, None, None)
 }
 
 /// Admit an in-memory workspace edit against the current global layer before
@@ -282,14 +282,15 @@ pub(crate) fn validate_staged_workspace_document(
             redact_home_dir(&roots.global().join("config.toml").display().to_string())
         )));
     }
-    load_layered_resolved_with_workspace(roots, Some((workspace_path, raw)))
+    load_layered_resolved_with_staged(roots, None, Some((workspace_path, raw)))
         .map(|loaded| loaded.resolved)
 }
 
 /// Admit an in-memory global edit against the workspace layer it would be
-/// read with, for the one cross-layer rule a global-only validation cannot
-/// see: both review layers on [ORB-14932]. Without this a global
-/// `review.before_landing` set beside a workspace `review.before_pr` saves
+/// read with, through the same layered load a runtime performs. Every
+/// admission rule that spans both layers applies (both review layers on,
+/// resource-throttle resume against high, crews a workspace pool or
+/// `default_crew` names). Without this a global edit that is valid alone saves
 /// cleanly and leaves that workspace's config unloadable, including for the
 /// `config set` that would repair it.
 pub(crate) fn validate_staged_global_document(
@@ -300,9 +301,7 @@ pub(crate) fn validate_staged_global_document(
     if !roots.has_workspace_layer() {
         return Ok(());
     }
-    let global = parse_config_document(global_path, raw)?;
-    let workspace = read_config_document(&roots.workspace().join("config.toml"))?;
-    resolve_operation_layers(Some(&global), workspace.as_ref()).map(|_| ())
+    load_layered_resolved_with_staged(roots, Some((global_path, raw)), None).map(|_| ())
 }
 
 /// Resolve workspace file values with only crew definitions inherited from
@@ -336,11 +335,18 @@ pub(crate) fn resolve_workspace_file_document(
     )
 }
 
-fn load_layered_resolved_with_workspace(
+/// The layered load, with an in-memory global or workspace document standing
+/// in for the file it will be written to.
+fn load_layered_resolved_with_staged(
     roots: &ConfigRoots,
+    staged_global: Option<(&Path, &str)>,
     staged_workspace: Option<(&Path, &str)>,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
-    let global = read_config_document(&roots.global().join("config.toml"))?;
+    let global = if let Some((path, raw)) = staged_global {
+        Some(parse_config_document(path, raw)?)
+    } else {
+        read_config_document(&roots.global().join("config.toml"))?
+    };
     if let Some(global_document) = &global {
         reject_global_plugin_enablement(&global_document.value, &global_document.path)?;
     }

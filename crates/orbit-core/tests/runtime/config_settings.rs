@@ -145,6 +145,84 @@ fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
     );
 }
 
+#[test]
+fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
+    if !isolated(
+        "config_settings::global_writes_that_break_the_workspace_layered_load_are_refused_unchanged",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let global_config = "[workflow]\ndefault_crew = \"sol\"\n\n\
+                         [workflow.resource_throttle]\ncpu_resume_percent = 70\n\n\
+                         [crews.sol]\nprovider = \"claude\"\nmodel = \"sol-model\"\n\n\
+                         [crews.terra]\nprovider = \"codex\"\nmodel = \"terra-model\"\n";
+    std::fs::write(global.join("config.toml"), global_config).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow]\nmedium_complexity_crews = [\"terra\"]\n\n\
+         [workflow.resource_throttle]\ncpu_high_percent = 80\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let roots = orbit_config::ConfigRoots::new(&global, &workspace);
+    orbit_config::ResolvedConfig::load(&roots).expect("the layers load before any write");
+    let unchanged = || {
+        assert_eq!(
+            std::fs::read_to_string(global.join("config.toml")).unwrap(),
+            global_config,
+            "a refused global write leaves the file byte-identical"
+        );
+        orbit_config::ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+    };
+
+    // The resume value is valid in the global file alone, not beside the
+    // workspace's high.
+    let error = config::set_key(
+        &runtime,
+        "workflow.resource_throttle.cpu_resume_percent",
+        &json!(85),
+        ConfigScope::Global,
+        ConfigWriteInit::default(),
+    )
+    .expect_err("a cross-layer throttle conflict is refused")
+    .to_string();
+    assert!(
+        error.contains("cpu_resume_percent must be less than cpu_high_percent"),
+        "{error}"
+    );
+    unchanged();
+
+    // Removing or breaking a crew the workspace pool names.
+    config::delete_crew(&runtime, "terra", ConfigScope::Global)
+        .expect_err("a global crew the workspace default names cannot be deleted");
+    unchanged();
+    config::set_crew(
+        &runtime,
+        "terra",
+        &fields(json!({"provider": null})),
+        ConfigScope::Global,
+        ConfigWriteInit::default(),
+    )
+    .expect_err("clearing the provider breaks the crew the workspace names");
+    unchanged();
+
+    // A write that keeps the layers loadable still lands.
+    config::set_key(
+        &runtime,
+        "workflow.resource_throttle.cpu_resume_percent",
+        &json!(60),
+        ConfigScope::Global,
+        ConfigWriteInit::default(),
+    )
+    .expect("a compatible global write is admitted");
+    orbit_config::ResolvedConfig::load(&roots).expect("still loadable");
+}
+
 fn crew_named<'a>(crews: &'a [Value], name: &str) -> &'a Value {
     crews
         .iter()
