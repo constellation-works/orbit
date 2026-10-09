@@ -273,3 +273,25 @@ pub(crate) fn ensure_task_has_execution_plan(id: &str, plan: &str) -> Result<(),
 pub(crate) fn in_progress_transition_requires_plan(from_status: TaskStatus) -> bool {
     !matches!(from_status, TaskStatus::Backlog | TaskStatus::InProgress)
 }
+
+/// Whether a `blocked → in-progress` write closes out a rescued task rather
+/// than starting work on it [ORB-14931].
+///
+/// When a blocked task's work lands outside its run (a PR merged by hand),
+/// the operator walks it `blocked → in-progress → review → done`. That first
+/// step starts no run, so the footprint guard on starting work must not refuse
+/// it because another run holds a claim on the same files. The write says it is
+/// a close by carrying the `execution_summary` the close needs, and only an
+/// operator caller with no agent identity can make it: an agent or drain moving
+/// the same task still starts work and is refused on an overlapping claim.
+pub(crate) fn is_operator_rescue_close(
+    from: TaskStatus,
+    to: TaskStatus,
+    execution_summary: Option<&str>,
+    operator: bool,
+) -> bool {
+    operator
+        && from == TaskStatus::Blocked
+        && to == TaskStatus::InProgress
+        && execution_summary.is_some_and(|summary| !summary.trim().is_empty())
+}

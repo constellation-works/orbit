@@ -84,6 +84,35 @@ lock file alone does not prove a worker is alive. Follow
 [run-debugging.md](run-debugging.md) before process-level
 intervention, and never weaken protected-path policies to make a retry pass.
 
+## Close a rescued blocked task
+
+When a blocked task's work landed outside its run (its PR was merged by hand),
+close the task rather than rerunning it. First confirm that no run is live on
+it and that the merged commit meets its acceptance criteria. Then, as an
+operator in the owning workspace's checkout, run:
+
+```bash
+export ORBIT_OPERATOR=1
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","execution_summary":"<what landed: PR, commit, evidence>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"review"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"done"}'
+```
+
+The `execution_summary` on the `blocked → in-progress` write makes it a close
+rather than a start. No work starts, so another run's execution claim on the
+same files does not refuse the write, and you don't need `--force`. Add `plan`
+to that write if the task has none. Operator capability comes from an
+interactive terminal or `ORBIT_OPERATOR=1`; an `ssh host '<command>'`
+invocation has no terminal, so it needs the variable. Don't pass `model`,
+because naming an agent makes the write an agent's. Without the summary, from
+an agent, or without operator capability, the write starts work. While a
+claim overlaps, that start is refused with the claim's task and run named.
+
+The CLI subcommand also closes without `--force`: run
+`orbit task update <task-id> --status in-progress --execution-summary "<…>"`,
+then `--status review` and `--status done`. Keep `--force` for an edge the
+lifecycle refuses. It records an override in task history.
+
 ## A PR exists but completion failed
 
 Inspect the failed step and GitHub state independently. A `complete_pr` error

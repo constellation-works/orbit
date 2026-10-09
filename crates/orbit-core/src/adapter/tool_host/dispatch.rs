@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Everything the dispatch table knows about *who* is making this call.
 ///
@@ -177,6 +178,12 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
         OrbitBuiltinAction::TaskUpdate => {
+            // An operator is a caller holding operator capability and naming
+            // no agent identity; only such a caller can close out a rescued
+            // blocked task without starting work on it.
+            let operator = agent.is_none()
+                && model.is_none()
+                && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
             let written = super::task_tools::update(
                 runtime,
                 input,
@@ -184,6 +191,7 @@ pub(super) fn execute(
                 model,
                 reservation_owner,
                 runtime.artifact_origin(session_context),
+                operator,
             )?;
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)

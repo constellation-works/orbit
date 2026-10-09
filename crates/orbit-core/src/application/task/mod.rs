@@ -73,7 +73,7 @@ pub(crate) use validation_tools::positive_validation_tools;
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub(crate) use lifecycle::{
     ensure_completion_run_stopped, ensure_task_has_execution_plan,
-    in_progress_transition_requires_plan,
+    in_progress_transition_requires_plan, is_operator_rescue_close,
 };
 pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 pub(crate) use paths::{compute_task_add_warnings, context_workspace_root};
