@@ -29,6 +29,7 @@ mod host_fleet;
 mod host_registry;
 #[cfg(unix)]
 mod host_routing;
+mod init_force_identity;
 mod init_interactive_stdin;
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod init_linux_sandbox;

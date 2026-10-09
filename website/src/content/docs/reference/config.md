@@ -24,7 +24,10 @@ Three security keys never inherit from global once a workspace file exists:
 default. `orbit config show` labels every value with its source.
 
 `orbit init` seeds the global file. `orbit init --force` resets the global root
-first.
+first, including the machine identity. A reset creates a new machine ID;
+non-interactive resets require both `--machine-name` and `--task-prefix`.
+Missing non-interactive inputs or invalid supplied identity flags are refused
+before deleting the existing root.
 
 ```bash
 orbit config path              # the config.toml in effect

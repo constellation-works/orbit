@@ -4,7 +4,7 @@ Usage: orbit init [OPTIONS]
 
 Options:
       --force
-          Reset the global Orbit root (~/.orbit/) to shipped defaults before initialization, including executor sandbox settings
+          Reset the global Orbit root (~/.orbit/) to shipped defaults before initialization, including executor sandbox settings and the machine identity. Non-interactive resets require --machine-name and --task-prefix
 
       --root <ROOT>
           Override the Orbit root directory (highest precedence)
@@ -24,10 +24,10 @@ Options:
           Skip interactive prompts. config.toml is still seeded from detected agent surfaces, but a CI runner that pipes nothing into stdin will not hang
 
       --machine-name <MACHINE_NAME>
-          Operator-chosen display name for this machine. Used only when no identity exists yet (first init). Required with --non-interactive on a fresh machine; interactively, the OS hostname is the default
+          Operator-chosen display name for this machine. Used only when no identity exists yet or --force resets it. Required with --non-interactive on a fresh machine or reset; interactively, the OS hostname is the default
 
       --task-prefix <PREFIX>
-          Immutable task-id namespace for this machine (2-5 uppercase ASCII letters). Required on first init; reserved artifact namespaces cannot be chosen
+          Immutable task-id namespace for this machine (2-5 uppercase ASCII letters). Required on first init or with --force; reserved artifact namespaces cannot be chosen
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

@@ -28,7 +28,8 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 )]
 pub struct InitCommand {
     /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
-    /// initialization, including executor sandbox settings
+    /// initialization, including executor sandbox settings and the machine
+    /// identity. Non-interactive resets require --machine-name and --task-prefix
     #[arg(long)]
     pub force: bool,
 
@@ -54,14 +55,14 @@ pub struct InitCommand {
     pub non_interactive: bool,
 
     /// Operator-chosen display name for this machine. Used only when no
-    /// identity exists yet (first init). Required with --non-interactive on a
-    /// fresh machine; interactively, the OS hostname is the default.
+    /// identity exists yet or --force resets it. Required with --non-interactive
+    /// on a fresh machine or reset; interactively, the OS hostname is the default.
     #[arg(long)]
     pub machine_name: Option<String>,
 
     /// Immutable task-id namespace for this machine (2-5 uppercase ASCII
-    /// letters). Required on first init; reserved artifact namespaces cannot
-    /// be chosen.
+    /// letters). Required on first init or with --force; reserved artifact
+    /// namespaces cannot be chosen.
     #[arg(long, value_name = "PREFIX")]
     pub task_prefix: Option<String>,
 }
@@ -115,6 +116,7 @@ impl InitCommand {
         // [ORB-12112].
         reject_invalid_fresh_identity_inputs(
             root_override,
+            self.force,
             self.non_interactive,
             self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
@@ -197,8 +199,7 @@ fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
 /// a rejected or, under `--non-interactive`, missing value leaves no partial
 /// root [ORB-12112]) and again inside the identity-creation closure, which
 /// stays self-sufficient against a racing concurrent create. A present
-/// identity never reaches this function — both callers only consult it when
-/// the identity is confirmed absent.
+/// identity only reaches this function before a forced reset, which discards it.
 fn validate_fresh_identity_flags(
     non_interactive: bool,
     machine_name: Option<&str>,
@@ -214,7 +215,7 @@ fn validate_fresh_identity_flags(
         Some(name) => validate_machine_name(name.trim())?,
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "machine identity is absent; pass --machine-name and --task-prefix \
+                "a fresh machine identity requires --machine-name and --task-prefix \
                  to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
@@ -227,7 +228,7 @@ fn validate_fresh_identity_flags(
         }
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "machine identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
+                "a fresh machine identity requires --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
                  to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
@@ -239,20 +240,18 @@ fn validate_fresh_identity_flags(
 
 /// Reject a malformed, or under `--non-interactive` missing, `--machine-name`/
 /// `--task-prefix` before `orbit init` writes anything. These flags are only
-/// consulted when the machine identity is absent (a fresh create) — a present
-/// identity ignores them entirely, so this check is skipped on the idempotent
-/// re-init path, matching [`ensure_machine_identity_for_init`]'s own condition.
+/// consulted when the machine identity is absent or `--force` will discard it.
+/// An ordinary re-init preserves a present identity and ignores these flags.
 fn reject_invalid_fresh_identity_inputs(
     root_override: Option<&Path>,
+    force: bool,
     non_interactive: bool,
     machine_name: Option<&str>,
     task_prefix: Option<&str>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root(root_override)?;
-    if !matches!(
-        inspect_machine_identity(&global_root)?,
-        MachineIdentityState::Absent
-    ) {
+    let identity = inspect_machine_identity(&global_root)?;
+    if !force && !matches!(identity, MachineIdentityState::Absent) {
         return Ok(());
     }
     validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)?;
