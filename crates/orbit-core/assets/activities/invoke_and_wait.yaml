@@ -37,7 +37,9 @@ spec:
     withdrawn during the wait returns `skipped: true` with a non-success
     `status` and an `error` naming the task and its status, so a following
     release step still runs and `pipeline_success_guard` then fails the
-    parent. A task id that resolves to no task at all fails the activity.
+    parent. A task that keeps an admissible status but is refused by
+    admission (a pilot hold, a native-OS wait or an unreadable pilot receipt)
+    stops the same way, with the admission error as the `error`. A task id that resolves to no task at all fails the activity.
   input_schema_json:
     type: object
     required: [job_name, run_input]

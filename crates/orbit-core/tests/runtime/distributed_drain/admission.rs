@@ -1639,6 +1639,123 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
     }
 }
 
+/// A task that keeps an admissible status but is refused at dispatch (a pilot
+/// hold, or a pilot receipt that cannot be decoded) stops the gate as a failed
+/// child whose reason and audit record carry the admission error, never a
+/// claim that its status changed. A status that really left the admissible set
+/// still reports a withdrawal.
+#[test]
+fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
+    if !isolated(
+        module_path!(),
+        "a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change",
+    ) {
+        return;
+    }
+    let pair = Pair::new(3);
+    let owner = &pair.wire.owner;
+    let gate = |task: &str| {
+        owner
+            .run_deterministic(
+                "invoke_and_wait",
+                &json!({"run_id": "parent-run"}),
+                &json!({
+                    "job_name": "task_pr_pipeline",
+                    "run_input": {"task_ids": [task]},
+                    "admission_task_ids": [task],
+                    "admission_workflow": "worktree_setup",
+                    "timeout_seconds": 5,
+                }),
+                ToolContext::default(),
+            )
+            .expect("gate dispatch")
+    };
+    let audit_reason = |command: &str| {
+        let events = owner
+            .list_audit_events(None, None, None, None, 1000)
+            .expect("audit events");
+        let event = events
+            .iter()
+            .find(|event| event.command == command)
+            .unwrap_or_else(|| panic!("no {command} audit event"));
+        let payload: Value =
+            serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["outcome"], command.trim_start_matches("gate."));
+        payload["reason"].as_str().unwrap().to_string()
+    };
+
+    // A host-operational pilot hold recorded after the gate was admitted.
+    let held = pair.tasks[0].clone();
+    super::pilot::apply_assessment(
+        &pair,
+        "The owner-side repair is observable.",
+        json!({
+            "disposition": "host_operational", "context_files_after": [],
+            "evidence": "Only the operator can repair the owner-side definition.",
+        }),
+    );
+    let output = gate(&held);
+    assert_eq!(output["skipped"], true, "{output}");
+    assert_eq!(output["status"], "failed", "{output}");
+    let error = output["error"].as_str().unwrap();
+    assert!(
+        error.contains("Only the operator can repair the owner-side definition."),
+        "{output}"
+    );
+    assert!(!error.contains("no longer admissible"), "{output}");
+    assert!(!error.contains("status changed"), "{output}");
+    assert_eq!(output["task_statuses"][0]["status"], "backlog", "{output}");
+    assert!(
+        audit_reason("gate.admission_refused")
+            .contains("Only the operator can repair the owner-side definition.")
+    );
+
+    // A malformed pilot receipt is surfaced instead of discarded.
+    let malformed = pair.tasks[1].clone();
+    // The write persists the comment, then its own admission read refuses it.
+    let _ = owner.update_task_as_human(
+        &malformed,
+        orbit_core::application::task::TaskUpdateParams {
+            comment: Some("operation_id=fixture\n{not json".into()),
+            ..Default::default()
+        },
+        "task-pilot".into(),
+    );
+    assert_eq!(
+        owner.get_task_comments(&malformed).unwrap().len(),
+        1,
+        "the malformed receipt must be recorded"
+    );
+    let output = gate(&malformed);
+    assert_eq!(output["status"], "failed", "{output}");
+    let error = output["error"].as_str().unwrap();
+    assert!(error.contains("decode pilot assessment"), "{output}");
+    assert!(!error.contains("no longer admissible"), "{output}");
+
+    // A task a human moved out of the admissible set is still a withdrawal.
+    let withdrawn = pair.tasks[2].clone();
+    owner
+        .update_task_as_human(
+            &withdrawn,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Someday),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let output = gate(&withdrawn);
+    assert_eq!(output["status"], "failed", "{output}");
+    assert!(
+        output["error"]
+            .as_str()
+            .unwrap()
+            .contains("no longer admissible"),
+        "{output}"
+    );
+    assert!(audit_reason("gate.withdrawn").contains("someday"));
+}
+
 /// Ask `owner`'s probe, as the routed follower does, whether a pull with
 /// `caller_before_pr` would be admitted.
 fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
