@@ -4,7 +4,7 @@ summary: Open causes of Orbit task-run failures and blocks, one entry per distin
 incident_date: 2026-09-27
 last_validated: 2026-10-09
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/activity_job/job_executor/recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-store/src/driver/sqlite/job_run_store/queries.rs", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/activity_job/job_executor/recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs", "crates/orbit-exec/src/macos_sandbox/**"]
 related_artifacts:
   - ORB-14722
   - ORB-14727
@@ -14,6 +14,7 @@ related_artifacts:
   - ORB-14812
   - ORB-14822
   - ORB-14827
+  - ORB-14828
   - ORB-14837
 ---
 
@@ -38,6 +39,25 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
+
+## 2026-10-09: The code disagrees on whether a singular `task_id` binds a run to a task
+
+- **Where:** Owner `task_pr_pipeline`, `implement_bundle` step.
+- **Symptom:** The implementer stopped with `contradictory_requirements`
+  (`jrun-20261009-0244-c3`). The store filter, the `JobRunQuery::task_id`
+  contract and the `run_history` test treat only the `task_ids` array as
+  ownership. The run projection, resume, step recovery and crew resolution also
+  read the singular `task_id`.
+- **Cause:** The two readings grew apart in the code. The QA-sweep task offered
+  both fixes ("match `$.task_id` too, or drop it from the projection") without
+  choosing one, and the agent rightly declined to choose. `blocked_task_recovery_pipeline`
+  and `review_evidence_fulfilment_pipeline` submit the singular key, so
+  `run history --task` hides those runs.
+- **Fix:** ORB-14828 (open). The operator decided that the singular `task_id` is a
+  binding and wrote that into the task. The store filter matches it.
+- **Tasks:** ORB-14828.
+- **Final recovery:** none. The agent blocked itself, the operator recorded the
+  decision, and the run was resumed as `jrun-20261009-0317-t1`.
 
 ## 2026-10-09: A finished review batch without an execution summary fails the no-diff guard
 
@@ -104,6 +124,12 @@ entries.
 
 ## Operational causes (no code defect)
 
+- **A task that offers alternative fixes without choosing one.** An implementer
+  that meets two fixes in the description, where the code supports both,
+  blocks with `contradictory_requirements` instead of guessing (ORB-14828).
+  Whoever files the task, a QA sweep included, names the chosen fix. When a
+  task blocks this way, the operator writes the decision into its description,
+  then resumes the run.
 - **Stale follower binary.** Follower-side fixes only take effect after the
   follower binary is rebuilt from `agent-main`. A leaf that fails for an already
   fixed cause usually means an old binary.
