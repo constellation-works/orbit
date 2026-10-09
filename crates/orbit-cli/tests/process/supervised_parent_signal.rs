@@ -4,7 +4,9 @@
 //! `SignalHandlerGuard` intercepts those signals so the child's process group
 //! can be torn down. After the last waiter restores the previous disposition
 //! it re-raises, so `orbit mcp listen` (SIG_DFL) and an interactive CLI
-//! (SIGINT) still exit instead of running forever.
+//! (SIGINT) still exit instead of running forever. The listener test calls an
+//! advertised exec plugin because the TCP listener has agent authority only;
+//! the operator-only `orbit_command_exec` cannot run on that transport.
 
 #![allow(missing_docs)]
 #![cfg(unix)]
@@ -116,8 +118,9 @@ impl Fixture {
 }
 
 #[test]
-fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
+fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
     let fixture = Fixture::init();
+    install_signal_plugin(&fixture);
     let addr = free_loopback_addr();
     let mut server = spawn_mcp_listen(&fixture, addr);
     wait_for_listening(&mut server, addr);
@@ -130,7 +133,6 @@ fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
     let mut writer = stream;
     mcp_initialize(&mut writer, &mut reader, &fixture.work);
 
-    let marker = fixture.work.join("listen.ready");
     send_rpc(
         &mut writer,
         &json!({
@@ -143,57 +145,157 @@ fn mcp_listen_exits_on_sigterm_while_proc_spawn_runs() {
     let tools = listed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list failed: {listed}"));
-    let proc_tool = tools.iter().find_map(|tool| {
-        tool["name"]
-            .as_str()
-            .filter(|name| matches!(*name, "proc.spawn" | "proc_spawn"))
-    });
-    // Choose the actual advertised surface, rather than waiting for a marker
-    // from two unadvertised calls. The CLI route exercises the same
-    // SignalHandlerGuard when proc.spawn is only a CLI/activity tool.
-    let mut cli_child = if let Some(name) = proc_tool {
-        send_rpc(
-            &mut writer,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": { "name": name, "arguments": proc_spawn_input(&marker) }
-            }),
-        );
-        wait_for_marker(&mut server, &marker);
-        None
-    } else {
-        drop(writer);
-        drop(reader);
-        Some(spawn_cli_proc_spawn(&fixture, &marker))
-    };
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "signalfixture_wait"),
+        "the supervising plugin tool must be advertised: {listed}"
+    );
+    if !orbit_exec::macos_sandbox_test_guard("mcp_listen_exits_on_sigterm_while_plugin_child_runs")
+    {
+        return;
+    }
+    send_rpc(
+        &mut writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": { "name": "signalfixture_wait", "arguments": {} }
+        }),
+    );
+    // Only this in-flight MCP call can create the marker. Keep its connection
+    // open, and verify the backend PID is live before signalling its parent.
+    let marker = fixture.work.join("markers/listen.ready");
+    let backend = wait_for_backend_pid(&mut server, &marker);
+    assert!(process_is_live(backend.0), "plugin child must be live");
 
     let before = Instant::now();
-    if let Some(child) = cli_child.as_mut() {
-        send_signal(child, libc::SIGTERM);
-        let status = wait_with_deadline(child, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
-            panic!("orbit tool run proc.spawn did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM")
-        });
-        assert_signaled_or_nonzero(&status, libc::SIGTERM);
-        send_signal(&server, libc::SIGTERM);
-        let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE)
-            .expect("orbit mcp listen must also exit after SIGTERM");
-        assert_signaled_or_nonzero(&status, libc::SIGTERM);
-    } else {
-        send_signal(&server, libc::SIGTERM);
-        let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
-            panic!(
-                "orbit mcp listen did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM \
-                 while supervising proc.spawn"
-            )
-        });
-        assert_signaled_or_nonzero(&status, libc::SIGTERM);
-    }
+    send_signal(&server, libc::SIGTERM);
+    let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
+        panic!(
+            "orbit mcp listen did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM \
+             while supervising a plugin tools/call"
+        )
+    });
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGTERM),
+        "listener must restore the SIGTERM disposition, got {status:?}"
+    );
     assert!(
         before.elapsed() < SHUTDOWN_DEADLINE,
         "SIGTERM shutdown took {:?}",
         before.elapsed()
+    );
+    let deadline = Instant::now() + SHUTDOWN_DEADLINE;
+    while process_is_live(backend.0) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !process_is_live(backend.0),
+        "supervised plugin child {} survived listener shutdown",
+        backend.0
+    );
+}
+
+/// An owned backend PID, including panic cleanup if the listener regresses.
+struct BackendGuard(libc::pid_t);
+
+impl Drop for BackendGuard {
+    fn drop(&mut self) {
+        if process_is_live(self.0) {
+            // Safety: the fixture backend wrote its own PID, and is still live.
+            let _ = unsafe { libc::kill(self.0, libc::SIGKILL) };
+        }
+    }
+}
+
+fn process_is_live(pid: libc::pid_t) -> bool {
+    // Safety: signal 0 probes the fixture PID without delivering a signal.
+    let rc = unsafe { libc::kill(pid, 0) };
+    if rc == 0 {
+        return true;
+    }
+    let error = std::io::Error::last_os_error();
+    assert_eq!(
+        error.raw_os_error(),
+        Some(libc::ESRCH),
+        "probe PID {pid}: {error}"
+    );
+    false
+}
+
+fn wait_for_backend_pid(server: &mut Child, marker: &Path) -> BackendGuard {
+    let deadline = Instant::now() + STARTUP_DEADLINE;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(marker)
+            && let Ok(pid) = contents.trim().parse::<libc::pid_t>()
+        {
+            assert!(pid > 0, "backend marker must contain a positive PID");
+            return BackendGuard(pid);
+        }
+        if server.try_wait().expect("poll listener").is_some() || Instant::now() >= deadline {
+            fail_startup(server, "MCP plugin call did not write its live child PID");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn install_signal_plugin(fixture: &Fixture) {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Install solely into the disposable HOME, outside the fixture checkout.
+    // This uses the real advertised plugin surface and its normal sandbox
+    // grants without changing the listener's agent-only authority. The tool
+    // only waits; its readiness marker is fixture instrumentation.
+    let source = fixture.home.join("plugin-source/.orbit-plugin");
+    std::fs::create_dir_all(source.join("bin")).expect("create plugin source");
+    let backend = source.join("bin/wait.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$ORBIT_WORKSPACE_ROOT/markers/listen.ready\"\nexec /bin/sleep 120\n",
+    )
+    .expect("write plugin backend");
+    std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+        .expect("make plugin executable");
+    std::fs::write(
+        source.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: signalfixture
+  version: 0.1.0
+  description: Long-lived supervised signal fixture.
+spec:
+  permissions:
+    fs:
+      write: ['{{workspace}}/markers']
+  backend:
+    type: exec
+    command: bin/wait.sh
+    timeout_ms: 120000
+  tools:
+    - name: wait
+      description: Wait for the parent signal.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema:
+        type: object
+"#,
+    )
+    .expect("write plugin manifest");
+    let output = orbit_command(&fixture.work, &fixture.home)
+        .args(["plugin", "add"])
+        .arg(&source)
+        .args(["--enable", "--grant", "fs={{workspace}}/markers"])
+        .output()
+        .expect("install signal plugin");
+    assert!(
+        output.status.success(),
+        "plugin install failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
