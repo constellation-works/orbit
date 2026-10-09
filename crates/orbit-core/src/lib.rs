@@ -127,7 +127,8 @@ pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
 pub use application::auto_tasks::{
-    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskUpdateParams,
+    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskTemplatePatch,
+    AutoTaskUpdateParams,
 };
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};

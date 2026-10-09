@@ -61,6 +61,91 @@ fn auto_task_doctor_row(fixture: &Fixture) -> Value {
 }
 
 #[test]
+fn template_flags_preserve_unnamed_fields_and_full_tool_templates_still_replace() {
+    let fixture = Fixture::new();
+    let added = fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "field-patch",
+        "--every-minutes",
+        "60",
+        "--title",
+        "Original title",
+        "--body",
+        "Retained body",
+        "--criterion",
+        "Retain unnamed fields",
+        "--type",
+        "chore",
+        "--tag",
+        "retained-tag",
+        "--required-tools",
+        "orbit.task.show",
+        "--complexity",
+        "low",
+        "--crew",
+        "opus",
+        "--status",
+        "backlog",
+        "--json",
+    ]);
+    let mut expected = added["template"].clone();
+    expected["title"] = Value::String("Updated title".into());
+    let title = fixture.json(&[
+        "auto-task",
+        "update",
+        "field-patch",
+        "--title",
+        "Updated title",
+        "--json",
+    ]);
+    assert_eq!(title["template"], expected);
+
+    expected["priority"] = Value::String("high".into());
+    let priority = fixture.json(&[
+        "auto-task",
+        "update",
+        "field-patch",
+        "--priority",
+        "high",
+        "--json",
+    ]);
+    assert_eq!(priority["template"], expected);
+    let shown = fixture.json(&["auto-task", "show", "field-patch", "--json"]);
+    assert_eq!(shown["template"], expected);
+
+    // An explicitly empty required-tools flag clears it without changing the
+    // remaining fields. Whole-template tool input retains its older contract.
+    expected.as_object_mut().unwrap().remove("required_tools");
+    let cleared = fixture.json(&[
+        "auto-task",
+        "update",
+        "field-patch",
+        "--required-tools",
+        "",
+        "--json",
+    ]);
+    assert_eq!(cleared["template"], expected);
+    let replaced = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.auto_task.update",
+        "--input",
+        r#"{"name":"field-patch","template":{"title":"Replacement title"}}"#,
+        "--json",
+    ]);
+    let template = &replaced["template"];
+    assert_eq!(template["title"], "Replacement title");
+    assert_eq!(template["description"], "");
+    assert_eq!(template["acceptance_criteria"], serde_json::json!([]));
+    assert_eq!(template["tags"], serde_json::json!([]));
+    assert_eq!(template["priority"], "medium");
+    assert!(template["crew"].is_null());
+    assert!(template["complexity"].is_null());
+}
+
+#[test]
 fn bundled_auto_task_settings_stay_outside_the_body_and_survive_a_body_refresh() {
     let fixture = Fixture::new();
     let path = definition_path(&fixture, "security-review");

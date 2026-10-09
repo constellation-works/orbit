@@ -120,7 +120,9 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         description: optional_str(&input, "description"),
         schedule: parse_field(&input, "schedule", false)?,
         dedupe: parse_field(&input, "dedupe", false)?,
-        template: parse_field(&input, "template", false)?,
+        // The tool's template object is a full replacement, including defaults
+        // for omitted fields. CLI flags use a field-scoped patch instead.
+        template: parse_field::<AutoTaskTemplate>(&input, "template", false)?.map(Into::into),
         enabled: parse_field(&input, "enabled", false)?,
     };
     let waived = params.waive_batch.is_some();
