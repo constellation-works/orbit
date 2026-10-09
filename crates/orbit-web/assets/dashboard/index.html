@@ -44,6 +44,7 @@
           <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
+              <button class="subtab" data-subtab="doctor" type="button">Doctor</button>
               <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
               <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
@@ -283,6 +284,23 @@
             </div>
           </section>
         </div>
+      </main>
+      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
+           host. Read-only: the panel runs the checks on open and on Refresh,
+           and offers each remediation's commands to copy; repairs stay CLI. -->
+      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="doctor-panel">
+          <header>
+            <span>Doctor</span>
+            <span class="count" id="doctor-count">-</span>
+          </header>
+          <div class="scoreboard-controls" id="doctor-controls">
+            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
+            <span class="scoreboard-controls-spacer"></span>
+            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
+          </div>
+          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
+        </section>
       </main>
       <!-- ORB-10588: pipeline reliability. Like the scoreboard it replaces the
            two-column diagnostics layout with its own full-width <main>. Every

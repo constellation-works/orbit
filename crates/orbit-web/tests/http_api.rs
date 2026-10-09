@@ -9,6 +9,8 @@ mod auto_tasks;
 mod automation;
 #[path = "http_api/diagnostics_errors.rs"]
 mod diagnostics_errors;
+#[path = "http_api/doctor.rs"]
+mod doctor;
 #[path = "http_api/guards.rs"]
 mod guards;
 #[path = "http_api/host.rs"]

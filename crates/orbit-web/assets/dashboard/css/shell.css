@@ -105,6 +105,7 @@
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--fg-mute);
+  white-space: nowrap;
 }
 .rail-count.alert {
   color: var(--danger-fg);

@@ -14,6 +14,7 @@
 mod api;
 mod assets;
 mod connect;
+mod doctor_report;
 mod health;
 mod heap;
 mod host_tunnels;

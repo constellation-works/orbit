@@ -2,13 +2,10 @@ use clap::{Args, Subcommand};
 use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
 };
-use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
-use crate::command::doctor_permissions::state_directory_permissions_row;
-use crate::command::mcp::registered_clients_for_workspace;
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
 
@@ -216,47 +213,7 @@ impl Execute for DoctorCommand {
                 remediation: None,
             });
         }
-        results.extend(runtime.doctor_workspace_with_depth(self.deep)?);
-        results.push(WorkspaceDoctorResult::timed(|| {
-            state_directory_permissions_row(runtime)
-        }));
-        results.extend(WorkspaceDoctorResult::timed_many(|| {
-            routed_provider_rows(runtime)
-        }));
-        results.extend(WorkspaceDoctorResult::timed_many(|| {
-            match runtime.active_pull_auth_exclusions() {
-                Ok(exclusions) => exclusions
-                    .into_iter()
-                    .map(|exclusion| WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name: format!("provider-auth:{}", exclusion.provider),
-                        status: WorkspaceDoctorStatus::Warning,
-                        message: exclusion.describe(),
-                        remediation: Some(exclusion.relogin_hint),
-                    })
-                    .collect(),
-                Err(error) => vec![WorkspaceDoctorResult {
-                    duration_ms: 0,
-                    check_name: "provider-auth".into(),
-                    status: WorkspaceDoctorStatus::Warning,
-                    message: format!(
-                        "could not inspect active drain authentication exclusions: {error}"
-                    ),
-                    remediation: Some("Inspect the drain with `orbit run show`.".into()),
-                }],
-            }
-        }));
-        results.push(WorkspaceDoctorResult::timed(|| {
-            mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
-        }));
-        // Machine-global checks belong to the CLI, which assembles MCP and cmd surfaces.
-        results.extend(WorkspaceDoctorResult::timed_many(caller_authorization_rows));
-        results.push(WorkspaceDoctorResult::timed(|| {
-            clock_unit_row(&runtime.global_root())
-        }));
-        results.push(WorkspaceDoctorResult::timed(|| {
-            orbit_cmd::hosts::doctor_hosts_row(&runtime.global_root())
-        }));
+        results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
         let failures = results
             .iter()
             .filter(|row| row.status == WorkspaceDoctorStatus::Error)
@@ -266,7 +223,10 @@ impl Execute for DoctorCommand {
             .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
             .count();
 
-        let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
+        let values = results
+            .iter()
+            .map(orbit_cmd::doctor_row_json)
+            .collect::<Vec<_>>();
         let mut blocks = Vec::new();
         {
             use crate::output::table::{Column, Table};
@@ -327,178 +287,6 @@ fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) ->
         failed.join(", "),
         if warnings == 1 { "warning" } else { "warnings" },
     )
-}
-
-/// Check only crews that normal workflow routing can select. A disabled crew
-/// is never drawn, so a missing CLI or executor for it is not a readiness
-/// failure; a disabled default or system lane is reported separately as a
-/// config warning. Provider auth is deliberately not probed: a status command
-/// may refresh credentials or call the network, while `doctor` must stay fast
-/// and read-only.
-fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    use std::collections::BTreeSet;
-
-    let config = match ResolvedConfig::load(&ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    )) {
-        Ok(config) => config,
-        Err(error) => {
-            return vec![WorkspaceDoctorResult {
-                duration_ms: 0,
-                check_name: "provider-routing".to_string(),
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("cannot inspect effective crew routing: {error}"),
-                remediation: Some(
-                    "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
-                ),
-            }];
-        }
-    };
-
-    let mut names = BTreeSet::new();
-    if let Some(name) = &config.default_crew
-        && routing_selects_crew(&config, name)
-    {
-        names.insert(name.clone());
-    }
-    if routing_selects_crew(&config, &config.system_crew) {
-        names.insert(config.system_crew.clone());
-    }
-    for (complexity, entries) in [
-        ("low", &config.complexity_crews.low),
-        ("medium", &config.complexity_crews.medium),
-        ("hard", &config.complexity_crews.hard),
-        ("xhard", &config.complexity_crews.xhard),
-    ] {
-        if let Some(entries) = entries {
-            match canonical_crew_pool(
-                entries,
-                &config.crews,
-                &format!("workflow.{complexity}_complexity_crews"),
-            ) {
-                Ok(pool) => names.extend(
-                    pool.entries
-                        .into_iter()
-                        .filter(|entry| {
-                            entry.weight > 0 && routing_selects_crew(&config, &entry.name)
-                        })
-                        .map(|entry| entry.name),
-                ),
-                Err(error) => {
-                    return vec![WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name: "provider-routing".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!("cannot inspect {complexity} crew pool: {error}"),
-                        remediation: Some(
-                            "Repair the config reported by `orbit doctor`, then rerun it."
-                                .to_string(),
-                        ),
-                    }];
-                }
-            }
-        }
-    }
-
-    names.into_iter().map(|name| {
-        let check_name = format!("provider:{name}");
-        let Some(crew) = config.crews.get(&name) else {
-            return WorkspaceDoctorResult {
-                duration_ms: 0,
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("routed crew '{name}' is not configured"),
-                remediation: Some(format!("Define crew '{name}' in config.toml or change workflow routing.")),
-            };
-        };
-        let provider = &crew.assignment.provider;
-        match runtime.get_executor_def(provider) {
-            Ok(Some(def)) => match def.command.as_deref() {
-                Some(program) => match runtime.locate_provider_launcher(program) {
-                    Some(path) => WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name,
-                        status: WorkspaceDoctorStatus::Ok,
-                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{}' found at {} (authentication not checked)", program, path.display()),
-                        remediation: None,
-                    },
-                    None => WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name,
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{program}' was not found"),
-                        remediation: Some(format!("Install the '{program}' CLI or change crew '{name}' to an available provider.")),
-                    },
-                },
-                None => WorkspaceDoctorResult {
-                    duration_ms: 0,
-                    check_name,
-                    status: WorkspaceDoctorStatus::Skipped,
-                    message: format!("crew '{name}' uses provider '{provider}', which has no CLI command"),
-                    remediation: None,
-                },
-            },
-            Ok(None) => WorkspaceDoctorResult {
-                duration_ms: 0,
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("crew '{name}' uses provider '{provider}', but no executor definition exists"),
-                remediation: Some(format!("Restore the '{provider}' executor definition or change crew '{name}'.")),
-            },
-            Err(error) => WorkspaceDoctorResult {
-                duration_ms: 0,
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("cannot inspect provider '{provider}' for crew '{name}': {error}"),
-                remediation: Some("Repair executor storage, then rerun `orbit doctor`.".to_string()),
-            },
-        }
-    }).collect()
-}
-
-/// Provider readiness follows dispatch. A disabled crew is omitted. A name
-/// absent from the registry stays included so the probe can report it missing.
-fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
-    match config.crews.get(name) {
-        Some(crew) => crew.enabled,
-        None => true,
-    }
-}
-
-fn mcp_registration_row(
-    runtime: &OrbitRuntime,
-    home_dir: Option<&std::path::Path>,
-) -> WorkspaceDoctorResult {
-    let workspace_id = runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .or_else(|| runtime.workspace_id().ok());
-    let clients = registered_clients_for_workspace(
-        &runtime.paths().repo_root,
-        workspace_id.as_deref(),
-        home_dir,
-    );
-    if clients.is_empty() {
-        WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "mcp-registration".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: "no Orbit MCP client registration found for this workspace".to_string(),
-            remediation: Some("Run `orbit mcp init --auto` in this workspace, or configure a client with `orbit mcp init --client <client>`.".to_string()),
-        }
-    } else {
-        WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "mcp-registration".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: format!(
-                "Orbit MCP registered in: {} (connection not checked)",
-                clients.join(", ")
-            ),
-            remediation: None,
-        }
-    }
 }
 
 /// `orbit doctor fs-access`: the active policy's read and modify verdicts for
@@ -622,106 +410,6 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
     Ok(Payload::list(values, table).into())
 }
 
-/// Whether this machine still carries retired destination-side MCP caller
-/// authorization files [ORB-12564].
-///
-/// One row, and never an error. The files grant and refuse nothing now: an SSH
-/// login to this machine is ownership of it, so a session served over SSH holds
-/// the authority its argv asks for, exactly as a local one does. What is worth
-/// saying is that a ceiling an operator wrote is inert, because the operator
-/// who wrote it has no other way to find out.
-fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
-    let Ok(home) = orbit_common::fs::path::home_dir() else {
-        return Vec::new();
-    };
-    let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
-    if ignored.is_empty() {
-        return vec![WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: "no retired MCP caller-authorization files; a session served over SSH \
-                      holds the authority its argv asks for"
-                .to_string(),
-            remediation: None,
-        }];
-    }
-    let paths = ignored
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    vec![WorkspaceDoctorResult {
-        duration_ms: 0,
-        check_name: "mcp-callers".to_string(),
-        status: WorkspaceDoctorStatus::Warning,
-        message: format!(
-            "left over from destination-side caller authorization and ignored, capping no \
-             remote MCP session: {}",
-            paths.join(", ")
-        ),
-        remediation: Some(format!(
-            "Delete it: `rm -r {}`. To deny a caller, remove its key from \
-             `~/.ssh/authorized_keys` — that is the only boundary this machine ever had.",
-            paths.join(" ")
-        )),
-    }]
-}
-
-/// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
-fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
-    match orbit_core::application::routines::inspect_clock_unit() {
-        Ok(inspection) => {
-            let mut row = clock_unit_row_from_inspection(&inspection);
-            if !matches!(
-                inspection.verdict,
-                orbit_core::application::routines::ClockUnitVerdict::NoUnitInstalled
-            ) && let Ok(status) = orbit_core::application::routines::clock_status(global_root)
-                && let Some(issue) = status.health_issue
-            {
-                if row.status != WorkspaceDoctorStatus::Error {
-                    row.status = WorkspaceDoctorStatus::Warning;
-                }
-                row.message.push_str(&format!("; {issue}"));
-                row.remediation = Some("Inspect `orbit clock status` and the sweep service log, then run `orbit clock repair`.".into());
-            }
-            row
-        }
-        Err(error) => WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "clock-unit".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!("could not inspect the sweep clock unit: {error}"),
-            remediation: Some(
-                "Fix the home-directory or unit-file error named above, then rerun `orbit doctor`."
-                    .to_string(),
-            ),
-        },
-    }
-}
-
-pub(super) fn clock_unit_row_from_inspection(
-    inspection: &orbit_core::application::routines::ClockUnitInspection,
-) -> WorkspaceDoctorResult {
-    use orbit_core::application::routines::ClockUnitVerdict;
-
-    let status = match inspection.verdict {
-        ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
-        ClockUnitVerdict::NoUnitInstalled => WorkspaceDoctorStatus::Skipped,
-        ClockUnitVerdict::PathMismatch
-        | ClockUnitVerdict::InvocationMismatch
-        | ClockUnitVerdict::SafetyMismatch { .. }
-        | ClockUnitVerdict::Unrunnable { .. } => WorkspaceDoctorStatus::Warning,
-        ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
-    };
-    WorkspaceDoctorResult {
-        duration_ms: 0,
-        check_name: "clock-unit".to_string(),
-        status,
-        message: inspection.doctor_message(),
-        remediation: inspection.doctor_remediation(),
-    }
-}
-
 fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
     match status {
         WorkspaceDoctorStatus::Ok => "ok",
@@ -793,19 +481,4 @@ fn human_detail(row: &WorkspaceDoctorResult) -> String {
         detail.push_str(&format!(" ({:.2} s)", row.duration_ms as f64 / 1000.0));
     }
     detail
-}
-
-pub(crate) fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
-    json!({
-        "check": row.check_name,
-        "duration_ms": row.duration_ms,
-        "status": match row.status {
-            WorkspaceDoctorStatus::Ok => "ok",
-            WorkspaceDoctorStatus::Warning => "warning",
-            WorkspaceDoctorStatus::Error => "error",
-            WorkspaceDoctorStatus::Skipped => "skipped",
-        },
-        "message": row.message,
-        "remediation": row.remediation,
-    })
 }

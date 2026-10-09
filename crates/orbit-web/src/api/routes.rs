@@ -163,6 +163,9 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
+        // `orbit doctor` for the selected workspace: read-only, on demand and
+        // cached [ORB-14830]. GET only; repairs stay on the CLI.
+        .route("/doctor", get(doctor::doctor))
         // Installed plugins and their declared panels [§4.7]. Panel reads
         // remain safe for every session; operator-only enable/disable writes
         // preserve recorded consent. Install and grant decisions stay on CLI.

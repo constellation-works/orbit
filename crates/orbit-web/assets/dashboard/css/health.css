@@ -224,3 +224,58 @@ td .rel-rate { font-size: 12px; }
 #diag-implement-one-body .card-body { overflow-x: auto; }
 .diag-table td.c-target { overflow-wrap: anywhere; }
 .diag-table td.c-recovered { color: var(--state-success); white-space: normal; }
+
+/* Health › Doctor [ORB-14830]: one row per `orbit doctor` check. Problems
+   lead with their full message and remediation; passing and skipped checks
+   fold into a disclosure below them. Status words are spelled out, so the
+   colour only reinforces what the text says. */
+.doctor-body { overflow-y: auto; background: var(--bg); }
+.doctor-meta { overflow-wrap: anywhere; }
+.doctor-list { display: flex; flex-direction: column; }
+.doctor-row {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--fg-dim);
+}
+.doctor-row.error { border-left-color: var(--state-error); }
+.doctor-row.warning { border-left-color: var(--state-pending); }
+.doctor-row.ok { border-left-color: var(--state-success); }
+.doctor-row.skipped { border-left-color: var(--state-disabled); }
+.doctor-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.doctor-status {
+  min-width: 7ch; font: 600 10px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim);
+}
+.doctor-status.error { color: var(--state-error); }
+.doctor-status.warning { color: var(--state-pending); }
+.doctor-status.ok { color: var(--state-success); }
+.doctor-check { color: var(--fg); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
+.doctor-duration { margin-left: auto; color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
+.doctor-message {
+  margin: 0; color: var(--fg); font: 12.5px/1.5 var(--font-sans);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.doctor-remediation {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 6px 10px; border-radius: 4px; background: var(--bg-sunk);
+  color: var(--fg-dim); font: 12px/1.6 var(--font-sans);
+}
+.doctor-remediation-label {
+  flex: 0 0 auto; font: 600 10px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-mute);
+}
+.doctor-remediation-text { min-width: 0; overflow-wrap: anywhere; }
+.doctor-command { display: inline-flex; align-items: baseline; gap: 4px; margin: 0 2px; }
+.doctor-command code {
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-elev); color: var(--fg); font: 11.5px var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.doctor-copy {
+  padding: 0 4px; border: 0; background: none; cursor: copy;
+  color: var(--accent); font: 10.5px var(--font-sans);
+}
+.doctor-copy:hover { text-decoration: underline; }
+.doctor-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.doctor-passing summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
+.doctor-passing .doctor-message { color: var(--fg-dim); }
