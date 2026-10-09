@@ -52,7 +52,7 @@ allowed_internal_deps() {
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
       # machine-local Registry state for CLI and dashboard consumers.
-      echo "orbit-common orbit-config orbit-core orbit-engine orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
+      echo "orbit-common orbit-config orbit-core orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.

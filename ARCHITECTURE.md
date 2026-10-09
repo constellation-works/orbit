@@ -32,7 +32,7 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
 | `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types (dev: core) |
-| `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
+| `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 

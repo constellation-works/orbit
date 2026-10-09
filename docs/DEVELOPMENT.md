@@ -34,6 +34,14 @@ use Starlight page routes, mapped back to their source Markdown files.
 Run `python3 scripts/check-doc-links.py` for a quick check and
 `python3 scripts/test-ci-fast-guards.py` for its isolated repository fixtures.
 
+[check-unused-dependencies.py](../scripts/check-unused-dependencies.py) fails when a crate
+manifest declares a dependency its sources never reference: `[dependencies]` against `src/`,
+`[dev-dependencies]` against `src/`, `tests/`, `benches/` and `examples/`, and
+`[build-dependencies]` against `build.rs`. A normal dependency that only test targets use is
+reported as misplaced. It also flags `[workspace.dependencies]` entries no member declares.
+A dependency kept only to enable a feature goes in its `FEATURE_ONLY` allowlist with a reason.
+Its self-test is `python3 scripts/test-check-unused-dependencies.py`.
+
 Hosted CI runs the full `make ci` for open PRs. Every PR-triggered workflow
 first reads the live PR state through the GitHub API in a checkout-free
 `Live PR state` job with only `pull-requests: read` permission. If the PR was
