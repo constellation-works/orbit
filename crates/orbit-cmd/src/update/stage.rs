@@ -298,11 +298,22 @@ fn extract_release_executable(archive: &[u8], asset: &str) -> Result<Vec<u8>, Or
 /// The file is created fresh (`create_new` never follows a pre-planted
 /// symlink at the predictable name) and synced before the rename, so a crash
 /// cannot swap in a truncated binary. More than `limit` bytes is refused, and
-/// the partial file removed.
+/// the partial file removed. A mode-setting failure also removes the file.
 fn write_staging_file(
     destination: &Path,
     executable: impl Read,
     limit: u64,
+) -> Result<PathBuf, OrbitError> {
+    write_staging_file_with_mode(destination, executable, limit, set_executable_mode)
+}
+
+/// Inject the mode operation to exercise staging cleanup without relying on
+/// filesystem-specific permission failures.
+pub(super) fn write_staging_file_with_mode(
+    destination: &Path,
+    executable: impl Read,
+    limit: u64,
+    set_mode: impl FnOnce(&Path) -> Result<(), OrbitError>,
 ) -> Result<PathBuf, OrbitError> {
     let path = sibling_staging_path(destination, ".orbit-update-staged")?;
     let stage_error = |error: std::io::Error| {
@@ -335,7 +346,11 @@ fn write_staging_file(
             "the replacement executable exceeds the {limit}-byte staging limit"
         )));
     }
-    set_executable_mode(&path)?;
+    drop(file);
+    if let Err(error) = set_mode(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
     Ok(path)
 }
 
