@@ -7,7 +7,8 @@ sidebar:
 
 The Orbit dashboard is the browser UI for the host it runs on: tasks, runs,
 errors, automation, and settings. It has no login and binds to loopback only.
-To use another machine's dashboard, tunnel to it over SSH.
+To use another machine's dashboard, tunnel to it over SSH, or switch to a
+registered host with the host picker.
 
 ![The dashboard's Tasks list with status groups, the load, memory, and disk host chips, and the 24-hour refresh clock.](../../../assets/dashboard/dashboard-tasks.png)
 
@@ -60,6 +61,64 @@ orbit web connect my-server
 attaches to one running without it, it prints a notice. Restart that server
 with `orbit web serve --operator`, or stop it and reconnect.
 
+`connect` opens a separate tab, and its own port, for each machine. If the
+machine is already registered with `orbit host add`, you can instead stay in
+one dashboard and [switch hosts](#switch-hosts). Use `connect` when the
+machine is not registered, when you want to choose its operator capability
+with `--no-operator` or a different `--remote-port`, or when you want a
+dashboard that does not depend on a machine in between. Use the host picker
+to move between machines you have already registered.
+
+## Switch hosts
+
+When the serving machine has registered other hosts (see
+[Run Orbit across hosts](../multi-host/)), the left rail shows a **Host**
+picker above the workspace picker. It lists the serving host first, marked
+`(serving host)`, then each registered host by name. Choose one and every
+panel, action, log tail, and the load, memory, and disk chips show that host.
+The chips are labelled with its name. The workspace picker then lists that
+host's workspaces: the workspace you had stays selected if the host also
+lists it, **All workspaces** stays the aggregate of that host's workspaces,
+and anything else falls back to that host's default.
+
+The serving dashboard reaches the host over SSH, with the SSH identity of the
+machine that serves the dashboard, not your browser's machine. It opens a
+tunnel when you first select a host, attaches to a dashboard already running
+there or starts one, and closes the tunnel after five minutes without use.
+The remote host stays authoritative: it answers from its own stores and
+enforces its own gates. SSH runs without a prompt here, so a host that needs a
+passphrase or password reports as unreachable. The remote dashboard is
+expected on the default port, `7878`.
+
+- **`?host=`** names the host in the URL, by registered name (any case) or
+  machine ID, so a reload or copied link opens the same host. The URL always
+  wins. Choosing the serving host removes the parameter.
+- **Remembered choice.** The browser remembers the last host you picked and
+  uses it when the URL has no `?host=`. It forgets a host that is no longer
+  registered. Choosing the serving host clears it.
+- **Skew banner.** A host on a different Orbit version or protocol than the
+  serving host shows a persistent note above the panels, naming both. It is a
+  warning, not a refusal: views and actions follow what that host supports.
+- **Unreachable state.** A host that cannot be shown replaces every panel
+  with one state naming the host, an error code, and its message. The codes
+  are `unknown_host` (a `?host=` that is not registered, listed in the picker
+  as `(not registered)`), `unreachable_destination`, `process_timeout`,
+  `host_identity_mismatch`, and `host_too_old`. **Retry** tries the host again
+  and **Back to** the serving host returns. The picker stays available. The
+  dashboard asks the host again on each refresh and shows its panels once it
+  answers.
+- **Remote-run links.** Where a task's execution line says which machine ran
+  it (`on build-box`) and that machine is registered on the serving host, the
+  name links to that run on that host, as `?host=<name>&workspace=<workspace>#runs?run_id=<run>`.
+  An unregistered machine stays plain text.
+- **Read-only.** Writes to another host go through the serving dashboard's
+  [operator session](#authorization). Without one, a note reads `Read-only on
+  <host>: <reason>` and write controls are disabled with the same reason.
+
+**Settings › Hosts** is not forwarded. With another host selected, it still
+edits the serving host's registry, and says so. The picker reads that same
+registry.
+
 ## Workspace scope
 
 With more than one workspace registered, the left rail has a workspace picker.
@@ -71,8 +130,8 @@ the current directory, else the first active workspace.
   Task actions still work on a row that names its owning workspace and are
   sent to that owner. A row without an owner stays read-only.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
-- The URL holds the workspace and time window, so a reload or copied link
-  opens the same view.
+- The URL holds the host, workspace, and time window, so a reload or copied
+  link opens the same view.
 - **Health → Reliability** covers every workspace, whatever is selected.
 
 Confirm the selected workspace before you act. A count or metric does not
@@ -452,6 +511,17 @@ The dashboard server has operator capability when:
   because the SSH login is the operator act (pass `--no-operator` for a
   read-only remote); or
 - its process has `ORBIT_OPERATOR=1`, which the audit trail records.
+
+When you [switch to another host](#switch-hosts), a write is forwarded only
+if the dashboard you are using, the serving one, has operator capability.
+Operator access on the remote machine is not enough on its own, and a
+dashboard without it is read-only for every other host. The forward refuses
+the write with `403` and `code: authorization_denied`, naming the
+`host.forward` operation, before it opens an SSH connection. Operator
+capability on the serving dashboard reaches every registered host its SSH
+identity can log in to: a dashboard it starts there gets `--operator`, while a
+dashboard already running there keeps its own capability. The remote host's
+own authorization still applies to each request.
 
 MCP is separate: `orbit mcp serve --operator` is its only operator path.
 

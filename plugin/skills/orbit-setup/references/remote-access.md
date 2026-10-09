@@ -174,6 +174,40 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+### Switching hosts in the dashboard
+
+A host registered with `orbit host add` appears in the dashboard's **Host**
+picker, above the workspace picker, so one dashboard can show each registered
+machine without an `orbit web connect` tab per machine. Prefer `connect` when
+the machine is not registered, when you need `--no-operator` or a non-default
+`--remote-port`, or when the dashboard must not depend on the serving machine.
+
+- The serving dashboard reaches the host over its own SSH identity, not the
+  browser's. It attaches to a dashboard already running on the remote's default
+  port 7878 or starts one, runs SSH with `BatchMode=yes`, and closes an idle
+  tunnel after five minutes. A host that needs a passphrase or password
+  therefore reports `unreachable_destination`.
+- `?host=<name|machine_id>` selects the host in the URL and wins over the
+  browser's remembered last choice, which only fills a URL with no `?host=`.
+  The serving host's own name selects the serving host.
+- Every panel, action, log tail and resource chip follows the selected host,
+  and the workspace picker lists that host's workspaces. Settings › Hosts does
+  not: it keeps editing the serving host's `hosts.toml`.
+- Version or protocol skew shows a persistent banner and is never refused.
+  An unreachable host replaces the panels with one state carrying a code:
+  `unknown_host`, `unreachable_destination`, `process_timeout`,
+  `host_identity_mismatch` or `host_too_old`, with Retry and a way back to the
+  serving host.
+- Where a task's execution line says which machine ran it and that machine is
+  registered on the serving host, the name links to the run on that host.
+
+Remote writes need an operator session on the serving dashboard
+(`orbit web serve --operator`, or `connect` without `--no-operator`). Without
+one the dashboard shows `Read-only on <host>` and disables write controls; a
+direct request gets `403 authorization_denied` for `host.forward` before any SSH
+starts. A remote dashboard Orbit starts gets `--operator` exactly when the
+serving session has it, and one already running keeps its own capability.
+
 The dashboard refuses non-loopback binds and has no application login. Its
 Origin checks mitigate browser CSRF, not unauthorized port access. Anyone with
 access to its forwarded port can reach mutation endpoints with the server's

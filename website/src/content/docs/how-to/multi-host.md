@@ -95,6 +95,15 @@ Host-local commands such as `orbit workspace`, `orbit config`, `orbit doctor`,
 remote over SSH, or use the workspace-scoped task tools through the
 federated server.
 
+## See another host in the dashboard
+
+A registered host also appears in the dashboard's **Host** picker. Select it
+to show its tasks, runs, and logs in the dashboard you already have open,
+instead of running `orbit web connect` in a tab per machine. The page covers
+the picker, `?host=`, version skew, unreachable hosts, and the operator
+session that remote writes need:
+[Switch hosts](../dashboard/#switch-hosts).
+
 ## Prepare a follower and pull work
 
 A **follower** executes tasks for another machine's backlog. Its repository
