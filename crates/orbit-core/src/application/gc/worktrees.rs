@@ -3,6 +3,7 @@
 use chrono::{Duration, Utc};
 use orbit_engine::{
     RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
+    run_worktree_has_reclaim_output,
 };
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskStatus, task_id_prefix};
@@ -52,9 +53,14 @@ impl OrbitRuntime {
                 return;
             }
         };
+        // Skip empty history before sorting or paying for a full collection's
+        // Git queries. Keep all runs in `runs` to protect shared active paths.
+        let patterns = self.worktree_reclaim_patterns();
+        let repo_root = &self.paths().repo_root;
         let mut oldest = runs
             .iter()
             .filter(|run| run.state.is_terminal())
+            .filter(|run| run_worktree_has_reclaim_output(repo_root, run, &patterns))
             .collect::<Vec<_>>();
         oldest.sort_by_key(|run| (run.finished_at.unwrap_or(run.created_at), &run.run_id));
         for run in oldest {

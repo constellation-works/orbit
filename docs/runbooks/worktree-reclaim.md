@@ -43,8 +43,11 @@ The scheduled `worktree_gc_pipeline` reclaims every retained terminal worktree
 on each sweep, including failed, blocked and review candidates. Its age floor
 applies to whole-worktree removal; retained terminal output can be reclaimed
 immediately. When configured, actual admission checks free space beneath the
-state directory and visits oldest terminal worktrees first, stopping once the
-threshold is met. Reclamation is best effort; a failure is reported and later
+state directory and visits oldest terminal worktrees with declared output first,
+stopping once the threshold is met. Runs without matching output are skipped
+before collection and Git queries, even if free space remains low across
+admissions. The next admission checks for newly created output again.
+Reclamation is best effort; a failure is reported and later
 passes can retry. Active runs, including another active run sharing a checkout,
 are protected.
 
