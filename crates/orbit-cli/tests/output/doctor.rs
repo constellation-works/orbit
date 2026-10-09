@@ -145,6 +145,119 @@ fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fixture = WorkCheckout::new();
+    doctor(&fixture, &[]);
+    let global = fixture.home.join(".orbit");
+    let workspace = fixture.work.join(".orbit");
+    let legacy = [
+        global.clone(),
+        global.join("tasks"),
+        global.join("tasks/workspaces/legacy/artifacts/files/validation/claim-legacy"),
+        global.join("state/logs/legacy"),
+        global.join("frictions/legacy"),
+        workspace.clone(),
+        workspace.join("tasks/legacy"),
+        workspace.join("state/legacy"),
+        workspace.join("frictions/legacy"),
+    ];
+    for path in &legacy {
+        fs::create_dir_all(path).expect("legacy state");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o775)).expect("shared legacy mode");
+    }
+    let excluded = [
+        global.join("state/worktrees"),
+        global.join("state/worktrees/run/nested"),
+        global.join("tasks/target"),
+        global.join("tasks/target/nested"),
+        workspace.join("state/worktrees"),
+        workspace.join("state/worktrees/run/nested"),
+        workspace.join("state/legacy/target"),
+        workspace.join("state/legacy/target/nested"),
+        fixture.temp.path().join("outside"),
+    ];
+    for path in &excluded {
+        fs::create_dir_all(path).expect("excluded tree");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o777)).expect("excluded mode");
+    }
+    let cache = global.join("cache");
+    if cache.exists() {
+        fs::rename(&cache, fixture.temp.path().join("retained-cache"))
+            .expect("retain existing fixture cache");
+    }
+    symlink(excluded.last().unwrap(), &cache).expect("linked scan subtree root");
+    symlink(excluded.last().unwrap(), global.join("state/linked"))
+        .expect("external directory link");
+    let file = global.join("state/legacy-file");
+    fs::write(&file, "retained").expect("legacy file");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).expect("legacy file mode");
+    let before = rows(&doctor(&fixture, &[]));
+    let warning = row(&before, "state-directory-permissions");
+    assert_eq!(warning["status"], "warning");
+    let remediation = warning["remediation"]
+        .as_str()
+        .expect("runnable remediation");
+    let runnable = remediation.split('`').nth(1).expect("repair command");
+    let args = runnable
+        .strip_prefix("orbit ")
+        .expect("Orbit repair")
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let repaired = command(&fixture)
+        .args(args)
+        .arg("--json")
+        .output()
+        .expect("run remediation as written");
+    let after = rows(&repaired);
+    assert_eq!(
+        row(&after, "fix-state-directory-permissions")["status"],
+        "ok"
+    );
+    assert_eq!(row(&after, "state-directory-permissions")["status"], "ok");
+    for path in &legacy {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "{}",
+            path.display()
+        );
+    }
+    for path in &excluded {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o777,
+            "repair must leave worktrees, targets and symlink targets untouched: {}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o666
+    );
+    assert_eq!(fs::read_to_string(file).unwrap(), "retained");
+    let repeated = rows(&doctor(&fixture, &["--fix-state-directory-permissions"]));
+    assert_eq!(
+        row(&repeated, "state-directory-permissions")["status"],
+        "ok"
+    );
+    assert_eq!(
+        row(&repeated, "fix-state-directory-permissions")["status"],
+        "ok"
+    );
+    for path in &excluded {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o777,
+            "excluded directories must also survive repeated repair: {}",
+            path.display()
+        );
+    }
+}
+
 /// Manual performance fixture; setup writes a real 1 GiB SQLite table and 50k directories.
 /// Keep its disk and setup cost out of routine CI; run and record it before handoff.
 #[test]

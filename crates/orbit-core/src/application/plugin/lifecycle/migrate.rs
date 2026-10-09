@@ -27,6 +27,10 @@ pub struct PluginMigrateRequest {
 
 /// Write a v2 manifest from a set of v1 sidecars (§4.8). The v1 sidecars and
 /// `orbit tool add` keep working; this only produces the new file.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "migration writes a user-selected plugin source tree, outside Orbit state"
+)]
 pub fn migrate_plugin_sidecars(
     request: &PluginMigrateRequest,
 ) -> Result<(String, Option<PathBuf>), OrbitError> {

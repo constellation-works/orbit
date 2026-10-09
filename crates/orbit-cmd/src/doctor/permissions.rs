@@ -1,72 +1,26 @@
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
-use orbit_core::OrbitRuntime;
+use orbit_core::{OrbitError, OrbitRuntime};
 
 /// Report Orbit-owned state directories whose write bits let another local
 /// principal replace or unlink private files held beneath them.
 pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     #[cfg(unix)]
     {
-        use std::collections::BTreeSet;
-
-        let mut seen = BTreeSet::new();
-        let mut writable = Vec::new();
-        let mut offenders = Vec::new();
-        let global = runtime.global_root();
-        let workspace = runtime.paths().orbit_dir.clone();
-        let configured_roots = [
-            (global.clone(), false),
-            (global.join("state"), true),
-            (global.join("tasks"), true),
-            (global.join("cache"), true),
-            (global.join("frictions"), true),
-            (workspace.clone(), false),
-            (workspace.join("state"), true),
-            (workspace.join("tasks"), true),
-            (workspace.join("frictions"), true),
-        ];
-        for (configured_root, descend) in configured_roots {
-            let root = match configured_root.canonicalize() {
-                Ok(root) => root,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name: "state-directory-permissions".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!(
-                            "could not resolve Orbit state directory '{}': {error}",
-                            configured_root.display()
-                        ),
-                        remediation: Some(
-                            "Fix the directory access error named above, then rerun `orbit doctor`."
-                                .to_string(),
-                        ),
-                    };
-                }
-            };
-            let before = writable.len();
-            if let Err(error) = visit(&root, descend, &mut seen, &mut writable, &mut |_| {}) {
-                return WorkspaceDoctorResult {
+        let scan =
+            match inspect_state_directories(runtime) {
+                Ok(scan) => scan,
+                Err(error) => return WorkspaceDoctorResult {
                     duration_ms: 0,
                     check_name: "state-directory-permissions".to_string(),
                     status: WorkspaceDoctorStatus::Error,
-                    message: format!(
-                        "could not inspect Orbit state directory '{}': {error}",
-                        root.display()
-                    ),
+                    message: error.to_string(),
                     remediation: Some(
                         "Fix the directory access error named above, then rerun `orbit doctor`."
                             .to_string(),
                     ),
-                };
-            }
-            let count = writable.len() - before;
-            if count > 0 {
-                offenders.push((root, count));
-            }
-        }
-
-        if writable.is_empty() {
+                },
+            };
+        if scan.writable.is_empty() {
             return WorkspaceDoctorResult {
                 duration_ms: 0,
                 check_name: "state-directory-permissions".to_string(),
@@ -75,8 +29,8 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
                 remediation: None,
             };
         }
-
-        let locations = offenders
+        let locations = scan
+            .offenders
             .iter()
             .map(|(path, count)| format!("{} ({count} writable)", path.display()))
             .collect::<Vec<_>>()
@@ -85,21 +39,9 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             duration_ms: 0,
             check_name: "state-directory-permissions".to_string(),
             status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "{} Orbit state director{} group/world writable under: {locations}",
-                writable.len(),
-                if writable.len() == 1 {
-                    "y is"
-                } else {
-                    "ies are"
-                }
-            ),
-            remediation: Some(
-                "Remove group/world write permission from the writable directories under each named root \
-                 (for example, `chmod go-w <directory>`), excluding run worktrees and target trees, \
-                 then rerun `orbit doctor`."
-                    .to_string(),
-            ),
+            message: format!("{} Orbit state director{} group/world writable under: {locations}",
+                scan.writable.len(), if scan.writable.len() == 1 { "y is" } else { "ies are" }),
+            remediation: Some("Run `orbit doctor --fix-state-directory-permissions` to restrict writable Orbit state directories to owner-only access, excluding run worktrees and target trees, then rerun `orbit doctor`.".to_string()),
         }
     }
     #[cfg(not(unix))]
@@ -113,6 +55,160 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             remediation: None,
         }
     }
+}
+
+/// Tighten only the directories reported by the read-only probe. Worktrees,
+/// targets and child symlinks share the scanner's exclusions.
+pub(super) fn repair_state_directory_permissions(
+    runtime: &OrbitRuntime,
+) -> Result<usize, OrbitError> {
+    #[cfg(unix)]
+    {
+        let scan = inspect_state_directories(runtime)?;
+        let mut repaired = 0;
+        for (path, _) in scan.writable {
+            repaired += usize::from(tighten_directory(&path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "could not repair Orbit state directory '{}': {error}",
+                    path.display()
+                ))
+            })?);
+        }
+        Ok(repaired)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = runtime;
+        Err(OrbitError::InvalidInput(
+            "Unix directory mode repairs are not available on this platform".to_string(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+struct PermissionScan {
+    writable: Vec<(std::path::PathBuf, u32)>,
+    offenders: Vec<(std::path::PathBuf, usize)>,
+}
+
+#[cfg(unix)]
+fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, OrbitError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut scan = PermissionScan {
+        writable: Vec::new(),
+        offenders: Vec::new(),
+    };
+    // Only the two configured owner roots may resolve through links. Their
+    // state/tasks/cache children are inspected as entries, just like deeper
+    // children, so a linked subtree cannot redirect the scan or repair.
+    for configured_owner in [runtime.global_root(), runtime.paths().orbit_dir.clone()] {
+        let owner = match configured_owner.canonicalize() {
+            Ok(owner) => owner,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "could not resolve Orbit state directory '{}': {error}",
+                    configured_owner.display()
+                )));
+            }
+        };
+        let mut roots = vec![
+            (owner.clone(), false),
+            (owner.join("state"), true),
+            (owner.join("tasks"), true),
+            (owner.join("frictions"), true),
+        ];
+        if configured_owner == runtime.global_root() {
+            roots.push((owner.join("cache"), true));
+        }
+        for (root, descend) in roots {
+            let before = scan.writable.len();
+            visit(&root, descend, &mut seen, &mut scan.writable, &mut |_| {}).map_err(|error| {
+                OrbitError::Io(format!(
+                    "could not inspect Orbit state directory '{}': {error}",
+                    root.display()
+                ))
+            })?;
+            let count = scan.writable.len() - before;
+            if count > 0 {
+                scan.offenders.push((root, count));
+            }
+        }
+    }
+    Ok(scan)
+}
+
+/// Open every component relative to the preceding directory descriptor. Neither
+/// a final symlink nor a parent swapped after scanning can redirect the chmod.
+#[cfg(unix)]
+fn open_directory_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "directory repair requires an absolute path",
+        ));
+    }
+    let mut directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open("/")?;
+    for component in path.components() {
+        let name = match component {
+            Component::RootDir => continue,
+            Component::Normal(name) => CString::new(name.as_bytes())
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "directory repair requires a canonical path",
+                ));
+            }
+        };
+        // SAFETY: directory owns a live descriptor and name is NUL-terminated.
+        // O_DIRECTORY and O_NOFOLLOW bind only a real directory at this step.
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a new descriptor owned exclusively here.
+        directory = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+pub(super) fn tighten_directory(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(directory) = present(open_directory_no_follow(path))? else {
+        return Ok(false);
+    };
+    if directory.metadata()?.permissions().mode() & 0o022 == 0 {
+        return Ok(false);
+    }
+    directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn excluded(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| name == "target")
+        || (path.file_name().is_some_and(|name| name == "worktrees")
+            && path
+                .parent()
+                .and_then(std::path::Path::file_name)
+                .is_some_and(|name| name == "state"))
 }
 
 #[cfg(unix)]
@@ -136,7 +232,7 @@ fn visit(
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    if path.file_name().is_some_and(|name| name == "target") || !seen.insert(path.to_path_buf()) {
+    if excluded(path) || !seen.insert(path.to_path_buf()) {
         return Ok(());
     }
     let Some(metadata) = present(std::fs::symlink_metadata(path))? else {
@@ -149,13 +245,7 @@ fn visit(
     if mode & 0o022 != 0 {
         writable.push((path.to_path_buf(), mode));
     }
-    if !descend
-        || (path.file_name().is_some_and(|name| name == "worktrees")
-            && path
-                .parent()
-                .and_then(std::path::Path::file_name)
-                .is_some_and(|name| name == "state"))
-    {
+    if !descend {
         return Ok(());
     }
     before_read_dir(path);

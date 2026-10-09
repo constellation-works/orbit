@@ -36,6 +36,10 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_stale_task_locks: bool,
 
+    /// Restrict writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only).
+    #[arg(long)]
+    pub fix_state_directory_permissions: bool,
+
     /// Remove retired graph state from this worktree and the shared workspace.
     #[arg(long)]
     pub remove_graph: bool,
@@ -90,6 +94,22 @@ impl Execute for DoctorCommand {
             None => {}
         }
         let mut results = Vec::new();
+        if self.fix_state_directory_permissions {
+            let started = std::time::Instant::now();
+            let repaired = runtime.repair_state_directory_permissions()?;
+            let message = format!(
+                "Restricted {repaired} writable Orbit state director{} to owner-only access.",
+                if repaired == 1 { "y" } else { "ies" }
+            );
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-state-directory-permissions".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message,
+                remediation: None,
+            });
+        }
         if self.fix_stale_locks {
             let started = std::time::Instant::now();
             let cleared = runtime.remove_stale_lock_files()?;

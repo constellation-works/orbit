@@ -235,6 +235,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
 /// (extension trait — the implementation moved out of orbit-core in
 /// [ORB-10016]).
 pub trait DoctorCommands {
+    /// Restrict writable Orbit-owned state directories to owner-only access,
+    /// excluding run worktrees, Cargo target trees and child symlinks.
+    fn repair_state_directory_permissions(&self) -> Result<usize, OrbitError>;
     /// Run every workspace-level doctor check. Individual checks never abort
     /// the diagnosis: probe failures surface as `Warning`/`Error` rows and
     /// absent subsystems as `Skipped`.
@@ -285,6 +288,9 @@ pub trait DoctorCommands {
 }
 
 impl DoctorCommands for OrbitRuntime {
+    fn repair_state_directory_permissions(&self) -> Result<usize, OrbitError> {
+        super::permissions::repair_state_directory_permissions(self)
+    }
     fn doctor_workspace_with_depth(
         &self,
         deep: bool,

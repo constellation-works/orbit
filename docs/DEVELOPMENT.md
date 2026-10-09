@@ -145,6 +145,15 @@ a policy change.
 
 ## Filesystem writes
 
+Create Orbit-owned directories with `orbit_common::fs::io::create_private_dir_all`
+or `create_private_dir` for exclusive single-directory creation. These create
+owner-only directories on Unix regardless of umask and leave existing modes
+alone. The production Clippy pass disallows `std::fs::create_dir_all` and
+`std::fs::create_dir`, including aliases. External source, installation,
+service-manager and Cargo output directories retain reasoned exceptions;
+state and task-artifact writers must use the private helpers. Repair legacy
+writable state with `orbit doctor --fix-state-directory-permissions`.
+
 Replace durable files through `orbit_common::fs::io::atomic_write_text` or
 `atomic_write_bytes`. These stage a private sibling file, sync its contents,
 rename it into place, and sync the parent directory. Existing file permissions

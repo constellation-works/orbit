@@ -111,7 +111,7 @@ pub(in crate::application) fn preserve_modified_retired_asset(
             continue;
         }
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
+            orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
                 OrbitError::io_with_context(
                     &error,
                     format!(

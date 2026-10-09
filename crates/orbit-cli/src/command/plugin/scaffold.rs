@@ -34,6 +34,10 @@ pub struct PluginScaffoldArgs {
 }
 
 impl Execute for PluginScaffoldArgs {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "plugin scaffolding creates user-owned source directories, outside Orbit state"
+    )]
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
         let namespace = self.namespace.trim().to_string();
         if !is_valid_namespace(&namespace) {

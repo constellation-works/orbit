@@ -7,6 +7,8 @@ disallowed-methods = [
     { path = "std::process::Command::output", reason = "a child wait needs a deadline, a process group and capped capture; use orbit_common::process::run_bounded or run_bounded_capped" },
     { path = "std::process::Command::status", reason = "a child wait needs a deadline and a process group; use orbit_common::process::run_bounded or run_bounded_capped, or add a reasoned exception for an interactive or long-lived child" },
     { path = "std::fs::write", reason = "durable replacements must use orbit_common::fs::io atomic helpers; deliberate in-place writes need a reasoned exception" },
+    { path = "std::fs::create_dir_all", reason = "Orbit state directories must be owner-only regardless of umask; use orbit_common::fs::io::create_private_dir_all; external directories need a reasoned exception" },
+    { path = "std::fs::create_dir", reason = "Orbit state directories must be owner-only regardless of umask; use orbit_common::fs::io::create_private_dir; external directories need a reasoned exception" },
 ]
 
 # A file-lock guard must be released before suspension. ScopedEnv already

@@ -276,7 +276,7 @@ fn ensure_worktree(
     }
 
     if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Execution(format!(
                 "failed to create worktree directory '{}': {error}",
                 parent.display()

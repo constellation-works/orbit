@@ -39,7 +39,7 @@ impl PolicyDefFileStore {
     }
 
     pub(crate) fn ensure_layout(&self) -> Result<(), OrbitError> {
-        fs::create_dir_all(self.policies_dir())?;
+        orbit_common::fs::io::create_private_dir_all(&self.policies_dir())?;
         Ok(())
     }
 

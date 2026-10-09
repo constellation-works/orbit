@@ -86,7 +86,7 @@ fn create_authority_root_under(trusted: &Path) -> Result<PathBuf, OrbitError> {
     let mut root = trusted.to_path_buf();
     for component in Path::new(AUTHORITY_DIR).components() {
         root.push(component);
-        match fs::create_dir(&root) {
+        match orbit_common::fs::io::create_private_dir(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {

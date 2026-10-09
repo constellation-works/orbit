@@ -38,7 +38,7 @@ impl ExclusiveWaiter {
         if !dir.starts_with(&root) {
             return Err(refusal("admission waiter directory escapes the root"));
         }
-        match std::fs::create_dir_all(&dir) {
+        match crate::fs::io::create_private_dir_all(&dir) {
             Ok(()) => {}
             Err(error) if read_only(&error) => return Ok(None),
             Err(error) => return Err(refusal(error)),

@@ -130,7 +130,8 @@ fn ensure_plugin_skill_link(
             root.display()
         )));
     }
-    fs::create_dir_all(root).map_err(|error| OrbitError::Io(error.to_string()))?;
+    orbit_common::fs::io::create_private_dir_all(root)
+        .map_err(|error| OrbitError::Io(error.to_string()))?;
 
     let link = root.join(skill_id);
     let Ok(metadata) = fs::symlink_metadata(&link) else {

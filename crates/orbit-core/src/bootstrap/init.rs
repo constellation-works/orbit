@@ -579,7 +579,7 @@ fn ensure_skill_links(
     force: bool,
 ) -> Result<bool, OrbitError> {
     if let Some(parent) = skills_links_dir.parent() {
-        fs::create_dir_all(parent).map_err(OrbitError::from)?;
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(OrbitError::from)?;
     }
 
     if let Ok(metadata) = fs::symlink_metadata(skills_links_dir)
@@ -596,11 +596,12 @@ fn ensure_skill_links(
     }
 
     if !skills_links_dir.exists() {
-        fs::create_dir_all(skills_links_dir).map_err(OrbitError::from)?;
+        orbit_common::fs::io::create_private_dir_all(skills_links_dir).map_err(OrbitError::from)?;
     } else if !skills_links_dir.is_dir() {
         if force {
             remove_path_if_exists(skills_links_dir)?;
-            fs::create_dir_all(skills_links_dir).map_err(OrbitError::from)?;
+            orbit_common::fs::io::create_private_dir_all(skills_links_dir)
+                .map_err(OrbitError::from)?;
         } else {
             return Err(OrbitError::InvalidInput(format!(
                 "expected '{}' to be a directory for skill links; found non-directory path",

@@ -168,7 +168,7 @@ pub(super) fn load(path: &Path) -> RetryableHistory {
 
 pub(super) fn save(path: &Path, history: &RetryableHistory) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        orbit_common::fs::io::create_private_dir_all(parent)?;
     }
     orbit_common::fs::io::atomic_write_text(path, &history.to_json().to_string())
 }

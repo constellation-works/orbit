@@ -44,7 +44,7 @@ pub(super) fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     if !root.starts_with(parent) || !path.starts_with(&root) {
         return Err(refusal("generation record path escapes the root"));
     }
-    std::fs::create_dir_all(&root).map_err(refusal)?;
+    crate::fs::io::create_private_dir_all(&root).map_err(refusal)?;
     match OpenOptions::new()
         .read(true)
         .write(true)

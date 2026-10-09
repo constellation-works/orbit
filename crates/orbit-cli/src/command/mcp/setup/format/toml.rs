@@ -34,6 +34,10 @@ pub(in crate::command::mcp::setup) fn write_toml_document(
     let parent = path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!("path has no parent: {}", path.display()))
     })?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "MCP configuration parents belong to the external client, outside Orbit state"
+    )]
     fs::create_dir_all(parent)
         .map_err(|err| OrbitError::Io(format!("failed to create '{}': {err}", parent.display())))?;
     fs::write(path, doc.to_string())

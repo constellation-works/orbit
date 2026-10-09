@@ -39,7 +39,7 @@ impl WorkspaceInitArgs {
         // Registry path validation canonicalizes its parent before reading or
         // locking the registry. Create a fresh global root here so first-time
         // workspace initialization can reach that validation step.
-        std::fs::create_dir_all(&global_root).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(&global_root).map_err(|error| {
             OrbitError::Io(format!(
                 "create global Orbit root '{}': {error}",
                 global_root.display()

@@ -146,7 +146,8 @@ pub(super) fn copy_checkout(source: &Path, target: &Path) -> Result<(), OrbitErr
                     .map_err(|error| io("create", &destination, error))?;
             }
         } else if file_type.is_dir() {
-            std::fs::create_dir(&destination).map_err(|error| io("create", &destination, error))?;
+            orbit_common::fs::io::create_private_dir(&destination)
+                .map_err(|error| io("create", &destination, error))?;
             copy_checkout(&path, &destination)?;
         } else if file_type.is_file() {
             std::fs::copy(&path, &destination).map_err(|error| io("copy", &path, error))?;

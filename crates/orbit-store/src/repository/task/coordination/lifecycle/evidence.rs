@@ -243,7 +243,7 @@ impl TaskCommitBoundary {
                 .join("files")
                 .join(&artifact.path);
             if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)?;
+                orbit_common::fs::io::create_private_dir_all(parent)?;
             }
             atomic_write_bytes(&destination, &artifact.content)
                 .map_err(|e| OrbitError::from_write_io(&destination, e))?;

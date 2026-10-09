@@ -49,7 +49,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `unresolved-task-bundles` | Directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …) | `warning` for retained unresolved data or scan failure; otherwise `ok`. Restore `task.yaml` or move the directory aside; reindex will not delete it. |
 | `artifacts-skills`, `artifacts-jobs`, `artifacts-activities`, `artifacts-auto-tasks`, `artifacts-routines` | One row per definition kind: missing shipped defaults, stale, deprecated, residual, or faulty catalog content | `skipped` for no files/findings, `ok` for healthy content, `error` only for an unloadable/missing shipped default, `warning` for other findings. Each finding names its remedy; use `orbit workspace sync` for shipped-default convergence and the scoped repair/manual edit when advised. |
 | `artifacts` | Fallback when the definition-artifact inspection itself fails | One `warning` replaces the per-kind rows. Resolve the runtime/store error and rerun doctor. |
-| `state-directory-permissions` | Unix group/world write bits on Orbit-owned state directories | `warning` for writable directories (`chmod go-w <directory>`); `error` for resolution/inspection failure; otherwise `ok`. `skipped` on non-Unix platforms. See scan scope below. |
+| `state-directory-permissions` | Unix group/world write bits on Orbit-owned state directories | `warning` for writable directories (`orbit doctor --fix-state-directory-permissions`); `error` for resolution/inspection failure; otherwise `ok`. `skipped` on non-Unix platforms. See scan and repair scope below. |
 | `provider:<crew>` | One row per enabled crew selected by default/system/positive-weight complexity routing: executor definition and CLI lookup | `ok` when the CLI resolves (authentication is **not** checked); `skipped` for an executor without a CLI command; `error` for missing crew/executor/CLI or inspection failure. Restore the named dependency or change routing. Disabled crews are omitted. |
 | `provider-routing` | Fallback when effective routing config or a complexity crew pool cannot be inspected | One `error` replaces the per-crew rows. Repair the named configuration. |
 | `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
@@ -59,12 +59,29 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 
 The state-permission probe checks the global and workspace Orbit roots themselves, then
 recurses through global `state/`, `tasks/`, `cache/`, `frictions/` and workspace `state/`,
-`tasks/`, `frictions/`. Missing roots are ignored. Configured roots are resolved first;
-child symlinks are not followed. The scan never enters `state/worktrees/` contents or any
-`target/` directory, including the `target/` directory's own mode: Orbit does not own run
+`tasks/`, `frictions/`. Missing roots are ignored. The global and workspace owner roots
+are resolved first; child symlinks, including linked subtree roots, are not followed.
+The scan excludes `state/worktrees/` and any
+`target/` directory, including those directories' own modes: Orbit does not own run
 checkout contents or Cargo output. Entries disappearing during a walk are skipped; other
 access errors still report an error. Warnings count writable Orbit-owned directories and
 group them by distinct scanned roots so an operator can find the actionable subtrees.
+To repair legacy writable directories in one pass, run:
+
+```sh
+orbit doctor --fix-state-directory-permissions
+```
+
+On Unix, this sets each reported writable directory to `0700` and then runs
+the ordinary diagnostics. It uses the same roots and exclusions as the probe:
+run worktrees, Cargo target trees, child symlinks and files are untouched.
+Every path component is opened without following symlinks, and permissions
+are changed through the opened directory handle, so a symlink swapped in
+after scanning cannot redirect the repair. Missing directories are skipped;
+other access errors abort the repair and may leave earlier directories repaired.
+Running it again is safe and changes nothing when no writable directories remain.
+The flag is CLI-only and refuses on non-Unix platforms.
+
 The separate filesystem-lock probe scans only immediate
 files in `state_dir`; on non-Unix platforms holder PIDs are conservatively treated as alive.
 
@@ -76,6 +93,7 @@ Do not run a repair merely to collect health evidence.
 |---|---|
 | `fix-stale-locks` | `ok`, number of dead-holder records cleared (lock files preserved) |
 | `fix-stale-task-locks` | `ok`, number of conclusively stale reservations released |
+| `fix-state-directory-permissions` | `ok`, number of writable Orbit state directories restricted to owner-only access |
 | `remove-graph` | `ok`, number of retired graph locations removed |
 | `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
 | `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
