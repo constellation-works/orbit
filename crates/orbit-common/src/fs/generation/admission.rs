@@ -39,11 +39,9 @@ const EXCLUSIVE_SETTLE: Duration = Duration::from_millis(250);
 
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
-    // Declared before the record so it drops first: a live registration then
-    // always means its owner still holds the generation lock, which the
-    // shared join relies on to know the authority is not empty.
-    _registration: Option<Registration>,
-    _record: Record,
+    /// Released in the order [`Self::release`] gives.
+    registration: Option<Registration>,
+    record: Record,
     /// True when this process joined a recorded generation other than its own
     /// digest, without rewriting the record (read-only same-schema join).
     joined_foreign: bool,
@@ -236,14 +234,14 @@ pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
 impl GenerationGuard {
     pub(super) fn holding(record: Record, joined_foreign: bool) -> Self {
         Self {
-            _record: record,
+            record,
             joined_foreign,
-            _registration: None,
+            registration: None,
         }
     }
 
     pub(super) fn registered(mut self, root: &Path, participant: &Participant<'_>) -> Self {
-        self._registration = registry::register(
+        self.registration = registry::register(
             root,
             &ParticipantRecord {
                 pid: std::process::id(),
@@ -256,6 +254,39 @@ impl GenerationGuard {
             },
         );
         self
+    }
+
+    /// Release the generation lock, then withdraw the registration.
+    ///
+    /// Two inferences read the registry against the generation lock. A shared
+    /// join takes a live record to mean its owner holds the lock, so the
+    /// authority is not empty. An updater that finds the lock held and no
+    /// record visible refuses the holder as unregistered. Withdrawing first
+    /// broke the second: a holder descheduled between withdrawing and
+    /// releasing, for longer than the updater's settle, was refused as an
+    /// unregistered v1 process instead of waited for [ORB-14869]. Releasing
+    /// first would break the first. So the record is renamed to its releasing
+    /// name, still locked: joiners stop counting it, an updater waits for it,
+    /// and only after the lock is released is it withdrawn.
+    /// `paused` runs between the rename and the release.
+    fn release(&mut self, paused: impl FnOnce()) {
+        if let Some(registration) = self.registration.as_mut()
+            && !registration.begin_release()
+        {
+            // Without the releasing name, a live record must still mean a
+            // held lock.
+            self.registration = None;
+        }
+        paused();
+        let _ = FileExt::unlock(&self.record.file);
+        self.registration = None;
+    }
+
+    /// Drop this guard, running `paused` once its registration is withdrawn
+    /// from the live set but before the generation lock is released.
+    #[cfg(test)]
+    pub(super) fn release_pausing(mut self, paused: impl FnOnce()) {
+        self.release(paused);
     }
 
     /// Whether this pin joined a live generation it may not write: a
@@ -583,6 +614,12 @@ impl GenerationGuard {
             generation,
         }
         .pin(digest, None)
+    }
+}
+
+impl Drop for GenerationGuard {
+    fn drop(&mut self) {
+        self.release(|| {});
     }
 }
 

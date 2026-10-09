@@ -293,7 +293,10 @@ Orbit process joins behind them, and then treat each live participant by its rol
   (below).
 - A holder that **never registered** (an `executable-generation-v1` binary, or a
   sandboxed child that cannot write the root) refuses at once: it cannot be named by
-  role or asked to hand over.
+  role or asked to hand over. A registered process keeps its record, renamed to
+  `<record>.releasing` and still locked, until it has released `.generation.lock`, so
+  admission waits for one that is exiting instead of mistaking it for an unregistered
+  holder.
 
 Each refusal names every blocker by pid, role and start time with the remedy for its
 role — let a command finish; let a tick finish or `orbit clock pause`; close the MCP

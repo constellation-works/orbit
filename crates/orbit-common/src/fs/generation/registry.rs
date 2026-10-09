@@ -4,9 +4,12 @@
 //! record naming its PID, role and start time, and holds an exclusive lock on
 //! it for its lifetime. The lock, not the file, is liveness: a record whose
 //! lock can be taken belongs to a process that has exited, and admission
-//! removes it. Records are advisory — they name blockers and let a newer
-//! binary ask live processes to yield — while the generation lock itself still
-//! decides who may take exclusive admission.
+//! removes it. A participant withdraws its record only after it has released
+//! the generation lock: until then the record stays locked under a releasing
+//! name that joiners skip and an updater waits for. Records are advisory —
+//! they name blockers and let a newer binary ask live processes to yield —
+//! while the generation lock itself still decides who may take exclusive
+//! admission.
 //!
 //! A binary that needs exclusive admission for a breaking migration records a
 //! pending switch and holds its lock while it waits. Live participants observe
@@ -32,6 +35,8 @@ const PARTICIPANTS_DIR: &str = ".generation-participants";
 const PENDING_RECORD: &str = ".generation-pending.json";
 /// A registration being written, before it is renamed into place.
 const STAGED_EXTENSION: &str = "staged";
+/// A registration whose owner is releasing the generation lock.
+const RELEASING_EXTENSION: &str = "releasing";
 /// How long a staged registration may stay unlocked before it is abandoned.
 const STAGED_GRACE: Duration = Duration::from_secs(60);
 /// How long a pending claim retries past a reader probing the record.
@@ -119,6 +124,26 @@ impl fmt::Display for ParticipantRecord {
 pub(super) struct Registration {
     file: File,
     path: PathBuf,
+}
+
+impl Registration {
+    /// Rename this record to its releasing name, still locked, before its
+    /// owner releases the generation lock. Joiners stop counting it as live,
+    /// while [`releasing`] still sees it. `false` when the rename failed and
+    /// the record stays live.
+    pub(super) fn begin_release(&mut self) -> bool {
+        let Some(dir) = self.path.parent() else {
+            return false;
+        };
+        let mut name = self.path.clone().into_os_string();
+        name.push(format!(".{RELEASING_EXTENSION}"));
+        let releasing = PathBuf::from(name);
+        if !releasing.starts_with(dir) || std::fs::rename(&self.path, &releasing).is_err() {
+            return false;
+        }
+        self.path = releasing;
+        true
+    }
 }
 
 impl Drop for Registration {
@@ -218,6 +243,16 @@ pub(super) fn live_participants(
                 collect_abandoned_stage(&path);
                 continue;
             }
+            Some(RELEASING_EXTENSION) if collect => {
+                // Renamed while locked, so an unlocked one has been released.
+                if let Ok(file) = File::open(&path)
+                    && FileExt::try_lock_shared(&file).is_ok()
+                {
+                    let _ = FileExt::unlock(&file);
+                    let _ = std::fs::remove_file(&path);
+                }
+                continue;
+            }
             _ => continue,
         }
         if except.is_some_and(|own| own.path == path) {
@@ -240,6 +275,28 @@ pub(super) fn live_participants(
     }
     live.sort_by_key(|record| (record.started_at, record.pid));
     live
+}
+
+/// Whether a registered participant is between withdrawing its record from
+/// [`live_participants`] and releasing the generation lock: a releasing
+/// record its owner still holds.
+pub(super) fn releasing(root: &Path) -> bool {
+    let Ok(root) = validated_generation_root(root) else {
+        return false;
+    };
+    let dir = root.join(PARTICIPANTS_DIR);
+    if !dir.starts_with(&root) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.starts_with(&dir)
+            && path.extension().and_then(|ext| ext.to_str()) == Some(RELEASING_EXTENSION)
+            && File::open(&path).is_ok_and(|file| FileExt::try_lock_shared(&file).is_err())
+    })
 }
 
 /// Remove a staged record nobody holds that is too old to be one a live
