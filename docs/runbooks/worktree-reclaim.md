@@ -33,6 +33,10 @@ orbit gc worktrees --reclaim
 orbit gc worktrees --reclaim --confirm
 ```
 
+`--confirm` is governed: it needs the operator or runner capability. From a
+shell with no terminal, prefix `ORBIT_OPERATOR=1`, as doctor's printed action
+does.
+
 The default and `--dry-run` report paths, matching patterns and file-size bytes
 without deletion. Overlapping matches count each removed path once, against the
 first matching pattern. `--run` and `--older-than-hours` can narrow the manual
