@@ -222,8 +222,21 @@ pub(super) fn last_compiled_file_write_allows_under(
     path: &std::path::Path,
     fixture: &std::path::Path,
 ) -> bool {
+    last_compiled_file_write_under(profile, path, fixture) == Some(true)
+}
+
+/// Whether the last `file-write*` clause rooted inside `fixture` that covers
+/// `path` allows it, or `None` when no such clause exists. A temp fixture
+/// sits beneath the host scratch allows, so a `None` path is writable there
+/// even though a real checkout would leave it to the default deny.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn last_compiled_file_write_under(
+    profile: &str,
+    path: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Option<bool> {
     let rendered = path.display().to_string();
-    let mut allowed = false;
+    let mut allowed = None;
     for line in profile.lines() {
         let (is_deny, filter) = if let Some(filter) = line.trim().strip_prefix("(deny file-write* ")
         {
@@ -250,7 +263,7 @@ pub(super) fn last_compiled_file_write_allows_under(
             continue;
         };
         if covers && std::path::Path::new(root).starts_with(fixture) {
-            allowed = !is_deny;
+            allowed = Some(!is_deny);
         }
     }
     allowed
