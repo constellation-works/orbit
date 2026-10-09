@@ -4,11 +4,9 @@ summary: Open causes of Orbit task-run failures and blocks, one entry per distin
 incident_date: 2026-09-27
 last_validated: 2026-10-09
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: []
 related_artifacts:
-  - ORB-14832
-  - ORB-14740
-  - ORB-14812
+  - ORB-14777
 ---
 
 # Run failure log
@@ -32,28 +30,6 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
-
-## 2026-10-08: macOS claimed executors cannot apply Seatbelt in affected tests
-
-- **Where:** Mac claimed leaves, `make ci-test-affected` inside the executor's
-  sandbox.
-- **Symptom:** About 27 tests fail on an unmodified base with
-  `sandbox-exec: sandbox_apply: Operation not permitted` (exit 71). Each leaf
-  spends 10+ minutes on a baseline replay
-  (ORB-14655, `jrun-20261008-1130-c1`).
-- **Cause:** macOS refuses a second `sandbox_apply` inside the executor's
-  profile. The test guards check only that `sandbox-exec` is executable, and the
-  plugin-backend tests have no guard at all.
-- **Fix:** ORB-14812 (open): one cached apply-probe that every sandbox-gated test
-  checks, skipping with a `SKIP:` notice. Coverage of the real paths stays with
-  macOS CI and host-run sandbox evidence.
-- **Tasks:** ORB-14649, ORB-14655, ORB-14740, ORB-14832 (`jrun-20261009-0409-c1`:
-  about 64 affected failures, and the agent stopped with `validation_blocked`
-  after its own checks passed).
-- **Final recovery:** ORB-14740's final recovery confirmed that even
-  `sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` exits 71.
-  ORB-14832 escalated (`jrun-20261009-0409-c1`). The operator resumed its owner
-  run `jrun-20261009-0313-c3`, which validates on Linux.
 
 ## Operational causes (no code defect)
 
