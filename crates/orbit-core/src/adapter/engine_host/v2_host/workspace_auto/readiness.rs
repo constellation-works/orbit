@@ -522,13 +522,22 @@ pub fn explain_workspace_auto_readiness(
             .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
     )?;
 
+    // [ORB-14880] Build budget inspection is advisory: an invalid setting or
+    // unreadable slots file must not fail readiness.
+    let (build_budget_warnings, build_budget_error) = match runtime.build_budget_capacity_warnings()
+    {
+        Ok(warnings) => (warnings, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
     Ok(json!({
         "snapshot": {
             "read_only": true,
             "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
         },
         "capacity": {
-            "build_budget_warnings": runtime.build_budget_capacity_warnings()?,
+            "build_budget_warnings": build_budget_warnings,
+            "build_budget_error": build_budget_error,
             "max_active_leaf_runs": max_active_leaf_runs,
             "active_leaf_runs": shared_occupancy.occupied,
             // [ORB-12617] The wrapper subset of that occupancy, and what the

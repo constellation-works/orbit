@@ -113,6 +113,9 @@ effective concurrency exceeds the host build slots, including a resized ceiling.
 The warning names both counts, `ORBIT_BUILD_SLOTS` and the resolved `slots` file.
 These diagnostics do not change capacity or admission; a drain may deliberately
 run more agents than build slots. Disabled admission produces no mismatch warning.
+An invalid build-budget setting or unreadable slots file does not prevent `orbit run readiness`
+from reporting the snapshot; it surfaces the failure as an advisory `build_budget_error` field
+on the capacity object (with `build_budget_warnings: []`) and in command text.
 Fresh managed `proc.spawn` calls include accumulated queue credit in the activity's
 remaining budget, while their configured per-call timeout still applies. Prefer
 the provider's native long-running shell transport for build validation.
