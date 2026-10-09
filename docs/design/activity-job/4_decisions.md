@@ -1506,7 +1506,7 @@ The commit step derives the summary from the change it is about to deliver, and 
 1. `commit_batch_changes` calls `ensure_durable_execution_summary` after read-only checkout resolution and validation, and before the delivery gate. It no-ops when `meaningful_execution_summary` already finds one, so an agent-authored summary always wins.
 2. The derived text is read out of `git status --porcelain=v1 --untracked-files=all -z` in the delivery worktree — the same file set `git add --all` will stage — and names each path with its change kind, capped at 25 entries plus a remainder count. It claims no outcome, only what the diff shows.
 3. It is persisted to the task record through `apply_task_automation_update` with a `execution_summary_derived` event, so it is durable before any Git mutation and re-checkable afterwards with `git show --stat` on the delivery commit.
-4. When there is no change to describe, nothing is derived and nothing is persisted; the gate rejects as before.
+4. When there is no change to describe, nothing is derived from the worktree. A delivery automation action (a review batch) is the one exception: its deliverable is coverage evidence, not a diff. The host returns that action's `automation-coverage.json` only when settlement accepts or would accept it for the frozen batch (complete examination, and matching batch, epoch, input digest and action), and the summary restates its reviewed range, commit and delivery counts, and findings, under the same `execution_summary_derived` event [ORB-14837]. Otherwise nothing is persisted and the gate rejects as before.
 
 The gate's contract is untouched. What changed is that its rejection is no longer reachable in the ordinary case.
 
@@ -1524,7 +1524,7 @@ The gate's contract is untouched. What changed is that its rejection is no longe
 - Checkout resolution and branch/merge validation now run before the delivery gate, since the derived summary reads the worktree the gate protects. Nothing ahead of the gate mutates Git state.
 - `Cost:` a derived summary describes the shape of a change, not its intent. A PR whose body carries one tells a reviewer which files moved and nothing about why, which is weaker than an agent-authored account and could be mistaken for one if the opening line is not read.
 - `Cost:` the parser is coupled to `git status --porcelain=v1 -z` record framing, including the rename/copy source field that follows its record.
-- `Cost:` a task tagged `no-diff-expected` with an empty summary still has nothing to derive from and still fails the gate, unchanged from before this decision.
+- `Cost:` a task tagged `no-diff-expected` with an empty summary and no accepted coverage evidence still has nothing to derive from and still fails the gate.
 
 ## Shipped activities move from tool allowlists to disallow lists; allowlists stay for custom jobs
 
@@ -1724,6 +1724,7 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - [ORB-10449] — split step-completion protocol from response content so a stalled agent-loop step fails where it happened.
 - [ORB-10464] — refuse workflow admission when a done dependency's work is not in the base the worktree would be cut from.
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
+- [ORB-14837] — derive a clean review batch's `execution_summary` from its accepted coverage evidence.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.

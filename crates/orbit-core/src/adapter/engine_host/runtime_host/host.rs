@@ -83,6 +83,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::automation::record_direct_landing_intent(self, request)
     }
 
+    fn accepted_automation_coverage(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::automation::CoverageEvidence>, OrbitError> {
+        crate::application::automation::accepted_action_coverage(self, task_id, Utc::now())
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,
