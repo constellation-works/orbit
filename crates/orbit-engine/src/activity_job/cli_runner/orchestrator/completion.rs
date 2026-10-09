@@ -1,7 +1,7 @@
 //! Projection of a finished provider subprocess: response and completion
 //! envelopes, invocation trace, failure diagnostics, and the step output.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_agent::{
@@ -35,7 +35,7 @@ use super::super::stdout_preview::{
     bounded_assistant_message, stdout_text_preview,
 };
 use super::super::supervisor::CapturedOutput;
-use super::limit::{record_limit, reported_limit, structured_provider_limit};
+use super::limit::{record_limit, record_usage_windows, reported_limit, structured_provider_limit};
 
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
@@ -64,6 +64,9 @@ pub(super) struct ProviderExit<'a> {
     /// The provider-side time budget Orbit injected into argv, if the
     /// provider has one. [ORB-14683]
     pub(super) print_timeout: Option<Duration>,
+    /// The `CODEX_HOME` a Codex child ran with, where its session rollout
+    /// holds the usage windows. [ORB-14696]
+    pub(super) codex_home: Option<PathBuf>,
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -92,6 +95,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         duration,
         timed_out,
         print_timeout,
+        codex_home,
     } = exit;
 
     // Provider output is not the system of record for artifact-backed
@@ -456,15 +460,19 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         None
     };
 
+    // [ORB-14696] The windows first, so a limit failure observed in the same
+    // run is the newer observation of its window.
+    let crew = input.get("crew").and_then(Value::as_str);
+    record_usage_windows(
+        host,
+        &provider,
+        stdout.bytes(),
+        codex_home.as_deref(),
+        run_id,
+        crew,
+    );
     if let Some((limit, detail)) = &observed_limit {
-        record_limit(
-            host,
-            &provider,
-            limit,
-            detail,
-            run_id,
-            input.get("crew").and_then(Value::as_str),
-        );
+        record_limit(host, &provider, limit, detail, run_id, crew);
     }
 
     let StdoutTextPreview {

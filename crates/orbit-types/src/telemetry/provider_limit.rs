@@ -1,8 +1,9 @@
 //! What a host knows about its provider accounts' usage limits [ORB-14695].
 //!
 //! A usage limit belongs to the provider login on one host, so each host keeps
-//! its own record. Every limit failure writes an observation; the latest per
-//! provider, model scope and window stands.
+//! its own record. Every limit failure writes an observation, and so does
+//! every Codex or Claude run that reported its usage windows [ORB-14696]; the
+//! latest per provider, model scope and window stands.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,9 @@ pub const PROVIDER_LIMIT_DETAIL_MAX_BYTES: usize = 512;
 pub enum ProviderLimitSource {
     /// The provider failed a run because the limit was reached.
     Error,
+    /// The provider reported a window's usage in its own telemetry after a
+    /// run, whether or not the run failed [ORB-14696].
+    Event,
 }
 
 impl ProviderLimitSource {
@@ -24,6 +28,7 @@ impl ProviderLimitSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
+            Self::Event => "event",
         }
     }
 
@@ -32,13 +37,14 @@ impl ProviderLimitSource {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "error" => Some(Self::Error),
+            "event" => Some(Self::Event),
             _ => None,
         }
     }
 }
 
 /// One reading of a provider account's usage limit on this host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderLimitObservation {
     /// The provider whose account the limit belongs to (`codex`, `claude`).
     pub provider: String,
@@ -55,6 +61,18 @@ pub struct ProviderLimitObservation {
     /// When the provider said the limit resets; `None` when it did not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<DateTime<Utc>>,
+    /// How much of the window the account has used, in percent, as the
+    /// provider reported it. It can exceed 100. `None` when the provider did
+    /// not say, as a limit failure usually does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percent: Option<f64>,
+    /// The window's length in minutes, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
+    /// Whether reaching this window stops the account's runs. An overage
+    /// window is recorded for display but does not gate.
+    #[serde(default = "gating_default")]
+    pub gating: bool,
     pub observed_at: DateTime<Utc>,
     /// The run that observed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +83,10 @@ pub struct ProviderLimitObservation {
     /// The provider's own words, redacted and bounded to
     /// [`PROVIDER_LIMIT_DETAIL_MAX_BYTES`].
     pub detail: String,
+}
+
+fn gating_default() -> bool {
+    true
 }
 
 impl ProviderLimitObservation {

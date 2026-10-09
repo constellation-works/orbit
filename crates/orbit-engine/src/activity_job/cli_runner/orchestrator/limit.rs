@@ -1,8 +1,11 @@
 //! [ORB-14695] A provider whose account hit a usage limit: the typed
 //! `[provider_limit]` failure, and the observation the host records.
+//! [ORB-14696] The usage windows a provider reported after any run.
+
+use std::path::Path;
 
 use chrono::{DateTime, Offset, Utc};
-use orbit_agent::{provider_usage_limit, provider_usage_limit_details};
+use orbit_agent::{provider_usage_limit, provider_usage_limit_details, provider_usage_windows};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
 use serde_json::Value;
@@ -113,11 +116,39 @@ pub(super) fn record_limit(
         run_id: (!run_id.is_empty()).then(|| run_id.to_string()),
         crew: crew.map(str::to_string),
         detail: ProviderLimitObservation::bounded_detail(detail),
+        used_percent: None,
+        window_minutes: None,
+        gating: true,
     };
-    if let Err(error) = host.record_provider_limit(&observation) {
+    record(host, &observation);
+}
+
+/// [ORB-14696] Record each usage window the provider reported about its own
+/// account during the run, success or failure. `stdout` is the whole capture,
+/// since a long run's first frames sit before a truncation marker, and
+/// `codex_home` the `CODEX_HOME` the Codex child ran with.
+pub(super) fn record_usage_windows(
+    host: &dyn RuntimeHost,
+    provider: &str,
+    stdout: &[u8],
+    codex_home: Option<&Path>,
+    run_id: &str,
+    crew: Option<&str>,
+) {
+    for mut observation in provider_usage_windows(provider, stdout, codex_home, Utc::now()) {
+        observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
+        observation.crew = crew.map(str::to_string);
+        record(host, &observation);
+    }
+}
+
+/// The store is advisory: a host that cannot record an observation logs it
+/// and the step's outcome stands.
+fn record(host: &dyn RuntimeHost, observation: &ProviderLimitObservation) {
+    if let Err(error) = host.record_provider_limit(observation) {
         tracing::warn!(
-            provider,
-            run_id,
+            provider = observation.provider,
+            run_id = observation.run_id,
             "could not record the provider usage limit on this host: {error}"
         );
     }

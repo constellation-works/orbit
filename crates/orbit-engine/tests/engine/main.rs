@@ -1,8 +1,8 @@
 //! Activity dispatch and the engine's deterministic actions: v2 agent and
-//! local-shell dispatch, provider capacity, name resolution, worktree
-//! lifecycle, PR and handoff landing, the shipped PR pipeline's before-PR
-//! review fixes, completion re-review rounds and candidate resume, and history
-//! notes.
+//! local-shell dispatch, provider capacity, limits and usage windows, name
+//! resolution, worktree lifecycle, PR and handoff landing, the shipped PR
+//! pipeline's before-PR review fixes, completion re-review rounds and candidate
+//! resume, and history notes.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -27,6 +27,8 @@ mod pr_landing;
 mod provider_capacity;
 #[cfg(unix)]
 mod provider_limit;
+#[cfg(unix)]
+mod provider_usage_window;
 mod recovery_evidence;
 mod review_fixes;
 #[cfg(unix)]
