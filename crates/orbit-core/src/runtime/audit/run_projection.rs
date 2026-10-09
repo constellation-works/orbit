@@ -232,6 +232,7 @@ where
                     latest_message: None,
                     latest_message_truncated: false,
                     stdout_blob_ref: None,
+                    build_budget_waits: None,
                     stopped_descendants: Vec::new(),
                 });
             }
@@ -294,6 +295,16 @@ where
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                 }
+            }
+            Some("cli_invocation_build_budget") => {
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                record.build_budget_waits = serde_json::from_value(event.raw.clone()).ok();
             }
             Some("cli_invocation_finished") => {
                 let Some(record) = matching_provider_process_for_completion(

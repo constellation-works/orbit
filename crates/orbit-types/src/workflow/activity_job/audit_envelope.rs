@@ -339,6 +339,16 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Admission waits observed for a provider invocation. Cumulative within
+    /// the invocation; overlapping intervals earn deadline credit only once.
+    CliInvocationBuildBudget {
+        provider: String,
+        count: u64,
+        total_ms: u64,
+        longest_ms: u64,
+        queued_wall_ms: u64,
+        deadline_extension_ms: u64,
+    },
     /// §7.6 — CLI backend subprocess finished (either naturally or by
     /// wall-clock timeout). `timed_out == true` iff the subprocess was killed
     /// because it exceeded `wall_clock_timeout_ms`.
@@ -403,6 +413,7 @@ impl V2AuditEventKind {
                 "cli.invocation.stopped_descendant"
             }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
+            V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }

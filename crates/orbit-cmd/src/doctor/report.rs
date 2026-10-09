@@ -15,6 +15,7 @@ use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDocto
 
 /// The checks after the workspace ones, in report order.
 const REPORT_PROBES: &[DoctorProbe] = &[
+    DoctorProbe::many("build-budget", |runtime, _| build_budget_rows(runtime)),
     DoctorProbe::one("state-directory-permissions", |runtime, _| {
         state_directory_permissions_row(runtime)
     }),
@@ -32,6 +33,25 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
 ];
+
+fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+    match runtime.build_budget_capacity_warnings() {
+        Ok(warnings) if warnings.is_empty() => vec![WorkspaceDoctorResult {
+            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Ok,
+            message: "No running drain exceeds host build slots.".into(), remediation: None,
+        }],
+        Ok(warnings) => warnings.into_iter().map(|warning| WorkspaceDoctorResult {
+            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning,
+            message: format!("{}: {}", warning["run_id"].as_str().unwrap_or("drain"), warning["message"].as_str().unwrap_or("capacity mismatch")),
+            remediation: Some(format!("Set ORBIT_BUILD_SLOTS or edit {}; or lower orbit run concurrency.", warning["settings_file"].as_str().unwrap_or("~/.orbit/cache/build-budget/slots"))),
+        }).collect(),
+        Err(error) => vec![WorkspaceDoctorResult {
+            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning,
+            message: format!("Cannot inspect build-budget capacity: {error}"),
+            remediation: Some("Check ORBIT_BUILD_SLOTS and ~/.orbit/cache/build-budget/slots, then rerun orbit doctor.".into()),
+        }],
+    }
+}
 
 /// Every read-only check `orbit doctor` reports, in report order.
 pub fn doctor_report_probes() -> impl Iterator<Item = &'static DoctorProbe> {

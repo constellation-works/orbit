@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import math
 import os
 from pathlib import Path
 import sys
 import time
+import uuid
 from typing import NoReturn
 
 
@@ -18,6 +20,53 @@ MAX_BUILD_SLOTS = 128
 MAX_CARGO_JOBS = 1024
 DEFAULT_WAIT_REPORT_INTERVAL_SECONDS = 45.0
 TEST_WAIT_REPORT_INTERVAL_ENV = "_ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS"
+WAIT_DIRECTORY_ENV = "ORBIT_ACTIVITY_BUILD_BUDGET_DIR"
+
+
+class ManagedWait:
+    """Heartbeat only admission time, independently of provider output buffering."""
+
+    def __init__(self) -> None:
+        directory = os.environ.get(WAIT_DIRECTORY_ENV)
+        self.path = Path(directory) / f"{uuid.uuid4().hex}.json" if directory else None
+        self.started_monotonic_ms = time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1_000_000
+        self.started = time.monotonic()
+        self.next_update = 0.0
+        self.lock_file = None
+        if self.path is not None:
+            try:
+                self.lock_file = self.path.with_suffix(".lock").open("a+")
+                fcntl.flock(self.lock_file, fcntl.LOCK_EX)
+            except OSError:
+                if self.lock_file is not None:
+                    self.lock_file.close()
+                self.lock_file = None
+                self.path = None
+
+    def update(self, finished: bool = False) -> None:
+        now = time.monotonic()
+        if not finished and now < self.next_update:
+            return
+        self.next_update = now + 0.1
+        if self.path is None:
+            return
+        # Atomic replacement gives the reader a complete snapshot. A killed
+        # wrapper stops heartbeating, so it cannot keep extending the deadline.
+        temporary = self.path.with_suffix(".pending")
+        try:
+            temporary.write_text(json.dumps({
+                "started_monotonic_ms": self.started_monotonic_ms,
+                "elapsed_ms": int((now - self.started) * 1000),
+                "finished": finished,
+            }), encoding="utf-8")
+            temporary.replace(self.path)
+        except OSError:
+            # The ordinary lock budget still works without managed telemetry.
+            pass
+        finally:
+            if finished and self.lock_file is not None:
+                self.lock_file.close()
+                self.lock_file = None
 
 
 def fail(message: str, status: int = 64) -> NoReturn:
@@ -165,6 +214,7 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
         wait_started = time.monotonic()
         report_interval = wait_report_interval()
         waiting = False
+        managed_wait = None
         next_report = 0.0
         while True:
             for slot, descriptor in descriptors:
@@ -178,20 +228,27 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
                         os.close(other_descriptor)
                 if waiting:
                     elapsed = time.monotonic() - wait_started
+                    if managed_wait is not None:
+                        managed_wait.update(finished=True)
                     report_wait(f"acquired slot {slot} after {elapsed:.1f}s")
                 return slot, descriptor
 
             now = time.monotonic()
             if not waiting:
+                managed_wait = ManagedWait()
                 report_wait(
                     f"waiting for admission (slots={slots}, budget_dir={directory})"
                 )
                 waiting = True
                 next_report = now + report_interval
+
             elif now >= next_report:
                 elapsed = now - wait_started
                 report_wait(f"still waiting for admission (elapsed {elapsed:.1f}s)")
                 next_report = now + report_interval
+
+            if managed_wait is not None:
+                managed_wait.update()
 
             time.sleep(0.05)
     except BaseException:

@@ -61,7 +61,7 @@ class AffectedTestGateTests(unittest.TestCase):
         (self.root / "docs/guide.md").write_text("Fixture docs\n")
         for path in ("crates/orbit-core/assets/jobs/pipeline.yaml",
                      "crates/orbit-core/assets/activities/examples/reference.yaml",
-                     "plugin/hooks/check.sh", "server.json"):
+                     "plugin/hooks/check.sh", "server.json", "scripts/build-budget.py"):
             (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text("fixture\n")
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
@@ -171,6 +171,8 @@ os.execvp(sys.argv[2], sys.argv[2:])
                 (self.root / path).write_text("changed\n")
                 self.assertEqual(self.selected(), ["orbit-cli"])
                 self.git("checkout", "--", path)
+        (self.root / "scripts/build-budget.py").write_text("changed\n")
+        self.assertEqual(self.selected(), sorted(set(self.core_dependents + ["orbit-engine"])))
 
     def test_unknown_declared_reader_fails_closed(self):
         metadata = json.loads(self.metadata.read_text())

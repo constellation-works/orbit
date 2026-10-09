@@ -48,6 +48,7 @@ def changed_paths(base):
 # these edges, so each is declared here as (path prefix, reading crates). A
 # changed path under a prefix selects the readers and their reverse dependents.
 FILE_READERS = (
+    (Path("scripts/build-budget.py"), ("orbit-engine",)),
     (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
     (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
     (Path("plugin/hooks"), ("orbit-cli",)),
