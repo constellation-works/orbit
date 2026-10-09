@@ -162,7 +162,7 @@ clears it.
 ## 4. The scheduler pass
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
-then per enabled definition holds the sidecar lock, re-reads cursors, and
+then per definition holds the sidecar lock, re-reads cursors, and
 either baselines, skips, or fires. Under that lock it first revalidates the
 loaded revision: a definition deleted since discovery skips as
 `definition_removed`, and one whose file no longer loads to the same
@@ -193,6 +193,12 @@ Recovery on the next locked pass:
 - Checkpoint write failure reports `fired` with the task id and best-effort
   mint evidence; retry reconciles from `pending.task_id` or stays
   unresolved.
+
+Pending recovery runs before the enabled check: disabling a definition stops
+new mints while still reconciling an already-recorded mint. Dry-run inspects
+the pending claim in the same order. A claim with a task id previews `fired`
+with that task and slot, while a claim without one reports `unresolved_pending`.
+Neither preview writes cursor state or mints a task.
 
 ### 4b. `skip_if_unchanged`: nothing landed, nothing to mint
 

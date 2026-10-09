@@ -43,6 +43,8 @@ use orbit_types::workflow::{
 
 #[path = "scheduling/failed_members.rs"]
 mod failed_members;
+#[path = "scheduling/pending_mints.rs"]
+mod pending_mints;
 #[path = "scheduling/released_attempts.rs"]
 mod released_attempts;
 

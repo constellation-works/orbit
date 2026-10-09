@@ -335,17 +335,22 @@ fn dry_run_definition(
     state_path: &Path,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskFireReport, OrbitError> {
+    let state = load_cursor_state(state_path)?;
+    if let Some(pending) = state
+        .definitions
+        .get(&definition.name)
+        .and_then(|cursor| cursor.pending.as_ref())
+    {
+        return Ok(pending_claim_report(definition, pending));
+    }
+
     if !definition.enabled {
         return Ok(skipped(definition, "disabled"));
     }
 
-    let state = load_cursor_state(state_path)?;
     let Some(cursor) = state.definitions.get(&definition.name) else {
         return Ok(action(definition, "would_baseline"));
     };
-    if let Some(pending) = &cursor.pending {
-        return Ok(unresolved_pending(definition, pending));
-    }
 
     let baseline = parse_rfc3339(&cursor.baseline_at)?;
     let last_slot = cursor.last_slot.as_deref().map(parse_rfc3339).transpose()?;
@@ -502,18 +507,7 @@ fn recover_pending(
     if let Some(task_id) = pending.task_id.clone() {
         return match checkpoint_consumed(session, definition, &cursor, &pending.slot, &task_id, now)
         {
-            Ok(()) => Ok(Some(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
-                reason: Some(format!(
-                    "reconciled pending mint for slot {} as {task_id}",
-                    pending.slot
-                )),
-                slot: Some(pending.slot),
-                task_id: Some(task_id),
-                blocking_task_id: None,
-                automation: None,
-            })),
+            Ok(()) => Ok(Some(pending_claim_report(definition, &pending))),
             Err(error) => Ok(Some(AutoTaskFireReport {
                 name: definition.name.clone(),
                 action: "fired",
@@ -528,7 +522,7 @@ fn recover_pending(
         };
     }
 
-    Ok(Some(unresolved_pending(definition, &pending)))
+    Ok(Some(pending_claim_report(definition, &pending)))
 }
 
 fn fire_slot(
@@ -687,10 +681,23 @@ fn checkpoint_consumed(
     session.save()
 }
 
-fn unresolved_pending(
+/// Preview the same recovery outcome a live pass reports after checkpointing.
+fn pending_claim_report(
     definition: &AutoTaskDefinition,
     pending: &AutoTaskPendingClaim,
 ) -> AutoTaskFireReport {
+    if let Some(task_id) = &pending.task_id {
+        return AutoTaskFireReport {
+            reason: Some(format!(
+                "reconciled pending mint for slot {} as {task_id}",
+                pending.slot
+            )),
+            slot: Some(pending.slot.clone()),
+            task_id: Some(task_id.clone()),
+            ..action(definition, "fired")
+        };
+    }
+
     AutoTaskFireReport {
         slot: Some(pending.slot.clone()),
         ..skipped(
