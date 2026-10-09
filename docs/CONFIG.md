@@ -296,7 +296,7 @@ orbit config set crews.gemini.enabled true
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns, on each workspace row, the normalized crews of that checkout's effective config, each with its `enabled` state (schema version 3), or `crews_error` when that configuration cannot be read.
 
-The dashboard's **Settings › Crews** table shows each crew's provider, model, effort, tags, layer and **Used by** references. At widths of 900 px or less, each value carries an inline field label. Usage is resolved server-side from the effective default, system and review crew settings, final-recovery and complexity pools, and enabled auto-task definitions whose plugin is active in the workspace. Auto-tasks without an explicit crew inherit the configured selection rather than adding a separate crew reference. If the auto-task listing fails (every definition malformed), the Settings view and crew writes still succeed, the **Used by** column omits auto-task references, and a warning is logged.
+The dashboard's **Settings › Crews** table shows each crew's provider, model, usage **Limit**, effort, tags, layer and **Used by** references. The Limit column is the crew's tightest live usage window on this host, with its used percent, reset and a `gated` badge while admission skips the crew (see [provider usage limits](#provider-usage-limits)). At widths of 900 px or less, each value carries an inline field label. Usage is resolved server-side from the effective default, system and review crew settings, final-recovery and complexity pools, and enabled auto-task definitions whose plugin is active in the workspace. Auto-tasks without an explicit crew inherit the configured selection rather than adding a separate crew reference. If the auto-task listing fails (every definition malformed), the Settings view and crew writes still succeed, the **Used by** column omits auto-task references, and a warning is logged.
 
 ### Disabled crews
 
@@ -596,6 +596,19 @@ provider_limit_explicit_crews = "wait"      # or "pool"
 A redrawn task's `crew_selection.source` names the limit. A task left with no unlimited crew waits, and the local drain reports it with `reason: "provider_limit"` in `orbit run readiness --json`. The detail reads `<provider> <window> at <used>% (limit <threshold>%) until <reset>; crews <list> skipped`. The wait lifts by itself after the reset. As under a hold, an `orbit run ship` that names such a task still runs it on its usual draw. A task whose standing [provider failure hold](#provider-failure-holds) leaves no crew reports `provider_backoff` first.
 
 **Pull drains.** Each pass of a follower's pull drain re-reads its own store. It excludes each limited crew from its crew window with source `provider_limit` and an `until` time. Unlike the window's other exclusions, this one lifts at `until` within the same drain. The owner never hands the follower a task on that crew in the meantime. The owner's before-PR reviewer is not gated.
+
+**Seeing the limits.** Every surface below reads one view of this host's live readings. It uses the same liveness, threshold and crew rules as admission, so a surface cannot show a crew as runnable while admission skips it.
+
+- `orbit run readiness` prints a `Provider limits:` line per gated reading, for example `claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`. A reset on another UTC day is written with its date. Each waiting task's `provider_limit` line carries its detail. `--json` lists every live reading in a top-level `provider_limits` array. Each entry has `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `threshold`, `gated`, `until` and `crews` (the enabled crews it covers).
+- `orbit run show <pull-drain>` lists a limited crew as `excluded <crew> (provider_limit until <time>): <reading>`.
+- `orbit doctor` reports one `provider-limits:<provider>` row per provider an enabled crew uses:
+  - `ok`: below its threshold. The row lists the live readings.
+  - `warning`: gated. The row names the window, use, reset and the crews skipped.
+  - `info`: `no usage signal; Orbit learns limits from failures`, for a provider that reports no usage windows: every provider but Codex and Claude.
+  - `warning` on `provider-limits:workflow.system_crew` or `provider-limits:operation.review_crew`: that lane's crew uses a gated provider. Those lanes are not gated, so their runs may fail until the reset.
+
+  `orbit doctor providers` shows the same rows under each provider's executor: the `LIMITS` column and `provider_limits` in `--json`.
+- The dashboard's Settings › Crews has a Limit column: the crew's tightest window, with its used percent, reset and a `gated` badge while admission skips the crew. The Drain card names the gated readings and lists tasks waiting with `provider_limit`, with their detail.
 
 ### Final recovery pool
 

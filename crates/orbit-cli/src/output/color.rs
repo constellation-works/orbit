@@ -64,6 +64,7 @@ pub fn role_for(domain: Domain, value: &str) -> Role {
         (DoctorStatus, "ok") => Ok,
         (DoctorStatus, "warning") => Warn,
         (DoctorStatus, "ERROR" | "error") => Error,
+        (DoctorStatus, "info") => Muted,
 
         (AuditStatus, "success") => Ok,
         (AuditStatus, "failure") => Error,

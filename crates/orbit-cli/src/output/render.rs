@@ -169,7 +169,9 @@ fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> Str
                 Status::Error => "ERROR",
                 Status::Warning => "WARN",
                 Status::Skipped => "SKIP",
-                Status::Ok => continue,
+                // Informational rows are facts, not findings; the table
+                // shows them.
+                Status::Ok | Status::Info => continue,
             };
             let mut finding = format!(
                 "{}  {label}\n{}",

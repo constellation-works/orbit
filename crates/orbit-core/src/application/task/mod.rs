@@ -9,6 +9,7 @@ mod context_widening;
 mod desktop;
 mod provider_hold;
 pub(crate) mod provider_limit;
+mod provider_limit_view;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod helpers;
@@ -62,6 +63,10 @@ pub(crate) use pilot_admission::{
     OperatorValidationRequirement, PilotAdmissionHold, operator_validation_requirements,
 };
 pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+pub use provider_limit_view::{
+    CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
+    UngatedLaneLimit, short_time,
+};
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};

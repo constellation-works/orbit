@@ -608,6 +608,7 @@ fn render_fixture_child() {
             Status::Warning => "WARN",
             Status::Error => "ERROR",
             Status::Skipped => "SKIP",
+            Status::Info => "INFO",
         };
         let detail = row.remediation.as_ref().map_or_else(
             || row.message.clone(),
@@ -745,7 +746,11 @@ fn doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values() {
     assert_eq!(table.status.code(), Some(1));
     let stdout = String::from_utf8(table.stdout).expect("table UTF-8");
     let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
-    for row in diagnostics.iter().filter(|row| row["status"] != "ok") {
+    // An `info` row is a fact about the setup, not a finding.
+    for row in diagnostics
+        .iter()
+        .filter(|row| row["status"] != "ok" && row["status"] != "info")
+    {
         assert!(
             findings.contains(row["check"].as_str().unwrap()),
             "{findings}"

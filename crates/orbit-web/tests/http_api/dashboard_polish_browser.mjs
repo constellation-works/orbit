@@ -178,7 +178,7 @@ try {
         const cells = [...document.querySelector('[data-key="crews.empty"] .config-crew-cells').children].map(cell => cell.lastElementChild);
         return {
           text: { left: text.left, right: text.right }, cell: { left: cell.left, right: cell.right }, cardRight: card.right,
-          empty: [1, 2, 3, 4, 6].map(index => cells[index].textContent), action: cells[7].textContent,
+          empty: [1, 2, 3, 4, 5, 7].map(index => cells[index].textContent), action: cells[8].textContent,
           columns: [...head.children].map(node => node.getBoundingClientRect().left),
           rowColumns: [...document.querySelector('[data-key="crews.primary"] .config-crew-cells').children].map(node => node.getBoundingClientRect().left),
           labelDisplays: [...document.querySelectorAll('.config-crew-label')].map(node => getComputedStyle(node).display),

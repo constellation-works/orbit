@@ -35,6 +35,7 @@ use serde_json::Value;
 
 mod auth_exclusions;
 mod build_budget;
+mod provider_limits;
 mod replay_crew;
 mod run_history;
 mod run_show_display;

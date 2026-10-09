@@ -241,6 +241,7 @@ td .rel-rate { font-size: 12px; }
 .doctor-row.warning { border-left-color: var(--state-pending); }
 .doctor-row.ok { border-left-color: var(--state-success); }
 .doctor-row.skipped { border-left-color: var(--state-disabled); }
+.doctor-row.info { border-left-color: var(--accent); }
 .doctor-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .doctor-status {
   min-width: 7ch; font: 600 10px var(--font-mono);
@@ -249,6 +250,7 @@ td .rel-rate { font-size: 12px; }
 .doctor-status.error { color: var(--state-error); }
 .doctor-status.warning { color: var(--state-pending); }
 .doctor-status.ok { color: var(--state-success); }
+.doctor-status.info { color: var(--accent); }
 .doctor-check { color: var(--fg); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
 .doctor-duration { margin-left: auto; color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
 .doctor-message {

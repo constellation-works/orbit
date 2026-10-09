@@ -6,7 +6,7 @@ Usage: orbit doctor [OPTIONS]
        orbit doctor <COMMAND>
 
 Commands:
-  providers  Show each executor's provider CLI, configured sandbox, and Linux sandbox readiness
+  providers  Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
   fs-access  Dry-run a workspace-relative path against a filesystem profile's read and modify rules
 
 Options:

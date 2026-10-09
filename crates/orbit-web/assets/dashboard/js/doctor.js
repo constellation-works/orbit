@@ -31,7 +31,10 @@ const $ = (id) => document.getElementById(id);
 const DOCTOR_TIMEOUT_MS = 75_000;
 
 // Problems first, in the order an operator acts on them.
-const STATUS_ORDER = ["error", "warning", "ok", "skipped"];
+// An `info` row is a fact about the setup, not a problem: it folds away with
+// the passing checks.
+const STATUS_ORDER = ["error", "warning", "ok", "info", "skipped"];
+const QUIET_STATUSES = new Set(["ok", "info", "skipped"]);
 
 // The report shown, for the host and workspace visit it was read in.
 let current = null;
@@ -333,8 +336,8 @@ function renderBody() {
       };
       return rank(a.row) - rank(b.row) || a.index - b.index;
     });
-  const problems = ordered.filter(({ row }) => row.status !== "ok" && row.status !== "skipped");
-  const quiet = ordered.filter(({ row }) => row.status === "ok" || row.status === "skipped");
+  const problems = ordered.filter(({ row }) => !QUIET_STATUSES.has(row.status));
+  const quiet = ordered.filter(({ row }) => QUIET_STATUSES.has(row.status));
   if (problems.length) {
     const list = el("div", { class: "doctor-list" }, problems.map(({ row, index }) => rowNode(row, index)));
     list.dataset.key = "doctor-problems";
@@ -350,8 +353,10 @@ function renderBody() {
       if (details.isConnected) detailsOpen = details.open;
     });
     const ok = quiet.filter(({ row }) => row.status === "ok").length;
+    const info = quiet.filter(({ row }) => row.status === "info").length;
+    const summary = [plural(ok, "passing check"), info ? `${info} info` : null, `${quiet.length - ok - info} skipped`];
     details.append(
-      el("summary", { text: `${plural(ok, "passing check")} · ${quiet.length - ok} skipped` }),
+      el("summary", { text: summary.filter(Boolean).join(" · ") }),
       el("div", { class: "doctor-list" }, quiet.map(({ row, index }) => rowNode(row, index))),
     );
     details.dataset.key = "doctor-passing";

@@ -655,8 +655,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   the task and error), `leaf_released` (a claimed leaf was
   released for a `transient` failure other than a forge outage, with the
   task, class and reason) or `provider_limit` (this host's latest reading of
-  the crew's provider usage window is at or over its threshold, with the
-  reading and an `until`; it lifts at `until` within the same drain, see
+  the crew's provider usage window is at or over its threshold, written
+  `(provider_limit until <time>)` before the reading; it lifts at `until`
+  within the same drain, see
   [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).

@@ -440,6 +440,19 @@ node crates/orbit-web/src/tests/dashboard_doctor_browser.mjs \
   /absolute/path/to/playwright/index.mjs .orbit/tmp/doctor-browser
 ```
 
+The provider-limit browser fixture serves Settings › Crews and the Drain card
+with a seeded provider-limit view. It checks the Limit column (used percent,
+window, reset, the `gated` badge and the placeholder for an uncovered crew),
+the Drain card's provider-limit note and its `provider_limit` waits with their
+detail, and their contrast under the light and the dark colour scheme. It
+saves a crews and a drain screenshot per scheme and
+`provider-limits-assertions.json`:
+
+```bash
+node crates/orbit-web/src/tests/dashboard_provider_limits_browser.mjs \
+  /absolute/path/to/playwright/index.mjs .orbit/tmp/provider-limits-browser
+```
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

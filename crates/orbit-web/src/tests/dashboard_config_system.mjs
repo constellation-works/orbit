@@ -403,13 +403,14 @@ assert.equal(explainer.hidden, true, 'Crews does not repeat the generic explaine
 assert.equal(controls.hidden, true, 'Crews hides the empty controls band');
 const crewHead = named(body, 'config-crew-head')[0];
 assert.ok(crewHead, 'Crews has a header row');
-assert.deepEqual(crewHead.children.map(cell => cell.textContent).slice(0, 7), [
-  'Name', 'Provider', 'Model', 'Effort', 'Tags / fallbacks', 'Layer', 'Used by',
+assert.deepEqual(crewHead.children.map(cell => cell.textContent).slice(0, 8), [
+  'Name', 'Provider', 'Model', 'Limit', 'Effort', 'Tags / fallbacks', 'Layer', 'Used by',
 ]);
 const crewCells = named(body, 'config-crew-cells').find(node => !classesOf(node).includes('config-crew-head'));
 assert.ok(crewCells, 'the crew row is present');
 assert.doesNotMatch(crewCells.textContent, /\[\]/, 'empty crew arrays use the em dash placeholder');
-assert.equal(crewCells.children[4].children[1].textContent, '—', 'an empty crew array uses an em dash');
+assert.equal(crewCells.children[5].children[1].textContent, '—', 'an empty crew array uses an em dash');
+assert.equal(crewCells.children[3].children[1].textContent, '—', 'a crew no usage reading covers shows no limit');
 assert.deepEqual(crewCells.children.map(cell => cell.children[0].textContent), crewHead.children.map(cell => cell.textContent), 'every stacked value has its matching column label before it');
 assert.match(crewCells.textContent, /workflow\.default_crew/);
 assert.deepEqual(textOf(crewCells, 'config-crew-use'), effective().crews[0].referenced_by, 'usage renders each server reference once');
