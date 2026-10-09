@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 
-use super::apply::{PreparedTaskSnapshot, ValidatedTask};
+use super::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::input::action_failed;
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};

@@ -639,7 +639,7 @@ was cancelled at 04:14Z and its six live leaves finished with four handoffs reco
 undelivered, two failures recorded nowhere, and every owner claim left `running`.
 **Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/pull/settle.rs`
 (`OrbitRuntime::best_effort_settle_terminal_claimed_leaf`, `OrbitRuntime::settle_pending_pulls`),
-`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain.rs::PullDrain::carry_settlement`,
+`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain/settlement.rs::PullDrain::carry_settlement`,
 `crates/orbit-core/src/runtime/task/reservation_cleanup.rs::finalize_job_run_with_cleanup_after_prior_read`,
 `crates/orbit-core/src/application/job/run/actions.rs::cancel_job_run_with_reason`
 
