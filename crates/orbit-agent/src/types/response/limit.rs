@@ -14,7 +14,9 @@
 //! - Gemini CLI: `TerminalQuotaError: You exceeded your current quota`.
 //! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`.
 
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc,
+};
 use orbit_types::workflow::ProviderLimitFailure;
 
 /// Phrases that alone say a usage limit was reached. Lowercase, with
@@ -158,7 +160,7 @@ fn try_again_at(folded: &str, now: DateTime<Utc>, local: FixedOffset) -> Option<
 }
 
 /// Claude Code's `resets 3pm (America/Los_Angeles)` or `resets Oct 10, 3pm
-/// (Europe/London)`. A time-only reset already past today is tomorrow's.
+/// (Europe/London)`. A reset already past today is tomorrow's.
 fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     const LEAD: &str = "resets ";
     let start = folded.find(LEAD)? + LEAD.len();
@@ -178,10 +180,7 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let time = parse_clock(time)?;
     let today = now.with_timezone(zone).date_naive();
     let date = match date {
-        Some(date) => {
-            let year = today.format("%Y").to_string();
-            NaiveDate::parse_from_str(&format!("{date} {year}"), "%b %d %Y").ok()?
-        }
+        Some(date) => nearest_explicit_date(date, today)?,
         None => today,
     };
     let at = zone
@@ -193,6 +192,17 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     } else {
         at
     })
+}
+
+/// The year-less `Jan 2` occurrence nearest `today`, so a January reset seen in
+/// late December is next January's, and a December reset seen in early January
+/// is last December's. A date already passed today is not pushed a year ahead:
+/// its own occurrence is nearest, and the caller rolls a past instant to tomorrow.
+fn nearest_explicit_date(date: &str, today: NaiveDate) -> Option<NaiveDate> {
+    [today.year() - 1, today.year(), today.year() + 1]
+        .into_iter()
+        .filter_map(|year| NaiveDate::parse_from_str(&format!("{date} {year}"), "%b %d %Y").ok())
+        .min_by_key(|candidate| (*candidate - today).num_days().abs())
 }
 
 /// `3pm`, `3:30pm`, `10 am`.
