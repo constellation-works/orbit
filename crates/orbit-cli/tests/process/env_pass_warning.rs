@@ -20,6 +20,7 @@ use crate::{fixture_crew, git_repo};
 
 const UNSET: &str = "FIXTURE_WORKER_TOKEN_UNSET";
 const SET: &str = "FIXTURE_WORKER_TOKEN_SET";
+const MACOS_TEMPLATE_VAR: &str = "__CF_USER_TEXT_ENCODING";
 const SECRET: &str = "secret-value-that-must-never-be-printed";
 const JOB: &str = "env_pass_fixture";
 
@@ -31,6 +32,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::build(true)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn new_with_template_defaults() -> Self {
+        Self::build(false)
+    }
+
+    fn build(override_pass_list: bool) -> Self {
         let temp = tempdir().expect("fixture root");
         let home = temp.path().join("home");
         let repo = temp.path().join("repo");
@@ -61,7 +71,9 @@ impl Fixture {
             .success();
         let root = fixture.home.join(".orbit");
         fixture_crew::configure_sol(&root);
-        fixture.pass_list(&["HOME", "PATH", UNSET, SET]);
+        if override_pass_list {
+            fixture.pass_list(&["HOME", "PATH", UNSET, SET]);
+        }
         let jobs = root.join("resources/jobs");
         fs::create_dir_all(&jobs).expect("job catalog");
         for name in [JOB, "workspace_auto_pipeline"] {
@@ -134,6 +146,7 @@ impl Fixture {
         // a scratch home; its JSON still lists every row.
         let output = self
             .command(set)
+            .env_remove(MACOS_TEMPLATE_VAR)
             .args(["doctor", "--json"])
             .output()
             .expect("doctor");
@@ -258,4 +271,22 @@ fn doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set() {
 
     let ok = fixture.doctor_row(&[(SET, SECRET), (UNSET, SECRET)]);
     assert_eq!(ok["status"], "ok", "{ok}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_does_not_warn_for_unset_template_defaults_after_fresh_init() {
+    let fixture = Fixture::new_with_template_defaults();
+    let row = fixture.doctor_row(&[]);
+    assert_eq!(
+        row["status"], "ok",
+        "template defaults should not warn: {row}"
+    );
+    assert!(
+        !row["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(MACOS_TEMPLATE_VAR),
+        "the macOS-only template name is absent on Linux: {row}"
+    );
 }
