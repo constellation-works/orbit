@@ -383,16 +383,19 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let mut child = command
-        .current_dir(&fixture.work)
-        .env("HOME", &fixture.home)
-        .env("USERPROFILE", &fixture.home)
-        .env_remove("RUST_LOG")
-        .args(["run", "logs", run_id, "--follow", "--json"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    // Own the child before any assertion so every panic path reaps it.
+    let mut child = crate::child_guard::ChildGuard::new(
+        command
+            .current_dir(&fixture.work)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .env_remove("RUST_LOG")
+            .args(["run", "logs", run_id, "--follow", "--json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let stdout = child.stdout.take().unwrap();
     let (send, receive) = std::sync::mpsc::sync_channel(16);
     let reader = std::thread::spawn(move || {
@@ -417,7 +420,8 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     while let Ok(line) = receive.recv_timeout(Duration::from_secs(15)) {
         records.push(serde_json::from_str(&line).unwrap());
     }
-    reader.join().unwrap();
+    // Bound the exit wait and kill before joining: the reader only ends at EOF,
+    // so joining first would hang on a follow that never stops.
     let deadline = Instant::now() + Duration::from_secs(15);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -425,10 +429,13 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         }
         if Instant::now() >= deadline {
             child.kill().unwrap();
+            child.wait().unwrap();
+            reader.join().unwrap();
             panic!("--follow did not stop at terminal");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    reader.join().unwrap();
     assert!(status.success());
     assert_eq!(
         fixture.run_state(run_id),
@@ -477,7 +484,7 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         .orbit()
         .env("RUST_LOG", "warn")
         .args(["run", "logs", run_id, "--follow", "--json"])
-        .timeout(Duration::from_secs(5))
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .assert()
         .success()
         .get_output()
