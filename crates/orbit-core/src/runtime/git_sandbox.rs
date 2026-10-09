@@ -1,4 +1,4 @@
-//! Host-owned Git write boundaries for Linux provider namespaces.
+//! Host-owned Git write boundaries for macOS and Linux provider sandboxes.
 
 use std::collections::HashMap;
 use std::fs;
@@ -11,9 +11,9 @@ use orbit_types::policy::ResolvedFsProfile;
 
 /// Protect the pointer entry as well as the real per-worktree and shared
 /// metadata. Recovery payloads and refs live beneath the shared Git directory.
-/// A symlink in the metadata path cannot be pinned by a bind of its target;
+/// A symlink in the metadata path can leave a writable alias of its target;
 /// reject that layout rather than leave a replaceable pointer in a write root.
-pub(crate) fn append_linux_git_denies(
+pub(crate) fn append_git_denies(
     cwd: &Path,
     resolved: &mut ResolvedFsProfile,
 ) -> Result<(), OrbitError> {
@@ -52,9 +52,9 @@ pub(crate) fn append_linux_git_denies(
         }
         metadata_root = protect_metadata_path(&git_dir.join(target.trim()), resolved)?;
     }
-    validate_linux_git_tree(&metadata_root)?;
+    validate_git_tree(&metadata_root)?;
     if !git_dir.starts_with(&metadata_root) {
-        validate_linux_git_tree(&git_dir)?;
+        validate_git_tree(&git_dir)?;
     }
     Ok(())
 }
@@ -90,7 +90,7 @@ fn protect_metadata_path(
             fs::symlink_metadata(ancestor).map_err(|error| metadata_error(ancestor, error))?;
         if metadata.file_type().is_symlink() {
             return Err(OrbitError::PolicyDenied(format!(
-                "Linux Git protection refuses symlink metadata path `{}`",
+                "Git protection refuses symlink metadata path `{}`",
                 ancestor.display()
             )));
         }
@@ -101,12 +101,12 @@ fn protect_metadata_path(
     let metadata = fs::metadata(&canonical).map_err(|error| metadata_error(path, error))?;
     if !metadata.is_file() && !metadata.is_dir() {
         return Err(OrbitError::PolicyDenied(
-            "Linux Git protection refuses a special-file metadata pointer".to_string(),
+            "Git protection refuses a special-file metadata pointer".to_string(),
         ));
     }
     if metadata.is_file() && metadata.nlink() > 1 {
         return Err(OrbitError::PolicyDenied(
-            "Linux Git protection refuses hard-linked metadata pointer".to_string(),
+            "Git protection refuses hard-linked metadata pointer".to_string(),
         ));
     }
     let suffix = if metadata.is_dir() { "/**" } else { "" };
@@ -116,7 +116,7 @@ fn protect_metadata_path(
     Ok(canonical)
 }
 
-fn validate_linux_git_tree(root: &Path) -> Result<(), OrbitError> {
+fn validate_git_tree(root: &Path) -> Result<(), OrbitError> {
     // Git removes transient locks while host-side preparation is scanning.
     // Restart the entire tree rather than skip a missing entry: its replacement
     // and previously inspected siblings must still pass the same validation.
@@ -128,7 +128,7 @@ fn validate_linux_git_tree(root: &Path) -> Result<(), OrbitError> {
     loop {
         attempts += 1;
         validate_git_tree_ancestors(root, &mut directories)?;
-        let result = scan_linux_git_tree(root, &mut directories);
+        let result = scan_git_tree(root, &mut directories);
         validate_git_tree_ancestors(root, &mut directories)?;
         match result {
             Ok(()) => return Ok(()),
@@ -168,7 +168,7 @@ fn validate_git_directory(
 ) -> Result<(), OrbitError> {
     if !metadata.is_dir() {
         return Err(OrbitError::PolicyDenied(format!(
-            "Linux Git protection refuses non-directory metadata traversal `{}`",
+            "Git protection refuses non-directory metadata traversal `{}`",
             path.display()
         )));
     }
@@ -177,7 +177,7 @@ fn validate_git_directory(
         && previous != identity
     {
         return Err(OrbitError::PolicyDenied(format!(
-            "Linux Git protection refuses replaced metadata directory `{}`",
+            "Git protection refuses replaced metadata directory `{}`",
             path.display()
         )));
     }
@@ -206,18 +206,18 @@ fn scan_error(path: &Path, error: io::Error) -> GitTreeScanError {
     }
 }
 
-fn scan_linux_git_tree(
+fn scan_git_tree(
     root: &Path,
     directories: &mut DirectoryIdentities,
 ) -> Result<(), GitTreeScanError> {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     run_scan_hook(GitScanStage::ReadDirectory, root).map_err(|error| scan_error(root, error))?;
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
     validate_git_directory(root, &metadata, directories)?;
     for entry in fs::read_dir(root).map_err(|error| scan_error(root, error))? {
         let entry = entry.map_err(|error| scan_error(root, error))?;
         let path = entry.path();
-        #[cfg(test)]
+        #[cfg(all(test, target_os = "linux"))]
         run_scan_hook(GitScanStage::InspectEntry, &path)
             .map_err(|error| scan_error(&path, error))?;
         let metadata = fs::symlink_metadata(&path).map_err(|error| scan_error(&path, error))?;
@@ -225,13 +225,14 @@ fn scan_linux_git_tree(
             || (metadata.is_file() && metadata.nlink() > 1)
         {
             return Err(OrbitError::PolicyDenied(format!(
-                "Linux Git protection refuses symlink, special-file or hard-linked metadata entry `{}`",
+                "Git protection refuses symlink, special-file or hard-linked metadata entry `{}`",
                 path.display()
-            )).into());
+            ))
+            .into());
         }
         if metadata.is_dir() {
             validate_git_directory(&path, &metadata, directories)?;
-            scan_linux_git_tree(&path, directories)?;
+            scan_git_tree(&path, directories)?;
         }
     }
     // read_dir may have opened an older directory after a concurrent rename.
@@ -248,26 +249,26 @@ fn metadata_error(path: &Path, error: std::io::Error) -> OrbitError {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GitScanStage {
     ReadDirectory,
     InspectEntry,
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 type GitScanHook = Box<dyn FnMut(GitScanStage, &Path) -> io::Result<()>>;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 thread_local! {
     static SCAN_HOOK: std::cell::RefCell<Option<GitScanHook>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Per-thread interleaving seam; production always uses the real filesystem.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) struct GitScanHookGuard(Option<GitScanHook>);
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 impl GitScanHookGuard {
     pub(crate) fn install(
         hook: impl FnMut(GitScanStage, &Path) -> io::Result<()> + 'static,
@@ -276,14 +277,14 @@ impl GitScanHookGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 impl Drop for GitScanHookGuard {
     fn drop(&mut self) {
         SCAN_HOOK.with(|slot| slot.replace(self.0.take()));
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn run_scan_hook(stage: GitScanStage, path: &Path) -> io::Result<()> {
     SCAN_HOOK.with(|slot| match slot.borrow_mut().as_mut() {
         Some(hook) => hook(stage, path),

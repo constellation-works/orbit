@@ -134,6 +134,18 @@ pub(super) fn resolve_executor_sandbox_on(
                 // side roots and the worktree re-allow.
                 deny_registered_checkout_host_stores(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
+                // Host Git state is never a provider convenience grant. Append
+                // these last so even a side root inside metadata stays denied.
+                crate::runtime::git_sandbox::append_git_denies(
+                    &runtime.paths().repo_root,
+                    &mut resolved,
+                )
+                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+                if let Some(cwd) = subprocess_cwd {
+                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
+                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
+                    )?;
+                }
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 Ok(Some(ResolvedSandbox {
                     kind,
@@ -197,16 +209,15 @@ pub(super) fn resolve_executor_sandbox_on(
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 // Host Git state is never a provider convenience grant. Append
                 // these last so even a side root inside metadata stays denied.
-                crate::runtime::git_sandbox::append_linux_git_denies(
+                crate::runtime::git_sandbox::append_git_denies(
                     &runtime.paths().repo_root,
                     &mut resolved,
                 )
                 .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
                 if let Some(cwd) = subprocess_cwd {
-                    crate::runtime::git_sandbox::append_linux_git_denies(cwd, &mut resolved)
-                        .map_err(|error| {
-                            DispatchError::CliInvocationPermanent(error.to_string())
-                        })?;
+                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
+                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
+                    )?;
                 }
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 // Recovery is host-prepared too. Its policy includes future

@@ -355,14 +355,21 @@ requires no new ADR.
 
 ### Git integrity and host recovery
 
-The Linux host appends non-overridable Git write denials after provider and
-runtime convenience grants. It discovers the registered and active checkout's
-`.git` entry, its real gitdir and `commondir`. Those directories include refs,
+On macOS and Linux, the host appends non-overridable Git write denials after
+provider and runtime convenience grants. It discovers the registered and active
+checkout's `.git` entry, its real gitdir and `commondir`. Those directories include refs,
 rebase state and host recovery payloads at
 `<git-common-dir>/orbit/worktree-recovery/<run-id>/attempt-<n>/`. Git inspection stays
 readable; source files remain writable according to the activity profile.
-The private `/tmp` mount hides host scratch, including metadata for a primary
-repository located there. For linked checkouts the compiler resolves the
+On macOS these become terminal SBPL `deny file-write*` clauses covering the
+`.git` pointer file and the complete gitdir/common-directory subtrees, including
+config, attributes, hooks and future metadata entries. They follow the active
+worktree re-allow as well as provider and runtime grants; recovery checkouts
+receive the same protection. macOS implementer profiles still anchor source
+grants at the registered checkout, independently of these metadata denies.
+
+On Linux, the private `/tmp` mount hides host scratch, including metadata for a
+primary repository located there. For linked checkouts the compiler resolves the
 checkout's `.git` file and the gitdir's optional `commondir` pointer, including
 relative paths, and restores just the metadata directories beneath `/tmp` with
 read-only binds before policy mounts and credential masks. Separate gitdir and
@@ -370,8 +377,9 @@ common-directory roots are both retained; the primary checkout's files and
 unrelated host scratch stay hidden unless explicitly granted by the profile.
 Pointers that would restore host `/tmp` itself are refused.
 Metadata paths containing symlinks, symlink entries inside metadata, and
-special files or hard-linked metadata files fail closed before launch: a read-only mount cannot
-protect a writable alias of the same inode. This deliberately does not support
+special files or hard-linked metadata files fail closed before launch on both
+platforms: a pathname deny or read-only mount cannot protect a writable alias
+of the same inode. This deliberately does not support
 local clones whose metadata is hard-linked into another repository.
 
 Host Git operations can remove a transient entry such as `maintenance.lock`
@@ -386,8 +394,8 @@ retry rather than admitting an unstable traversal. This handles the pre-provider
 changing the Git write-denial surface. That UI task needs an explicit retry
 after the repair lands; this repair does not dispatch it.
 
-The compiler pins writable ancestor entries of existing denied paths as mount
-points so they cannot be renamed aside. Beneath the private `/tmp` tmpfs,
+The Linux compiler pins writable ancestor entries of existing denied paths as
+mount points so they cannot be renamed aside. Beneath the private `/tmp` tmpfs,
 Bubblewrap's automatically created mount parents would also be writable even
 when no profile rule grants them. The compiler binds these ancestors read-only
 before mounting writable children, preserving narrow task/audit grants without
