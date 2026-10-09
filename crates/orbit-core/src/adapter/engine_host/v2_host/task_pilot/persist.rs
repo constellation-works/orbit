@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::automation::members::SUPERSEDED_BY_SOURCE;
 
-use super::apply::{Admission, PreparedTaskSnapshot, ValidatedTask};
+use super::admission::{Admission, PreparedTaskSnapshot, ValidatedTask};
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 

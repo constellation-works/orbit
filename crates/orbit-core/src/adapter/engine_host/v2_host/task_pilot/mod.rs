@@ -16,6 +16,7 @@
 //! the atomic write compares it again under the task lock. The pilot cannot
 //! drop a granted target: apply keeps any it omitted.
 
+mod admission;
 mod apply;
 mod assessment;
 mod attachment_budget;
