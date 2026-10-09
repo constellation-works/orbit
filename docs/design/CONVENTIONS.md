@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-09-24
-last_validated: 2026-09-27
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Accepted
 ---
 
@@ -51,10 +51,10 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 - `owner` is the accountable agent family, not a committer list or full model string.
 - `last_updated` is the calendar date of the last meaningful content change. Trivial reformat commits should not reset it.
 - `status` is `Draft` until the doc is approved by the feature lead, then `Accepted`. It moves back to `Draft` if a structural rewrite is in flight.
-- `feature` is the folder slug (e.g. `host-registry`, `task-artifacts`). Lets tooling group docs by feature without parsing paths.
+- `feature` is the folder slug (e.g. `host-registry`, `task-artifacts`). It is descriptive metadata; the current generated index groups design rows by directory path.
 - `doc_role` is one of `overview`, `design`, `vision`, `decisions` — corresponds 1:1 with the filename prefix `1_`/`2_`/`3_`/`4_`.
 
-The template frontmatter also carries the orbit-docs retrieval fields (`type`, `summary`, `tags`, `paths`, `related_features`, `related_artifacts`) so the doc is indexable on day one. `type` and `summary` are required by the strict parser. `summary` must be a non-empty single line. `related_artifacts` accepts task, learning, and friction references (`ORB-NNNNN`, `L-NNNN`, and `FYYYY-MM-NNN`). Decisions are addressed by their titles and links, not artifact IDs, so they do not belong in `related_artifacts`. The tolerant indexer infers these fields for legacy design docs and pattern docs, but new docs should write them explicitly.
+The current generated design index reads `title`, `summary`, `status`, and `owner` from each entry document. `scripts/generate-doc-indexes.sh` derives a missing title or summary from the document and defaults missing status and owner; it does not validate a design-frontmatter schema. No `orbit docs` command or tolerant inference contract is present in the current source tree. The template's other fields (`feature`, `doc_role`, `type`, `tags`, `paths`, `related_features`, and `related_artifacts`) are descriptive metadata that the generated design index does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 
@@ -185,7 +185,7 @@ There is no `Deprecated` status at the doc level. If the feature is retired, del
 
 ## 11. Enforcement
 
-These are recommendations, not mechanically enforced by `orbit-design` (retired) or the docs indexer. Both numbered design folders and free-form docs are acceptable.
+These are recommendations, not mechanically enforced by `scripts/generate-doc-indexes.sh`, which renders navigation rows from current documents. Both numbered design folders and free-form docs are acceptable.
 
 Five mechanical checks worth adding later (as optional lints, never blocking):
 
@@ -217,15 +217,15 @@ Retired features are removed from this table along with their folder.
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
-| Host Registry | [docs/design/host-registry/](./host-registry/) | claude |
-| MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | claude |
+| Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
+| MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | codex |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
 | Operations as Data | [docs/design/operations-as-data/](./operations-as-data/) | claude |
-| Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
-| Orbit Search | [docs/design/orbit-search/](./orbit-search/) | claude |
+| Orbit Core | [docs/design/orbit-core/](./orbit-core/) | codex |
+| Orbit Search | [docs/design/orbit-search/](./orbit-search/) | codex |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
-| Remote Access | [docs/design/remote-access/](./remote-access/) | claude |
+| Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |

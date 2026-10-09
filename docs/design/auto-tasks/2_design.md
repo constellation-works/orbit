@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-09-27
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -514,11 +514,11 @@ accurate.
 - **Definitions are not full-text indexed.** Unlike indexed docs, auto-task
   YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
-- **Workspace-scoped.** The scheduler processes the definitions of the workspace
-  whose routine fired it, not a cross-workspace sweep. **[slated to change]** —
-  the tick fans out over every registered owner checkout on the host; each
-  checkout's definitions are still evaluated against that checkout's own store.
-- **Repo-global chores run once per owner** (pending change). Everything the
+- **Workspace-local definitions, host-wide tick.** The scheduler loads definitions
+  from the current runtime's workspace. The host tick evaluates auto-task
+  definitions in every registered owner checkout after routine evaluation and
+  under the host sweep lock; each checkout uses its own task store and cursor.
+- **Repo-global chores run once per owner.** Everything the
   scheduler touches is host-local, so N owner checkouts of one repository are N
   independent schedules by design. A definition whose effect lands on the shared
   remote (a dependency bump, a release chore) is minted by each owner's clock;
