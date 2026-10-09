@@ -1,3 +1,5 @@
+//! Worktree GC: which runs' worktrees are delivered, and the owner lookups it needs.
+
 use chrono::{Duration, Utc};
 use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
@@ -6,17 +8,6 @@ use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
 use crate::{OrbitError, OrbitRuntime};
-
-mod scratch;
-mod store;
-#[cfg(test)]
-mod tests;
-mod tmp;
-pub use store::{
-    AuditGcReport, BatchReport, BlobSweepReport, RetentionTableReport, RunGcReport,
-    StoreRetentionOverview, StoreSpaceReport,
-};
-pub use tmp::{TmpGcReport, TmpGcResult};
 
 impl OrbitRuntime {
     /// Every recorded run, without step rows. Worktree GC classifies live
