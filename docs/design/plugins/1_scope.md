@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-04
-last_validated: 2026-09-22
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 ---
 
 # Scope: Orbit plugin standard
@@ -18,7 +18,7 @@ Orbit binary.
 
 Before this standard a "plugin" was three unrelated things: an **external tool** (executable
 plus sidecar, registered by `orbit tool add`, unsandboxed, absent from MCP —
-`orbit-tools/src/external.rs`); the **Claude Code plugin mirror** under `plugin/`; and a
+`crates/orbit-tools/src/external.rs`); the **Claude Code plugin mirror** under `plugin/`; and a
 **separate product** (orbit-research, orbit-graph) shelling out to `orbit tool run`. Nothing
 let one artifact declare tools, CLI, schedules, panels and skills together, or record what it
 is *allowed* to do; a first-party surface cost up to nine hand edits [ORB-12724].

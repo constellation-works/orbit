@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-09-23
+last_validated: 2026-10-08
 ---
 
 # Scope: Cloud dispatch
