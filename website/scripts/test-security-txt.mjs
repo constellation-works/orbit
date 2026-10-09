@@ -7,12 +7,39 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const validatorPath = join(scriptDirectory, 'validate-security-txt.mjs');
-const fixture = Buffer.from([
-  'Contact: https://example.com/security\n',
-  'Expires: 2099-12-31T23:59:59Z\n',
-  'Canonical: https://orbit-cli.com/.well-known/security.txt\n',
-  'Policy: https://example.com/security/policy\n',
-].join(''));
+
+function securityTxt(expires) {
+  return Buffer.from([
+    'Contact: https://example.com/security\n',
+    `Expires: ${expires}\n`,
+    'Canonical: https://orbit-cli.com/.well-known/security.txt\n',
+    'Policy: https://example.com/security/policy\n',
+  ].join(''));
+}
+
+const fixture = securityTxt('2099-12-31T23:59:59Z');
+const expiryCases = [
+  { label: 'a valid future date', expires: '2099-12-31T23:59:59Z', valid: true },
+  { label: 'February 29 in a future leap year', expires: '2096-02-29T00:00:00Z', valid: true },
+  {
+    label: 'February 29 in a future non-leap year',
+    expires: '2099-02-29T00:00:00Z',
+    valid: false,
+    message: /existing UTC calendar date/u,
+  },
+  {
+    label: 'February 30 in the future',
+    expires: '2099-02-30T00:00:00Z',
+    valid: false,
+    message: /existing UTC calendar date/u,
+  },
+  {
+    label: 'an expired timestamp',
+    expires: '2000-01-01T00:00:00Z',
+    valid: false,
+    message: /must be in the future/u,
+  },
+];
 const fixtureDirectory = await mkdtemp(join(tmpdir(), 'security-txt-validator-'));
 
 function validate(filePath) {
@@ -20,16 +47,24 @@ function validate(filePath) {
 }
 
 try {
-  const validPath = join(fixtureDirectory, 'valid.txt');
   const bomPath = join(fixtureDirectory, 'bom.txt');
   const malformedPath = join(fixtureDirectory, 'malformed.txt');
 
-  await writeFile(validPath, fixture);
   await writeFile(bomPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fixture]));
   await writeFile(malformedPath, Buffer.concat([fixture, Buffer.from([0xff])]));
 
-  const validResult = validate(validPath);
-  assert.equal(validResult.status, 0, validResult.stderr);
+  for (const [index, testCase] of expiryCases.entries()) {
+    const filePath = join(fixtureDirectory, `expires-${index}.txt`);
+    await writeFile(filePath, securityTxt(testCase.expires));
+
+    const result = validate(filePath);
+    if (testCase.valid) {
+      assert.equal(result.status, 0, `${testCase.label} must pass: ${result.stderr}`);
+    } else {
+      assert.notEqual(result.status, 0, `${testCase.label} must fail`);
+      assert.match(result.stderr, testCase.message, `${testCase.label} must be reported`);
+    }
+  }
 
   const bomResult = validate(bomPath);
   assert.notEqual(bomResult.status, 0, 'a UTF-8 BOM must make validation fail');
