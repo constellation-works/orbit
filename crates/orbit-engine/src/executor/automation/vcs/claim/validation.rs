@@ -40,6 +40,12 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// An empty requirement list runs no command: the candidate is still observed
 /// and pinned, and the output records `skipped_no_required_commands` with no
 /// validation references.
+///
+/// [ORB-14849] A before-landing review runs after `pr_open`. Its
+/// revalidation step passes the pre-publication output as `carry`: unless
+/// `revalidate` is true — the reviewer committed a fix — that output is
+/// returned unchanged, so the pin step always reads one step. With a fix the
+/// commands run on the new head, still unpublished, before it is pushed.
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -52,6 +58,11 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         == Some(true)
     {
         return no_diff::validate(host, &context, &workspace_path, input);
+    }
+    if let Some(carried) = input.get("carry").filter(|value| !value.is_null())
+        && input.get("revalidate").and_then(Value::as_bool) != Some(true)
+    {
+        return Ok(carried.clone());
     }
     if let Some(prevalidated) = input.get("prevalidated").filter(|value| !value.is_null()) {
         return pin_prevalidated(host, &context, &workspace_path, input, prevalidated);

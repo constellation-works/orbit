@@ -1,10 +1,11 @@
-//! One read view of both automatic-review switches [ORB-13992].
+//! One read view of every automatic-review switch [ORB-13992].
 //!
-//! Before-PR review is `review.before_pr` (with `review.minutes` and
-//! `operation.review_crew`); after-landing review is the
+//! Before-PR review is `review.before_pr` and before-landing review is
+//! `review.before_landing` [ORB-14849], both with `review.minutes` and
+//! `operation.review_crew`; after-landing review is the
 //! `delivery-code-review` auto-task's `enabled` flag. `orbit config show`,
 //! `orbit doctor`, the dashboard and the drain probe all render this view, so
-//! they report the two switches together and with the same provenance.
+//! they report the switches together and with the same provenance.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -13,16 +14,17 @@ use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
-use super::local_route_before_pr_conflict;
+use super::{local_route_before_landing_conflict, local_route_before_pr_conflict};
 use crate::OrbitRuntime;
 use crate::application::automation::{
     AfterLandingHealth, after_landing_health, after_landing_switch,
 };
 
-/// Both automatic-review switches as this workspace resolves them.
+/// Every automatic-review switch as this workspace resolves it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewSwitches {
     pub before_pr: BeforePrSwitch,
+    pub before_landing: BeforeLandingSwitch,
     pub after_landing: AfterLandingSwitch,
 }
 
@@ -45,6 +47,23 @@ pub struct BeforePrSwitch {
     /// route [ORB-14168]. The problem text already says so; doctor uses this
     /// to name the ship-mode remedy rather than the crew remedy. Omitted from
     /// JSON because `problems` and `healthy` carry it.
+    #[serde(skip)]
+    pub local_route_incompatible: bool,
+}
+
+/// `review.before_landing`: review the open PR before it lands. It shares
+/// `review.minutes` and `operation.review_crew` with [`BeforePrSwitch`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BeforeLandingSwitch {
+    pub enabled: bool,
+    /// Config layer that decided `review.before_landing`.
+    pub source: String,
+    /// Why before-landing review cannot run here while it is on; empty when
+    /// it can or is off.
+    pub problems: Vec<String>,
+    /// `review.before_landing` is on and automatic delivery uses the
+    /// local-only route, which opens no PR. Omitted from JSON because
+    /// `problems` and `healthy` carry it.
     #[serde(skip)]
     pub local_route_incompatible: bool,
 }
@@ -82,6 +101,22 @@ impl ReviewSwitches {
         )
     }
 
+    /// The before-landing line; minutes and crew are the before-PR line's.
+    pub fn before_landing_line(&self) -> String {
+        let before_landing = &self.before_landing;
+        let problems = if before_landing.problems.is_empty() {
+            String::new()
+        } else {
+            format!("unhealthy: {}; ", before_landing.problems.join("; "))
+        };
+        format!(
+            "{problems}{} (review.before_landing, {}); shares review.minutes and \
+             operation.review_crew with before-PR review",
+            if before_landing.enabled { "on" } else { "off" },
+            before_landing.source,
+        )
+    }
+
     /// The after-landing line, with the consumer's health when it is on.
     pub fn after_landing_line(&self) -> String {
         let after_landing = &self.after_landing;
@@ -112,9 +147,16 @@ impl ReviewSwitches {
         !self.before_pr.problems.is_empty()
     }
 
+    /// Whether before-landing review is on but cannot run here.
+    pub fn before_landing_unhealthy(&self) -> bool {
+        !self.before_landing.problems.is_empty()
+    }
+
     /// Whether every switch that is on can run.
     pub fn healthy(&self) -> bool {
-        !self.before_pr_unhealthy() && !self.after_landing_unhealthy()
+        !self.before_pr_unhealthy()
+            && !self.before_landing_unhealthy()
+            && !self.after_landing_unhealthy()
     }
 }
 
@@ -134,12 +176,13 @@ pub fn review_switches_view(
     };
     let mut view = serde_json::to_value(&switches).unwrap_or(JsonValue::Null);
     view["before_pr"]["line"] = JsonValue::String(switches.before_pr_line());
+    view["before_landing"]["line"] = JsonValue::String(switches.before_landing_line());
     view["after_landing"]["line"] = JsonValue::String(switches.after_landing_line());
     view["healthy"] = JsonValue::Bool(switches.healthy());
     view
 }
 
-/// Resolve both review switches for `runtime`'s workspace at `now`.
+/// Resolve every review switch for `runtime`'s workspace at `now`.
 pub fn review_switches(
     runtime: &OrbitRuntime,
     now: DateTime<Utc>,
@@ -152,40 +195,48 @@ fn review_switches_under(
     policy: &OperationPolicy,
     now: DateTime<Utc>,
 ) -> Result<ReviewSwitches, OrbitError> {
-    let mut problems = Vec::new();
-    let mut local_route_incompatible = false;
-    if policy.review_before_pr.value {
-        // The same mode the drain delivers in. A registered PR workspace is
-        // unaffected; a local-only one cannot run this switch [ORB-14168].
-        if runtime.automatic_delivery_ship_mode() == ShipMode::Local {
-            local_route_incompatible = true;
-            problems.push(local_route_before_pr_conflict(
-                policy.review_before_pr.source.label(),
-            ));
-        }
-        match policy.review_crew.value.as_deref() {
-            None => problems.push(
-                "operation.review_crew is unset, so every gated delivery is refused".to_string(),
-            ),
-            Some(crew) => {
-                if let Err(error) = runtime.resolve_crew_for_task(Some(crew), None) {
-                    problems.push(format!("review crew `{crew}` does not resolve: {error}"));
-                }
-            }
-        }
+    // The same mode the drain delivers in. A registered PR workspace is
+    // unaffected; a local-only one cannot run either switch [ORB-14168].
+    let local_route = runtime.automatic_delivery_ship_mode() == ShipMode::Local;
+    let before_pr_on = policy.review_before_pr.value;
+    let before_landing_on = policy.review_before_landing.value;
+    let mut before_pr_problems = Vec::new();
+    if before_pr_on && local_route {
+        before_pr_problems.push(local_route_before_pr_conflict(
+            policy.review_before_pr.source.label(),
+        ));
+    }
+    let mut before_landing_problems = Vec::new();
+    if before_landing_on && local_route {
+        before_landing_problems.push(local_route_before_landing_conflict(
+            policy.review_before_landing.source.label(),
+        ));
+    }
+    let crew_problems = crew_problems(runtime, policy);
+    if before_pr_on {
+        before_pr_problems.extend(crew_problems.iter().cloned());
+    }
+    if before_landing_on {
+        before_landing_problems.extend(crew_problems);
     }
     let (enabled, source) = after_landing_switch(runtime)?;
     let health = after_landing_health(runtime, now)?;
     Ok(ReviewSwitches {
         before_pr: BeforePrSwitch {
-            enabled: policy.review_before_pr.value,
+            enabled: before_pr_on,
             source: policy.review_before_pr.source.label().to_string(),
             minutes: policy.review_minutes.value,
             minutes_source: policy.review_minutes.source.label().to_string(),
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().to_string(),
-            problems,
-            local_route_incompatible,
+            problems: before_pr_problems,
+            local_route_incompatible: before_pr_on && local_route,
+        },
+        before_landing: BeforeLandingSwitch {
+            enabled: before_landing_on,
+            source: policy.review_before_landing.source.label().to_string(),
+            problems: before_landing_problems,
+            local_route_incompatible: before_landing_on && local_route,
         },
         after_landing: AfterLandingSwitch {
             enabled,
@@ -196,4 +247,19 @@ fn review_switches_under(
             health,
         },
     })
+}
+
+/// Why the shared reviewer crew cannot run a gated review here.
+fn crew_problems(runtime: &OrbitRuntime, policy: &OperationPolicy) -> Vec<String> {
+    match policy.review_crew.value.as_deref() {
+        None => {
+            vec!["operation.review_crew is unset, so every gated delivery is refused".to_string()]
+        }
+        Some(crew) => runtime
+            .resolve_crew_for_task(Some(crew), None)
+            .err()
+            .map(|error| format!("review crew `{crew}` does not resolve: {error}"))
+            .into_iter()
+            .collect(),
+    }
 }

@@ -43,6 +43,12 @@
 //! on every completion round but its last, so a base that keeps moving under
 //! re-review ends in review rather than in an unbounded loop [ORB-14332].
 //!
+//! [ORB-14849] A before-landing review settles the published PR head
+//! instead, after `pr_open`. Its `landing_reviewed_head_sha` then decides:
+//! completion merges only that head, and when the reviewer's fix moved the
+//! PR there, that head is the published one and the head it replaced the
+//! previous one. The DIRTY rule above applies to it unchanged.
+//!
 //! [ORB-13444] Ungated completion is held to that same candidate. The
 //! published head is checked before any merge or auto-merge request, and that
 //! SHA is what the synchronous provider mutation requires. Pending work that
@@ -95,6 +101,8 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    let pinned = landing_review_pins(input);
+    let input = pinned.as_ref().unwrap_or(input);
     // Resolve the bundle exactly as `pr_promote` does: the shared handoff
     // context validates that every named task still belongs to this run and has
     // not been diverted, which is the same precondition completion needs.
@@ -205,6 +213,25 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         "skipped_task_ids": completion["skipped_task_ids"],
         "authorization": completion["authorization"],
     }))
+}
+
+/// The completion pins after a before-landing review settled
+/// `landing_reviewed_head_sha` [ORB-14849], or `None` when no such review
+/// ran. That head is the one to merge. A reviewer fix was pushed onto the
+/// published head under a lease, so a different settled head is now the
+/// published one and the head it replaced the previous one.
+fn landing_review_pins(input: &Value) -> Option<Value> {
+    let landing = input_string_field(input, "landing_reviewed_head_sha")?;
+    let mut pinned = input.clone();
+    if input_string_field(input, "published_head_sha").as_deref() != Some(landing.as_str()) {
+        pinned["previous_published_head_sha"] = input
+            .get("published_head_sha")
+            .cloned()
+            .unwrap_or(Value::Null);
+        pinned["published_head_sha"] = json!(landing);
+    }
+    pinned["reviewed_head_sha"] = json!(landing);
+    Some(pinned)
 }
 
 /// A merge this run is authorized to complete on, with the evidence that

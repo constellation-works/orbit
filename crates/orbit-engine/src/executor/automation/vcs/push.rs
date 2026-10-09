@@ -128,6 +128,19 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 
     let local_sha = commit_sha(workspace_path, &branch)?;
     let remote_sha = remote_branch_sha(workspace_path, &branch)?;
+    // [ORB-14849] A before-landing reviewer's fix goes onto the published
+    // head it reviewed and nowhere else: a branch that moved since loses the
+    // lease, and the push itself is conditional on that head.
+    let lease = input_string_field(input, "lease_remote_sha");
+    if let Some(lease) = &lease
+        && remote_sha.as_deref() != Some(lease.as_str())
+    {
+        return Err(OrbitError::Execution(format!(
+            "push_lease_lost: 'origin/{branch}' is at {}, not the published head {lease} the \
+             review settled on; the reviewer fix is not pushed",
+            remote_sha.as_deref().unwrap_or("<missing>")
+        )));
+    }
     let decision = push_decision(workspace_path, &branch, &local_sha, remote_sha.as_deref())?;
     let (label, force_with_lease) = match decision {
         PushDecision::Missing => ("performed_create", false),
@@ -159,6 +172,9 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     });
     if force_with_lease {
         tool_input["expected_remote_sha"] = json!(remote_sha);
+    } else if let Some(lease) = &lease {
+        tool_input["force_with_lease"] = json!(true);
+        tool_input["expected_remote_sha"] = json!(lease);
     }
     if let Some(retry) = input.get("forge_retry").filter(|value| !value.is_null()) {
         tool_input["forge_retry"] = retry.clone();

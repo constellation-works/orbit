@@ -325,6 +325,9 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
                 outputs["validate"] = json!({"decision": "passed"});
                 outputs["push"] = json!({"branch": BRANCH, "local_sha": HEAD});
                 outputs["pr_open"] = json!({"pr_number": "42"});
+                outputs["landing_review_gate_admit"] = json!({"applies": false});
+                outputs["landing_review_gate_settle"] = json!({"applies": false});
+                outputs["landing_review_validate"] = json!({"decision": "passed"});
                 leaf_completed(pair, leaf, outputs);
             }
         });

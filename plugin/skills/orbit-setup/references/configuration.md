@@ -52,8 +52,9 @@ assuming a value.
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `review.before_pr` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds (default `false`). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
-| `review.minutes` | Wall-clock limit for one candidate's before-PR review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
-| `operation.review_crew` | Crew for automatic review: the before-PR reviewer and, when set, every review task the after-landing auto-task mints. |
+| `review.before_landing` | Before-landing review: open the PR first and review it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (default `false`). PR route only. Config load fails while it and `review.before_pr` are both on: one review layer before landing. |
+| `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
+| `operation.review_crew` | Crew for automatic review: the before-PR or before-landing reviewer and, when set, every review task the after-landing auto-task mints. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |

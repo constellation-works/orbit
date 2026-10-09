@@ -56,19 +56,25 @@ pub struct AdmissionShipContract {
     /// `review_policy` admitted only as `none`, which reads as `false`.
     #[serde(default)]
     pub before_pr: bool,
+    /// The owner's `review.before_landing` when it resolved this contract
+    /// [ORB-14849]: the claimed leaf reviews its open pull request before
+    /// handing it off. Never on together with `before_pr`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub before_landing: bool,
     pub completion: String,
     pub authorization_reference: Option<String>,
-    /// The owner's captured before-PR review contract: present exactly when
-    /// `before_pr` is on [ORB-13895]. A handoff's review evidence is judged
-    /// against it, never against the owner's settings at handoff time.
+    /// The owner's captured review contract: present exactly when
+    /// `before_pr` [ORB-13895] or `before_landing` [ORB-14849] is on. A
+    /// handoff's review evidence is judged against it, never against the
+    /// owner's settings at handoff time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<AdmissionReviewContract>,
 }
 
-/// The review a claimed leaf must run before it opens a pull request, as the
-/// owner resolved it when the claim was admitted [ORB-13895]. Its timing is
-/// the ship contract's `before_pr`; the rest is what the leaf's gate and the
-/// owner's acceptance hold it to.
+/// The review a claimed leaf must run before it hands off, as the owner
+/// resolved it when the claim was admitted [ORB-13895]. Its timing is the
+/// ship contract's `before_pr` or `before_landing`; the rest is what the
+/// leaf's gate and the owner's acceptance hold it to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionReviewContract {
     /// The review evidence contract version the owner reads
@@ -102,13 +108,27 @@ pub struct AdmissionReviewContract {
 }
 
 impl AdmissionShipContract {
-    /// Whether `review` matches `before_pr` and is itself well formed.
+    /// The review timing this contract captured for the claimed leaf.
+    #[must_use]
+    pub fn review_timing(&self) -> orbit_types::workflow::ReviewTiming {
+        use orbit_types::workflow::ReviewTiming;
+        if self.before_pr {
+            ReviewTiming::BeforePr
+        } else if self.before_landing {
+            ReviewTiming::BeforeLanding
+        } else {
+            ReviewTiming::None
+        }
+    }
+
+    /// Whether `review` matches the captured timing and is itself well
+    /// formed.
     #[must_use]
     pub fn review_contract_consistent(&self) -> bool {
         match &self.review {
-            None => !self.before_pr,
+            None => !self.before_pr && !self.before_landing,
             Some(review) => {
-                self.before_pr
+                self.before_pr != self.before_landing
                     && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
                     && review
                         .crew
@@ -198,11 +218,12 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    /// The owner captured `review.before_pr = true` and the executor's leaf
-    /// does not declare that it runs the before-PR gate, or the ship mode is
-    /// not the PR route the gate runs on [ORB-13908]. The executor's own
-    /// switch never refuses. After-landing review never refuses: it runs on
-    /// the owner after landing.
+    /// The owner captured `review.before_pr` or `review.before_landing` on
+    /// and the executor's leaf does not declare that it runs the review
+    /// gate, or the ship mode is not the PR route the gate runs on
+    /// [ORB-13908] [ORB-14849]. The executor's own switch never refuses.
+    /// After-landing review never refuses: it runs on the owner after
+    /// landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
 }

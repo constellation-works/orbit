@@ -28,7 +28,10 @@ routing is in [tool-surface.md](../tool-surface.md).
 - No review on the follower's own terms. With the owner's `review.before_pr`
   on, every claimed PR leaf runs the before-PR reviewer the claim captured
   (the owner's `operation.review_crew`, which each follower must be able to
-  run); the follower's own `review.before_pr` is ignored. After-landing review
+  run); the follower's own `review.before_pr` is ignored. With the owner's
+  `review.before_landing` on instead, the leaf opens its PR first and that
+  reviewer reviews the open PR before the leaf hands off; the owner accepts
+  only the head the review settled. After-landing review
   (the owner's `delivery-code-review` auto-task) never affects admission.
   Status `review` means a delivery handoff is waiting; whether a reviewer ran
   is on the task's `review-gate.json`.
@@ -58,16 +61,17 @@ orbit config get machine.id
 orbit workspace show
 orbit doctor
 orbit config get review.before_pr        # decisive on the owner only
-orbit config get operation.review_crew   # the owner's before-PR reviewer crew
+orbit config get review.before_landing   # decisive on the owner only
+orbit config get operation.review_crew   # the owner's reviewer crew
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
 protocol schema `10`, and equivalent crew and toolchain resolution. Review policy
-is the owner's: admission captures the owner's `review.before_pr` and, when it
-is on, its `operation.review_crew`, review budget, and
-`workflow.required_validation_commands` into the claim. With it
-on, the owner must ship through PRs (the before-PR review runs only on that
-route; admission refuses otherwise) and set `operation.review_crew`, and every
+is the owner's: admission captures the owner's `review.before_pr` and
+`review.before_landing` and, when either is on, its `operation.review_crew`, review budget, and
+`workflow.required_validation_commands` into the claim. With either
+on, the owner must ship through PRs (review runs only on that route;
+admission refuses otherwise) and set `operation.review_crew`, and every
 follower must resolve that crew; `orbit run auto --pull` refuses before
 claiming with `before_pr_reviewer_unavailable` otherwise. The follower's own
 `review.before_pr` is reported to the owner but never gates admission or the

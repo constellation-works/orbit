@@ -61,6 +61,13 @@ spec:
       # passed on.
       prevalidated:
         type: [object, "null"]
+      # A pre-publication output to return unchanged unless
+      # `revalidate` is true; with it true the commands run on the current,
+      # still unpublished head (a before-landing reviewer's fix).
+      carry:
+        type: [object, "null"]
+      revalidate:
+        type: boolean
   output_schema_json:
     type: object
     required: [candidate, validation]

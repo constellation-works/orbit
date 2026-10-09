@@ -939,3 +939,123 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         doctor.diagnostics()
     );
 }
+
+/// [ORB-14849] `orbit config show` and `orbit doctor` print the
+/// before-landing switch with its source, an edit that would turn on both
+/// review layers before landing is refused naming both keys, and a local-only
+/// workspace with it on fails doctor and is held by readiness under its own
+/// code.
+#[test]
+fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() {
+    const TEST: &str = "review_after_landing_cli::before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    enable_review_crew(&fixture);
+    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+    set_policy(&fixture, "review.before_landing", "true");
+
+    let config = fixture.json(&["config", "show", "--json"]);
+    let before_landing = &config["review"]["before_landing"];
+    assert_eq!(before_landing["enabled"], true, "{config}");
+    assert_eq!(before_landing["source"], "global", "{config}");
+    assert_eq!(config["review"]["before_pr"]["enabled"], false, "{config}");
+    let text = fixture.command(&["config", "show"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        text.contains("before-landing: on (review.before_landing, global)"),
+        "{text}"
+    );
+    let (row, _) = doctor_row(&fixture);
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("before-landing review: on (review.before_landing, global)"),
+        "{row}"
+    );
+
+    let refused = fixture
+        .command(&["config", "set", "--global", "review.before_pr", "true"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "{refused:?}");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("review.before_pr") && stderr.contains("review.before_landing"),
+        "{stderr}"
+    );
+
+    fixture
+        .command(&[
+            "workspace",
+            "init",
+            "--name",
+            "audit-qa",
+            "--ship-mode",
+            "local",
+            "--force",
+        ])
+        .assert()
+        .success();
+    let (row, success) = doctor_row(&fixture);
+    assert_eq!(row["status"], "error", "{row}");
+    assert!(!success, "{row}");
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("review.before_landing (global)"),
+        "{row}"
+    );
+    assert!(
+        row["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("`orbit config set review.before_landing false`"),
+        "{row}"
+    );
+
+    let added = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "local hold",
+        "--description",
+        "Held before a local delivery.",
+        "--type",
+        "chore",
+        "--context",
+        "dir:.",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Readiness names the hold.",
+        "--json",
+    ]);
+    let task_id = added["id"].as_str().unwrap().to_string();
+    fixture
+        .command(&["task", "update", &task_id, "--status", "backlog"])
+        .assert()
+        .success();
+    let readiness = fixture.json(&["run", "readiness", &task_id, "--json"]);
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == task_id)
+        .unwrap_or_else(|| panic!("{task_id} missing: {readiness}"));
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "local_route_before_landing", "{entry}");
+    let text = fixture.command(&["run", "readiness"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        text.contains("local_route_before_landing")
+            && text.contains("review.before_landing (global)"),
+        "{text}"
+    );
+}

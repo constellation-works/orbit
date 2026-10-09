@@ -310,6 +310,7 @@ fn admission(
             base_branch: "agent-main".into(),
             landing_branch: "agent-main".into(),
             before_pr: false,
+            before_landing: false,
             completion: "review".into(),
             authorization_reference: None,
             review: None,

@@ -39,10 +39,29 @@ pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] = &[
 /// candidate: there is no second review round [ORB-13989].
 const REVIEW_VALIDATION_STEP: &str = "review_validate";
 
-/// Completion-stage steps: merging the published PR, and re-reviewing and
-/// republishing it after completion rebased a conflicting reviewed head —
-/// up to two rounds, when the base moved again during the first.
+/// The before-landing review of the published PR [ORB-14849]: admission,
+/// the reviewer, settlement, owner revalidation of a reviewer fix and its
+/// push under a lease. They run after the PR opened, so any failure keeps
+/// that PR open and unmerged and the task in review, like a completion
+/// failure, with the step's typed reason.
+pub(in crate::executor::automation) const LANDING_REVIEW_STEPS: &[&str] = &[
+    "landing_review_gate_admit",
+    "landing_review",
+    "landing_review_gate_settle",
+    "landing_review_validate",
+    "landing_push",
+];
+
+/// Completion-stage steps: the before-landing review of the published PR,
+/// merging it, and re-reviewing and republishing it after completion rebased
+/// a conflicting reviewed head — up to two rounds, when the base moved again
+/// during the first.
 const COMPLETION_STEPS: &[&str] = &[
+    "landing_review_gate_admit",
+    "landing_review",
+    "landing_review_gate_settle",
+    "landing_review_validate",
+    "landing_push",
     "complete_pr",
     "re_review_gate_admit",
     "re_review",
@@ -61,6 +80,7 @@ const COMPLETION_STEPS: &[&str] = &[
 /// Admission checkpoints whose attempt a failing run must close.
 const REVIEW_ADMISSION_STEPS: &[&str] = &[
     "review_gate_admit",
+    "landing_review_gate_admit",
     "re_review_gate_admit",
     "re_review_gate_admit_2",
 ];

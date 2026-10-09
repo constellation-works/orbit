@@ -89,6 +89,14 @@ disk_resume_percent = 85
 # Each candidate gets one review, bounded by `minutes` (its fix commit and
 # final validation included).
 # before_pr = false
+#
+# Before-landing review: open the PR first, then have the same kind of
+# reviewer review the open PR while hosted CI runs on it. A reviewer fix is
+# validated and pushed to the PR; the PR lands only at the head the review
+# settled, and any other outcome leaves it open with the task in review.
+# Loading fails while before_pr and before_landing are both on: there is one
+# review layer before landing.
+# before_landing = false
 # minutes = 30
 #
 # After-landing review has no key here: it is the `delivery-code-review`

@@ -45,6 +45,12 @@ spec:
         description: >
           The head a before-PR review certified. Completion merges only this
           exact head; empty when the run carried no review.
+      landing_reviewed_head_sha:
+        type: string
+        description: >
+          The published head a before-landing review settled; empty when none
+          ran. When set it is the head to merge, and the published head after
+          a reviewer fix, with the head it replaced as the previous one.
       re_review_on_conflict:
         type: boolean
         description: >

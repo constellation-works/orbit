@@ -26,6 +26,7 @@ mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod retired_stubs;
 mod review_baseline_hold;
+mod review_before_landing;
 mod review_continuation;
 #[cfg(target_os = "linux")]
 mod review_evidence_fulfilment;

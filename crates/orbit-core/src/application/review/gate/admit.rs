@@ -82,19 +82,41 @@ pub(crate) fn review_gate_admit(
         }
         return Ok(not_applicable("review_admission_missing", None));
     };
-    if rebase.is_some() && !admission.gates_pr() {
+    if rebase.is_some() && !admission.gates_merge() {
         return Err(refused(
             "review_gate_stale: completion rebased a reviewed head but the run's review \
-             admission no longer gates the PR"
+             admission no longer gates the merge"
                 .to_string(),
         ));
     }
-    if !admission.gates_pr() {
+    let preflight = input
+        .get("preflight")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // [ORB-14849] Which review this step is: the published PR's
+    // (`before_landing`), the pre-push gate's, or — for a completion re-review
+    // or the budget preflight — whichever one the run captured.
+    let landing_step = input
+        .get("before_landing")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let applies = if rebase.is_some() || preflight {
+        admission.gates_merge()
+    } else if landing_step {
+        admission.gates_landing()
+    } else {
+        admission.gates_pr()
+    };
+    if !applies {
+        use orbit_types::workflow::ReviewTiming;
         let reason = match admission.timing {
-            orbit_types::workflow::ReviewTiming::None => "review_before_pr_off",
+            ReviewTiming::None if landing_step => "review_before_landing_off",
+            ReviewTiming::None => "review_before_pr_off",
+            // The other layer reviews this run.
+            ReviewTiming::BeforePr => "reviewed_before_pr",
+            ReviewTiming::BeforeLanding => "review_before_landing",
             // A run captured under the retired `after-landing` policy value.
-            orbit_types::workflow::ReviewTiming::AfterLanding => "review_policy_after_landing",
-            orbit_types::workflow::ReviewTiming::BeforePr => unreachable!("gates_pr"),
+            ReviewTiming::AfterLanding => "review_policy_after_landing",
         };
         return Ok(not_applicable(reason, Some(&admission)));
     }
@@ -108,13 +130,18 @@ pub(crate) fn review_gate_admit(
         return Ok(not_applicable("no_diff_exemption", Some(&admission)));
     }
     if input.get("mode").and_then(Value::as_str) == Some("local") {
-        // `review.before_pr` on a local-only route is refused rather than
-        // reinterpreted; a pipeline may learn its route late.
-        return Err(refused(
-            "review_before_pr_local_route_refused: this run captured review.before_pr on but \
-             delivers locally; ship through the PR route or turn review.before_pr off"
-                .to_string(),
-        ));
+        // A review layer before landing on a local-only route is refused
+        // rather than reinterpreted; a pipeline may learn its route late.
+        let key = if admission.gates_landing() {
+            "review.before_landing"
+        } else {
+            "review.before_pr"
+        };
+        return Err(refused(format!(
+            "{}_local_route_refused: this run captured {key} on but delivers locally; ship \
+             through the PR route or turn {key} off",
+            key.replace('.', "_")
+        )));
     }
 
     // A re-review pins the candidate to the base completion rebased onto.
@@ -124,10 +151,6 @@ pub(crate) fn review_gate_admit(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| failed(error.to_string()))?;
-    let preflight = input
-        .get("preflight")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let outcome = require_external_evidence(runtime, &context).and_then(|()| {
         if preflight {
             preflight_budget(runtime, &context)

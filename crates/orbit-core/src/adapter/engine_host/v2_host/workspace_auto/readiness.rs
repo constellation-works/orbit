@@ -376,6 +376,14 @@ pub fn explain_workspace_auto_readiness(
                         );
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    BacklogTaskExclusionReason::LocalRouteBeforeLanding => {
+                        // [ORB-14849] As above, under its own code.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("local_route_before_landing".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::BaselineRedHold => {
                         // [ORB-14258] Lifts by itself once the command passes
                         // on a new base tip; the detail names the base and

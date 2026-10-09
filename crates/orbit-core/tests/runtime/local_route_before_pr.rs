@@ -1,4 +1,5 @@
-//! `review.before_pr` on a local-only route is held before dispatch [ORB-14168].
+//! `review.before_pr` (and `review.before_landing`) on a local-only route is
+//! held before dispatch [ORB-14168] [ORB-14849].
 //!
 //! Readiness, the drain's wave and `orbit doctor`'s review switches share the
 //! ship mode automatic delivery uses. Submitting `task_local_pipeline` still
@@ -312,5 +313,55 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         excluded(&as_local, &pr_task)["reason"],
         "local_route_before_pr",
         "{as_local}"
+    );
+}
+
+/// [ORB-14849] `review.before_landing` on a local-only route opens no pull
+/// request to review, so it is held before dispatch and refused at
+/// submission exactly like `review.before_pr`, under a code of its own.
+#[test]
+fn local_route_holds_before_landing_under_its_own_code() {
+    if !isolated("local_route_before_pr::local_route_holds_before_landing_under_its_own_code") {
+        return;
+    }
+    let (_root, local) = open(ShipMode::Local, "", "[review]\nbefore_landing = true\n");
+    let task = seed(&local, "before landing");
+
+    let discovered = backlog(&local, json!({}));
+    assert!(admitted(&discovered).is_empty(), "{discovered}");
+    let skipped = excluded(&discovered, &task);
+    assert_eq!(
+        skipped["reason"], "local_route_before_landing",
+        "{discovered}"
+    );
+    let detail = skipped["detail"].as_str().unwrap().to_string();
+    assert!(
+        detail.starts_with("review.before_landing (workspace) ")
+            && detail.contains("turn review.before_landing off"),
+        "{detail}"
+    );
+
+    let entry = readiness_entry(&local, &task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "local_route_before_landing", "{entry}");
+    assert_eq!(entry["detail"], detail.as_str(), "{entry}");
+
+    let switches = review_switches(&local, chrono::Utc::now()).expect("review switches");
+    assert!(switches.before_landing.local_route_incompatible);
+    assert!(!switches.before_pr.local_route_incompatible);
+    assert!(!switches.healthy());
+    assert!(
+        switches.before_landing.problems.contains(&detail),
+        "{:?}",
+        switches.before_landing.problems
+    );
+
+    let refused = local_pipeline_error(&local, &task);
+    let OrbitError::InvalidInput(message) = &refused else {
+        panic!("local-route admission must refuse before the job loads, got {refused}");
+    };
+    assert!(
+        message.contains("turn review.before_landing off"),
+        "{message}"
     );
 }

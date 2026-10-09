@@ -85,14 +85,16 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "git_push",
             "pr_open",
             "pr_promote",
+            "review_gate_admit",
+            "review_gate_settle",
             "pr_complete",
             "review_gate_admit",
             "review_gate_settle",
             "review_gate_admit",
             "review_gate_settle",
         ],
-        "one review, no revalidation, then delivery; both completion re-review \
-         rounds only admit and settle as not applicable"
+        "one review, no revalidation, then delivery; the before-landing gate and both \
+         completion re-review rounds only admit and settle as not applicable"
     );
     let pr_open = &host.inputs("pr_open")[0];
     assert_eq!(pr_open["reviewed_head_sha"], "candidate");
@@ -133,7 +135,9 @@ fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
     assert_eq!(
         host.inputs("review_gate_admit")
             .iter()
-            .filter(|input| input["preflight"] != true && input.get("re_review_after").is_none())
+            .filter(|input| input["preflight"] != true
+                && input.get("re_review_after").is_none()
+                && input["before_landing"] != true)
             .count(),
         1,
         "no second reviewer start"
@@ -654,6 +658,10 @@ impl RuntimeHost for ScriptedHost {
             }
             "review_gate_admit" if input.get("re_review_after").is_some() => {
                 json!({ "applies": false, "reason": "re_review_not_required" })
+            }
+            // A before-PR run: the gate after `pr_open` does not apply.
+            "review_gate_admit" if input["before_landing"] == true => {
+                json!({ "applies": false, "reason": "reviewed_before_pr" })
             }
             "review_gate_admit" => json!({
                 "applies": true,

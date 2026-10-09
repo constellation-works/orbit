@@ -1,13 +1,14 @@
-//! Captured review admission: the `review.before_pr` switch, minutes and crew
-//! a delivery run carries in its immutable input [ORB-11333] [ORB-13992].
+//! Captured review admission: the `review.before_pr` or
+//! `review.before_landing` switch, minutes and crew a delivery run carries in
+//! its immutable input [ORB-11333] [ORB-13992] [ORB-14849].
 //!
 //! Resolution order at submission: a parent-authorized child inherits its
 //! parent's snapshot exactly; every other delivery run resolves from
 //! workspace configuration at that moment. Ordinary input naming the reserved
 //! key is refused, and a resume carries its persisted input forward
 //! unchanged.
-//! `review.before_pr` on `task_local_pipeline` is local-only final delivery
-//! and is refused outright. After-landing review is the `delivery-code-review`
+//! `review.before_pr` or `review.before_landing` on `task_local_pipeline` is
+//! local-only final delivery with no PR, and is refused outright. After-landing review is the `delivery-code-review`
 //! auto-task, not an admission value, so it never reaches a snapshot.
 
 use chrono::Utc;
@@ -64,6 +65,11 @@ pub(crate) fn install_review_admission(
             local_route_before_pr_refusal().to_string(),
         ));
     }
+    if job_name == LOCAL_ROUTE_JOB && admission.timing == ReviewTiming::BeforeLanding {
+        return Err(OrbitError::InvalidInput(
+            local_route_before_landing_refusal().to_string(),
+        ));
+    }
 
     let object = input.as_object_mut().ok_or_else(|| {
         OrbitError::InvalidInput("pipeline run input must be a JSON object".to_string())
@@ -107,8 +113,30 @@ pub(crate) fn local_route_before_pr_refusal() -> &'static str {
 /// and readiness. `source` is the operation-layer label (`global`,
 /// `workspace`, or `built-in`).
 pub(crate) fn local_route_before_pr_conflict(source: &str) -> String {
-    let refusal = local_route_before_pr_refusal();
-    let key = "review.before_pr";
+    with_source(local_route_before_pr_refusal(), "review.before_pr", source)
+}
+
+/// The fail-closed sentence `install_review_admission` returns for
+/// `review.before_landing` on `task_local_pipeline` [ORB-14849]: a local
+/// delivery opens no pull request to review before it lands.
+pub(crate) fn local_route_before_landing_refusal() -> &'static str {
+    "review.before_landing reviews an open pull request before it lands and has no meaning \
+     on the local-only delivery route, which opens none; ship through the PR route or turn \
+     review.before_landing off for local delivery (after-landing review is the \
+     delivery-code-review auto-task)"
+}
+
+/// [`local_route_before_landing_refusal`] with its deciding layer, for
+/// doctor and readiness.
+pub(crate) fn local_route_before_landing_conflict(source: &str) -> String {
+    with_source(
+        local_route_before_landing_refusal(),
+        "review.before_landing",
+        source,
+    )
+}
+
+fn with_source(refusal: &str, key: &str, source: &str) -> String {
     format!("{key} ({source}){}", refusal.trim_start_matches(key))
 }
 
@@ -119,12 +147,19 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
     ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
+        // Configuration never resolves both switches on.
         timing: if policy.review_before_pr.value {
             ReviewTiming::BeforePr
+        } else if policy.review_before_landing.value {
+            ReviewTiming::BeforeLanding
         } else {
             ReviewTiming::None
         },
-        timing_source: policy.review_before_pr.source.label().to_string(),
+        timing_source: if policy.review_before_landing.value && !policy.review_before_pr.value {
+            policy.review_before_landing.source.label().to_string()
+        } else {
+            policy.review_before_pr.source.label().to_string()
+        },
         crew: policy.review_crew.value.clone(),
         crew_source: policy.review_crew.source.label().to_string(),
         budget: policy.review_budget(),
@@ -187,7 +222,7 @@ pub(crate) fn upgrade_resume_admission_mismatch(
 fn reserved_review_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{REVIEW_ADMISSION_KEY}` field; the \
-         effective review.before_pr setting is captured from configuration at submission and cannot be \
-         requested through ordinary job input"
+         effective review.before_pr and review.before_landing settings are captured from \
+         configuration at submission and cannot be requested through ordinary job input"
     ))
 }

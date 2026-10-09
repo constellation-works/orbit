@@ -55,9 +55,12 @@ pub enum HandoffReviewDisposition {
     /// The leaf ran the before-PR gate the claim's contract captured
     /// [ORB-13895].
     BeforePr(Box<HandoffReviewEvidence>),
+    /// The leaf reviewed its open pull request before handing it off, as
+    /// the claim's contract captured `review.before_landing` [ORB-14849].
+    BeforeLanding(Box<HandoffReviewEvidence>),
 }
 
-/// The leaf's before-PR review of the candidate it hands off. Every field is
+/// The leaf's review of the candidate it hands off. Every field is
 /// a claim the owner checks against the certificate artifact it holds and
 /// its own observation of the candidate; none is trusted on its own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,11 +109,23 @@ impl HandoffReview {
         }
     }
 
-    /// The before-PR evidence this handoff carries, if any.
-    pub fn before_pr(&self) -> Option<&HandoffReviewEvidence> {
+    /// The review evidence this handoff carries, before-PR or
+    /// before-landing, if any.
+    pub fn evidence(&self) -> Option<&HandoffReviewEvidence> {
         match &self.disposition {
-            HandoffReviewDisposition::BeforePr(evidence) => Some(evidence.as_ref()),
+            HandoffReviewDisposition::BeforePr(evidence)
+            | HandoffReviewDisposition::BeforeLanding(evidence) => Some(evidence.as_ref()),
             HandoffReviewDisposition::NotRequired => None,
+        }
+    }
+
+    /// The timing the disposition records evidence for: `None` when it
+    /// carries none.
+    pub fn evidence_timing(&self) -> ReviewTiming {
+        match &self.disposition {
+            HandoffReviewDisposition::BeforePr(_) => ReviewTiming::BeforePr,
+            HandoffReviewDisposition::BeforeLanding(_) => ReviewTiming::BeforeLanding,
+            HandoffReviewDisposition::NotRequired => ReviewTiming::None,
         }
     }
 }

@@ -109,6 +109,11 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// `backlog` until the switch is turned off or delivery uses the PR route.
     /// `detail` names the deciding config layer and the remedy [ORB-14168].
     LocalRouteBeforePr,
+    /// Effective `review.before_landing` is on and this delivery is the
+    /// local-only route, which opens no pull request to review. Pipeline
+    /// admission refuses it the same way; `detail` names the deciding config
+    /// layer and the remedy [ORB-14849].
+    LocalRouteBeforeLanding,
     /// The task's last delivery failed a required command its base fails the
     /// same way, and the base has not moved to a commit that may pass it
     /// [ORB-14258]. The task stays in `backlog`; the hold lifts by itself once
@@ -656,25 +661,40 @@ fn backlog_snapshot_in_mode(
         }
     });
     // [ORB-14168] A task that cleared the per-task gates would still fail
-    // closed at local-route admission while `review.before_pr` is on. Hold it
-    // here so the drain does not spawn that delivery. Tasks already excluded
-    // above keep the more specific reason. PR delivery skips this, and turning
-    // the switch off (workspace overriding global included) clears it. A PR
-    // drain holds only the tasks a `delivery:task_local_pipeline` tag routes
-    // locally.
-    if runtime.operation_policy().review_before_pr.value
+    // closed at local-route admission while `review.before_pr` or
+    // `review.before_landing` [ORB-14849] is on. Hold it here so the drain
+    // does not spawn that delivery. Tasks already excluded above keep the
+    // more specific reason. PR delivery skips this, and turning the switch
+    // off (workspace overriding global included) clears it. A PR drain holds
+    // only the tasks a `delivery:task_local_pipeline` tag routes locally.
+    let policy = runtime.operation_policy();
+    let local_route_review = if policy.review_before_pr.value {
+        Some((
+            BacklogTaskExclusionReason::LocalRouteBeforePr,
+            crate::application::review::local_route_before_pr_conflict(
+                policy.review_before_pr.source.label(),
+            ),
+        ))
+    } else if policy.review_before_landing.value {
+        Some((
+            BacklogTaskExclusionReason::LocalRouteBeforeLanding,
+            crate::application::review::local_route_before_landing_conflict(
+                policy.review_before_landing.source.label(),
+            ),
+        ))
+    } else {
+        None
+    };
+    if let Some((reason, detail)) = local_route_review
         && (mode == ShipMode::Local || !routed_locally.is_empty())
     {
-        let detail = crate::application::review::local_route_before_pr_conflict(
-            runtime.operation_policy().review_before_pr.source.label(),
-        );
         backlog.retain(|task| {
             if mode == ShipMode::Pr && !routed_locally.contains(&task.id) {
                 return true;
             }
             excluded.push(BacklogTaskExclusion {
                 id: task.id.clone(),
-                reason: BacklogTaskExclusionReason::LocalRouteBeforePr,
+                reason,
                 conflicts: Vec::new(),
                 crew: None,
                 detail: Some(detail.clone()),

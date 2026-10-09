@@ -36,8 +36,8 @@ mod switches;
 mod tests;
 
 pub(crate) use admission::{
-    install_review_admission, local_route_before_pr_conflict, run_review_admission,
-    upgrade_resume_admission_mismatch,
+    install_review_admission, local_route_before_landing_conflict, local_route_before_pr_conflict,
+    run_review_admission, upgrade_resume_admission_mismatch,
 };
 pub(crate) use coverage::exclusions;
 pub(crate) use fulfilment::fulfil_review_evidence;
@@ -57,7 +57,8 @@ pub use handoff::{
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
 pub use switches::{
-    AfterLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches, review_switches_view,
+    AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,
+    review_switches_view,
 };
 
 /// Audit command name shared by every gate decision.

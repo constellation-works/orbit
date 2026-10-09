@@ -141,7 +141,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
             // A host-OS wait names the host, and a native-OS requirement the
-            // tag to add. A local-route before-PR hold names the remedy, and
+            // tag to add. A local-route review hold names the remedy, and
             // a provider limit its window, reset and skipped crews. Other
             // long repair instructions stay in JSON.
             let host = matches!(
@@ -149,6 +149,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 "host_os_mismatch"
                     | "native_os_required"
                     | "local_route_before_pr"
+                    | "local_route_before_landing"
                     | "provider_limit"
             )
             .then(|| task["detail"].as_str())

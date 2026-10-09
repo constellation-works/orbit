@@ -35,6 +35,11 @@ spec:
         type: string
       expected_remote_sha:
         type: [string, "null"]
+      # The published head a before-landing reviewer's fix must
+      # go onto: the remote branch must still be at it, and the push is
+      # conditional on it, else the step fails as `push_lease_lost`.
+      lease_remote_sha:
+        type: string
       # Transient push retry budget. Absent means the production default:
       # 6 attempts, backoff from 10 s doubling to a 160 s cap.
       forge_retry:

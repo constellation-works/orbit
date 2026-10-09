@@ -11,7 +11,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::freshness::{rebase_belongs_to_attempt, rebase_provenance_summary};
 use super::super::resume::ensure_retry_descends_from;
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
-use super::{FOREIGN_REBASE_EVENT, REVIEW_ADMISSION_STEPS};
+use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, REVIEW_ADMISSION_STEPS};
 
 pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -69,13 +69,28 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         .iter()
         .find(|external_ref| external_ref.system == "github-pr" && external_ref.id == pr_number)
         .and_then(|external_ref| external_ref.url.clone());
-    let note = format!(
-        "PR completion failed after publication; preserved PR #{pr_number} and task status '{}' \
-         for a safe completion retry. No candidate, PR body, branch, or repository setting was \
-         changed.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
-         `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
-        task.status
-    );
+    // [ORB-14849] A before-landing review that did not approve settles here
+    // too: its PR stays open and unmerged, under the step's typed reason.
+    let landing_review = LANDING_REVIEW_STEPS
+        .contains(&failed_step_id)
+        .then(|| typed_reason(error_code, error_message));
+    let note = match &landing_review {
+        Some(reason) => format!(
+            "Before-landing review did not approve PR #{pr_number} (`{reason}`); the PR stays \
+             open and unmerged and the task stays '{}'. Nothing was merged, and only a fix the \
+             review settled was pushed. An operator decides what lands next.\n\n- Run: \
+             `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
+             `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
+            task.status
+        ),
+        None => format!(
+            "PR completion failed after publication; preserved PR #{pr_number} and task status \
+             '{}' for a safe completion retry. No candidate, PR body, branch, or repository \
+             setting was changed.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- \
+             Error code: `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
+            task.status
+        ),
+    };
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
@@ -90,13 +105,35 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": "review_completion_failure",
+        "decision": if landing_review.is_some() {
+            "landing_review_failure"
+        } else {
+            "review_completion_failure"
+        },
+        "reason": landing_review,
         "failed_step_id": failed_step_id,
         "pr_number": pr_number,
         "pr_url": pr_url,
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
     }))
+}
+
+/// The typed reason a failure message leads with — the first `snake_case:`
+/// token, such as `review_gate_blocked` or `review_timeout_incomplete` —
+/// else the step's error code.
+fn typed_reason(error_code: &str, error_message: &str) -> String {
+    error_message
+        .split_whitespace()
+        .filter_map(|word| word.strip_suffix(':'))
+        .find(|word| {
+            word.contains('_')
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+        .unwrap_or(error_code)
+        .to_string()
 }
 
 /// Whether the in-progress rebase is the one `sync_base` started from this

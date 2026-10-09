@@ -771,7 +771,7 @@ fn handoff_json(
         "review": {
             "policy": accepted.handoff.review.policy,
             "disposition": accepted.handoff.review.disposition,
-            "is_code_review": accepted.handoff.review.before_pr().is_some(),
+            "is_code_review": accepted.handoff.review.evidence().is_some(),
             "summary": review_summary(&accepted.handoff.review),
         },
         "required_commands": accepted.required_commands,
@@ -800,10 +800,14 @@ fn handoff_json(
 
 /// One line on what a handoff's review settled, for the owner console.
 fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> String {
-    match review.before_pr() {
+    match review.evidence() {
         Some(evidence) => format!(
-            "before-PR review {} by crew `{}` (attempt {}) on candidate {}; the owner checked \
-             its certificate at acceptance",
+            "{} review {} by crew `{}` (attempt {}) on candidate {}; the owner checked its \
+             certificate at acceptance",
+            match review.evidence_timing() {
+                orbit_types::workflow::ReviewTiming::BeforeLanding => "before-landing",
+                _ => "before-PR",
+            },
             evidence.verdict.as_str(),
             evidence.reviewer_crew,
             evidence.attempt_id,

@@ -1,17 +1,17 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-05
+last_updated: 2026-10-09
 last_validated: 2026-10-05
 status: Accepted
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract — captured timing, the before-PR gate whose reviewer fixes its findings as a second commit, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
+summary: Shipped review contract — captured timing, the before-PR gate whose reviewer fixes its findings as a second commit, the before-landing review of the open PR, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -19,23 +19,34 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-1
 This file describes what shipped. A preference edit grants no authority and
 changes no schedule; a verdict grants no merge permission.
 
-## 1. Preferences: two switches [ORB-13992]
+## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
-Automatic review has two independent switches. Before-PR review is a
-`config.toml` boolean; after-landing review is the `delivery-code-review`
-auto-task's own `enabled` flag. Config preferences resolve **built-in →
-global → workspace**. Unknown keys and out-of-range values fail config load.
+Automatic review runs at up to three timings. Before-PR review and
+before-landing review are `config.toml` booleans; after-landing review is the
+`delivery-code-review` auto-task's own `enabled` flag. Config preferences
+resolve **built-in → global → workspace**, each with its winning layer
+recorded. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
 | `review.before_pr` | bool (`false`) |
+| `review.before_landing` | bool (`false`) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
-| `operation.review_crew` | crew name (before-PR reviewer; crew of after-landing review tasks) |
+| `operation.review_crew` | crew name (before-PR or before-landing reviewer; crew of after-landing review tasks) |
 
-`review.before_pr` holds PR creation for a fresh reviewer (§3); it needs an
-explicit `review_crew`, and admission escalates `review_crew_unconfigured`
-until one is set. Each candidate gets one review, bounded by `review.minutes`
-(§5).
+`review.before_pr` holds PR creation for a fresh reviewer (§3).
+`review.before_landing` opens the PR first and reviews it while hosted CI
+runs, so a clean review costs about max(review, CI) of wall time instead of
+review + CI; the PR lands only at the head that review settled (§3.2). Both
+need an explicit `review_crew`, and admission escalates
+`review_crew_unconfigured` until one is set; both share `review.minutes`, and
+each candidate gets one review (§5).
+
+There is one review layer before landing. A resolution with both
+`review.before_pr` and `review.before_landing` on fails config load with an
+error naming both keys and the layer that set each, and `orbit config set`
+refuses an edit that would turn both on in one file. After-landing review is
+independent of either and may run beside them.
 
 After-landing review is carried out by the workspace's shipped
 `delivery-code-review` delivery auto-task [ORB-13896], switched with
@@ -51,8 +62,9 @@ never affects delivery admission, local or distributed.
 
 `orbit config show` (`review` in `--json`), `orbit doctor` (the `review`
 check), the dashboard Config tab and `orbit.drain.probe` render one view of
-both switches, each with its source: before-PR on/off with its minutes and
-crew, and after-landing enabled with when the next batch is due. While the
+every switch, each with its source: before-PR on/off with its minutes and
+crew, before-landing on/off (sharing them), and after-landing enabled with
+when the next batch is due. While the
 after-landing consumer is enabled the view adds its health: whether it is
 present, whether this host owns it, whether it is wedged on a closed action
 or stalled, whether its branch and review crew resolve, its scheduling state,
@@ -62,7 +74,8 @@ for an operator (`definition_changed` for an edit the evaluator would not adopt
 automatically, which the row names; `needs_attention`;
 `retry_deadline_expired`), on a branch that does not resolve, or naming a crew
 that does not — is an `error`, so `orbit doctor` exits nonzero. So is
-before-PR review switched on without a resolvable `review_crew`.
+before-PR or before-landing review switched on without a resolvable
+`review_crew`, or on a workspace whose automatic delivery ships locally (§2).
 
 **Migration.** `operation.review_policy` and `operation.review_minutes` are
 deprecated: they are translated on load with a warning naming each key, and a
@@ -96,11 +109,17 @@ workspace preferences at that moment. A distributed drain
 declares to owners is the value it was submitted with. Ordinary input naming
 the reserved `review` key is refused, and a resume keeps its persisted input,
 so switching `review.before_pr` off never weakens a gate that is already
-active and switching it on never gates a run already admitted. A run captured
-under the retired `after-landing` policy value reads as not gated.
+active and switching it on never gates a run already admitted. The captured
+timing is `before-pr`, `before-landing` [ORB-14849] or `none`, with the source
+of the switch that decided it. A run captured under the retired
+`after-landing` policy value reads as not gated.
 `review.before_pr` is refused at submission for `task_local_pipeline` delivery,
 with no exemption: epic assembly was the one caller that gated a combined
-candidate later, and it is retired [ORB-12491].
+candidate later, and it is retired [ORB-12491]. `review.before_landing` is
+refused there the same way, since a local delivery opens no pull request to
+review. Readiness and the drain's wave hold such backlog work before dispatch
+(`local_route_before_pr`, `local_route_before_landing`), and doctor fails its
+`review` check while either switch is on for a workspace that ships locally.
 
 ## 3. The gate
 
@@ -257,6 +276,68 @@ provenance instead of failing ([ORB-13990]). It then reruns
 command fails the step with no retry and no recovery, and the failure handoff reports verdict `reject` even
 though the certificate recorded `accept_with_fixes`: the certificate says
 what the reviewer established, and the handoff says why publication stopped.
+### 3.2 Before-landing review of the open PR [ORB-14849]
+
+With `before-landing` captured, the pre-push gate reports `applies: false`
+(`review_before_landing`) and push, `pr_open` and promotion run as they do
+without review. Between promotion and `complete_pr`, `task_pr_pipeline` runs
+the same activities again, while hosted CI runs on the published head:
+
+- `landing_review_gate_admit` (`review_gate_admit` with `before_landing`):
+  the same lineage, budget, crew, manifest and host-evidence rules. It
+  applies only to a `before-landing` admission, and for a checked no-diff
+  exemption it does not apply.
+- `landing_review` (`agent_review_repair`): one fresh reviewer, given the
+  published head as its candidate; it fixes what it finds as one reviewer
+  commit (§3.1).
+- `landing_review_gate_settle`: the verdict, certificate and findings
+  comment.
+- With a reviewer commit, `landing_review_validate` reruns owner validation
+  and the ownership check on it, and `landing_push` pushes it to the PR
+  branch under a lease on the published head (`lease_remote_sha`): the remote
+  branch must still be at that head, and the push is conditional on it, else
+  the step fails `push_lease_lost`. The new head restarts hosted CI.
+
+These steps run whatever `completion` is, so a review-only run hands off a
+reviewed PR. `complete_pr` receives the settle's head as
+`landing_reviewed_head_sha` and merges only that head (§6); after a reviewer
+fix that head is also the published one. A later DIRTY rebase of it routes
+through the `re_review*` steps exactly as a before-PR review's does.
+
+Every step here is completion-stage. Any outcome other than an approve —
+a `reject` or `incomplete` verdict, a reviewer timeout, a lost lease, a
+failed revalidation or a settle error — fails the run with the PR open and
+unmerged, and the failure handoff keeps the task in `review` with a comment
+naming the step's typed reason (`review_gate_blocked`,
+`review_timeout_incomplete`, `push_lease_lost`, ...) and decision
+`landing_review_failure`. No outcome closes the PR. Because the PR is
+already published and the task promoted, an evidence-only `incomplete` is
+not held in progress (§4): it ends like any other `incomplete`. Final
+recovery still gets one look, as for a failed re-review.
+
+**Claimed leaves: the review runs on the leaf.** A claim from an owner with
+`review.before_landing` on captures `before_landing` and the owner's review
+contract in its ship contract, and the owner admits only an executor whose
+leaf declares the review gate on the PR route (`before_pr_unsupported`
+otherwise). `task_claimed_pr_pipeline` runs the same three gate steps after
+`pr_open`, under the same crew, budget and host-evidence rules as a claimed
+before-PR review. `landing_review_validate` (`claim_validate` with `carry`)
+returns the pre-publication validation unchanged unless the reviewer
+committed a fix; then the required commands run on the new, still
+unpublished head, `landing_push` pushes it under the lease, and
+`pin_validation` pins that head. `claim_handoff` carries the settled verdict
+as `landing_review_evidence` (disposition `before_landing`). The owner judges
+it against the claim's captured timing: a handoff without it, with a
+before-PR disposition in its place, or for a head other than the one the
+review settled is refused at acceptance (`review_evidence_missing`,
+`reviewed_head_mismatch`), and `handoff_land` rechecks the pinned evidence
+and merges only the handed-off head, so a claimed PR never lands unreviewed.
+The review runs on the leaf because the leaf owns the worktree and the
+published branch; an owner-side review before `handoff_land` would have to
+fetch the PR head into an owner workspace and push fixes to a branch the
+leaf published. A leaf whose review does not approve fails with its PR open
+and unmerged; its failure settlement blocks the task on the owner.
+
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
 
 An honest reviewer records more than the checks that had to pass, so each
@@ -883,6 +964,12 @@ most three requests within the unchanged wait budget. Ungated runs retain
 ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
+After a before-landing review (§3.2) `complete_pr` also receives
+`landing_reviewed_head_sha`. When set, that head is the reviewed head the PR
+must report and the `sha` the merge sends; when a reviewer fix moved the PR
+there, it is the published head and the head it replaced the previous one.
+A head pushed after the review settled is therefore refused before any merge.
+
 A conflicting reviewed PR is never merged as rebased, unreviewed content
 [ORB-13890]. `complete_pr` runs with `re_review_on_conflict`: it rebases the
 branch locally through the pinned `git_rebase` (a real conflict still reaches
@@ -945,7 +1032,8 @@ observed; a certificate that arrives later does not rewrite pending debt.
 ## 8. Surfaces
 
 `orbit config show`, `orbit doctor`, the dashboard Config tab and
-`orbit.drain.probe` report both review switches with their sources (§1). `orbit task show --json`, the task API, and the
+`orbit.drain.probe` report every review switch with its source (§1); doctor
+prints a before-landing line beside the before-PR one. `orbit task show --json`, the task API, and the
 task detail view carry a `review` block: verdict, assurance, reviewer
 (including `same_model_as_implementer`), base/reviewed/final candidate,
 implementation and reviewer commits, findings, validation, consumed and
@@ -970,7 +1058,8 @@ Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
 [delivery automation operations](../automation-triggers/5_operations.md).
-To roll back, set `review.before_pr = false` (and toggle the
+To roll back, set `review.before_pr = false` or `review.before_landing =
+false` (and toggle the
 `delivery-code-review` consumer on for after-landing review, §1): future
 submissions capture the new value, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
@@ -991,8 +1080,18 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   its intent.
 - Provider token and cost caps are not enforced; only reviewer runtime is
   bounded, so reviewer spend stays unknown.
-- `review.before_pr` has no meaning on the local-only delivery route and is refused
-  at submission rather than downgraded.
+- `review.before_pr` and `review.before_landing` have no meaning on the
+  local-only delivery route and are refused at submission rather than
+  downgraded.
+- A before-landing reviewer's fixes reach the open PR as a commit, not as a
+  "Review fixes" section in its body: the body was written at `pr_open`. The
+  findings comment on the task carries them.
+- A before-landing evidence-only gap is not held for its evidence: the PR is
+  already published, so it leaves the PR open in review like any other
+  `incomplete`.
+- The resolved-policy version is 5 with `review.before_landing`, and the
+  distributed pull request schema changed with the ship contract's
+  `before_landing`: owner and followers must run matching builds.
 - A denied required check is not evidence either way: it keeps its own
   `validation_unavailable` reason instead of counting as a failure.
 - A failed `review_validate` leaves a certificate that says
@@ -1026,6 +1125,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
+- [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

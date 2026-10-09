@@ -51,6 +51,11 @@ spec:
       # captured no before-PR review.
       review_evidence:
         type: [object, "null"]
+      # The settled before-landing verdict on the published head,
+      # in the same shape. Absent unless the claim captured
+      # `review.before_landing`; never set together with `review_evidence`.
+      landing_review_evidence:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [handed_off, merged]

@@ -702,6 +702,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
             base_branch: "main".into(),
             landing_branch: "main".into(),
             before_pr: false,
+            before_landing: false,
             completion: "review".into(),
             authorization_reference: None,
             review: None,
@@ -1148,6 +1149,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
             base_branch: "agent-main".into(),
             landing_branch: "agent-main".into(),
             before_pr: false,
+            before_landing: false,
             completion: "review".into(),
             authorization_reference: None,
             review: None,
@@ -1296,7 +1298,7 @@ impl Delivery {
             review: self
                 .handoff
                 .review
-                .before_pr()
+                .evidence()
                 .map(|evidence| HandoffReviewObservation {
                     reviewed_base_sha: evidence.reviewed_base_sha.clone(),
                     reviewed_base_is_ancestor: true,
@@ -1384,7 +1386,8 @@ impl Delivery {
 
     fn review_evidence(&mut self) -> &mut HandoffReviewEvidence {
         match &mut self.handoff.review.disposition {
-            HandoffReviewDisposition::BeforePr(evidence) => evidence,
+            HandoffReviewDisposition::BeforePr(evidence)
+            | HandoffReviewDisposition::BeforeLanding(evidence) => evidence,
             HandoffReviewDisposition::NotRequired => panic!("the handoff carries no review"),
         }
     }

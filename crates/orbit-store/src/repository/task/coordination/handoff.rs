@@ -68,7 +68,7 @@ impl TaskCommitBoundary {
             let Some(accepted) = self.find_accepted_handoff(claim_id)? else {
                 return Ok(None);
             };
-            let Some(evidence) = accepted.handoff.review.before_pr() else {
+            let Some(evidence) = accepted.handoff.review.evidence() else {
                 return Ok(None);
             };
             let bytes = self.artifact_bytes(&accepted.handoff.task_id, &evidence.certificate)?;
@@ -118,10 +118,13 @@ impl TaskCommitBoundary {
             return Ok(());
         }
         let Some(contract) = &ship.review else {
-            if ship.before_pr || handoff.review != HandoffReview::not_required() {
+            if ship.before_pr
+                || ship.before_landing
+                || handoff.review != HandoffReview::not_required()
+            {
                 return Err(review_refused(
                     R::ReviewEvidenceUnexpected,
-                    "the claim captured no before-PR review contract",
+                    "the claim captured no review contract",
                 ));
             }
             return Ok(());
@@ -132,12 +135,26 @@ impl TaskCommitBoundary {
                 "the captured review contract predates its required-check list; dispatch a fresh claim under the current host contract",
             ));
         }
-        let evidence = match (handoff.review.policy, handoff.review.before_pr()) {
-            (ReviewTiming::BeforePr, Some(evidence)) => evidence,
+        // The evidence must be for the timing the claim captured: a
+        // before-PR review cannot stand in for a before-landing one, nor the
+        // reverse [ORB-14849].
+        let captured = ship.review_timing();
+        let evidence = match handoff.review.evidence() {
+            Some(evidence)
+                if captured != ReviewTiming::None
+                    && handoff.review.policy == captured
+                    && handoff.review.evidence_timing() == captured =>
+            {
+                evidence
+            }
             _ => {
                 return Err(review_refused(
                     R::ReviewEvidenceMissing,
-                    "the claim captured review.before_pr; the handoff must carry the leaf's review",
+                    &format!(
+                        "the claim captured review timing `{}`; the handoff must carry the \
+                         leaf's review for it",
+                        captured.as_str()
+                    ),
                 ));
             }
         };

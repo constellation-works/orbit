@@ -185,21 +185,33 @@ fn attach_unfiled_findings<H: RuntimeHost + ?Sized>(
 }
 
 /// The review disposition the handoff reports. A leaf that ran the before-PR
-/// gate passes its evidence as `review_evidence` [ORB-13895]; without it
-/// there is no reviewed SHA, verdict or reviewer artifact to report and none
-/// is invented. The owner judges the evidence against the review contract
-/// the claim captured, so this only refuses evidence for another candidate.
+/// gate passes its evidence as `review_evidence` [ORB-13895], and one that
+/// reviewed its open pull request passes it as `landing_review_evidence`
+/// [ORB-14849]; without either there is no reviewed SHA, verdict or reviewer
+/// artifact to report and none is invented. The owner judges the evidence
+/// against the review contract the claim captured, so this only refuses
+/// evidence for another candidate, or from both layers at once.
 fn handoff_review(
     input: &Value,
     candidate: &HandoffCandidate,
 ) -> Result<HandoffReview, OrbitError> {
-    let Some(evidence) = input
-        .get("review_evidence")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(HandoffReview::not_required());
+    let present = |key: &str| input.get(key).filter(|value| !value.is_null()).cloned();
+    let (policy, evidence) = match (
+        present("review_evidence"),
+        present("landing_review_evidence"),
+    ) {
+        (None, None) => return Ok(HandoffReview::not_required()),
+        (Some(evidence), None) => (ReviewTiming::BeforePr, evidence),
+        (None, Some(evidence)) => (ReviewTiming::BeforeLanding, evidence),
+        (Some(_), Some(_)) => {
+            return Err(refused(
+                "the leaf settled both a before-PR and a before-landing review; there is one \
+                 review layer before landing"
+                    .to_string(),
+            ));
+        }
     };
-    let evidence: HandoffReviewEvidence = serde_json::from_value(evidence.clone())
+    let evidence: HandoffReviewEvidence = serde_json::from_value(evidence)
         .map_err(|error| OrbitError::InvalidInput(format!("invalid review evidence: {error}")))?;
     if evidence.reviewed_head_sha != candidate.candidate.commit {
         return Err(refused(format!(
@@ -208,9 +220,13 @@ fn handoff_review(
             evidence.reviewed_head_sha, candidate.candidate.commit
         )));
     }
+    let disposition = match policy {
+        ReviewTiming::BeforeLanding => HandoffReviewDisposition::BeforeLanding(Box::new(evidence)),
+        _ => HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+    };
     Ok(HandoffReview {
-        policy: ReviewTiming::BeforePr,
-        disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+        policy,
+        disposition,
     })
 }
 
