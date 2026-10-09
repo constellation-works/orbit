@@ -401,6 +401,42 @@ impl PullCrewWindow {
         self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(Vec::is_empty)
     }
 
+    /// Whether every crew this drain could otherwise run — the
+    /// allowlist-permitted preflight-runnable set — is excluded by a provider
+    /// usage limit, so this drain admits again once one lifts [ORB-14697, ORB-14902].
+    #[must_use]
+    pub fn held_by_provider_limit(&self) -> bool {
+        if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
+            return false;
+        }
+        let candidate_crews: Vec<&str> = match (&self.allowed, &self.reviewable) {
+            (Some(allowed), Some(reviewable)) => reviewable
+                .iter()
+                .filter(|crew| allowed.iter().any(|a| a == *crew))
+                .map(String::as_str)
+                .collect(),
+            (None, Some(reviewable)) => reviewable.iter().map(String::as_str).collect(),
+            (Some(allowed), None) => allowed
+                .iter()
+                .filter(|crew| {
+                    !self.excluded.iter().any(|exclusion| {
+                        &exclusion.crew == *crew
+                            && exclusion.source != CrewExclusionSource::ProviderLimit
+                    })
+                })
+                .map(String::as_str)
+                .collect(),
+            (None, None) => Vec::new(),
+        };
+        !candidate_crews.is_empty()
+            && candidate_crews.iter().all(|crew| {
+                self.excluded.iter().any(|exclusion| {
+                    exclusion.crew == *crew
+                        && exclusion.source == CrewExclusionSource::ProviderLimit
+                })
+            })
+    }
+
     /// One line per excluded crew, for a terminal report.
     #[must_use]
     pub fn describe(&self) -> Vec<String> {
