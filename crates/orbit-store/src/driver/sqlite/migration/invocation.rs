@@ -162,15 +162,12 @@ pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(),
 /// update of an existing row leaves these columns from the earlier reading,
 /// so a reader trusts them only on a row whose `source` is `event`.
 pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), OrbitError> {
-    for column in [
-        "used_percent REAL",
-        "window_minutes INTEGER",
-        "gating INTEGER NOT NULL DEFAULT 1",
+    for (column, definition) in [
+        ("used_percent", "REAL"),
+        ("window_minutes", "INTEGER"),
+        ("gating", "INTEGER NOT NULL DEFAULT 1"),
     ] {
-        add_column_if_missing(
-            conn,
-            &format!("ALTER TABLE provider_limit_observations ADD COLUMN {column}"),
-        )?;
+        add_column_if_missing(conn, "provider_limit_observations", column, definition)?;
     }
     Ok(())
 }
