@@ -30,6 +30,7 @@ const LISTED: usize = 20;
 pub(crate) struct PullWaiting {
     pub(crate) queued: u64,
     pub(crate) deferred: Vec<DrainWaitingTask>,
+    pub(crate) deferred_total: u64,
     pub(crate) excluded: Vec<DrainWaitingTask>,
     pub(crate) excluded_total: u64,
     /// Every task kept off this host by reason code: the deferred and the
@@ -105,6 +106,7 @@ impl PullWaiting {
             .collect::<Vec<_>>();
         Self {
             queued: receipt.queue_depth as u64,
+            deferred_total: deferred_all.len() as u64,
             excluded_total: excluded_all.len() as u64,
             deferred: deferred_all.into_iter().take(LISTED).collect(),
             excluded: excluded_all.into_iter().take(LISTED).collect(),

@@ -266,6 +266,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                     detail: None,
                 })
                 .collect(),
+            deferred_total: selection.deferred.len() as u64,
             excluded: waiting_excluded(&snapshot.excluded),
             excluded_total: snapshot.excluded.len() as u64,
             waiting_recorded_at: None,
