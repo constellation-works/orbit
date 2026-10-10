@@ -10,7 +10,7 @@ import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const events = ['success', 'failure', 'denied'].map((status, index) => ({
+let events = ['success', 'failure', 'denied'].map((status, index) => ({
   id: index + 1, timestamp: '2026-10-07T09:32:04Z', status,
   role: index ? 'codex' : 'unverified', command: 'tool', subcommand: 'run-mcp',
   tool_name: 'orbit.workflow.run.list', target_id: 'orbit.workflow.run.list',
@@ -93,6 +93,8 @@ try {
       const box = body.getBoundingClientRect();
       return {
         width: innerWidth, panel: { left: box.left, right: box.right }, scrollLeft: body.scrollLeft,
+        eventsPanelBottom: document.getElementById('audit-pane').getBoundingClientRect().bottom,
+        summaryPanelBottom: document.getElementById('audit-summary-panel').getBoundingClientRect().bottom,
         statuses: [...body.querySelectorAll('.c-status')].map(node => {
           const rect = node.getBoundingClientRect();
           return { text: node.textContent, left: rect.left, right: rect.right, width: rect.width };
@@ -112,6 +114,10 @@ try {
     });
     assert.equal(layout.scrollLeft, 0);
     assert.equal(layout.statuses.length, events.length);
+    if (width >= 1280) {
+      assert.ok(Math.abs(layout.eventsPanelBottom - layout.summaryPanelBottom) <= 2,
+        `events and summary panels align at ${width}: ${layout.eventsPanelBottom} vs ${layout.summaryPanelBottom}`);
+    }
     for (const status of layout.statuses) {
       assert.ok(status.width > 0 && status.left >= layout.panel.left && status.right <= Math.min(layout.panel.right, width) + 1, `status visible at ${width}: ${JSON.stringify(status)}`);
     }
@@ -128,6 +134,28 @@ try {
     await page.screenshot({ path: path.join(evidence, `events-${width}.png`), fullPage: true, animations: 'disabled' });
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  const shortEventCount = events.length;
+  events = [...events, ...Array.from({ length: 60 }, (_, index) => ({
+    ...events[index % shortEventCount], id: index + shortEventCount + 1,
+    execution_id: `long-list-${index}`,
+  }))];
+  await page.evaluate(async () => {
+    await auditFixture.fetchAndRenderAudit(auditContext);
+    await new Promise(requestAnimationFrame);
+  });
+  const longListLayout = await page.evaluate(() => {
+    const body = document.getElementById('audit-body');
+    return {
+      eventsBottom: document.getElementById('audit-pane').getBoundingClientRect().bottom,
+      summaryBottom: document.getElementById('audit-summary-panel').getBoundingClientRect().bottom,
+      bodyClientHeight: body.clientHeight,
+      bodyScrollHeight: body.scrollHeight,
+    };
+  });
+  assert.ok(longListLayout.bodyScrollHeight > longListLayout.bodyClientHeight,
+    'extra audit events scroll inside the events panel');
+  assert.ok(Math.abs(longListLayout.eventsBottom - longListLayout.summaryBottom) <= 2,
+    `a long events list does not grow the panel past the summary: ${JSON.stringify(longListLayout)}`);
   const rows = page.locator('.audit-row');
   assert.equal(await rows.nth(0).locator('.c-command').textContent(), events[0].tool_name);
   assert.equal(await rows.nth(0).locator('.c-target').textContent(), '');
